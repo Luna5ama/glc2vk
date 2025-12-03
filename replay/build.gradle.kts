@@ -1,12 +1,11 @@
+plugins {
+    id("buildsrc.convention.kotlin-jvm")
+}
+
 java {
     toolchain {
         languageVersion.set(JavaLanguageVersion.of(21))
     }
-}
-
-repositories {
-    mavenCentral()
-    maven("https://maven.luna5ama.dev")
 }
 
 dependencies {
