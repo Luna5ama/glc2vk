@@ -338,12 +338,11 @@ fun main(args: Array<String>) {
         }
 
         val bufferDeviceMemory = if (bufferList.isNotEmpty()) {
-            DoubleData(
-                allocateAndBindMemoryForBuffers(
-                    bufferList.map { it.cpu },
-                    bufferSubAllocator.cpu,
-                    bufferSuballocateOffsets.cpu,
-                    memoryTypes.staging
+            val cpu = allocateAndBindMemoryForBuffers(
+                bufferList.map { it.cpu },
+                bufferSubAllocator.cpu,
+                bufferSuballocateOffsets.cpu,
+                memoryTypes.staging
 //                    memoryTypes.run {
 //                        findType(
 //                            bufferMemoryTypeBits.cpu,
@@ -353,7 +352,28 @@ fun main(args: Array<String>) {
 //                            VkMemoryPropertyFlags.NONE
 //                        )
 //                    }
-                ),
+            )
+
+
+            val temp = NPointer.malloc<NUInt8>(1)
+            @Suppress("UNCHECKED_CAST")
+            device.mapMemory(
+                cpu, 0UL, VK_WHOLE_SIZE, VkMemoryMapFlags.NONE,
+                temp.ptr() as NPointer<NPointer<*>>
+            ).getOrThrow()
+
+            val mappedPtr = temp[0]
+
+            captureData.bufferData.forEachIndexed { index, data ->
+                val offset = bufferSuballocateOffsets.cpu.getLong(index)
+                val dataWrapped = NPointer<NUInt8>(data.ptr.address)
+                dataWrapped.copyTo(mappedPtr + offset, data.len)
+            }
+
+            device.unmapMemory(cpu)
+
+            DoubleData(
+                cpu,
                 allocateAndBindMemoryForBuffers(
                     bufferList.map { it.gpu },
                     bufferSubAllocator.gpu,
@@ -474,12 +494,11 @@ fun main(args: Array<String>) {
         }
 
         val imageDeviceMemory = if (imageList.isNotEmpty()) {
-            DoubleData(
-                allocateAndBindMemoryForImages(
-                    imageList.map { it.cpu },
-                    bufferSubAllocator.cpu,
-                    bufferSuballocateOffsets.cpu,
-                    memoryTypes.staging
+            val cpu = allocateAndBindMemoryForImages(
+                imageList.map { it.cpu },
+                imageSubAllocator.cpu,
+                imageSuballocateOffsets.cpu,
+                memoryTypes.staging
 //                    memoryTypes.run {
 //                        findType(
 //                            imageMemoryTypeBits.cpu,
@@ -489,11 +508,31 @@ fun main(args: Array<String>) {
 //                            VkMemoryPropertyFlags.NONE
 //                        )
 //                    }
-                ),
+            )
+
+            val temp = NPointer.malloc<NUInt8>(1)
+            @Suppress("UNCHECKED_CAST")
+            device.mapMemory(
+                cpu, 0UL, VK_WHOLE_SIZE, VkMemoryMapFlags.NONE,
+                temp.ptr() as NPointer<NPointer<*>>
+            ).getOrThrow()
+
+            val mappedPtr = temp[0]
+
+            captureData.imageData.forEachIndexed { index, dataV ->
+                val data = dataV.levels.first()
+                val offset = imageSuballocateOffsets.cpu.getLong(index)
+                val dataWrapped = NPointer<NUInt8>(data.ptr.address)
+                dataWrapped.copyTo(mappedPtr + offset, data.len)
+            }
+
+            device.unmapMemory(cpu)
+            DoubleData(
+                cpu,
                 allocateAndBindMemoryForImages(
                     imageList.map { it.gpu },
-                    bufferSubAllocator.gpu,
-                    bufferSuballocateOffsets.gpu,
+                    imageSubAllocator.gpu,
+                    imageSuballocateOffsets.gpu,
                     memoryTypes.device
 //                    memoryTypes.findType(
 //                        imageMemoryTypeBits.gpu + VkMemoryPropertyFlags.DEVICE_LOCAL,
