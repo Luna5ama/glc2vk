@@ -1,6 +1,8 @@
 package dev.luna5ama.glc2vk.common
 
 import dev.luna5ama.glwrapper.enums.ShaderStage
+import kotlin.io.path.Path
+import kotlin.io.path.readText
 import kotlin.test.Test
 
 class PatchTest {

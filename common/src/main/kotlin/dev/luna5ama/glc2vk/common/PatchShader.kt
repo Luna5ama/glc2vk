@@ -7,7 +7,7 @@ private const val INDENT = "\t"
 private val LINE_COMMENT_REGEX = """//.*?$""".toRegex(RegexOption.MULTILINE)
 private val BLOCK_COMMENT_REGEX = """/\*.*?\*/""".toRegex(RegexOption.DOT_MATCHES_ALL)
 
-private val TOKEN_DELIMITER_REGEX = """\s+|(?=[{}()\[\];,])|(?<=[{}()\[\];,])""".toRegex()
+private val TOKEN_DELIMITER_REGEX = """\s+|(?=[{}()\[\];,.])|(?<=[{}()\[\];,.])""".toRegex()
 private val NON_TOKEN_REGEX = """[\w_]+""".toRegex()
 private val UNIFORM_REGEX =
     """^((?:layout\(.+?\))?)\s*((?:${NON_TOKEN_REGEX.pattern}\s+)*?)uniform\s+((?:${NON_TOKEN_REGEX.pattern}\s+)*?)(\S+)\s+(\S+)\s*;\s*""".toRegex(
@@ -82,6 +82,7 @@ private fun ShaderSourceContext.patchUniforms() {
         val (layout, modifiers1, modifiers2, typeStr, name) = it.destructured
 
         if (!checkUsage(name)) {
+            println("Removing unused uniform: $name")
             // Not used, remove
             return@replace ""
         }
