@@ -718,7 +718,7 @@ private fun saveShader(
 
 
     ProcessBuilder()
-        .command("glslc", "-g" , "-x", "glsl", "--target-env=vulkan1.4", "-fshader-stage=comp", "-o", spvPath.absolutePathString(), glslPath.absolutePathString())
+        .command("glslang", "-gVS", "--target-env", "vulkan1.3", "-o", spvPath.absolutePathString(), glslPath.absolutePathString())
         .inheritIO()
         .start()
         .waitFor()
