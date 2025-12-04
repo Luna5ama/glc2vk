@@ -727,6 +727,7 @@ private fun saveShader(
 @Suppress("LocalVariableName")
 fun captureGlDispatchCompute(
     shaderInfo: ShaderInfo,
+    outputPath: Path,
     num_groups_x: Int,
     num_groups_y: Int,
     num_groups_z: Int
@@ -737,10 +738,21 @@ fun captureGlDispatchCompute(
     val captureContext = CaptureContext(shaderInfo, resourceManager)
     captureContext.captureShaderProgramResources()
 
+    val command = Command.DispatchCommand(
+        x = num_groups_x,
+        y = num_groups_y,
+        z = num_groups_z
+    )
+
+    val resourceCapture = captureContext.build(command)
+
+    CaptureData.save(outputPath, resourceCapture)
+    saveShader(outputPath, shaderInfo, ShaderStage.ComputeShader)
+    resourceCapture.free()
+
     glDispatchCompute(num_groups_x, num_groups_y, num_groups_z)
 }
 
-@Suppress("LocalVariableName")
 fun captureGlDispatchComputeIndirect(shaderInfo: ShaderInfo, outputPath: Path, indirect: Long) {
     val currProgram = glGetInteger(GL_CURRENT_PROGRAM)
     val resourceManager = ShaderProgramResourceManager(currProgram)
@@ -751,8 +763,6 @@ fun captureGlDispatchComputeIndirect(shaderInfo: ShaderInfo, outputPath: Path, i
     val boundIndirectBuffer = glGetInteger(GL_DISPATCH_INDIRECT_BUFFER_BINDING)
     val bufferIndex = captureContext.getBufferIndex(boundIndirectBuffer)
 
-    println(captureContext.buffers[bufferIndex].ptr.getInt())
-
     val command = Command.DispatchIndirectCommand(
         bufferIndex = bufferIndex,
         offset = indirect
@@ -762,10 +772,7 @@ fun captureGlDispatchComputeIndirect(shaderInfo: ShaderInfo, outputPath: Path, i
 
     CaptureData.save(outputPath, resourceCapture)
     saveShader(outputPath, shaderInfo, ShaderStage.ComputeShader)
-
-    resourceCapture.apply {
-        free()
-    }
+    resourceCapture.free()
 
     glDispatchComputeIndirect(indirect)
 }
