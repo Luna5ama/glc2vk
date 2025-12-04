@@ -14,7 +14,8 @@ kotlin {
         jvmDefault = JvmDefaultMode.NO_COMPATIBILITY
         freeCompilerArgs.addAll(
             "-Xcontext-parameters",
-            "-Xbackend-threads=0"
+            "-Xbackend-threads=0",
+            "-Xconsistent-data-class-copy-visibility"
         )
     }
 }

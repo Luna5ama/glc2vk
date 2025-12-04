@@ -33,15 +33,24 @@ private inline fun String.transformLines(block: (List<String>) -> List<String>):
     return newLines.joinToString("\n")
 }
 
+data class ShaderInfo(
+    val uniforms: Map<String, Uniform>,
+    val ssbos: Map<String, SSBO>,
+) {
+    data class Uniform(val name: String, val type: GLSLDataType, val set: Int, val binding: Int)
+    data class SSBO(val name: String, val set: Int, val binding: Int)
+}
+
 class ShaderSourceContext(val originalSource: String) {
     var modifiedSource: String = originalSource
 
-    val uniforms = mutableMapOf<String, Uniform>()
-    val ssbos = mutableMapOf<String, SSBO>()
+    val uniforms = mutableMapOf<String, ShaderInfo.Uniform>()
+    val ssbos = mutableMapOf<String, ShaderInfo.SSBO>()
 
     // set 0 = value uniforms
     // set 1 = sampler/image uniforms
     // set 2 = storage buffers
+    // set 3 = uniform buffers
     val bindingCounters = intArrayOf(1, 0, 0)
 
     val tokenCounts = modifiedSource.split(TOKEN_DELIMITER_REGEX)
@@ -52,8 +61,12 @@ class ShaderSourceContext(val originalSource: String) {
         return tokenCounts.getOrDefault(name, 0) > 1
     }
 
-    data class Uniform(val name: String, val type: GLSLDataType, val set: Int, val binding: Int)
-    data class SSBO(val name: String, val set: Int, val binding: Int)
+    fun toShaderInfo(): ShaderInfo {
+        return ShaderInfo(
+            uniforms = uniforms,
+            ssbos = ssbos
+        )
+    }
 }
 
 private fun ShaderSourceContext.patchSSBO() {
@@ -61,7 +74,7 @@ private fun ShaderSourceContext.patchSSBO() {
         val (_, modifiers1, modifiers2, name) = it.destructured
         val set = 2
         val binding = bindingCounters[set]++
-        val ssbo = ShaderSourceContext.SSBO(name, set, binding)
+        val ssbo = ShaderInfo.SSBO(name, set, binding)
         ssbos[name] = ssbo
         buildString {
             append("layout(std430, set = ")
@@ -94,7 +107,7 @@ private fun ShaderSourceContext.patchUniforms() {
             is GLSLDataType.Value -> {
                 // Have to put them into a uniform block
                 val set = 0
-                val uniform = ShaderSourceContext.Uniform(name, type, set, -1)
+                val uniform = ShaderInfo.Uniform(name, type, set, -1)
                 uniforms[name] = uniform
                 ""
             }
@@ -102,7 +115,7 @@ private fun ShaderSourceContext.patchUniforms() {
             is GLSLDataType.Opaque -> {
                 val set = 1
                 val binding = bindingCounters[set]++
-                val uniform = ShaderSourceContext.Uniform(name, type, set, binding)
+                val uniform = ShaderInfo.Uniform(name, type, set, binding)
                 uniforms[name] = uniform
 
                 buildString {

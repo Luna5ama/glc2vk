@@ -3,5 +3,5 @@ plugins {
 }
 
 dependencies {
-    implementation(project(":glc2vk-common"))
+    api(project(":glc2vk-common"))
 }
