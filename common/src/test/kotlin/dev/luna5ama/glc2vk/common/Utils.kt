@@ -10,7 +10,7 @@ import kotlin.test.assertTrue
 
 fun checkPatched(src: String, stage: ShaderStage) {
     val proc = ProcessBuilder()
-        .command("I:\\VulkanSDK\\1.4.321.1\\Bin\\glslc.exe", "-x", "glsl", "--target-env=vulkan1.4", "-fshader-stage=${stage.shortName}", "-")
+        .command("glslc", "-x", "glsl", "--target-env=vulkan1.4", "-fshader-stage=${stage.shortName}", "-")
         .redirectOutput(ProcessBuilder.Redirect.DISCARD)
         .redirectError(ProcessBuilder.Redirect.INHERIT)
         .redirectInput(ProcessBuilder.Redirect.PIPE)

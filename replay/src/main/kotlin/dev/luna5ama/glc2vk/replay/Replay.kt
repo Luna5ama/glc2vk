@@ -1,8 +1,6 @@
 package dev.luna5ama.glc2vk.replay
 
 import dev.luna5ama.glc2vk.common.CaptureData
-import dev.luna5ama.glc2vk.common.Command
-import it.unimi.dsi.fastutil.longs.LongArrayList
 import net.echonolix.caelum.*
 import net.echonolix.caelum.glfw.consts.GLFW_CLIENT_API
 import net.echonolix.caelum.glfw.consts.GLFW_FALSE
@@ -15,7 +13,11 @@ import net.echonolix.caelum.vulkan.flags.*
 import net.echonolix.caelum.vulkan.handles.*
 import net.echonolix.caelum.vulkan.structs.*
 import java.lang.foreign.Arena
+import java.lang.foreign.MemorySegment
+import java.lang.foreign.ValueLayout
+import java.nio.channels.FileChannel
 import java.nio.file.Files
+import java.nio.file.Path
 import kotlin.io.path.Path
 import kotlin.io.path.exists
 import kotlin.io.path.pathString
@@ -71,7 +73,7 @@ fun main(args: Array<String>) {
         }
         // endregion
 
-        val useValidationLayer = true
+        val useValidationLayer = false
 
         val layers = if (useValidationLayer) {
             setOf("VK_LAYER_KHRONOS_validation")
@@ -122,6 +124,9 @@ fun main(args: Array<String>) {
         val physicalDeviceFeatures = VkPhysicalDeviceFeatures2.allocate()
         val synchronization2Features = VkPhysicalDeviceSynchronization2Features.allocate()
         physicalDeviceFeatures.pNext = synchronization2Features.ptr()
+        val shaderAtomicInt64Features = VkPhysicalDeviceShaderAtomicInt64Features.allocate()
+        synchronization2Features.pNext = shaderAtomicInt64Features.ptr()
+
         physicalDevice.getPhysicalDeviceProperties(physicalDeviceProperties.ptr())
         physicalDevice.getPhysicalDeviceFeatures2(physicalDeviceFeatures.ptr())
 
@@ -222,633 +227,50 @@ fun main(args: Array<String>) {
             }
         }
 
-        val commandPoolCreateInfo = VkCommandPoolCreateInfo.allocate {
-            flags = VkCommandPoolCreateFlags.RESET_COMMAND_BUFFER
-            queueFamilyIndex = graphicsQueueFamilyIndex.toUInt()
-        }
-        val commandPool = device.createCommandPool(commandPoolCreateInfo.ptr(), null).getOrThrow()
+        val replayInstance = ReplayInstance(
+            captureData,
+            device,
+            capturePath,
+            graphicsQueueFamilyIndex.toUInt(),
+        )
 
-        val memoryProperties = VkPhysicalDeviceMemoryProperties2.allocate()
-        physicalDevice.getPhysicalDeviceMemoryProperties2(memoryProperties.ptr())
-        val memoryTypes = MemoryTypeManager(memoryProperties.memoryProperties)
-
-        val queueFamiliesIndicesNArray = NUInt32.arrayOf(graphicsQueueFamilyIndex.toUInt())
-
-
-        data class DoubleData<T>(val cpu: T, val gpu: T)
-        data class MutableDoubleData<T>(var cpu: T, var gpu: T)
-
-        val bufferSuballocateOffsets = DoubleData(LongArrayList(), LongArrayList())
-        val bufferSubAllocator = DoubleData(MemorySuballocator(0L), MemorySuballocator(0L))
-        val bufferMemoryTypeBits = MutableDoubleData(VkMemoryPropertyFlags.NONE, VkMemoryPropertyFlags.NONE)
-
-        val bufferList = captureData.metadata.buffers.map {
-            MemoryStack {
-                val gpuBuffer = MemoryStack {
-                    val usages = VkBufferUsageFlags2.STORAGE_TEXEL_BUFFER +
-                            VkBufferUsageFlags2.UNIFORM_TEXEL_BUFFER +
-                            VkBufferUsageFlags2.STORAGE_BUFFER +
-                            VkBufferUsageFlags2.UNIFORM_BUFFER +
-                            VkBufferUsageFlags2.TRANSFER_DST +
-                            VkBufferUsageFlags2.SHADER_DEVICE_ADDRESS
-
-                    val createInfo = VkBufferCreateInfo.allocate()
-                    createInfo.sharingMode = VkSharingMode.EXCLUSIVE
-                    createInfo.queueFamilyIndexes(queueFamiliesIndicesNArray)
-                    createInfo.size = it.size.toULong()
-
-                    val flagInfo = VkBufferUsageFlags2CreateInfo.allocate {
-                        this.usage = usages
-                    }
-                    createInfo.pNext = flagInfo.ptr()
-
-                    val memReqGPU = VkMemoryRequirements.allocate()
-
-                    val gpuBuffer = device.createBuffer(createInfo.ptr(), nullptr()).getOrThrow()
-                    device.getBufferMemoryRequirements(gpuBuffer, memReqGPU.ptr())
-                    bufferMemoryTypeBits.gpu += VkMemoryPropertyFlags.fromNativeData(memReqGPU.memoryTypeBits.toInt())
-                    bufferSuballocateOffsets.gpu.add(
-                        bufferSubAllocator.gpu.allocate(
-                            memReqGPU.size.toLong(),
-                            memReqGPU.alignment.toLong()
-                        )
-                    )
-                    gpuBuffer
-                }
-
-                val cpuBuffer = MemoryStack {
-                    val usageCPU = VkBufferUsageFlags2.TRANSFER_SRC
-
-                    val createInfoCPU = VkBufferCreateInfo.allocate()
-                    createInfoCPU.sharingMode = VkSharingMode.EXCLUSIVE
-                    createInfoCPU.queueFamilyIndexes(queueFamiliesIndicesNArray)
-                    createInfoCPU.size = it.size.toULong()
-
-                    val flagInfoCPU = VkBufferUsageFlags2CreateInfo.allocate {
-                        this.usage = usageCPU
-                    }
-                    createInfoCPU.pNext = flagInfoCPU.ptr()
-
-                    val memReqCPU = VkMemoryRequirements.allocate()
-                    val cpuBuffer = device.createBuffer(createInfoCPU.ptr(), nullptr()).getOrThrow()
-                    device.getBufferMemoryRequirements(cpuBuffer, memReqCPU.ptr())
-                    bufferMemoryTypeBits.cpu += VkMemoryPropertyFlags.fromNativeData(memReqCPU.memoryTypeBits.toInt())
-                    bufferSuballocateOffsets.cpu.add(
-                        bufferSubAllocator.cpu.allocate(
-                            memReqCPU.size.toLong(),
-                            memReqCPU.alignment.toLong()
-                        )
-                    )
-                    cpuBuffer
-                }
-
-                DoubleData(cpuBuffer, gpuBuffer)
-            }
-        }
-
-        fun allocateAndBindMemoryForBuffers(
-            buffers: List<VkBuffer>,
-            allocator: MemorySuballocator,
-            suballocateOffsets: LongArrayList,
-            memoryType: UInt
-        ): VkDeviceMemory {
-            // Allocate memory for all buffers
-            val memoryAllocateInfo = VkMemoryAllocateInfo.allocate {
-                allocationSize = allocator.allocatedSize.toULong()
-                memoryTypeIndex = memoryType
-            }
-            val deviceMemoryReturn = VkDeviceMemory.malloc()
-            device.allocateMemory(memoryAllocateInfo.ptr(), nullptr(), deviceMemoryReturn.ptr()).getOrThrow()
-            val deviceMemory = VkDeviceMemory.fromNativeData(device, deviceMemoryReturn.value)
-
-            // Using heap allocation because buffer count can be large
-            Arena.ofConfined().useAllocateScope {
-                val bufferCount = buffers.size.toLong()
-                // Bind buffers to memory
-                val bindInfos = VkBindBufferMemoryInfo.allocate(bufferCount)
-                for (i in 0L..<bufferCount) {
-                    bindInfos[i].buffer = buffers[i.toInt()]
-                    bindInfos[i].memory = deviceMemory
-                    bindInfos[i].memoryOffset = suballocateOffsets.getLong(i.toInt()).toULong()
-                }
-                device.bindBufferMemory2(bufferCount.toUInt(), bindInfos.ptr()).getOrThrow()
-                deviceMemory
-            }
-
-            return deviceMemory
-        }
-
-        val bufferDeviceMemory = if (bufferList.isNotEmpty()) {
-            val cpu = allocateAndBindMemoryForBuffers(
-                bufferList.map { it.cpu },
-                bufferSubAllocator.cpu,
-                bufferSuballocateOffsets.cpu,
-                memoryTypes.staging
-//                    memoryTypes.run {
-//                        findType(
-//                            bufferMemoryTypeBits.cpu,
-//                            VkMemoryPropertyFlags.DEVICE_LOCAL
-//                        ).findType(
-//                            bufferMemoryTypeBits.cpu,
-//                            VkMemoryPropertyFlags.NONE
-//                        )
-//                    }
-            )
-
-
-            val temp = NPointer.malloc<NUInt8>(1)
-            @Suppress("UNCHECKED_CAST")
-            device.mapMemory(
-                cpu, 0UL, VK_WHOLE_SIZE, VkMemoryMapFlags.NONE,
-                temp.ptr() as NPointer<NPointer<*>>
-            ).getOrThrow()
-
-            val mappedPtr = temp[0]
-
-            captureData.bufferData.forEachIndexed { index, data ->
-                val offset = bufferSuballocateOffsets.cpu.getLong(index)
-                val dataWrapped = NPointer<NUInt8>(data.ptr.address)
-                dataWrapped.copyTo(mappedPtr + offset, data.len)
-            }
-
-            device.unmapMemory(cpu)
-
-            DoubleData(
-                cpu,
-                allocateAndBindMemoryForBuffers(
-                    bufferList.map { it.gpu },
-                    bufferSubAllocator.gpu,
-                    bufferSuballocateOffsets.gpu,
-                    memoryTypes.device
-//                    memoryTypes.findType(
-//                        bufferMemoryTypeBits.gpu + VkMemoryPropertyFlags.DEVICE_LOCAL,
-//                        VkMemoryPropertyFlags.NONE
-//                    )
-                )
-            )
-        } else {
-            null
-        }
-
-        val imageMemoryTypeBits = MutableDoubleData(VkMemoryPropertyFlags.NONE, VkMemoryPropertyFlags.NONE)
-        val imageSuballocateOffsets = DoubleData(LongArrayList(), LongArrayList())
-        val imageSubAllocator = DoubleData(MemorySuballocator(0L), MemorySuballocator(0L))
-
-        val imageList = captureData.metadata.images.map {
-            MemoryStack {
-                val imageType = when (it.type) {
-                    dev.luna5ama.glc2vk.common.VkImageViewType.`1D` -> VkImageType.`1D`
-                    dev.luna5ama.glc2vk.common.VkImageViewType.`2D` -> VkImageType.`2D`
-                    dev.luna5ama.glc2vk.common.VkImageViewType.`3D` -> VkImageType.`3D`
-                    dev.luna5ama.glc2vk.common.VkImageViewType.`1D_ARRAY` -> VkImageType.`1D`
-                    dev.luna5ama.glc2vk.common.VkImageViewType.`2D_ARRAY` -> VkImageType.`2D`
-                    dev.luna5ama.glc2vk.common.VkImageViewType.CUBE -> VkImageType.`2D`
-                    dev.luna5ama.glc2vk.common.VkImageViewType.CUBE_ARRAY -> VkImageType.`2D`
-                }
-                val vkImageGPU = MemoryStack {
-                    val createInfo = VkImageCreateInfo.allocate()
-                    createInfo.imageType = imageType
-                    createInfo.format = VkFormat.fromNativeData(it.format.value)
-                    createInfo.extent.width = it.width.toUInt()
-                    createInfo.extent.height = it.height.toUInt()
-                    createInfo.extent.depth = it.depth.toUInt()
-                    createInfo.mipLevels = it.mipLevels.toUInt()
-                    createInfo.arrayLayers = it.arrayLayers.toUInt()
-                    createInfo.samples = VkSampleCountFlags.`1_BIT`
-                    createInfo.tiling = VkImageTiling.OPTIMAL
-                    createInfo.initialLayout = VkImageLayout.UNDEFINED
-                    createInfo.usage =
-                        VkImageUsageFlags.TRANSFER_DST + VkImageUsageFlags.STORAGE + VkImageUsageFlags.SAMPLED
-
-                    val memReq = VkMemoryRequirements.allocate()
-                    val vkImage = device.createImage(createInfo.ptr(), nullptr()).getOrThrow()
-                    device.getImageMemoryRequirements(vkImage, memReq.ptr())
-                    imageMemoryTypeBits.gpu += VkMemoryPropertyFlags.fromNativeData(memReq.memoryTypeBits.toInt())
-                    imageSuballocateOffsets.gpu.add(
-                        imageSubAllocator.gpu.allocate(
-                            memReq.size.toLong(),
-                            memReq.alignment.toLong()
-                        )
-                    )
-                    vkImage
-                }
-
-                // TODO mipmap support
-                val vkImageCPU = MemoryStack {
-                    val createInfo = VkImageCreateInfo.allocate()
-                    createInfo.imageType = imageType
-                    createInfo.format = VkFormat.fromNativeData(it.format.value)
-                    createInfo.extent.width = it.width.toUInt()
-                    createInfo.extent.height = it.height.toUInt()
-                    createInfo.extent.depth = it.depth.toUInt()
-                    createInfo.mipLevels = it.mipLevels.toUInt()
-                    createInfo.arrayLayers = it.arrayLayers.toUInt()
-                    createInfo.samples = VkSampleCountFlags.`1_BIT`
-                    createInfo.tiling = VkImageTiling.LINEAR
-                    createInfo.usage = VkImageUsageFlags.TRANSFER_SRC
-                    createInfo.initialLayout = VkImageLayout.PREINITIALIZED
-
-                    val memReq = VkMemoryRequirements.allocate()
-                    val vkImage = device.createImage(createInfo.ptr(), nullptr()).getOrThrow()
-                    device.getImageMemoryRequirements(vkImage, memReq.ptr())
-                    imageMemoryTypeBits.cpu += VkMemoryPropertyFlags.fromNativeData(memReq.memoryTypeBits.toInt())
-                    imageSuballocateOffsets.cpu.add(
-                        imageSubAllocator.cpu.allocate(
-                            memReq.size.toLong(),
-                            memReq.alignment.toLong()
-                        )
-                    )
-                    vkImage
-                }
-
-                DoubleData(vkImageCPU, vkImageGPU)
-            }
-        }
-
-        fun allocateAndBindMemoryForImages(
-            images: List<VkImage>,
-            allocator: MemorySuballocator,
-            suballocateOffsets: LongArrayList,
-            memoryType: UInt
-        ): VkDeviceMemory {
-            // Allocate memory for all buffers
-            val memoryAllocateInfo = VkMemoryAllocateInfo.allocate {
-                allocationSize = allocator.allocatedSize.toULong()
-                memoryTypeIndex = memoryType
-            }
-            val deviceMemoryReturn = VkDeviceMemory.malloc()
-            device.allocateMemory(memoryAllocateInfo.ptr(), nullptr(), deviceMemoryReturn.ptr()).getOrThrow()
-            val deviceMemory = VkDeviceMemory.fromNativeData(device, deviceMemoryReturn.value)
-
-            // Using heap allocation because buffer count can be large
-            Arena.ofConfined().useAllocateScope {
-                val bufferCount = images.size.toLong()
-                // Bind buffers to memory
-                val bindInfos = VkBindImageMemoryInfo.allocate(bufferCount)
-                for (i in 0L..<bufferCount) {
-                    bindInfos[i].image = images[i.toInt()]
-                    bindInfos[i].memory = deviceMemory
-                    bindInfos[i].memoryOffset = suballocateOffsets.getLong(i.toInt()).toULong()
-                }
-                device.bindImageMemory2(bufferCount.toUInt(), bindInfos.ptr()).getOrThrow()
-                deviceMemory
-            }
-
-            return deviceMemory
-        }
-
-        val imageDeviceMemory = if (imageList.isNotEmpty()) {
-            val cpu = allocateAndBindMemoryForImages(
-                imageList.map { it.cpu },
-                imageSubAllocator.cpu,
-                imageSuballocateOffsets.cpu,
-                memoryTypes.staging
-//                    memoryTypes.run {
-//                        findType(
-//                            imageMemoryTypeBits.cpu,
-//                            VkMemoryPropertyFlags.DEVICE_LOCAL
-//                        ).findType(
-//                            imageMemoryTypeBits.cpu,
-//                            VkMemoryPropertyFlags.NONE
-//                        )
-//                    }
-            )
-
-            val temp = NPointer.malloc<NUInt8>(1)
-            @Suppress("UNCHECKED_CAST")
-            device.mapMemory(
-                cpu, 0UL, VK_WHOLE_SIZE, VkMemoryMapFlags.NONE,
-                temp.ptr() as NPointer<NPointer<*>>
-            ).getOrThrow()
-
-            val mappedPtr = temp[0]
-
-            captureData.imageData.forEachIndexed { index, dataV ->
-                val data = dataV.levels.first()
-                val offset = imageSuballocateOffsets.cpu.getLong(index)
-                val dataWrapped = NPointer<NUInt8>(data.ptr.address)
-                dataWrapped.copyTo(mappedPtr + offset, data.len)
-            }
-
-            device.unmapMemory(cpu)
-            DoubleData(
-                cpu,
-                allocateAndBindMemoryForImages(
-                    imageList.map { it.gpu },
-                    imageSubAllocator.gpu,
-                    imageSuballocateOffsets.gpu,
-                    memoryTypes.device
-//                    memoryTypes.findType(
-//                        imageMemoryTypeBits.gpu + VkMemoryPropertyFlags.DEVICE_LOCAL,
-//                        VkMemoryPropertyFlags.NONE
-//                    )
-                )
-            )
-        } else {
-            null
-        }
-
-        val pCommandBuffer = VkCommandBuffer.malloc(1)
-        val commandBufferAllocateInfo = VkCommandBufferAllocateInfo.allocate {
-            this.commandPool = commandPool
-            level = VkCommandBufferLevel.PRIMARY
-            commandBufferCount = 1u
-        }
-        val fenceCreateInfo = VkFenceCreateInfo.allocate {
-            flags = VkFenceCreateFlags.SIGNALED
-        }
-        device.allocateCommandBuffers(commandBufferAllocateInfo.ptr(), pCommandBuffer.ptr())
-        val commandBuffer = VkCommandBuffer.fromNativeData(commandPool, pCommandBuffer[0])
-
-        val semaphoreCreateInfo = VkSemaphoreCreateInfo.allocate {}
-        val renderFinishedSemaphore = device.createSemaphore(semaphoreCreateInfo.ptr(), null).getOrThrow()
-        val pRenderFinishedSemaphore = VkSemaphore.arrayOf(renderFinishedSemaphore)
-
-        val imageAvailableSemaphore = device.createSemaphore(semaphoreCreateInfo.ptr(), null).getOrThrow()
-        val pImageAvailableSemaphore = VkSemaphore.arrayOf(imageAvailableSemaphore)
-
-        val inFlightFence = device.createFence(fenceCreateInfo.ptr(), null).getOrThrow()
-
-        val fences = VkFence.arrayOf(inFlightFence)
-
-        val initializeSemaphore = device.createSemaphore(semaphoreCreateInfo.ptr(), null).getOrThrow()
-        val pInitializeSemaphore = VkSemaphore.arrayOf(initializeSemaphore)
-
-        // Initial layout transitions
-        MemoryStack {
-            device.waitForFences(1u, fences.ptr(), VK_TRUE, ULong.MAX_VALUE)
-            device.resetFences(1u, fences.ptr())
-
-            val dependencyInfo = VkDependencyInfo.allocate {
-                val imageMemoryBarriers = VkImageMemoryBarrier2.allocate(imageList.size.toLong())
-                imageList.forEachIndexed { i, image ->
-                    imageMemoryBarriers[i.toLong()].apply {
-                        srcStageMask = VkPipelineStageFlags2.HOST
-                        srcAccessMask = VkAccessFlags2.HOST_WRITE
-                        dstStageMask = VkPipelineStageFlags2.COPY
-                        dstAccessMask = VkAccessFlags2.TRANSFER_READ
-                        oldLayout = VkImageLayout.PREINITIALIZED
-                        newLayout = VkImageLayout.TRANSFER_SRC_OPTIMAL
-
-                        ofWholeImage(image.cpu)
-                    }
-                }
-                imageMemoryBarriers(imageMemoryBarriers)
-                val bufferMemoryBarriers = VkBufferMemoryBarrier2.allocate(bufferList.size.toLong())
-                bufferList.forEachIndexed { i, buffer ->
-                    bufferMemoryBarriers[i.toLong()].apply {
-                        srcStageMask = VkPipelineStageFlags2.HOST
-                        srcAccessMask = VkAccessFlags2.HOST_WRITE
-                        dstStageMask = VkPipelineStageFlags2.COPY
-                        dstAccessMask = VkAccessFlags2.TRANSFER_READ
-
-                        ofWholeBuffer(buffer.cpu)
-                    }
-                }
-                bufferMemoryBarriers(bufferMemoryBarriers)
-            }
-            commandBuffer.resetCommandBuffer(VkCommandBufferResetFlags.NONE)
-
-            val beginInfo = VkCommandBufferBeginInfo.allocate {}
-            commandBuffer.beginCommandBuffer(beginInfo.ptr())
-            commandBuffer.cmdPipelineBarrier2(dependencyInfo.ptr())
-            commandBuffer.endCommandBuffer()
-
-            val submitInfo = VkSubmitInfo.allocate {
-                commandBuffers(pCommandBuffer)
-                signalSemaphores(pInitializeSemaphore)
-            }
-
-            graphicsQueue.queueSubmit(
-                1u,
-                submitInfo.ptr(),
-                inFlightFence
-            )
-        }
-
-        val dependencyInfo1 = VkDependencyInfo.allocate {
-            val bufferMemoryBarriers = VkBufferMemoryBarrier2.allocate(bufferList.size.toLong())
-            bufferList.forEachIndexed { i, buffer ->
-                bufferMemoryBarriers[i.toLong()].apply {
-                    srcStageMask = VkPipelineStageFlags2.ALL_COMMANDS
-                    srcAccessMask = VkAccessFlags2.NONE
-                    dstStageMask = VkPipelineStageFlags2.COPY
-                    dstAccessMask = VkAccessFlags2.TRANSFER_WRITE
-
-                    ofWholeBuffer(buffer.gpu)
-                }
-            }
-            bufferMemoryBarriers(bufferMemoryBarriers)
-            val imageMemoryBarriers = VkImageMemoryBarrier2.allocate(imageList.size.toLong())
-            imageList.forEachIndexed { i, image ->
-                imageMemoryBarriers[i.toLong()].apply {
-                    srcStageMask = VkPipelineStageFlags2.ALL_COMMANDS
-                    srcAccessMask = VkAccessFlags2.NONE
-                    dstStageMask = VkPipelineStageFlags2.COPY
-                    dstAccessMask = VkAccessFlags2.TRANSFER_WRITE
-                    oldLayout = VkImageLayout.UNDEFINED
-                    newLayout = VkImageLayout.TRANSFER_DST_OPTIMAL
-
-                    ofWholeImage(image.gpu)
-                }
-            }
-        }
-
-        val dependencyInfo2 = VkDependencyInfo.allocate {
-            val bufferMemoryBarriers = VkBufferMemoryBarrier2.allocate(captureData.metadata.buffers.size.toLong())
-            bufferList.forEachIndexed { i, buffer ->
-                bufferMemoryBarriers[i.toLong()].apply {
-                    srcStageMask = VkPipelineStageFlags2.COPY
-                    srcAccessMask = VkAccessFlags2.TRANSFER_READ
-                    dstStageMask = VkPipelineStageFlags2.ALL_COMMANDS
-                    dstAccessMask = VkAccessFlags2.MEMORY_READ
-
-                    ofWholeBuffer(buffer.gpu)
-                }
-            }
-            bufferMemoryBarriers(bufferMemoryBarriers)
-            val imageMemoryBarriers = VkImageMemoryBarrier2.allocate(captureData.metadata.images.size.toLong())
-            imageList.forEachIndexed { i, image ->
-                imageMemoryBarriers[i.toLong()].apply {
-                    srcStageMask = VkPipelineStageFlags2.COPY
-                    srcAccessMask = VkAccessFlags2.TRANSFER_READ
-                    dstStageMask = VkPipelineStageFlags2.ALL_COMMANDS
-                    dstAccessMask = VkAccessFlags2.MEMORY_READ
-                    oldLayout = VkImageLayout.TRANSFER_DST_OPTIMAL
-                    newLayout = VkImageLayout.GENERAL
-
-                    ofWholeImage(image.gpu)
-                }
-            }
-            imageMemoryBarriers(imageMemoryBarriers)
-        }
+        replayInstance.init(graphicsQueue)
 
         device.deviceWaitIdle()
-
-        var isFirst = true
 
         while (glfwWindowShouldClose(window) == GLFW_FALSE) {
             glfwPollEvents()
             MemoryStack {
-                device.waitForFences(1u, fences.ptr(), VK_TRUE, ULong.MAX_VALUE)
-                device.resetFences(1u, fences.ptr())
+                device.waitForFences(1u, replayInstance.fences.ptr(), VK_TRUE, ULong.MAX_VALUE)
+                device.resetFences(1u, replayInstance.fences.ptr())
 
                 val pImageIndex = NUInt32.malloc(1)
                 device.acquireNextImageKHR(
                     swapchain,
                     ULong.MAX_VALUE,
-                    imageAvailableSemaphore,
+                    replayInstance.imageAvailableSemaphore,
                     VkFence.fromNativeData(device, 0L),
                     pImageIndex.ptr()
                 )
 
-                commandBuffer.resetCommandBuffer(VkCommandBufferResetFlags.NONE)
-
-                val beginInfo = VkCommandBufferBeginInfo.allocate {}
-                commandBuffer.beginCommandBuffer(beginInfo.ptr())
-
-                val dependencyInfo0 = VkDependencyInfo.allocate {
-                    val imageMemoryBarrier = VkImageMemoryBarrier2.allocate(1L)
-                    imageMemoryBarrier[0].apply {
-                        srcStageMask = VkPipelineStageFlags2.ALL_COMMANDS
-                        srcAccessMask = VkAccessFlags2.NONE
-                        dstStageMask = VkPipelineStageFlags2.ALL_COMMANDS
-                        dstAccessMask = VkAccessFlags2.NONE
-                        oldLayout = VkImageLayout.UNDEFINED
-                        newLayout = VkImageLayout.PRESENT_SRC_KHR
-
-                        ofWholeImage(swapchainImages[pImageIndex[0].toInt()])
-                    }
-                    imageMemoryBarriers(imageMemoryBarrier)
-                }
-                commandBuffer.cmdPipelineBarrier2(dependencyInfo0.ptr())
-
-                commandBuffer.cmdPipelineBarrier2(dependencyInfo1.ptr())
-
-                bufferList.forEachIndexed { i, buffer ->
-                    val bufferMetadata = captureData.metadata.buffers[i]
-                    commandBuffer.cmdCopyBuffer(
-                        buffer.cpu,
-                        buffer.gpu,
-                        1u,
-                        VkBufferCopy.allocate {
-                            srcOffset = 0uL
-                            dstOffset = 0uL
-                            size = bufferMetadata.size.toULong()
-                        }.ptr()
-                    )
-                }
-                imageList.forEachIndexed { i, image ->
-                    val imageMetadata = captureData.metadata.images[i]
-                    commandBuffer.cmdCopyImage(
-                        image.cpu,
-                        VkImageLayout.TRANSFER_SRC_OPTIMAL,
-                        image.gpu,
-                        VkImageLayout.TRANSFER_DST_OPTIMAL,
-                        1u,
-                        VkImageCopy.allocate {
-                            srcSubresource {
-                               aspectMask = VkImageAspectFlags.COLOR
-                                mipLevel = 0u
-                                baseArrayLayer = 0u
-                                layerCount = imageMetadata.arrayLayers.toUInt()
-                            }
-                            srcOffset {
-                                x = 0
-                                y = 0
-                                z = 0
-                            }
-
-                            dstSubresource {
-                                aspectMask = VkImageAspectFlags.COLOR
-                                mipLevel = 0u
-                                baseArrayLayer = 0u
-                                layerCount = imageMetadata.arrayLayers.toUInt()
-                            }
-
-                            dstOffset {
-                                x = 0
-                                y = 0
-                                z = 0
-                            }
-
-                            extent {
-                                width = imageMetadata.width.toUInt()
-                                height = imageMetadata.height.toUInt()
-                                depth = imageMetadata.depth.toUInt()
-                            }
-                        }.ptr()
-                    )
-                }
-                commandBuffer.cmdPipelineBarrier2(dependencyInfo2.ptr())
-                // Replay commands
-                when (val command = captureData.metadata.command) {
-                    is Command.DispatchIndirectCommand -> {
-                        commandBuffer.cmdDispatchIndirect(bufferList[command.bufferIndex].gpu, command.offset.toULong())
-                    }
-
-                    is Command.DispatchCommand -> {
-                        // TODO
-                    }
-                }
-                commandBuffer.endCommandBuffer()
-
-                val submitInfo = VkSubmitInfo.allocate {
-                    waitSemaphores(
-                        pImageAvailableSemaphore,
-                        VkPipelineStageFlags.arrayOf(VkPipelineStageFlags.COLOR_ATTACHMENT_OUTPUT)
-                    )
-                    commandBuffers(pCommandBuffer)
-                    signalSemaphores(pRenderFinishedSemaphore)
-                }
-                graphicsQueue.queueSubmit(
-                    1u,
-                    submitInfo.ptr(),
-                    inFlightFence
+                replayInstance.execute(
+                    graphicsQueue,
+                    swapchainImages[pImageIndex[0].toInt()]
                 )
 
-                val waitSemaphores = if (isFirst) {
-                    VkSemaphore.arrayOf(initializeSemaphore, renderFinishedSemaphore)
-                } else {
-                    pRenderFinishedSemaphore
-                }
-
                 val presentInfo = VkPresentInfoKHR.allocate {
-                    waitSemaphores(waitSemaphores)
-
+                    waitSemaphores(replayInstance.pRenderFinishedSemaphore)
                     val dummy = VkResult.malloc(1)
                     swapchains(VkSwapchainKHR.arrayOf(swapchain), pImageIndex, dummy)
                 }
                 graphicsQueue.queuePresentKHR(presentInfo.ptr())
             }
             device.deviceWaitIdle()
-            isFirst = false
         }
 
         device.deviceWaitIdle()
 
-        device.destroyFence(inFlightFence, null)
-        device.destroySemaphore(initializeSemaphore, null)
-        device.destroySemaphore(imageAvailableSemaphore, null)
-        device.destroySemaphore(renderFinishedSemaphore, null)
 
-        bufferList.forEach {
-            device.destroyBuffer(it.cpu, null)
-            device.destroyBuffer(it.gpu, null)
-        }
-        if (bufferDeviceMemory != null) {
-            device.freeMemory(bufferDeviceMemory.gpu, null)
-            device.freeMemory(bufferDeviceMemory.cpu, null)
-        }
-        imageList.forEach {
-            device.destroyImage(it.cpu, null)
-            device.destroyImage(it.gpu, null)
-        }
-        if (imageDeviceMemory != null) {
-            device.freeMemory(imageDeviceMemory.gpu, null)
-            device.freeMemory(imageDeviceMemory.cpu, null)
-        }
-        device.destroyCommandPool(commandPool, null)
         for (imageView in swapchainImageViews) {
             device.destroyImageView(imageView, null)
         }
@@ -861,6 +283,26 @@ fun main(args: Array<String>) {
         instance.destroyInstance(null)
 
         glfwTerminate()
+    }
+}
+
+public inline fun <R> Path.useMapped(crossinline block: (NArray<NUInt8>) -> R): R {
+    return try {
+        FileChannel.open(this).use { fileChannel ->
+            Arena.ofConfined().use { arena ->
+                val segment = fileChannel.map(FileChannel.MapMode.READ_ONLY, 0, fileChannel.size(), arena)
+                block(NArray(segment.address(), segment.byteSize()))
+            }
+        }
+    } catch (_: UnsupportedOperationException) {
+        Files.newInputStream(this).use {
+            Arena.ofConfined().use { arena ->
+                val bytes = it.readAllBytes()
+                val segment = arena.allocate(bytes.size.toLong(), 16)
+                MemorySegment.copy(bytes, 0, segment, ValueLayout.JAVA_BYTE, 0, bytes.size)
+                block(NArray(segment.address(), segment.byteSize()))
+            }
+        }
     }
 }
 

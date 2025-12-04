@@ -54,11 +54,10 @@ class ShaderSourceContext(val originalSource: String) {
     val ssbos = mutableMapOf<String, ShaderInfo.Buffer>()
     val ubos = mutableMapOf<String, ShaderInfo.Buffer>()
 
-    // set 0 = value uniforms
-    // set 1 = sampler/image uniforms
-    // set 2 = storage buffers
-    // set 3 = uniform buffers
-    val bindingCounters = intArrayOf(1, 0, 0, 0)
+    // set 0 = sampler/image uniforms
+    // set 1 = storage buffers
+    // set 2 = uniform buffers
+    val bindingCounters = intArrayOf(0, 0, 0)
 
     val tokenCounts = modifiedSource.split(TOKEN_DELIMITER_REGEX)
         .groupingBy { it }
@@ -81,7 +80,7 @@ class ShaderSourceContext(val originalSource: String) {
 private fun ShaderSourceContext.patchSSBO() {
     modifiedSource = SSBO_REGEX.replace(modifiedSource) {
         val (_, modifiers1, modifiers2, name) = it.destructured
-        val set = 2
+        val set = 1
         val binding = bindingCounters[set]++
         val buffer = ShaderInfo.Buffer(name, set, binding)
         ssbos[name] = buffer
@@ -103,7 +102,7 @@ private fun ShaderSourceContext.patchSSBO() {
 private fun ShaderSourceContext.patchUBO() {
     modifiedSource = UBO_REGEX.replace(modifiedSource) {
         val (_, modifiers1, modifiers2, name) = it.destructured
-        val set = 3
+        val set = 2
         val binding = bindingCounters[set]++
         val buffer = ShaderInfo.Buffer(name, set, binding)
         ubos[name] = buffer
@@ -114,7 +113,7 @@ private fun ShaderSourceContext.patchUBO() {
             append(binding)
             append(") ")
             append(modifiers1)
-            append("buffer ")
+            append("uniform ")
             append(modifiers2)
             append(name)
             append(" {")
@@ -123,6 +122,11 @@ private fun ShaderSourceContext.patchUBO() {
 }
 
 private fun ShaderSourceContext.patchUniforms() {
+    val setV = 2
+    val binding = bindingCounters[setV]++
+    val buffer = ShaderInfo.Buffer("DefaultUniforms", setV, binding)
+    ubos[buffer.name] = buffer
+
     modifiedSource = UNIFORM_REGEX.replace(modifiedSource) {
         val (layout, modifiers1, modifiers2, typeStr, name) = it.destructured
 
@@ -134,18 +138,17 @@ private fun ShaderSourceContext.patchUniforms() {
 
         val type = GLSLDataType[typeStr]
 
-
         when (type) {
             is GLSLDataType.Value -> {
                 // Have to put them into a uniform block
-                val set = 0
+                val set = 2
                 val uniform = ShaderInfo.Uniform(name, type, set, -1)
                 uniforms[name] = uniform
                 ""
             }
 
             is GLSLDataType.Opaque -> {
-                val set = 1
+                val set = 0
                 val binding = bindingCounters[set]++
                 val uniform = ShaderInfo.Uniform(name, type, set, binding)
                 uniforms[name] = uniform
@@ -183,7 +186,12 @@ private fun ShaderSourceContext.patchUniforms() {
             newLines.add(ogLines[0].trim())
             newLines.add("")
             newLines.add(buildString {
-                append("layout(std140, set = 0, binding = 0) uniform DefaultUniforms {\n")
+                append("layout(std140, ")
+                append("set = ")
+                append(setV)
+                append(", binding = ")
+                append(binding)
+                append(") uniform DefaultUniforms {\n")
                 nonOpaqueUniforms.forEach {
                     append(INDENT)
                     append(it.type.codeStr)

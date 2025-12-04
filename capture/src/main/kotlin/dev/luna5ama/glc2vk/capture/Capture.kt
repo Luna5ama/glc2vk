@@ -6,12 +6,15 @@ import dev.luna5ama.glwrapper.base.*
 import dev.luna5ama.glwrapper.enums.GLSLDataType
 import dev.luna5ama.glwrapper.enums.GLSLDataType.UniformType
 import dev.luna5ama.glwrapper.enums.ImageFormat
+import dev.luna5ama.glwrapper.enums.ShaderStage
 import dev.luna5ama.glwrapper.objects.BufferObject
 import dev.luna5ama.kmogus.Arr
 import dev.luna5ama.kmogus.MemoryStack
 import dev.luna5ama.kmogus.ensureCapacity
 import dev.luna5ama.kmogus.memcpy
 import java.nio.file.Path
+import kotlin.io.path.absolutePathString
+import kotlin.io.path.writeText
 
 private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: ShaderProgramResourceManager) {
     val tempGPUBuffer = BufferObject.Immutable()
@@ -122,10 +125,10 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
     }
 
     fun transferBuffer(size: Long): Arr {
+        glFinish()
         val cpuBuffer = Arr.malloc(size)
         val imageData = tempGPUBuffer.map(GL_MAP_READ_BIT)
-        val cpuImageData = Arr.malloc(size)
-        memcpy(imageData.ptr, 0L, cpuImageData.ptr, 0L, size)
+        memcpy(imageData.ptr, 0L, cpuBuffer.ptr, 0L, size)
         tempGPUBuffer.unmap()
         return cpuBuffer
     }
@@ -329,12 +332,15 @@ private fun CaptureContext.captureDefaultUniformBlock() {
         }
     }
 
+    check(buffers.isEmpty())
+    check(bufferMetadata.isEmpty())
+
     buffers += defaultUniformData.realloc(struct.size.toLong(), false)
     bufferMetadata += BufferMetadata(
         name = "DefaultUniforms",
         size = buffers.last().len
     )
-    uniformBufferBinding("DefaultUniforms", 0, 0, 0L)
+    uniformBufferBinding("DefaultUniforms", 0, shaderInfo.ubos["DefaultUniforms"]!!.binding, 0L)
 }
 
 private fun CaptureContext.captureImages() {
@@ -667,6 +673,24 @@ private fun CaptureContext.captureShaderProgramResources() {
     captureBuffers()
 }
 
+private fun saveShader(
+    outputPath: Path,
+    shaderInfo: ShaderInfo,
+    stage: ShaderStage
+) {
+    val extension = "${stage.shortName}.glsl"
+    val glslPath = outputPath.resolve("shader.$extension")
+    val spvPath = outputPath.resolve("shader.${stage.shortName}.spv")
+    glslPath.writeText(shaderInfo.patchedSource)
+
+
+    ProcessBuilder()
+        .command("glslc", "-g" , "-x", "glsl", "--target-env=vulkan1.4", "-fshader-stage=comp", "-o", spvPath.absolutePathString(), glslPath.absolutePathString())
+        .inheritIO()
+        .start()
+        .waitFor()
+}
+
 @Suppress("LocalVariableName")
 fun captureGlDispatchCompute(
     shaderInfo: ShaderInfo,
@@ -694,6 +718,8 @@ fun captureGlDispatchComputeIndirect(shaderInfo: ShaderInfo, outputPath: Path, i
     val boundIndirectBuffer = glGetInteger(GL_DISPATCH_INDIRECT_BUFFER_BINDING)
     val bufferIndex = captureContext.getBufferIndex(boundIndirectBuffer)
 
+    println(captureContext.buffers[bufferIndex].ptr.getInt())
+
     val command = Command.DispatchIndirectCommand(
         bufferIndex = bufferIndex,
         offset = indirect
@@ -702,6 +728,7 @@ fun captureGlDispatchComputeIndirect(shaderInfo: ShaderInfo, outputPath: Path, i
     val resourceCapture = captureContext.build(command)
 
     CaptureData.save(outputPath, resourceCapture)
+    saveShader(outputPath, shaderInfo, ShaderStage.ComputeShader)
 
     resourceCapture.apply {
         free()

@@ -191,10 +191,10 @@ class CaptureData(
                     StandardOpenOption.TRUNCATE_EXISTING
                 ).use { channel ->
                     val mappedBuffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, totalSize)
-                        .order(ByteOrder.nativeOrder())
                     data.levels.forEach {
-                        mappedBuffer.put(it.ptr.asByteBuffer(it.len.toInt()))
+                        mappedBuffer.order(ByteOrder.nativeOrder()).put(it.ptr.asByteBuffer(it.len.toInt()).order(ByteOrder.nativeOrder()))
                     }
+                    mappedBuffer.force()
                 }
             }
             capture.metadata.buffers.forEachIndexed { index, metadata ->
@@ -208,8 +208,8 @@ class CaptureData(
                     StandardOpenOption.TRUNCATE_EXISTING
                 ).use { channel ->
                     val mappedBuffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, metadata.size)
-                        .order(ByteOrder.nativeOrder())
-                    mappedBuffer.put(data.ptr.asByteBuffer(data.len.toInt()))
+                    mappedBuffer.order(ByteOrder.nativeOrder()).put(data.ptr.asByteBuffer(data.len.toInt()).order(ByteOrder.nativeOrder()))
+                    mappedBuffer.force()
                 }
             }
         }
