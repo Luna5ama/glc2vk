@@ -11,6 +11,7 @@ import dev.luna5ama.kmogus.Arr
 import dev.luna5ama.kmogus.MemoryStack
 import dev.luna5ama.kmogus.ensureCapacity
 import dev.luna5ama.kmogus.memcpy
+import java.nio.file.Path
 
 private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: ShaderProgramResourceManager) {
     val tempGPUBuffer = BufferObject.Immutable()
@@ -438,7 +439,8 @@ private fun CaptureContext.captureImages() {
                         mipLevels = mipLevels,
                         arrayLayers = arrayLayers,
                         format = format,
-                        type = type
+                        type = type,
+                        levelDataSizes = mipData.map { it.len }
                     )
                 )
             }
@@ -667,13 +669,16 @@ fun captureGlDispatchCompute(
 }
 
 @Suppress("LocalVariableName")
-fun captureGlDispatchComputeIndirect(shaderInfo: ShaderInfo, indirect: Long) {
+fun captureGlDispatchComputeIndirect(shaderInfo: ShaderInfo, outputPath: Path, indirect: Long) {
     val currProgram = glGetInteger(GL_CURRENT_PROGRAM)
     val resourceManager = ShaderProgramResourceManager(currProgram)
 
     val captureContext = CaptureContext(shaderInfo, resourceManager)
     captureContext.captureShaderProgramResources()
     val resourceCapture = captureContext.build()
+
+    ResourceCapture.save(outputPath, resourceCapture)
+
     resourceCapture.apply {
         free()
     }

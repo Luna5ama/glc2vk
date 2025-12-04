@@ -1,5 +1,6 @@
 plugins {
     id("buildsrc.convention.kotlin-jvm")
+    alias(libs.plugins.kotlinxSerialization)
 }
 
 dependencies {
@@ -8,9 +9,11 @@ dependencies {
     implementation("org.lwjgl", "lwjgl")
     implementation("org.lwjgl", "lwjgl-opengl")
     implementation("org.lwjgl", "lwjgl-stb")
+    implementation("org.lwjgl", "lwjgl-zstd")
     runtimeOnly("org.lwjgl", "lwjgl", classifier = "natives-windows")
     runtimeOnly("org.lwjgl", "lwjgl-opengl", classifier = "natives-windows")
     runtimeOnly("org.lwjgl", "lwjgl-stb", classifier = "natives-windows")
+    runtimeOnly("org.lwjgl", "lwjgl-zstd", classifier = "natives-windows")
 
     api(libs.kotlinxSerializationJson)
 
