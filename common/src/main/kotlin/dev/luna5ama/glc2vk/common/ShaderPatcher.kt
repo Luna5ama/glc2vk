@@ -17,6 +17,10 @@ private val SSBO_REGEX =
     """^((?:layout\(.+?\))?)\s*((?:${NON_TOKEN_REGEX.pattern}\s+)*?)buffer\s+((?:${NON_TOKEN_REGEX.pattern}\s+)*?)(\S+)\s*\{""".toRegex(
         RegexOption.MULTILINE
     )
+private val UBO_REGEX =
+    """^((?:layout\(.+?\))?)\s*((?:${NON_TOKEN_REGEX.pattern}\s+)*?)uniform\s+((?:${NON_TOKEN_REGEX.pattern}\s+)*?)(\S+)\s*\{""".toRegex(
+        RegexOption.MULTILINE
+    )
 private val CONST_REGEX =
     """^const\s+(\S+)\s+(\S+)\s*=\s*(.+?)\s*;\s*""".toRegex(
         RegexOption.MULTILINE
@@ -35,23 +39,25 @@ private inline fun String.transformLines(block: (List<String>) -> List<String>):
 
 data class ShaderInfo(
     val uniforms: Map<String, Uniform>,
-    val ssbos: Map<String, SSBO>,
+    val ssbos: Map<String, Buffer>,
+    val ubos: Map<String, Buffer>
 ) {
     data class Uniform(val name: String, val type: GLSLDataType, val set: Int, val binding: Int)
-    data class SSBO(val name: String, val set: Int, val binding: Int)
+    data class Buffer(val name: String, val set: Int, val binding: Int)
 }
 
 class ShaderSourceContext(val originalSource: String) {
     var modifiedSource: String = originalSource
 
     val uniforms = mutableMapOf<String, ShaderInfo.Uniform>()
-    val ssbos = mutableMapOf<String, ShaderInfo.SSBO>()
+    val ssbos = mutableMapOf<String, ShaderInfo.Buffer>()
+    val ubos = mutableMapOf<String, ShaderInfo.Buffer>()
 
     // set 0 = value uniforms
     // set 1 = sampler/image uniforms
     // set 2 = storage buffers
     // set 3 = uniform buffers
-    val bindingCounters = intArrayOf(1, 0, 0)
+    val bindingCounters = intArrayOf(1, 0, 0, 0)
 
     val tokenCounts = modifiedSource.split(TOKEN_DELIMITER_REGEX)
         .groupingBy { it }
@@ -64,7 +70,8 @@ class ShaderSourceContext(val originalSource: String) {
     fun toShaderInfo(): ShaderInfo {
         return ShaderInfo(
             uniforms = uniforms,
-            ssbos = ssbos
+            ssbos = ssbos,
+            ubos = ubos
         )
     }
 }
@@ -74,8 +81,8 @@ private fun ShaderSourceContext.patchSSBO() {
         val (_, modifiers1, modifiers2, name) = it.destructured
         val set = 2
         val binding = bindingCounters[set]++
-        val ssbo = ShaderInfo.SSBO(name, set, binding)
-        ssbos[name] = ssbo
+        val buffer = ShaderInfo.Buffer(name, set, binding)
+        ssbos[name] = buffer
         buildString {
             append("layout(std430, set = ")
             append(set)
@@ -90,6 +97,29 @@ private fun ShaderSourceContext.patchSSBO() {
         }
     }
 }
+
+private fun ShaderSourceContext.patchUBO() {
+    modifiedSource = UBO_REGEX.replace(modifiedSource) {
+        val (_, modifiers1, modifiers2, name) = it.destructured
+        val set = 3
+        val binding = bindingCounters[set]++
+        val buffer = ShaderInfo.Buffer(name, set, binding)
+        ubos[name] = buffer
+        buildString {
+            append("layout(std140, set = ")
+            append(set)
+            append(", binding = ")
+            append(binding)
+            append(") ")
+            append(modifiers1)
+            append("buffer ")
+            append(modifiers2)
+            append(name)
+            append(" {")
+        }
+    }
+}
+
 private fun ShaderSourceContext.patchUniforms() {
     modifiedSource = UNIFORM_REGEX.replace(modifiedSource) {
         val (layout, modifiers1, modifiers2, typeStr, name) = it.destructured
@@ -189,6 +219,7 @@ fun ShaderSourceContext.patchShaderForVulkan(): String {
     removeComments()
     removeUnusedConsts()
     patchSSBO()
+    patchUBO()
     patchUniforms()
 
     return modifiedSource.replace("\n", System.lineSeparator())

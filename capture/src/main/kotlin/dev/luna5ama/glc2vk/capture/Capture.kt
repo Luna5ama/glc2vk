@@ -5,10 +5,10 @@ import dev.luna5ama.glwrapper.ShaderProgramResourceManager
 import dev.luna5ama.glwrapper.base.*
 import dev.luna5ama.glwrapper.enums.GLSLDataType
 import dev.luna5ama.glwrapper.enums.GLSLDataType.UniformType
+import dev.luna5ama.glwrapper.enums.ImageFormat
 import dev.luna5ama.glwrapper.objects.BufferObject
 import dev.luna5ama.kmogus.Arr
 import dev.luna5ama.kmogus.MemoryStack
-import dev.luna5ama.kmogus.Ptr
 import dev.luna5ama.kmogus.ensureCapacity
 import dev.luna5ama.kmogus.memcpy
 
@@ -22,7 +22,7 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
         }
     }
 
-    val images = mutableListOf<Arr>()
+    val images = mutableListOf<ImageData>()
     val imageMetadata = mutableListOf<ImageMetadata>()
     val samplerBindings = mutableListOf<SamplerBinding>()
     val imageBindings = mutableListOf<ImageBinding>()
@@ -89,6 +89,15 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
             imageData = images,
             bufferData = buffers
         )
+    }
+
+    fun transferBuffer(size: Long): Arr {
+        val cpuBuffer = Arr.malloc(size)
+        val imageData = tempGPUBuffer.map(GL_MAP_READ_BIT)
+        val cpuImageData = Arr.malloc(size)
+        memcpy(imageData.ptr, 0L, cpuImageData.ptr, 0L, size)
+        tempGPUBuffer.unmap()
+        return cpuBuffer
     }
 
     fun destroy() {
@@ -299,37 +308,213 @@ private fun CaptureContext.captureDefaultUniformBlock() {
 }
 
 private fun CaptureContext.captureImages() {
-
-}
-
-private fun CaptureContext.captureBuffers() {
-    val bufferIDToIndex = mutableMapOf<Int, Int>()
-
-    fun getBufferIndex(boundBufferID: Int, tempPtr: Ptr): Int {
-        if (bufferIDToIndex.putIfAbsent(boundBufferID, buffers.size) == null) {
-            glGetNamedBufferParameteriv(boundBufferID, GL_BUFFER_SIZE, tempPtr)
-            val bufferSize = tempPtr.getInt()
-            ensureTempGPUBufferCapacity(bufferSize.toLong())
-            glCopyNamedBufferSubData(boundBufferID, tempGPUBuffer.id, 0L, 0L, bufferSize.toLong())
-
-            val bufferData = tempGPUBuffer.map(GL_MAP_READ_BIT)
-            val cpuBufferData = Arr.malloc(bufferSize.toLong())
-            memcpy(bufferData.ptr, 0L, cpuBufferData.ptr, 0L, bufferSize.toLong())
-
-            buffers.add(cpuBufferData)
-        }
-        val bufferIndex = bufferIDToIndex[boundBufferID]!!
-        return bufferIndex
-    }
+    val imageIDToIndex = mutableMapOf<Int, Int>()
 
     MemoryStack {
         val temp = malloc(8 * 4 * 4L)
         val tempPtr = temp.ptr
 
+        fun getImageIndex(imageID: Int): Int {
+            if (imageIDToIndex.putIfAbsent(imageID, images.size) == null) {
+                glGetTextureParameteriv(imageID, GL_TEXTURE_TARGET, tempPtr)
+                val target = tempPtr.getInt()
+                val type = glImageTargetToVKImageViewType(target)
+                val width: Int
+                val height: Int
+                val depth: Int
+                val arrayLayers: Int
+                when (type) {
+                    VkImageViewType.`1D` -> {
+                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
+                        width = tempPtr.getInt()
+                        height = 1
+                        depth = 1
+                        arrayLayers = 1
+                    }
+
+                    VkImageViewType.`2D` -> {
+                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
+                        width = tempPtr.getInt()
+                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_HEIGHT, tempPtr)
+                        height = tempPtr.getInt()
+                        depth = 1
+                        arrayLayers = 1
+                    }
+
+                    VkImageViewType.`3D` -> {
+                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
+                        width = tempPtr.getInt()
+                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_HEIGHT, tempPtr)
+                        height = tempPtr.getInt()
+                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_DEPTH, tempPtr)
+                        depth = tempPtr.getInt()
+                        arrayLayers = 1
+                    }
+                    VkImageViewType.CUBE -> {
+                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
+                        width = tempPtr.getInt()
+                        height = width
+                        depth = 1
+                        arrayLayers = 1
+                    }
+                    VkImageViewType.`1D_ARRAY` -> {
+                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
+                        width = tempPtr.getInt()
+                        height = 1
+                        depth = 1
+                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_DEPTH, tempPtr)
+                        arrayLayers = tempPtr.getInt()
+                    }
+                    VkImageViewType.`2D_ARRAY` -> {
+                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
+                        width = tempPtr.getInt()
+                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_HEIGHT, tempPtr)
+                        height = tempPtr.getInt()
+                        depth = 1
+                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_DEPTH, tempPtr)
+                        arrayLayers = tempPtr.getInt()
+                    }
+                    VkImageViewType.CUBE_ARRAY -> {
+                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
+                        width = tempPtr.getInt()
+                        height = width
+                        depth = 1
+                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_DEPTH, tempPtr)
+                        arrayLayers = tempPtr.getInt()
+                    }
+                }
+
+                glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_INTERNAL_FORMAT, tempPtr)
+                val typedFormat = ImageFormat[tempPtr.getInt()]
+                val format = glFormatToVkFormat(typedFormat)
+
+                val mipData = mutableListOf<Arr>()
+
+                // Thanks mutable texture storage
+                var mipLevels = 1
+                for (mip in 0 until 69) {
+                    glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_WIDTH, tempPtr)
+                    val mipWidth = tempPtr.getInt()
+                    if (mipWidth == 0) {
+                        break
+                    }
+
+                    glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_COMPRESSED, tempPtr)
+                    val compressed = tempPtr.getInt() != GL_FALSE
+                    val size: Int
+                    if (compressed) {
+                        glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_COMPRESSED_IMAGE_SIZE, tempPtr)
+                        size = tempPtr.getInt()
+                        ensureTempGPUBufferCapacity(size.toLong())
+                        tempGPUBuffer.bind(GL_PIXEL_PACK_BUFFER)
+                        glGetCompressedTextureImage(imageID, mip, size, 0L)
+                    } else {
+                        typedFormat as ImageFormat.Uncompressed
+                        glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_HEIGHT, tempPtr)
+                        val mipHeight = tempPtr.getInt()
+                        glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_DEPTH, tempPtr)
+                        val mipDepth = tempPtr.getInt()
+                        val pixelSize = typedFormat.totalBits / 8
+                        size = mipWidth * mipHeight * mipDepth * pixelSize
+                        ensureTempGPUBufferCapacity(size.toLong())
+                        tempGPUBuffer.bind(GL_PIXEL_PACK_BUFFER)
+                        glGetTextureImage(imageID, mip, typedFormat.pixelFormat.value, typedFormat.pixelType, size, 0L)
+                    }
+
+                    val cpuImageData = transferBuffer(size.toLong())
+                    mipData.add(cpuImageData)
+
+                    mipLevels++
+                }
+
+                images.add(ImageData(mipData))
+                imageMetadata.add(
+                    ImageMetadata(
+                        name = "Image$imageID",
+                        width = width,
+                        height = height,
+                        depth = depth,
+                        mipLevels = mipLevels,
+                        arrayLayers = arrayLayers,
+                        format = format,
+                        type = type
+                    )
+                )
+            }
+
+            val imageIndex = imageIDToIndex[imageID]!!
+            return imageIndex
+        }
+
+        resourceManager.uniformResource.entries.values.asSequence()
+            .filter { it.type is GLSLDataType.Opaque.Image }
+            .forEach {
+                glGetUniformiv(resourceManager.programID, it.location, tempPtr)
+                val textureUnit = tempPtr.getInt()
+                glGetIntegeri_v(GL_IMAGE_BINDING_NAME, textureUnit, tempPtr)
+                val boundImageID = tempPtr.getInt()
+                val imageIndex = getImageIndex(boundImageID)
+                val metadata = imageMetadata[imageIndex]
+                val targetBinding = when (metadata.type) {
+                    VkImageViewType.`1D` -> GL_TEXTURE_BINDING_1D
+                    VkImageViewType.`2D` -> GL_TEXTURE_BINDING_2D
+                    VkImageViewType.`3D` -> GL_TEXTURE_BINDING_3D
+                    VkImageViewType.CUBE -> GL_TEXTURE_BINDING_CUBE_MAP
+                    VkImageViewType.`1D_ARRAY` -> GL_TEXTURE_BINDING_1D_ARRAY
+                    VkImageViewType.`2D_ARRAY` -> GL_TEXTURE_BINDING_2D_ARRAY
+                    VkImageViewType.CUBE_ARRAY -> GL_TEXTURE_BINDING_CUBE_MAP_ARRAY
+                }
+                glGetIntegeri_v(targetBinding, textureUnit, tempPtr)
+
+                imageBinding(it.name, imageIndex, shaderInfo.uniforms[it.name]!!.binding)
+            }
+
+        resourceManager.uniformResource.entries.values.asSequence()
+            .filter { it.type is GLSLDataType.Opaque.Sampler }
+            .forEach {
+                glGetUniformiv(resourceManager.programID, it.location, tempPtr)
+                val glBindingIndex = tempPtr.getInt()
+                glGetIntegeri_v(GL_IMAGE_BINDING_NAME, glBindingIndex, tempPtr)
+                val boundImageID = tempPtr.getInt()
+                val imageIndex = getImageIndex(boundImageID)
+
+                imageBinding(it.name, imageIndex, shaderInfo.uniforms[it.name]!!.binding)
+            }
+    }
+}
+
+private fun CaptureContext.captureBuffers() {
+    val bufferIDToIndex = mutableMapOf<Int, Int>()
+
+    MemoryStack {
+        val temp = malloc(8 * 4 * 4L)
+        val tempPtr = temp.ptr
+
+        fun getBufferIndex(boundBufferID: Int): Int {
+            if (bufferIDToIndex.putIfAbsent(boundBufferID, buffers.size) == null) {
+                glGetNamedBufferParameteriv(boundBufferID, GL_BUFFER_SIZE, tempPtr)
+                val bufferSize = tempPtr.getInt()
+                ensureTempGPUBufferCapacity(bufferSize.toLong())
+                glCopyNamedBufferSubData(boundBufferID, tempGPUBuffer.id, 0L, 0L, bufferSize.toLong())
+
+                val cpuBufferData = transferBuffer(bufferSize.toLong())
+
+                buffers.add(cpuBufferData)
+                bufferMetadata.add(
+                    BufferMetadata(
+                        name = "Buffer$boundBufferID",
+                        size = bufferSize.toLong()
+                    )
+                )
+            }
+            val bufferIndex = bufferIDToIndex[boundBufferID]!!
+            return bufferIndex
+        }
+
         resourceManager.shaderStorageBlockResource.entries.values.forEach {
             glGetIntegeri_v(GL_SHADER_STORAGE_BUFFER_BINDING, it.bindingIndex, tempPtr)
             val boundBufferID = tempPtr.getInt()
-            val bufferIndex = getBufferIndex(boundBufferID, tempPtr)
+            val bufferIndex = getBufferIndex(boundBufferID)
 
             glGetInteger64i_v(GL_SHADER_STORAGE_BUFFER_START, it.bindingIndex, tempPtr)
             val bufferOffset = tempPtr.getLong()
@@ -340,12 +525,12 @@ private fun CaptureContext.captureBuffers() {
         resourceManager.uniformBlockResource.entries.values.forEach {
             glGetIntegeri_v(GL_UNIFORM_BUFFER_BINDING, it.bindingIndex, tempPtr)
             val boundBufferID = tempPtr.getInt()
-            val bufferIndex = getBufferIndex(boundBufferID, tempPtr)
+            val bufferIndex = getBufferIndex(boundBufferID)
 
             glGetInteger64i_v(GL_UNIFORM_BUFFER_START, it.bindingIndex, tempPtr)
             val bufferOffset = tempPtr.getLong()
 
-            uniformBufferBinding(it.name, bufferIndex, shaderInfo.ssbos[it.name]!!.binding, bufferOffset)
+            uniformBufferBinding(it.name, bufferIndex, shaderInfo.ubos[it.name]!!.binding, bufferOffset)
         }
     }
 }

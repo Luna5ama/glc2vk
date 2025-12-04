@@ -11,7 +11,8 @@ data class ImageMetadata(
     val depth: Int,
     val mipLevels: Int,
     val arrayLayers: Int,
-    val format: VkFormat
+    val format: VkFormat,
+    val type: VkImageViewType
 )
 
 @Serializable
@@ -78,9 +79,19 @@ data class ResourceMetadata(
     val uniformBufferBindings: List<BufferBinding>
 )
 
+class ImageData(
+    val levels: List<Arr>
+) {
+    fun free() {
+        for (level in levels) {
+            level.free()
+        }
+    }
+}
+
 class ResourceCapture(
     val metadata: ResourceMetadata,
-    val imageData: List<Arr>,
+    val imageData: List<ImageData>,
     val bufferData: List<Arr>
 ) {
     fun free() {
