@@ -1,15 +1,19 @@
 package dev.luna5ama.glc2vk.common
 
 import dev.luna5ama.kmogus.Arr
+import dev.luna5ama.kmogus.MemoryStack
 import dev.luna5ama.kmogus.asByteBuffer
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import org.lwjgl.util.zstd.Zstd
 import java.nio.ByteOrder
 import java.nio.channels.FileChannel
+import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import kotlin.io.path.createDirectories
+import kotlin.io.path.fileSize
 import kotlin.io.path.readText
 import kotlin.io.path.writeText
 
@@ -140,71 +144,70 @@ class CaptureData(
             }
             outputPath.createDirectories()
             outputPath.resolve("metadata.json").writeText(jsonInstance.encodeToString(capture.metadata))
-            (capture.metadata.images zip capture.imageData).forEachIndexed { imageIndex, (metadata, data) ->
-                data.levels.forEachIndexed { level, data ->
-                    val path = outputPath.resolve("image_${imageIndex}_$level.bin")
-                    FileChannel.open(
+
+            fun writeCompressed(path: Path, data: Arr) {
+                val maxCompressedSize = Zstd.ZSTD_compressBound(data.len)
+                Arr.malloc(maxCompressedSize).use {
+                    val outputBuffer = it.ptr.asByteBuffer(it.len.toInt()).order(ByteOrder.nativeOrder())
+                    val srcAsByteBuffer = data.ptr.asByteBuffer(data.len.toInt()).order(ByteOrder.nativeOrder())
+                    val finalSize = Zstd.ZSTD_compress(outputBuffer, srcAsByteBuffer, Zstd.ZSTD_CLEVEL_DEFAULT)
+                    outputBuffer.clear()
+                    outputBuffer.limit(finalSize.toInt())
+
+                    Files.newByteChannel(
                         path,
                         StandardOpenOption.CREATE,
-                        StandardOpenOption.READ,
                         StandardOpenOption.WRITE,
                         StandardOpenOption.TRUNCATE_EXISTING
                     ).use { channel ->
-                        val mappedBuffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, data.len)
-                        mappedBuffer.order(ByteOrder.nativeOrder())
-                            .put(data.ptr.asByteBuffer(data.len.toInt()).order(ByteOrder.nativeOrder()))
-                        mappedBuffer.force()
+                        channel.write(outputBuffer)
                     }
                 }
             }
-            capture.metadata.buffers.forEachIndexed { i, metadata ->
-                val path = outputPath.resolve("buffer_$i.bin")
-                val data = capture.bufferData[i]
-                FileChannel.open(
-                    path,
-                    StandardOpenOption.CREATE,
-                    StandardOpenOption.READ,
-                    StandardOpenOption.WRITE,
-                    StandardOpenOption.TRUNCATE_EXISTING
-                ).use { channel ->
-                    val mappedBuffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, metadata.size)
-                    mappedBuffer.order(ByteOrder.nativeOrder())
-                        .put(data.ptr.asByteBuffer(data.len.toInt()).order(ByteOrder.nativeOrder()))
-                    mappedBuffer.force()
+
+            (capture.metadata.images zip capture.imageData).forEachIndexed { imageIndex, (metadata, data) ->
+                data.levels.forEachIndexed { level, data ->
+                    writeCompressed(outputPath.resolve("image_${imageIndex}_$level.bin.zstd"), data)
                 }
+            }
+            capture.metadata.buffers.forEachIndexed { i, metadata ->
+                writeCompressed(outputPath.resolve("buffer_$i.bin.zstd"), capture.bufferData[i])
             }
         }
 
         fun load(inputPath: Path): CaptureData {
             val metadata = Json.decodeFromString<CaptureMetadata>(inputPath.resolve("metadata.json").readText())
+            fun readCompressed(path: Path, uncompressedSize: Long): Arr {
+                return Files.newByteChannel(
+                    path,
+                    StandardOpenOption.READ
+                ).use { channel ->
+                    val outputBuffer = Arr.malloc(uncompressedSize)
+                    Arr.malloc(channel.size()).use {
+                        val inputBuffer = it.ptr.asByteBuffer(it.len.toInt()).order(ByteOrder.nativeOrder())
+                        val outputBufferBB = outputBuffer.ptr.asByteBuffer(outputBuffer.len.toInt()).order(ByteOrder.nativeOrder())
+                        channel.read(inputBuffer)
+                        inputBuffer.clear()
+                        val decompressedSize = Zstd.ZSTD_decompress(
+                            outputBufferBB,
+                            inputBuffer
+                        )
+                        if (decompressedSize != uncompressedSize) {
+                            error("Decompression size mismatch for $path: expected $uncompressedSize, got $decompressedSize")
+                        }
+                    }
+                    outputBuffer
+                }
+            }
+
             val imageData = metadata.images.mapIndexed { i, imageMeta ->
                 val levels = imageMeta.levelDataSizes.mapIndexed { levelIndex, levelSize ->
-                    val path = inputPath.resolve("image_${i}_$levelIndex.bin")
-                    FileChannel.open(
-                        path,
-                        StandardOpenOption.READ
-                    ).use { channel ->
-                        val mappedBuffer = channel.map(FileChannel.MapMode.READ_ONLY, 0L, levelSize)
-                            .order(ByteOrder.nativeOrder())
-                        val arr = Arr.malloc(levelSize)
-                        arr.ptr.asByteBuffer(levelSize.toInt()).order(ByteOrder.nativeOrder()).put(mappedBuffer)
-                        arr
-                    }
+                    readCompressed(inputPath.resolve("image_${i}_$levelIndex.bin.zstd"), levelSize)
                 }
                 ImageData(levels)
             }
             val bufferData = metadata.buffers.mapIndexed { i, bufferMeta ->
-                val path = inputPath.resolve("buffer_$i.bin")
-                FileChannel.open(
-                    path,
-                    StandardOpenOption.READ
-                ).use { channel ->
-                    val mappedBuffer = channel.map(FileChannel.MapMode.READ_ONLY, 0, bufferMeta.size)
-                        .order(ByteOrder.nativeOrder())
-                    val arr = Arr.malloc(bufferMeta.size)
-                    arr.ptr.asByteBuffer(bufferMeta.size.toInt()).order(ByteOrder.nativeOrder()).put(mappedBuffer)
-                    arr
-                }
+                readCompressed(inputPath.resolve("buffer_$i.bin.zstd"), bufferMeta.size)
             }
             return CaptureData(
                 metadata,
