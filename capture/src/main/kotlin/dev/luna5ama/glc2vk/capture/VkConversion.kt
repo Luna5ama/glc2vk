@@ -1,7 +1,6 @@
 package dev.luna5ama.glc2vk.capture
 
-import dev.luna5ama.glc2vk.common.VkFormat
-import dev.luna5ama.glc2vk.common.VkImageViewType
+import dev.luna5ama.glc2vk.common.*
 import dev.luna5ama.glwrapper.base.*
 import dev.luna5ama.glwrapper.enums.ImageFormat
 
@@ -115,4 +114,44 @@ fun glFormatToVkFormat(format: ImageFormat): VkFormat = when (format) {
     ImageFormat.RGBA_SRGB_C -> VkFormat.ETC2_R8G8B8A8_SRGB_BLOCK
 
     else -> throw UnsupportedOperationException("Unsupported image format: ${format::class}")
+}
+
+fun glMagFilterToVkFilter(magFilter: Int): VkFilter = when (magFilter) {
+    GL_NEAREST -> VkFilter.NEAREST
+    GL_LINEAR -> VkFilter.LINEAR
+    else -> throw UnsupportedOperationException("Unsupported mag filter: $magFilter")
+}
+
+fun glMinFilterToVkFilter(minFilter: Int): VkFilter = when (minFilter) {
+    GL_NEAREST, GL_NEAREST_MIPMAP_NEAREST, GL_NEAREST_MIPMAP_LINEAR -> VkFilter.NEAREST
+    GL_LINEAR, GL_LINEAR_MIPMAP_NEAREST, GL_LINEAR_MIPMAP_LINEAR -> VkFilter.LINEAR
+    else -> throw UnsupportedOperationException("Unsupported min filter: $minFilter")
+}
+
+fun glMinFilterTOVkSamplerMipmapMode(minFilter: Int): VkSamplerMipmapMode = when (minFilter) {
+    GL_NEAREST, GL_LINEAR -> VkSamplerMipmapMode.NEAREST
+    GL_NEAREST_MIPMAP_NEAREST, GL_LINEAR_MIPMAP_NEAREST -> VkSamplerMipmapMode.NEAREST
+    GL_NEAREST_MIPMAP_LINEAR, GL_LINEAR_MIPMAP_LINEAR -> VkSamplerMipmapMode.LINEAR
+    else -> throw UnsupportedOperationException("Unsupported min filter: $minFilter")
+}
+
+fun glWarpModeToVkSamplerAddressMode(wrapMode: Int): VkSamplerAddressMode = when (wrapMode) {
+    GL_REPEAT -> VkSamplerAddressMode.REPEAT
+    GL_MIRRORED_REPEAT -> VkSamplerAddressMode.MIRRORED_REPEAT
+    GL_CLAMP_TO_EDGE -> VkSamplerAddressMode.CLAMP_TO_EDGE
+    GL_CLAMP_TO_BORDER -> VkSamplerAddressMode.CLAMP_TO_BORDER
+    GL_MIRROR_CLAMP_TO_EDGE -> VkSamplerAddressMode.MIRROR_CLAMP_TO_EDGE
+    else -> throw UnsupportedOperationException("Unsupported wrap mode: $wrapMode")
+}
+
+fun glCompareFuncToVkCompareOp(compareFunc: Int): VkCompareOp = when (compareFunc) {
+    GL_NEVER -> VkCompareOp.NEVER
+    GL_LESS -> VkCompareOp.LESS
+    GL_EQUAL -> VkCompareOp.EQUAL
+    GL_LEQUAL -> VkCompareOp.LESS_OR_EQUAL
+    GL_GREATER -> VkCompareOp.GREATER
+    GL_NOTEQUAL -> VkCompareOp.NOT_EQUAL
+    GL_GEQUAL -> VkCompareOp.GREATER_OR_EQUAL
+    GL_ALWAYS -> VkCompareOp.ALWAYS
+    else -> throw UnsupportedOperationException("Unsupported compare func: $compareFunc")
 }

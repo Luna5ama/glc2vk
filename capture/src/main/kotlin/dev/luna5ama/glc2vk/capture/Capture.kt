@@ -309,6 +309,7 @@ private fun CaptureContext.captureDefaultUniformBlock() {
 
 private fun CaptureContext.captureImages() {
     val imageIDToIndex = mutableMapOf<Int, Int>()
+    val imageSamplerInfo = mutableMapOf<Int, SamplerInfo>()
 
     MemoryStack {
         val temp = malloc(8 * 4 * 4L)
@@ -446,39 +447,147 @@ private fun CaptureContext.captureImages() {
             return imageIndex
         }
 
+        fun getTextureDefaultSamplerInfo(imageID: Int): SamplerInfo {
+            fun glGetTextureParameteri(texture: Int, pname: Int): Int {
+                glGetTextureParameteriv(texture, pname, tempPtr)
+                return tempPtr.getInt()
+            }
+
+            fun glGetTextureParameterf(texture: Int, pname: Int): Float {
+                glGetTextureParameterfv(texture, pname, tempPtr)
+                return tempPtr.getFloat()
+            }
+
+            val magFilter = glGetTextureParameteri(imageID, GL_TEXTURE_MAG_FILTER)
+            val minFilter = glGetTextureParameteri(imageID, GL_TEXTURE_MIN_FILTER)
+            val warpU = glGetTextureParameteri(imageID, GL_TEXTURE_WRAP_S)
+            val warpV = glGetTextureParameteri(imageID, GL_TEXTURE_WRAP_T)
+            val warpW = glGetTextureParameteri(imageID, GL_TEXTURE_WRAP_R)
+            val mipLodBias = glGetTextureParameterf(imageID, GL_TEXTURE_LOD_BIAS)
+            val maxAnisotropy = glGetTextureParameterf(imageID, GL_TEXTURE_MAX_ANISOTROPY)
+            val compareMode = glGetTextureParameteri(imageID, GL_TEXTURE_COMPARE_MODE)
+            val compareFunc = glGetTextureParameteri(imageID, GL_TEXTURE_COMPARE_FUNC)
+            val minLod = glGetTextureParameterf(imageID, GL_TEXTURE_MIN_LOD)
+            val maxLod = glGetTextureParameterf(imageID, GL_TEXTURE_MAX_LOD)
+            glGetTextureParameterfv(imageID, GL_TEXTURE_BORDER_COLOR, tempPtr)
+            val borderColorR = tempPtr.getFloat(0)
+            val borderColorG = tempPtr.getFloat(4)
+            val borderColorB = tempPtr.getFloat(8)
+            val borderColorA = tempPtr.getFloat(12)
+
+            return SamplerInfo(
+                magFilter = glMagFilterToVkFilter(magFilter),
+                minFilter = glMinFilterToVkFilter(minFilter),
+                mipmapMode = glMinFilterTOVkSamplerMipmapMode(minFilter),
+                addressModeU = glWarpModeToVkSamplerAddressMode(warpU),
+                addressModeV = glWarpModeToVkSamplerAddressMode(warpV),
+                addressModeW = glWarpModeToVkSamplerAddressMode(warpW),
+                mipLodBias = mipLodBias,
+                anisotropyEnable = maxAnisotropy > 1.0f,
+                maxAnisotropy = maxAnisotropy,
+                compareEnable = compareMode != GL_NONE,
+                compareOp = glCompareFuncToVkCompareOp(compareFunc),
+                minLod = minLod,
+                maxLod = maxLod,
+                boarderColorR = borderColorR,
+                boarderColorG = borderColorG,
+                boarderColorB = borderColorB,
+                boarderColorA = borderColorA,
+                false
+            )
+        }
+
+        fun getSamplerInfo(samplerID: Int): SamplerInfo {
+            fun glGetSamplerParameteri(sampler: Int, pname: Int): Int {
+                glGetSamplerParameteriv(sampler, pname, tempPtr)
+                return tempPtr.getInt()
+            }
+
+            fun glGetSamplerParameterf(sampler: Int, pname: Int): Float {
+                glGetSamplerParameterfv(sampler, pname, tempPtr)
+                return tempPtr.getFloat()
+            }
+
+            val magFilter = glGetSamplerParameteri(samplerID, GL_TEXTURE_MAG_FILTER)
+            val minFilter = glGetSamplerParameteri(samplerID, GL_TEXTURE_MIN_FILTER)
+            val warpU = glGetSamplerParameteri(samplerID, GL_TEXTURE_WRAP_S)
+            val warpV = glGetSamplerParameteri(samplerID, GL_TEXTURE_WRAP_T)
+            val warpW = glGetSamplerParameteri(samplerID, GL_TEXTURE_WRAP_R)
+            val mipLodBias = glGetSamplerParameterf(samplerID, GL_TEXTURE_LOD_BIAS)
+            val maxAnisotropy = glGetSamplerParameterf(samplerID, GL_TEXTURE_MAX_ANISOTROPY)
+            val compareMode = glGetSamplerParameteri(samplerID, GL_TEXTURE_COMPARE_MODE)
+            val compareFunc = glGetSamplerParameteri(samplerID, GL_TEXTURE_COMPARE_FUNC)
+            val minLod = glGetSamplerParameterf(samplerID, GL_TEXTURE_MIN_LOD)
+            val maxLod = glGetSamplerParameterf(samplerID, GL_TEXTURE_MAX_LOD)
+            glGetSamplerParameterfv(samplerID, GL_TEXTURE_BORDER_COLOR, tempPtr)
+            val borderColorR = tempPtr.getFloat(0)
+            val borderColorG = tempPtr.getFloat(4)
+            val borderColorB = tempPtr.getFloat(8)
+            val borderColorA = tempPtr.getFloat(12)
+
+            return SamplerInfo(
+                magFilter = glMagFilterToVkFilter(magFilter),
+                minFilter = glMinFilterToVkFilter(minFilter),
+                mipmapMode = glMinFilterTOVkSamplerMipmapMode(minFilter),
+                addressModeU = glWarpModeToVkSamplerAddressMode(warpU),
+                addressModeV = glWarpModeToVkSamplerAddressMode(warpV),
+                addressModeW = glWarpModeToVkSamplerAddressMode(warpW),
+                mipLodBias = mipLodBias,
+                anisotropyEnable = maxAnisotropy > 1.0f,
+                maxAnisotropy = maxAnisotropy,
+                compareEnable = compareMode != GL_NONE,
+                compareOp = glCompareFuncToVkCompareOp(compareFunc),
+                minLod = minLod,
+                maxLod = maxLod,
+                boarderColorR = borderColorR,
+                boarderColorG = borderColorG,
+                boarderColorB = borderColorB,
+                boarderColorA = borderColorA,
+                false
+            )
+        }
+
         resourceManager.uniformResource.entries.values.asSequence()
             .filter { it.type is GLSLDataType.Opaque.Image }
             .forEach {
                 glGetUniformiv(resourceManager.programID, it.location, tempPtr)
-                val textureUnit = tempPtr.getInt()
-                glGetIntegeri_v(GL_IMAGE_BINDING_NAME, textureUnit, tempPtr)
+                val imageUnit = tempPtr.getInt()
+                glGetIntegeri_v(GL_IMAGE_BINDING_NAME, imageUnit, tempPtr)
                 val boundImageID = tempPtr.getInt()
                 val imageIndex = getImageIndex(boundImageID)
-                val metadata = imageMetadata[imageIndex]
-                val targetBinding = when (metadata.type) {
-                    VkImageViewType.`1D` -> GL_TEXTURE_BINDING_1D
-                    VkImageViewType.`2D` -> GL_TEXTURE_BINDING_2D
-                    VkImageViewType.`3D` -> GL_TEXTURE_BINDING_3D
-                    VkImageViewType.CUBE -> GL_TEXTURE_BINDING_CUBE_MAP
-                    VkImageViewType.`1D_ARRAY` -> GL_TEXTURE_BINDING_1D_ARRAY
-                    VkImageViewType.`2D_ARRAY` -> GL_TEXTURE_BINDING_2D_ARRAY
-                    VkImageViewType.CUBE_ARRAY -> GL_TEXTURE_BINDING_CUBE_MAP_ARRAY
-                }
-                glGetIntegeri_v(targetBinding, textureUnit, tempPtr)
 
                 imageBinding(it.name, imageIndex, shaderInfo.uniforms[it.name]!!.binding)
             }
 
         resourceManager.uniformResource.entries.values.asSequence()
             .filter { it.type is GLSLDataType.Opaque.Sampler }
-            .forEach {
-                glGetUniformiv(resourceManager.programID, it.location, tempPtr)
-                val glBindingIndex = tempPtr.getInt()
-                glGetIntegeri_v(GL_IMAGE_BINDING_NAME, glBindingIndex, tempPtr)
+            .forEach { uniformEntry ->
+                glGetUniformiv(resourceManager.programID, uniformEntry.location, tempPtr)
+                val textureUnit = tempPtr.getInt()
+                val bindingTargets = listOf(
+                    GL_TEXTURE_BINDING_1D,
+                    GL_TEXTURE_BINDING_2D,
+                    GL_TEXTURE_BINDING_3D,
+                    GL_TEXTURE_BINDING_CUBE_MAP,
+                    GL_TEXTURE_BINDING_1D_ARRAY,
+                    GL_TEXTURE_BINDING_2D_ARRAY,
+                    GL_TEXTURE_BINDING_CUBE_MAP_ARRAY
+                )
+                bindingTargets.find {
+                    glGetIntegeri_v(it, textureUnit, tempPtr)
+                    glIsTexture(tempPtr.getInt())
+                }
                 val boundImageID = tempPtr.getInt()
                 val imageIndex = getImageIndex(boundImageID)
+                glGetIntegeri_v(GL_SAMPLER_BINDING, textureUnit, tempPtr)
+                val boundSamplerID = tempPtr.getInt()
+                val samplerInfo = if (glIsSampler(boundSamplerID)) {
+                    getSamplerInfo(boundSamplerID)
+                } else {
+                    getTextureDefaultSamplerInfo(boundImageID)
+                }
 
-                imageBinding(it.name, imageIndex, shaderInfo.uniforms[it.name]!!.binding)
+                samplerBinding(uniformEntry.name, imageIndex, samplerInfo, shaderInfo.uniforms[uniformEntry.name]!!.binding)
             }
     }
 }
