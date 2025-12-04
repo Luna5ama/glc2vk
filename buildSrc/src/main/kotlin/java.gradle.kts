@@ -12,6 +12,7 @@ java {
 
 repositories {
     mavenCentral()
+    maven("https://maven.luna5ama.dev")
 }
 
 val library: Configuration by configurations.creating {

@@ -14,6 +14,22 @@ import kotlin.io.path.readText
 import kotlin.io.path.writeText
 
 @Serializable
+sealed interface Command {
+    @Serializable
+    data class DispatchCommand(
+        val x: Int,
+        val y: Int,
+        val z: Int
+    ) : Command
+
+    @Serializable
+    data class DispatchIndirectCommand(
+        val bufferIndex: Int,
+        val offset: Long
+    ) : Command
+}
+
+@Serializable
 data class ImageMetadata(
     val name: String,
     val width: Int,
@@ -81,13 +97,14 @@ data class BufferBinding(
 )
 
 @Serializable
-data class ResourceMetadata(
+data class CaptureMetadata(
     val images: List<ImageMetadata>,
     val buffers: List<BufferMetadata>,
     val samplerBindings: List<SamplerBinding>,
     val imageBindings: List<ImageBinding>,
     val storageBufferBindings: List<BufferBinding>,
-    val uniformBufferBindings: List<BufferBinding>
+    val uniformBufferBindings: List<BufferBinding>,
+    val command: Command
 )
 
 class ImageData(
@@ -100,10 +117,10 @@ class ImageData(
     }
 }
 
-class ResourceCapture(
-    val metadata: ResourceMetadata,
+class CaptureData(
+    val metadata: CaptureMetadata,
     val imageData: List<ImageData>,
-    val bufferData: List<Arr>
+    val bufferData: List<Arr>,
 ) {
     fun free() {
         for (image in imageData) {
@@ -155,7 +172,7 @@ class ResourceCapture(
 //            }
 //        }
 
-        fun save(outputPath: Path, capture: ResourceCapture) {
+        fun save(outputPath: Path, capture: CaptureData) {
             @OptIn(ExperimentalSerializationApi::class)
             val jsonInstance = Json {
                 prettyPrint = true
@@ -197,8 +214,8 @@ class ResourceCapture(
             }
         }
 
-        fun load(inputPath: Path): ResourceCapture {
-            val metadata = Json.decodeFromString<ResourceMetadata>(inputPath.resolve("metadata.json").readText())
+        fun load(inputPath: Path): CaptureData {
+            val metadata = Json.decodeFromString<CaptureMetadata>(inputPath.resolve("metadata.json").readText())
             val imageData = metadata.images.map { imageMeta ->
                 val path = inputPath.resolve("image_${imageMeta.name}.bin")
                 FileChannel.open(
@@ -231,7 +248,7 @@ class ResourceCapture(
                     arr
                 }
             }
-            return ResourceCapture(
+            return CaptureData(
                 metadata,
                 imageData,
                 bufferData

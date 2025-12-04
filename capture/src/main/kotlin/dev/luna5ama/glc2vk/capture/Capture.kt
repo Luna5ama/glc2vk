@@ -76,16 +76,45 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
         uniformBufferBindings += binding
     }
 
-    fun build(): ResourceCapture {
-        val metadata = ResourceMetadata(
+
+    val bufferIDToIndex = mutableMapOf<Int, Int>()
+
+    fun getBufferIndex(boundBufferID: Int): Int {
+        MemoryStack {
+            val temp = malloc(8L)
+            val tempPtr = temp.ptr
+            if (bufferIDToIndex.putIfAbsent(boundBufferID, buffers.size) == null) {
+                glGetNamedBufferParameteriv(boundBufferID, GL_BUFFER_SIZE, tempPtr)
+                val bufferSize = tempPtr.getInt()
+                ensureTempGPUBufferCapacity(bufferSize.toLong())
+                glCopyNamedBufferSubData(boundBufferID, tempGPUBuffer.id, 0L, 0L, bufferSize.toLong())
+
+                val cpuBufferData = transferBuffer(bufferSize.toLong())
+
+                buffers.add(cpuBufferData)
+                bufferMetadata.add(
+                    BufferMetadata(
+                        name = "Buffer$boundBufferID",
+                        size = bufferSize.toLong()
+                    )
+                )
+            }
+            val bufferIndex = bufferIDToIndex[boundBufferID]!!
+            return bufferIndex
+        }
+    }
+
+    fun build(command: Command): CaptureData {
+        val metadata = CaptureMetadata(
             images = imageMetadata,
             buffers = bufferMetadata,
             samplerBindings = samplerBindings,
             imageBindings = imageBindings,
             storageBufferBindings = storageBufferBindings,
-            uniformBufferBindings = uniformBufferBindings
+            uniformBufferBindings = uniformBufferBindings,
+            command = command
         )
-        return ResourceCapture(
+        return CaptureData(
             metadata = metadata,
             imageData = images,
             bufferData = buffers
@@ -352,6 +381,7 @@ private fun CaptureContext.captureImages() {
                         depth = tempPtr.getInt()
                         arrayLayers = 1
                     }
+
                     VkImageViewType.CUBE -> {
                         glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
                         width = tempPtr.getInt()
@@ -359,6 +389,7 @@ private fun CaptureContext.captureImages() {
                         depth = 1
                         arrayLayers = 1
                     }
+
                     VkImageViewType.`1D_ARRAY` -> {
                         glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
                         width = tempPtr.getInt()
@@ -367,6 +398,7 @@ private fun CaptureContext.captureImages() {
                         glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_DEPTH, tempPtr)
                         arrayLayers = tempPtr.getInt()
                     }
+
                     VkImageViewType.`2D_ARRAY` -> {
                         glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
                         width = tempPtr.getInt()
@@ -376,6 +408,7 @@ private fun CaptureContext.captureImages() {
                         glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_DEPTH, tempPtr)
                         arrayLayers = tempPtr.getInt()
                     }
+
                     VkImageViewType.CUBE_ARRAY -> {
                         glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
                         width = tempPtr.getInt()
@@ -589,38 +622,20 @@ private fun CaptureContext.captureImages() {
                     getTextureDefaultSamplerInfo(boundImageID)
                 }
 
-                samplerBinding(uniformEntry.name, imageIndex, samplerInfo, shaderInfo.uniforms[uniformEntry.name]!!.binding)
+                samplerBinding(
+                    uniformEntry.name,
+                    imageIndex,
+                    samplerInfo,
+                    shaderInfo.uniforms[uniformEntry.name]!!.binding
+                )
             }
     }
 }
 
 private fun CaptureContext.captureBuffers() {
-    val bufferIDToIndex = mutableMapOf<Int, Int>()
-
     MemoryStack {
         val temp = malloc(8 * 4 * 4L)
         val tempPtr = temp.ptr
-
-        fun getBufferIndex(boundBufferID: Int): Int {
-            if (bufferIDToIndex.putIfAbsent(boundBufferID, buffers.size) == null) {
-                glGetNamedBufferParameteriv(boundBufferID, GL_BUFFER_SIZE, tempPtr)
-                val bufferSize = tempPtr.getInt()
-                ensureTempGPUBufferCapacity(bufferSize.toLong())
-                glCopyNamedBufferSubData(boundBufferID, tempGPUBuffer.id, 0L, 0L, bufferSize.toLong())
-
-                val cpuBufferData = transferBuffer(bufferSize.toLong())
-
-                buffers.add(cpuBufferData)
-                bufferMetadata.add(
-                    BufferMetadata(
-                        name = "Buffer$boundBufferID",
-                        size = bufferSize.toLong()
-                    )
-                )
-            }
-            val bufferIndex = bufferIDToIndex[boundBufferID]!!
-            return bufferIndex
-        }
 
         resourceManager.shaderStorageBlockResource.entries.values.forEach {
             glGetIntegeri_v(GL_SHADER_STORAGE_BUFFER_BINDING, it.bindingIndex, tempPtr)
@@ -675,9 +690,18 @@ fun captureGlDispatchComputeIndirect(shaderInfo: ShaderInfo, outputPath: Path, i
 
     val captureContext = CaptureContext(shaderInfo, resourceManager)
     captureContext.captureShaderProgramResources()
-    val resourceCapture = captureContext.build()
 
-    ResourceCapture.save(outputPath, resourceCapture)
+    val boundIndirectBuffer = glGetInteger(GL_DISPATCH_INDIRECT_BUFFER_BINDING)
+    val bufferIndex = captureContext.getBufferIndex(boundIndirectBuffer)
+
+    val command = Command.DispatchIndirectCommand(
+        bufferIndex = bufferIndex,
+        offset = indirect
+    )
+
+    val resourceCapture = captureContext.build(command)
+
+    CaptureData.save(outputPath, resourceCapture)
 
     resourceCapture.apply {
         free()
