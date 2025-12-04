@@ -10,8 +10,10 @@ import dev.luna5ama.glwrapper.enums.ShaderStage
 import dev.luna5ama.glwrapper.objects.BufferObject
 import dev.luna5ama.kmogus.Arr
 import dev.luna5ama.kmogus.MemoryStack
+import dev.luna5ama.kmogus.Ptr
 import dev.luna5ama.kmogus.ensureCapacity
 import dev.luna5ama.kmogus.memcpy
+import org.lwjgl.system.MemoryUtil
 import java.nio.file.Path
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.writeText
@@ -26,12 +28,15 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
         }
     }
 
+    val imageNames = mutableMapOf<Int, String>()
     val images = mutableListOf<ImageData>()
     val imageMetadata = mutableListOf<ImageMetadata>()
     val samplerBindings = mutableListOf<SamplerBinding>()
     val imageBindings = mutableListOf<ImageBinding>()
 
     fun samplerBinding(name: String, imageIndex: Int, samplerInfo: SamplerInfo, bindingIndex: Int) {
+        val prev = imageNames[imageIndex]
+        imageNames[imageIndex] = prev?.let { "${it}_$name" } ?: name
         val binding = SamplerBinding(
             name = name,
             imageIndex = imageIndex,
@@ -43,6 +48,8 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
     }
 
     fun imageBinding(name: String, imageIndex: Int, bindingIndex: Int) {
+        val prev = imageNames[imageIndex]
+        imageNames[imageIndex] = prev?.let { "${it}_$name" } ?: name
         val binding = ImageBinding(
             name = name,
             imageIndex = imageIndex,
@@ -52,12 +59,15 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
         imageBindings += binding
     }
 
+    val bufferNames  = mutableMapOf<Int, String>()
     val buffers = mutableListOf<Arr>()
     val bufferMetadata = mutableListOf<BufferMetadata>()
     val storageBufferBindings = mutableListOf<BufferBinding>()
     val uniformBufferBindings = mutableListOf<BufferBinding>()
 
     fun storageBufferBinding(name: String, bufferIndex: Int, bindingIndex: Int, offset: Long) {
+        val prev = bufferNames[bufferIndex]
+        bufferNames[bufferIndex] = prev?.let { "${it}_$name" } ?: name
         val binding = BufferBinding(
             name = name,
             bufferIndex = bufferIndex,
@@ -69,6 +79,8 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
     }
 
     fun uniformBufferBinding(name: String, bufferIndex: Int, bindingIndex: Int, offset: Long) {
+        val prev = bufferNames[bufferIndex]
+        bufferNames[bufferIndex] = prev?.let { "${it}_$name" } ?: name
         val binding = BufferBinding(
             name = name,
             bufferIndex = bufferIndex,
@@ -82,35 +94,47 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
 
     val bufferIDToIndex = mutableMapOf<Int, Int>()
 
-    fun getBufferIndex(boundBufferID: Int): Int {
+    fun getBufferIndex(bufferID: Int): Int {
         MemoryStack {
             val temp = malloc(8L)
             val tempPtr = temp.ptr
-            if (bufferIDToIndex.putIfAbsent(boundBufferID, buffers.size) == null) {
-                glGetNamedBufferParameteriv(boundBufferID, GL_BUFFER_SIZE, tempPtr)
+            if (bufferIDToIndex.putIfAbsent(bufferID, buffers.size) == null) {
+                glGetNamedBufferParameteriv(bufferID, GL_BUFFER_SIZE, tempPtr)
                 val bufferSize = tempPtr.getInt()
                 ensureTempGPUBufferCapacity(bufferSize.toLong())
-                glCopyNamedBufferSubData(boundBufferID, tempGPUBuffer.id, 0L, 0L, bufferSize.toLong())
+                glCopyNamedBufferSubData(bufferID, tempGPUBuffer.id, 0L, 0L, bufferSize.toLong())
 
                 val cpuBufferData = transferBuffer(bufferSize.toLong())
+
+
+
+                glGetObjectLabel(GL_BUFFER, bufferID, 0, tempPtr, Ptr.NULL)
+                val labelLen = tempPtr.getInt()
+                val str =   if (labelLen > 0) {
+                    val labelBuffer = malloc(labelLen + 1L)
+                    glGetObjectLabel(GL_BUFFER, bufferID, labelLen + 1, tempPtr, labelBuffer.ptr)
+                    MemoryUtil.memUTF8(labelBuffer.ptr.address)
+                } else {
+                    ""
+                }
 
                 buffers.add(cpuBufferData)
                 bufferMetadata.add(
                     BufferMetadata(
-                        name = "Buffer$boundBufferID",
+                        name = str,
                         size = bufferSize.toLong()
                     )
                 )
             }
-            val bufferIndex = bufferIDToIndex[boundBufferID]!!
+            val bufferIndex = bufferIDToIndex[bufferID]!!
             return bufferIndex
         }
     }
 
     fun build(command: Command): CaptureData {
         val metadata = CaptureMetadata(
-            images = imageMetadata,
-            buffers = bufferMetadata,
+            images = imageMetadata.mapIndexed { i, metadata -> metadata.copy(name = metadata.name.ifEmpty { imageNames[i] ?: "buffer_$i" }) },
+            buffers = bufferMetadata.mapIndexed { i, metadata -> metadata.copy(name = metadata.name.ifEmpty { bufferNames[i] ?: "buffer_$i" }) },
             samplerBindings = samplerBindings,
             imageBindings = imageBindings,
             storageBufferBindings = storageBufferBindings,
@@ -337,7 +361,7 @@ private fun CaptureContext.captureDefaultUniformBlock() {
 
     buffers += defaultUniformData.realloc(struct.size.toLong(), false)
     bufferMetadata += BufferMetadata(
-        name = "DefaultUniforms",
+        name = "",
         size = buffers.last().len
     )
     uniformBufferBinding("DefaultUniforms", 0, shaderInfo.ubos["DefaultUniforms"]!!.binding, 0L)
@@ -345,7 +369,6 @@ private fun CaptureContext.captureDefaultUniformBlock() {
 
 private fun CaptureContext.captureImages() {
     val imageIDToIndex = mutableMapOf<Int, Int>()
-    val imageSamplerInfo = mutableMapOf<Int, SamplerInfo>()
 
     MemoryStack {
         val temp = malloc(8 * 4 * 4L)
@@ -468,10 +491,20 @@ private fun CaptureContext.captureImages() {
                     mipLevels++
                 }
 
+                glGetObjectLabel(GL_TEXTURE, imageID, 0, tempPtr, Ptr.NULL)
+                val labelLen = tempPtr.getInt()
+                val str =   if (labelLen > 0) {
+                    val labelBuffer = malloc(labelLen + 1L)
+                    glGetObjectLabel(GL_TEXTURE, imageID, labelLen + 1, tempPtr, labelBuffer.ptr)
+                    MemoryUtil.memUTF8(labelBuffer.ptr.address)
+                } else {
+                    ""
+                }
+
                 images.add(ImageData(mipData))
                 imageMetadata.add(
                     ImageMetadata(
-                        name = "Image$imageID",
+                        name = str,
                         width = width,
                         height = height,
                         depth = depth,

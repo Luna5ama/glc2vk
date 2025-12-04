@@ -8,39 +8,7 @@ import net.echonolix.caelum.vulkan.*
 import net.echonolix.caelum.vulkan.enums.*
 import net.echonolix.caelum.vulkan.flags.*
 import net.echonolix.caelum.vulkan.handles.*
-import net.echonolix.caelum.vulkan.structs.VkBindBufferMemoryInfo
-import net.echonolix.caelum.vulkan.structs.VkBindImageMemoryInfo
-import net.echonolix.caelum.vulkan.structs.VkBufferCreateInfo
-import net.echonolix.caelum.vulkan.structs.VkBufferUsageFlags2CreateInfo
-import net.echonolix.caelum.vulkan.structs.VkImageCreateInfo
-import net.echonolix.caelum.vulkan.structs.VkMemoryAllocateInfo
-import net.echonolix.caelum.vulkan.structs.VkMemoryRequirements
-import net.echonolix.caelum.vulkan.structs.alignment
-import net.echonolix.caelum.vulkan.structs.allocate
-import net.echonolix.caelum.vulkan.structs.allocationSize
-import net.echonolix.caelum.vulkan.structs.arrayLayers
-import net.echonolix.caelum.vulkan.structs.buffer
-import net.echonolix.caelum.vulkan.structs.depth
-import net.echonolix.caelum.vulkan.structs.extent
-import net.echonolix.caelum.vulkan.structs.format
-import net.echonolix.caelum.vulkan.structs.get
-import net.echonolix.caelum.vulkan.structs.height
-import net.echonolix.caelum.vulkan.structs.image
-import net.echonolix.caelum.vulkan.structs.imageType
-import net.echonolix.caelum.vulkan.structs.initialLayout
-import net.echonolix.caelum.vulkan.structs.memory
-import net.echonolix.caelum.vulkan.structs.memoryOffset
-import net.echonolix.caelum.vulkan.structs.memoryTypeBits
-import net.echonolix.caelum.vulkan.structs.memoryTypeIndex
-import net.echonolix.caelum.vulkan.structs.mipLevels
-import net.echonolix.caelum.vulkan.structs.pNext
-import net.echonolix.caelum.vulkan.structs.queueFamilyIndexes
-import net.echonolix.caelum.vulkan.structs.samples
-import net.echonolix.caelum.vulkan.structs.sharingMode
-import net.echonolix.caelum.vulkan.structs.size
-import net.echonolix.caelum.vulkan.structs.tiling
-import net.echonolix.caelum.vulkan.structs.usage
-import net.echonolix.caelum.vulkan.structs.width
+import net.echonolix.caelum.vulkan.structs.*
 import java.lang.foreign.Arena
 
 class ReplayResource(
@@ -102,6 +70,12 @@ class ReplayResource(
                                     memReqGPU.alignment.toLong()
                                 )
                             )
+                            val debugNameInfo = VkDebugUtilsObjectNameInfoEXT.allocate {
+                                objectType = VkObjectType.BUFFER
+                                objectHandle = gpuBuffer.value.toULong()
+                                pObjectName = it.name.c_str()
+                            }
+                            device.setDebugUtilsObjectNameEXT(debugNameInfo.ptr()).getOrThrow()
                             gpuBuffer
                         }
 
@@ -128,6 +102,12 @@ class ReplayResource(
                                     memReqCPU.alignment.toLong()
                                 )
                             )
+                            val debugNameInfo = VkDebugUtilsObjectNameInfoEXT.allocate {
+                                objectType = VkObjectType.BUFFER
+                                objectHandle = gpuBuffer.value.toULong()
+                                pObjectName = "${it.name}_Backup".c_str()
+                            }
+                            device.setDebugUtilsObjectNameEXT(debugNameInfo.ptr()).getOrThrow()
                             cpuBuffer
                         }
 
@@ -167,7 +147,7 @@ class ReplayResource(
                     return deviceMemory
                 }
 
-                bufferDeviceMemory= if (bufferList.isNotEmpty()) {
+                bufferDeviceMemory = if (bufferList.isNotEmpty()) {
                     val cpu = allocateAndBindMemoryForBuffers(
                         bufferList.map { it.cpu },
                         bufferSubAllocator.cpu,
@@ -257,6 +237,12 @@ class ReplayResource(
                                     memReq.alignment.toLong()
                                 )
                             )
+                            val debugNameInfo = VkDebugUtilsObjectNameInfoEXT.allocate {
+                                objectType = VkObjectType.IMAGE
+                                objectHandle = vkImage.value.toULong()
+                                pObjectName = it.name.c_str()
+                            }
+                            device.setDebugUtilsObjectNameEXT(debugNameInfo.ptr()).getOrThrow()
                             vkImage
                         }
 
@@ -285,6 +271,12 @@ class ReplayResource(
                                     memReq.alignment.toLong()
                                 )
                             )
+                            val debugNameInfo = VkDebugUtilsObjectNameInfoEXT.allocate {
+                                objectType = VkObjectType.IMAGE
+                                objectHandle = vkImage.value.toULong()
+                                pObjectName = "${it.name}_Backup".c_str()
+                            }
+                            device.setDebugUtilsObjectNameEXT(debugNameInfo.ptr()).getOrThrow()
                             vkImage
                         }
 

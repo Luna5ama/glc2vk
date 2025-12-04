@@ -31,11 +31,9 @@ class ReplayInstance(
 
     val renderFinishedSemaphore: VkSemaphore
     val imageAvailableSemaphore: VkSemaphore
-    val initializeSemaphore: VkSemaphore
 
     val pRenderFinishedSemaphore: NArray<VkSemaphoreHandle>
     val pImageAvailableSemaphore: NArray<VkSemaphoreHandle>
-    val pInitializeSemaphore: NArray<VkSemaphoreHandle>
 
 
     val inFlightFence: VkFence
@@ -102,12 +100,10 @@ class ReplayInstance(
                 val semaphoreCreateInfo = VkSemaphoreCreateInfo.allocate {}
                 renderFinishedSemaphore = device.createSemaphore(semaphoreCreateInfo.ptr(), null).getOrThrow()
                 imageAvailableSemaphore = device.createSemaphore(semaphoreCreateInfo.ptr(), null).getOrThrow()
-                initializeSemaphore = device.createSemaphore(semaphoreCreateInfo.ptr(), null).getOrThrow()
 
 
                 pRenderFinishedSemaphore = VkSemaphore.arrayOf(scope, renderFinishedSemaphore)
                 pImageAvailableSemaphore = VkSemaphore.arrayOf(scope, imageAvailableSemaphore)
-                pInitializeSemaphore = VkSemaphore.arrayOf(scope, initializeSemaphore)
             }
 
 
@@ -230,7 +226,6 @@ class ReplayInstance(
 
             val submitInfo = VkSubmitInfo.allocate {
                 commandBuffers(pCommandBuffer)
-                signalSemaphores(pInitializeSemaphore)
             }
 
             queue.queueSubmit(
@@ -243,6 +238,14 @@ class ReplayInstance(
 
     private var isFirst = true
 
+    private val setupLabel = VkDebugUtilsLabelEXT.allocate(scope) {
+        pLabelName = "Setup".c_str(scope)
+    }
+
+    private val replayLabel = VkDebugUtilsLabelEXT.allocate(scope) {
+        pLabelName = "Replay".c_str(scope)
+    }
+
     context(_: MemoryStack)
     fun execute(queue: VkQueue, swapchainImage: VkImage) {
         MemoryStack {
@@ -250,6 +253,7 @@ class ReplayInstance(
 
             val beginInfo = VkCommandBufferBeginInfo.allocate {}
             cmdBuffer.beginCommandBuffer(beginInfo.ptr())
+            cmdBuffer.cmdBeginDebugUtilsLabelEXT(setupLabel.ptr())
 
             val dependencyInfo0 = VkDependencyInfo.allocate {
                 val imageMemoryBarrier = VkImageMemoryBarrier2.allocate(1L)
@@ -325,6 +329,8 @@ class ReplayInstance(
                 )
             }
             cmdBuffer.cmdPipelineBarrier2(dependencyInfo2.ptr())
+            cmdBuffer.cmdEndDebugUtilsLabelEXT()
+            cmdBuffer.cmdBeginDebugUtilsLabelEXT(replayLabel.ptr())
             cmdBuffer.cmdBindPipeline(VkPipelineBindPoint.COMPUTE, pipelineInfo.pipeline)
 
             val pDescriptorSets = VkDescriptorSet.arrayOf(*pipelineInfo.descriptorInfo.descriptorSets.toTypedArray())
@@ -346,11 +352,11 @@ class ReplayInstance(
                         command.offset.toULong()
                     )
                 }
-
                 is Command.DispatchCommand -> {
-                    // TODO
+                    cmdBuffer.cmdDispatch(command.x.toUInt(), command.y.toUInt(), command.z.toUInt())
                 }
             }
+            cmdBuffer.cmdEndDebugUtilsLabelEXT()
             cmdBuffer.endCommandBuffer()
 
             val submitInfo = VkSubmitInfo.allocate {
@@ -373,7 +379,6 @@ class ReplayInstance(
         device.destroyDescriptorPool(descriptorPool, null)
         device.destroyFence(inFlightFence, null)
 
-        device.destroySemaphore(initializeSemaphore, null)
         device.destroySemaphore(imageAvailableSemaphore, null)
         device.destroySemaphore(renderFinishedSemaphore, null)
 

@@ -132,45 +132,6 @@ class CaptureData(
     }
 
     companion object {
-//        TODO: Implement compressed resource writing
-//        private fun writeCompressedResources(capture: ResourceCapture) {
-//            FileChannel.open(
-//                outputPath.resolve("resouces.zstd"),
-//                StandardOpenOption.CREATE,
-//                StandardOpenOption.READ,
-//                StandardOpenOption.WRITE,
-//                StandardOpenOption.TRUNCATE_EXISTING
-//            ).use { channel ->
-//                val alignment = 64L
-//
-//                fun alignUpTo(value: Long, alignment: Long): Long {
-//                    return ((value + alignment - 1L) / alignment) * alignment
-//                }
-//
-//
-//                org.lwjgl.system.MemoryStack.stackPush().use { stack ->
-//                    val cctx = Zstd.ZSTD_createCCtx()
-//                    var outputOffset = 0L
-//                    var fileOffset = 0L
-//
-//                    var outBuffer = channel.map(FileChannel.MapMode.READ_WRITE, fileOffset, bufferSize)
-//                        .order(ByteOrder.nativeOrder())
-//
-//                    // At least 16MB buffer size for Zstd streaming
-//                    val bufferSize = maxOf(Zstd.ZSTD_CStreamInSize(), 16 * 1024 * 1024)
-//
-//
-//                    fun streamCompress(input: Arr) {
-//                        stack.push().use { stack ->
-//
-//                            val zstdOutputBuffer = ZSTDOutBuffer.calloc(stack)
-//                                .dst(outBuffer)
-//                                .pos(0L)
-//                        }
-//                    }
-//                }
-//            }
-//        }
 
         fun save(outputPath: Path, capture: CaptureData) {
             @OptIn(ExperimentalSerializationApi::class)
@@ -180,8 +141,8 @@ class CaptureData(
             }
             outputPath.createDirectories()
             outputPath.resolve("metadata.json").writeText(jsonInstance.encodeToString(capture.metadata))
-            (capture.metadata.images zip capture.imageData).forEach { (metadata, data) ->
-                val path = outputPath.resolve("image_${metadata.name}.bin")
+            (capture.metadata.images zip capture.imageData).forEachIndexed { i, (metadata, data) ->
+                val path = outputPath.resolve("image_$i.bin")
                 val totalSize = metadata.levelDataSizes.sum()
                 FileChannel.open(
                     path,
@@ -197,9 +158,9 @@ class CaptureData(
                     mappedBuffer.force()
                 }
             }
-            capture.metadata.buffers.forEachIndexed { index, metadata ->
-                val path = outputPath.resolve("buffer_${metadata.name}.bin")
-                val data = capture.bufferData[index]
+            capture.metadata.buffers.forEachIndexed { i, metadata ->
+                val path = outputPath.resolve("buffer_$i.bin")
+                val data = capture.bufferData[i]
                 FileChannel.open(
                     path,
                     StandardOpenOption.CREATE,
@@ -216,8 +177,8 @@ class CaptureData(
 
         fun load(inputPath: Path): CaptureData {
             val metadata = Json.decodeFromString<CaptureMetadata>(inputPath.resolve("metadata.json").readText())
-            val imageData = metadata.images.map { imageMeta ->
-                val path = inputPath.resolve("image_${imageMeta.name}.bin")
+            val imageData = metadata.images.mapIndexed { i, imageMeta ->
+                val path = inputPath.resolve("image_$i.bin")
                 FileChannel.open(
                     path,
                     StandardOpenOption.READ
@@ -235,8 +196,8 @@ class CaptureData(
                     ImageData(levels)
                 }
             }
-            val bufferData = metadata.buffers.map { bufferMeta ->
-                val path = inputPath.resolve("buffer_${bufferMeta.name}.bin")
+            val bufferData = metadata.buffers.mapIndexed { i, bufferMeta ->
+                val path = inputPath.resolve("buffer_$i.bin")
                 FileChannel.open(
                     path,
                     StandardOpenOption.READ
