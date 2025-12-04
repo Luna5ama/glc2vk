@@ -455,7 +455,7 @@ private fun CaptureContext.captureImages() {
                 val mipData = mutableListOf<Arr>()
 
                 // Thanks mutable texture storage
-                var mipLevels = 1
+                var mipLevels = 0
                 for (mip in 0 until 69) {
                     glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_WIDTH, tempPtr)
                     val mipWidth = tempPtr.getInt()

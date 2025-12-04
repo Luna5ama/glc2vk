@@ -132,7 +132,6 @@ class CaptureData(
     }
 
     companion object {
-
         fun save(outputPath: Path, capture: CaptureData) {
             @OptIn(ExperimentalSerializationApi::class)
             val jsonInstance = Json {
@@ -141,21 +140,21 @@ class CaptureData(
             }
             outputPath.createDirectories()
             outputPath.resolve("metadata.json").writeText(jsonInstance.encodeToString(capture.metadata))
-            (capture.metadata.images zip capture.imageData).forEachIndexed { i, (metadata, data) ->
-                val path = outputPath.resolve("image_$i.bin")
-                val totalSize = metadata.levelDataSizes.sum()
-                FileChannel.open(
-                    path,
-                    StandardOpenOption.CREATE,
-                    StandardOpenOption.READ,
-                    StandardOpenOption.WRITE,
-                    StandardOpenOption.TRUNCATE_EXISTING
-                ).use { channel ->
-                    val mappedBuffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, totalSize)
-                    data.levels.forEach {
-                        mappedBuffer.order(ByteOrder.nativeOrder()).put(it.ptr.asByteBuffer(it.len.toInt()).order(ByteOrder.nativeOrder()))
+            (capture.metadata.images zip capture.imageData).forEachIndexed { imageIndex, (metadata, data) ->
+                data.levels.forEachIndexed { level, data ->
+                    val path = outputPath.resolve("image_${imageIndex}_$level.bin")
+                    FileChannel.open(
+                        path,
+                        StandardOpenOption.CREATE,
+                        StandardOpenOption.READ,
+                        StandardOpenOption.WRITE,
+                        StandardOpenOption.TRUNCATE_EXISTING
+                    ).use { channel ->
+                        val mappedBuffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, data.len)
+                        mappedBuffer.order(ByteOrder.nativeOrder())
+                            .put(data.ptr.asByteBuffer(data.len.toInt()).order(ByteOrder.nativeOrder()))
+                        mappedBuffer.force()
                     }
-                    mappedBuffer.force()
                 }
             }
             capture.metadata.buffers.forEachIndexed { i, metadata ->
@@ -169,7 +168,8 @@ class CaptureData(
                     StandardOpenOption.TRUNCATE_EXISTING
                 ).use { channel ->
                     val mappedBuffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, metadata.size)
-                    mappedBuffer.order(ByteOrder.nativeOrder()).put(data.ptr.asByteBuffer(data.len.toInt()).order(ByteOrder.nativeOrder()))
+                    mappedBuffer.order(ByteOrder.nativeOrder())
+                        .put(data.ptr.asByteBuffer(data.len.toInt()).order(ByteOrder.nativeOrder()))
                     mappedBuffer.force()
                 }
             }
@@ -178,23 +178,20 @@ class CaptureData(
         fun load(inputPath: Path): CaptureData {
             val metadata = Json.decodeFromString<CaptureMetadata>(inputPath.resolve("metadata.json").readText())
             val imageData = metadata.images.mapIndexed { i, imageMeta ->
-                val path = inputPath.resolve("image_$i.bin")
-                FileChannel.open(
-                    path,
-                    StandardOpenOption.READ
-                ).use { channel ->
-                    val levels = mutableListOf<Arr>()
-                    var offset = 0L
-                    for (levelSize in imageMeta.levelDataSizes) {
-                        val mappedBuffer = channel.map(FileChannel.MapMode.READ_ONLY, offset, levelSize)
+                val levels = imageMeta.levelDataSizes.mapIndexed { levelIndex, levelSize ->
+                    val path = inputPath.resolve("image_${i}_$levelIndex.bin")
+                    FileChannel.open(
+                        path,
+                        StandardOpenOption.READ
+                    ).use { channel ->
+                        val mappedBuffer = channel.map(FileChannel.MapMode.READ_ONLY, 0L, levelSize)
                             .order(ByteOrder.nativeOrder())
                         val arr = Arr.malloc(levelSize)
                         arr.ptr.asByteBuffer(levelSize.toInt()).order(ByteOrder.nativeOrder()).put(mappedBuffer)
-                        levels.add(arr)
-                        offset += levelSize
+                        arr
                     }
-                    ImageData(levels)
                 }
+                ImageData(levels)
             }
             val bufferData = metadata.buffers.mapIndexed { i, bufferMeta ->
                 val path = inputPath.resolve("buffer_$i.bin")

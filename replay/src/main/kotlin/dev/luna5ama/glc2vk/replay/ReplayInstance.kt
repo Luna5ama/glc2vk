@@ -140,7 +140,7 @@ class ReplayInstance(
                         oldLayout = VkImageLayout.UNDEFINED
                         newLayout = VkImageLayout.TRANSFER_DST_OPTIMAL
 
-                        ofWholeImage(image.gpu)
+                        ofWholeImage(image)
                     }
                 }
             }
@@ -170,7 +170,7 @@ class ReplayInstance(
                         oldLayout = VkImageLayout.TRANSFER_DST_OPTIMAL
                         newLayout = VkImageLayout.GENERAL
 
-                        ofWholeImage(image.gpu)
+                        ofWholeImage(image)
                     }
                 }
                 imageMemoryBarriers(imageMemoryBarriers)
@@ -190,8 +190,9 @@ class ReplayInstance(
             device.resetFences(1u, fences.ptr())
 
             val dependencyInfo = VkDependencyInfo.allocate {
-                val imageMemoryBarriers = VkImageMemoryBarrier2.allocate(resource.imageList.size.toLong())
-                resource.imageList.forEachIndexed { i, image ->
+                val flattenBackupImageList = resource.backupImageList.flatten()
+                val imageMemoryBarriers = VkImageMemoryBarrier2.allocate(flattenBackupImageList.size.toLong())
+                flattenBackupImageList.forEachIndexed { i, image ->
                     imageMemoryBarriers[i.toLong()].apply {
                         srcStageMask = VkPipelineStageFlags2.HOST
                         srcAccessMask = VkAccessFlags2.HOST_WRITE
@@ -200,7 +201,7 @@ class ReplayInstance(
                         oldLayout = VkImageLayout.PREINITIALIZED
                         newLayout = VkImageLayout.TRANSFER_SRC_OPTIMAL
 
-                        ofWholeImage(image.cpu)
+                        ofWholeImage(image)
                     }
                 }
                 imageMemoryBarriers(imageMemoryBarriers)
@@ -286,47 +287,49 @@ class ReplayInstance(
                     }.ptr()
                 )
             }
-            resource.imageList.forEachIndexed { i, image ->
-                val imageMetadata = captureData.metadata.images[i]
-                cmdBuffer.cmdCopyImage(
-                    image.cpu,
-                    VkImageLayout.TRANSFER_SRC_OPTIMAL,
-                    image.gpu,
-                    VkImageLayout.TRANSFER_DST_OPTIMAL,
-                    1u,
-                    VkImageCopy.allocate {
-                        srcSubresource {
-                            aspectMask = VkImageAspectFlags.COLOR
-                            mipLevel = 0u
-                            baseArrayLayer = 0u
-                            layerCount = imageMetadata.arrayLayers.toUInt()
-                        }
-                        srcOffset {
-                            x = 0
-                            y = 0
-                            z = 0
-                        }
+            (resource.imageList zip resource.backupImageList).forEachIndexed { imageIndex, (dstImage, srcImages) ->
+                val imageMetadata = captureData.metadata.images[imageIndex]
+                srcImages.forEachIndexed { mip, srcImage ->
+                    cmdBuffer.cmdCopyImage(
+                        srcImage,
+                        VkImageLayout.TRANSFER_SRC_OPTIMAL,
+                        dstImage,
+                        VkImageLayout.TRANSFER_DST_OPTIMAL,
+                        1u,
+                        VkImageCopy.allocate {
+                            srcSubresource {
+                                aspectMask = VkImageAspectFlags.COLOR
+                                mipLevel = 0u
+                                baseArrayLayer = 0u
+                                layerCount = imageMetadata.arrayLayers.toUInt()
+                            }
+                            srcOffset {
+                                x = 0
+                                y = 0
+                                z = 0
+                            }
 
-                        dstSubresource {
-                            aspectMask = VkImageAspectFlags.COLOR
-                            mipLevel = 0u
-                            baseArrayLayer = 0u
-                            layerCount = imageMetadata.arrayLayers.toUInt()
-                        }
+                            dstSubresource {
+                                aspectMask = VkImageAspectFlags.COLOR
+                                mipLevel = mip.toUInt()
+                                baseArrayLayer = 0u
+                                layerCount = imageMetadata.arrayLayers.toUInt()
+                            }
 
-                        dstOffset {
-                            x = 0
-                            y = 0
-                            z = 0
-                        }
+                            dstOffset {
+                                x = 0
+                                y = 0
+                                z = 0
+                            }
 
-                        extent {
-                            width = imageMetadata.width.toUInt()
-                            height = imageMetadata.height.toUInt()
-                            depth = imageMetadata.depth.toUInt()
-                        }
-                    }.ptr()
-                )
+                            extent {
+                                width = maxOf(1, imageMetadata.width shr mip).toUInt()
+                                height = maxOf(1, imageMetadata.height shr mip).toUInt()
+                                depth = maxOf(1, imageMetadata.depth shr mip).toUInt()
+                            }
+                        }.ptr()
+                    )
+                }
             }
             cmdBuffer.cmdPipelineBarrier2(dependencyInfo2.ptr())
             cmdBuffer.cmdEndDebugUtilsLabelEXT()
@@ -530,42 +533,42 @@ class ReplayInstance(
             List(descriptorSetLayouts.size) { VkDescriptorSet.fromNativeData(descriptorPool, returns[it.toLong()]) }
         }
 
-        // TODO: Image VIew
-//        MemoryStack {
-//            val set0BindingCount = captureData.metadata.imageBindings.size + captureData.metadata.samplerBindings.size
-//            val writeDescs = VkWriteDescriptorSet.allocate(set0BindingCount)
-//            captureData.metadata.imageBindings.forEach { imageBinding ->
-//                val image = resource.imageList[imageBinding.imageIndex]
-//                val descriptorImageInfo = VkDescriptorImageInfo.allocate {
-//                    imageView = image.view
-//                    imageLayout = VkImageLayout.GENERAL
-//                }
-//                writeDescs[imageBinding.binding.toLong()].apply {
-//                    dstSet = descriptorSets[0]
-//                    dstBinding = imageBinding.binding.toUInt()
-//                    dstArrayElement = 0u
-//                    descriptorType = VkDescriptorType.STORAGE_IMAGE
-//                    descriptorCount = 1u
-//                    pImageInfo = descriptorImageInfo.ptr()
-//                }
-//            }
-//            captureData.metadata.samplerBindings.forEachIndexed { i, samplerBinding ->
-//                val image = resource.imageList[samplerBinding.imageIndex]
-//                val descriptorImageInfo = VkDescriptorImageInfo.allocate {
-//                    sampler = samplers[i]
-//                    imageView = image.view
-//                    imageLayout = VkImageLayout.GENERAL
-//                }
-//                writeDescs[samplerBinding.binding.toLong()].apply {
-//                    dstSet = descriptorSets[0]
-//                    dstBinding = samplerBinding.binding.toUInt()
-//                    dstArrayElement = 0u
-//                    descriptorType = VkDescriptorType.COMBINED_IMAGE_SAMPLER
-//                    descriptorCount = 1u
-//                    pImageInfo = descriptorImageInfo.ptr()
-//                }
-//            }
-//        }
+        MemoryStack {
+            val set0BindingCount = captureData.metadata.imageBindings.size + captureData.metadata.samplerBindings.size
+            val writeDescs = VkWriteDescriptorSet.allocate(set0BindingCount.toLong())
+            var writeIndex = 0L
+            captureData.metadata.imageBindings.forEach { imageBinding ->
+                val descriptorImageInfo = VkDescriptorImageInfo.allocate {
+                    imageView = resource.imageViewList[imageBinding.imageIndex]
+                    imageLayout = VkImageLayout.GENERAL
+                }
+                writeDescs[writeIndex++].apply {
+                    dstSet = descriptorSets[0]
+                    dstBinding = imageBinding.binding.toUInt()
+                    dstArrayElement = 0u
+                    descriptorType = VkDescriptorType.STORAGE_IMAGE
+                    descriptorCount = 1u
+                    pImageInfo = descriptorImageInfo.ptr()
+                }
+            }
+            captureData.metadata.samplerBindings.forEachIndexed { i, samplerBinding ->
+                val descriptorImageInfo = VkDescriptorImageInfo.allocate {
+                    sampler = samplers[i]
+                    imageView = resource.imageViewList[samplerBinding.imageIndex]
+                    imageLayout = VkImageLayout.GENERAL
+                }
+                writeDescs[writeIndex++].apply {
+                    dstSet = descriptorSets[0]
+                    dstBinding = samplerBinding.binding.toUInt()
+                    dstArrayElement = 0u
+                    descriptorType = VkDescriptorType.COMBINED_IMAGE_SAMPLER
+                    descriptorCount = 1u
+                    pImageInfo = descriptorImageInfo.ptr()
+                }
+            }
+            check(writeIndex == set0BindingCount.toLong())
+            device.updateDescriptorSets(writeIndex.toUInt(), writeDescs.ptr(), 0u, nullptr())
+        }
 
         MemoryStack {
             val writeCount =
