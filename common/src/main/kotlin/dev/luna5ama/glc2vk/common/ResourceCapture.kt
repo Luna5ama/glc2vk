@@ -10,6 +10,7 @@ import java.nio.channels.FileChannel
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import kotlin.io.path.createDirectories
+import kotlin.io.path.readText
 import kotlin.io.path.writeText
 
 @Serializable
@@ -194,6 +195,47 @@ class ResourceCapture(
                     mappedBuffer.put(data.ptr.asByteBuffer(data.len.toInt()))
                 }
             }
+        }
+
+        fun load(inputPath: Path): ResourceCapture {
+            val metadata = Json.decodeFromString<ResourceMetadata>(inputPath.resolve("metadata.json").readText())
+            val imageData = metadata.images.map { imageMeta ->
+                val path = inputPath.resolve("image_${imageMeta.name}.bin")
+                FileChannel.open(
+                    path,
+                    StandardOpenOption.READ
+                ).use { channel ->
+                    val levels = mutableListOf<Arr>()
+                    var offset = 0L
+                    for (levelSize in imageMeta.levelDataSizes) {
+                        val mappedBuffer = channel.map(FileChannel.MapMode.READ_ONLY, offset, levelSize)
+                            .order(ByteOrder.nativeOrder())
+                        val arr = Arr.malloc(levelSize)
+                        arr.ptr.asByteBuffer(levelSize.toInt()).order(ByteOrder.nativeOrder()).put(mappedBuffer)
+                        levels.add(arr)
+                        offset += levelSize
+                    }
+                    ImageData(levels)
+                }
+            }
+            val bufferData = metadata.buffers.map { bufferMeta ->
+                val path = inputPath.resolve("buffer_${bufferMeta.name}.bin")
+                FileChannel.open(
+                    path,
+                    StandardOpenOption.READ
+                ).use { channel ->
+                    val mappedBuffer = channel.map(FileChannel.MapMode.READ_ONLY, 0, bufferMeta.size)
+                        .order(ByteOrder.nativeOrder())
+                    val arr = Arr.malloc(bufferMeta.size)
+                    arr.ptr.asByteBuffer(bufferMeta.size.toInt()).order(ByteOrder.nativeOrder()).put(mappedBuffer)
+                    arr
+                }
+            }
+            return ResourceCapture(
+                metadata,
+                imageData,
+                bufferData
+            )
         }
     }
 }
