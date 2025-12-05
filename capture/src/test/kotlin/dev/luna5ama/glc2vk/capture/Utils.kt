@@ -1,4 +1,4 @@
-package dev.luna5ama.glc2vk.common
+package dev.luna5ama.glc2vk.capture
 
 import dev.luna5ama.glwrapper.enums.ShaderStage
 import java.util.concurrent.TimeUnit
@@ -29,9 +29,9 @@ fun readSrc(path: String): String {
 }
 
 fun main() {
-//    val src = readSrc("/begin2_c.csh")
-    val src = Path("I:\\code\\gltest\\run\\resolveShaderSrc\\Draw.comp").readText()
+    val src = readSrc("/deferred13_b.csh")
+//    val src = Path("I:\\code\\gltest\\run\\resolveShaderSrc\\Draw.comp").readText()
     val patched = ShaderSourceContext(src).patchShaderForVulkan()
-    Path("Draw.comp").writeText(patched)
+    Path("deferred13_b_patched.csh").writeText(patched)
     checkPatched(patched, ShaderStage.ComputeShader)
 }

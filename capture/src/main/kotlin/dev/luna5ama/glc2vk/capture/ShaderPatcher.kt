@@ -1,6 +1,7 @@
 package dev.luna5ama.glc2vk.capture
 
 import dev.luna5ama.glwrapper.enums.GLSLDataType
+import dev.luna5ama.glwrapper.enums.ImageFormat
 
 private const val INDENT = "\t"
 
@@ -26,6 +27,8 @@ private val CONST_REGEX =
         RegexOption.MULTILINE
     )
 
+private val LAYOUT_REGEX = """^layout\((.+?)\)\s*""".toRegex()
+
 private fun ShaderSourceContext.removeComments() {
     modifiedSource = LINE_COMMENT_REGEX.replace(modifiedSource, "")
     modifiedSource = BLOCK_COMMENT_REGEX.replace(modifiedSource, "")
@@ -41,7 +44,8 @@ data class ShaderInfo(
     val patchedSource: String,
     val uniforms: Map<String, Uniform>,
     val ssbos: Map<String, Buffer>,
-    val ubos: Map<String, Buffer>
+    val ubos: Map<String, Buffer>,
+    val imageTypeOverrides: Map<String, ImageFormat>
 ) {
     data class Uniform(val name: String, val type: GLSLDataType, val set: Int, val binding: Int)
     data class Buffer(val name: String, val set: Int, val binding: Int)
@@ -53,6 +57,8 @@ class ShaderSourceContext(val originalSource: String) {
     val uniforms = mutableMapOf<String, ShaderInfo.Uniform>()
     val ssbos = mutableMapOf<String, ShaderInfo.Buffer>()
     val ubos = mutableMapOf<String, ShaderInfo.Buffer>()
+
+    val imageTypeOverride = mutableMapOf<String, ImageFormat>()
 
     // set 0 = sampler/image uniforms
     // set 1 = storage buffers
@@ -72,7 +78,8 @@ class ShaderSourceContext(val originalSource: String) {
             patchedSource = modifiedSource,
             uniforms = uniforms,
             ssbos = ssbos,
-            ubos = ubos
+            ubos = ubos,
+            imageTypeOverrides = imageTypeOverride
         )
     }
 
@@ -126,8 +133,8 @@ class ShaderSourceContext(val originalSource: String) {
         val buffer = ShaderInfo.Buffer("DefaultUniforms", setV, binding)
         ubos[buffer.name] = buffer
 
-        modifiedSource = UNIFORM_REGEX.replace(modifiedSource) {
-            val (layout, modifiers1, modifiers2, typeStr, name) = it.destructured
+        modifiedSource = UNIFORM_REGEX.replace(modifiedSource) { result ->
+            val (layout, modifiers1, modifiers2, typeStr, name) = result.destructured
 
             if (!checkUsage(name)) {
                 // Not used, remove
@@ -152,11 +159,17 @@ class ShaderSourceContext(val originalSource: String) {
                     uniforms[name] = uniform
 
                     buildString {
+                        append("layout(")
                         if (layout.isNotEmpty()) {
-                            append(layout.subSequence(0, layout.length - 1))
+                            val (inside) = LAYOUT_REGEX.matchEntire(layout)!!.destructured
+                            if (type is GLSLDataType.Opaque.Image) {
+                                val maybeFormat = inside.substringBefore(',').trim()
+                                glslFormatToImageFormat(maybeFormat)?.let {
+                                    imageTypeOverride[name] = it
+                                }
+                            }
+                            append(inside)
                             append(", ")
-                        } else {
-                            append("layout(")
                         }
                         append("set = ")
                         append(set)

@@ -28,7 +28,8 @@ class ReplayResource(
 
     val imageList: List<VkImage>
     val imageBufferList: List<ImageBufferInfo>
-    val imageViewList: List<VkImageView>
+    val samplerImageViewList: List<VkImageView>
+    val storageImageViewList: List<VkImageView>
 
     val imageDeviceMemory: DoubleData<VkDeviceMemory>?
     val bufferDeviceMemory: DoubleData<VkDeviceMemory>?
@@ -410,7 +411,9 @@ class ReplayResource(
                     }
                 }
 
-                imageViewList = captureData.metadata.images.mapIndexed { imageIndex, metadata ->
+                samplerImageViewList = captureData.metadata.samplerBindings.map { binding ->
+                    val imageIndex = binding.imageIndex
+                    val metadata = captureData.metadata.images[imageIndex]
                     val createInfo = VkImageViewCreateInfo.allocate {
                         image = imageList[imageIndex]
                         viewType = VkImageViewType.fromNativeData(metadata.type.value)
@@ -427,7 +430,32 @@ class ReplayResource(
                     val debugNameInfo = VkDebugUtilsObjectNameInfoEXT.allocate {
                         objectType = VkObjectType.IMAGE_VIEW
                         objectHandle = imageView.value.toULong()
-                        pObjectName = "${metadata.name}_View".c_str()
+                        pObjectName = "${binding.name}_View".c_str()
+                    }
+                    device.setDebugUtilsObjectNameEXT(debugNameInfo.ptr()).getOrThrow()
+                    imageView
+                }
+
+                storageImageViewList = captureData.metadata.imageBindings.map { binding ->
+                    val imageIndex = binding.imageIndex
+                    val metadata = captureData.metadata.images[imageIndex]
+                    val createInfo = VkImageViewCreateInfo.allocate {
+                        image = imageList[imageIndex]
+                        viewType = VkImageViewType.fromNativeData(metadata.type.value)
+                        format = VkFormat.fromNativeData(binding.format.value)
+                        subresourceRange {
+                            aspectMask = VkImageAspectFlags.COLOR
+                            baseMipLevel = 0u
+                            levelCount = metadata.mipLevels.toUInt()
+                            baseArrayLayer = 0u
+                            layerCount = metadata.arrayLayers.toUInt()
+                        }
+                    }
+                    val imageView = device.createImageView(createInfo.ptr(), nullptr()).getOrThrow()
+                    val debugNameInfo = VkDebugUtilsObjectNameInfoEXT.allocate {
+                        objectType = VkObjectType.IMAGE_VIEW
+                        objectHandle = imageView.value.toULong()
+                        pObjectName = "${binding.name}_View".c_str()
                     }
                     device.setDebugUtilsObjectNameEXT(debugNameInfo.ptr()).getOrThrow()
                     imageView
@@ -437,6 +465,12 @@ class ReplayResource(
     }
 
     fun destroy() {
+        samplerImageViewList.forEach {
+            device.destroyImageView(it, null)
+        }
+        storageImageViewList.forEach {
+            device.destroyImageView(it, null)
+        }
         imageList.forEach {
             device.destroyImage(it, null)
         }

@@ -519,9 +519,9 @@ class ReplayInstance(
             val set0BindingCount = captureData.metadata.imageBindings.size + captureData.metadata.samplerBindings.size
             val writeDescs = VkWriteDescriptorSet.allocate(set0BindingCount.toLong())
             var writeIndex = 0L
-            captureData.metadata.imageBindings.forEach { imageBinding ->
+            captureData.metadata.imageBindings.forEachIndexed { i, imageBinding ->
                 val descriptorImageInfo = VkDescriptorImageInfo.allocate {
-                    imageView = resource.imageViewList[imageBinding.imageIndex]
+                    imageView = resource.storageImageViewList[i]
                     imageLayout = VkImageLayout.GENERAL
                 }
                 writeDescs[writeIndex++].apply {
@@ -536,7 +536,7 @@ class ReplayInstance(
             captureData.metadata.samplerBindings.forEachIndexed { i, samplerBinding ->
                 val descriptorImageInfo = VkDescriptorImageInfo.allocate {
                     sampler = samplers[i]
-                    imageView = resource.imageViewList[samplerBinding.imageIndex]
+                    imageView = resource.samplerImageViewList[i]
                     imageLayout = VkImageLayout.GENERAL
                 }
                 writeDescs[writeIndex++].apply {

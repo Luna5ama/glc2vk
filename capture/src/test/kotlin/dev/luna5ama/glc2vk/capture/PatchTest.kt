@@ -1,4 +1,4 @@
-package dev.luna5ama.glc2vk.common
+package dev.luna5ama.glc2vk.capture
 
 import dev.luna5ama.glwrapper.enums.ShaderStage
 import kotlin.test.Test

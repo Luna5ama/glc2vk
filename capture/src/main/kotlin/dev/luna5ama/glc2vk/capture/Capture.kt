@@ -8,11 +8,7 @@ import dev.luna5ama.glwrapper.enums.GLSLDataType.UniformType
 import dev.luna5ama.glwrapper.enums.ImageFormat
 import dev.luna5ama.glwrapper.enums.ShaderStage
 import dev.luna5ama.glwrapper.objects.BufferObject
-import dev.luna5ama.kmogus.Arr
-import dev.luna5ama.kmogus.MemoryStack
-import dev.luna5ama.kmogus.Ptr
-import dev.luna5ama.kmogus.ensureCapacity
-import dev.luna5ama.kmogus.memcpy
+import dev.luna5ama.kmogus.*
 import org.lwjgl.system.MemoryUtil
 import java.nio.file.Path
 import kotlin.io.path.absolutePathString
@@ -54,12 +50,13 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
             name = name,
             imageIndex = imageIndex,
             set = 1,
-            binding = bindingIndex
+            binding = bindingIndex,
+            format = shaderInfo.imageTypeOverrides[name]?.let { glFormatToVkFormat(it) } ?: imageMetadata[imageIndex].format
         )
         imageBindings += binding
     }
 
-    val bufferNames  = mutableMapOf<Int, String>()
+    val bufferNames = mutableMapOf<Int, String>()
     val buffers = mutableListOf<Arr>()
     val bufferMetadata = mutableListOf<BufferMetadata>()
     val storageBufferBindings = mutableListOf<BufferBinding>()
@@ -110,7 +107,7 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
 
                 glGetObjectLabel(GL_BUFFER, bufferID, 0, tempPtr, Ptr.NULL)
                 val labelLen = tempPtr.getInt()
-                val str =   if (labelLen > 0) {
+                val str = if (labelLen > 0) {
                     val labelBuffer = malloc(labelLen + 1L)
                     glGetObjectLabel(GL_BUFFER, bufferID, labelLen + 1, tempPtr, labelBuffer.ptr)
                     MemoryUtil.memUTF8(labelBuffer.ptr.address)
@@ -133,8 +130,16 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
 
     fun build(command: Command): CaptureData {
         val metadata = CaptureMetadata(
-            images = imageMetadata.mapIndexed { i, metadata -> metadata.copy(name = metadata.name.ifEmpty { imageNames[i] ?: "buffer_$i" }) },
-            buffers = bufferMetadata.mapIndexed { i, metadata -> metadata.copy(name = metadata.name.ifEmpty { bufferNames[i] ?: "buffer_$i" }) },
+            images = imageMetadata.mapIndexed { i, metadata ->
+                metadata.copy(name = metadata.name.ifEmpty {
+                    imageNames[i] ?: "buffer_$i"
+                })
+            },
+            buffers = bufferMetadata.mapIndexed { i, metadata ->
+                metadata.copy(name = metadata.name.ifEmpty {
+                    bufferNames[i] ?: "buffer_$i"
+                })
+            },
             samplerBindings = samplerBindings,
             imageBindings = imageBindings,
             storageBufferBindings = storageBufferBindings,
@@ -377,6 +382,7 @@ private fun CaptureContext.captureImages() {
 
         fun getImageIndex(imageID: Int): Int {
             if (imageIDToIndex.putIfAbsent(imageID, images.size) == null) {
+                val imageIndex = images.size
                 glGetTextureParameteriv(imageID, GL_TEXTURE_TARGET, tempPtr)
                 val target = tempPtr.getInt()
                 val type = glImageTargetToVKImageViewType(target)
@@ -494,7 +500,7 @@ private fun CaptureContext.captureImages() {
 
                 glGetObjectLabel(GL_TEXTURE, imageID, 0, tempPtr, Ptr.NULL)
                 val labelLen = tempPtr.getInt()
-                val str =   if (labelLen > 0) {
+                val str = if (labelLen > 0) {
                     val labelBuffer = malloc(labelLen + 1L)
                     glGetObjectLabel(GL_TEXTURE, imageID, labelLen + 1, tempPtr, labelBuffer.ptr)
                     MemoryUtil.memUTF8(labelBuffer.ptr.address)
@@ -717,7 +723,16 @@ private fun saveShader(
 
 
     ProcessBuilder()
-        .command("glslang", "-DGLSLANG=1", "-gVS", "--target-env", "vulkan1.3", "-o", spvPath.absolutePathString(), glslPath.absolutePathString())
+        .command(
+            "glslang",
+            "-DGLSLANG=1",
+            "-gVS",
+            "--target-env",
+            "vulkan1.3",
+            "-o",
+            spvPath.absolutePathString(),
+            glslPath.absolutePathString()
+        )
         .inheritIO()
         .start()
         .waitFor()

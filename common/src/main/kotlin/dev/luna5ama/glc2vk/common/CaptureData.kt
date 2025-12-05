@@ -88,7 +88,8 @@ data class ImageBinding(
     val name: String,
     val imageIndex: Int,
     val set: Int,
-    val binding: Int
+    val binding: Int,
+    val format: VkFormat,
 )
 
 @Serializable
