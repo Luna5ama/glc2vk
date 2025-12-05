@@ -172,38 +172,41 @@ private fun CaptureContext.captureDefaultUniformBlock() {
 
     val struct = UniformBlock {
         MemoryStack {
-            resourceManager.uniformResource.entries.values.asSequence()
-                .filter { it.blockIndex == -1 }
-                .filter { it.location != -1 }
+            shaderInfo.uniforms.values.asSequence()
                 .filter { it.type is GLSLDataType.Value }
                 .forEach {
                     fun getData() {
+                        val uniformResource = resourceManager.uniformResource.nameToEntryMap[it.name]
+                        if (uniformResource == null || uniformResource.location == -1 || uniformResource.blockIndex != -1) {
+                            return
+                        }
+                        
                         val lastAttribute = this@UniformBlock.last
                         val offset = lastAttribute.alignOffset.toLong()
                         val size = lastAttribute.baseAlign.toLong()
                         defaultUniformData.ensureCapacity(offset + size, true)
                         val dstPtr = defaultUniformData.ptr + offset
 
-                        if (it.arraySize > 1) {
+                        if (uniformResource.arraySize > 1) {
                             when (it.type) {
                                 is UniformType.Bool -> {
                                     throw UnsupportedOperationException("Boolean uniforms are not supported")
                                 }
 
                                 is UniformType.Int -> {
-                                    glGetnUniformiv(resourceManager.programID, it.location, it.arraySize, dstPtr)
+                                    glGetnUniformiv(resourceManager.programID, uniformResource.location, uniformResource.arraySize, dstPtr)
                                 }
 
                                 is UniformType.UInt -> {
-                                    glGetnUniformuiv(resourceManager.programID, it.location, it.arraySize, dstPtr)
+                                    glGetnUniformuiv(resourceManager.programID, uniformResource.location, uniformResource.arraySize, dstPtr)
                                 }
 
                                 is UniformType.Float -> {
-                                    glGetnUniformfv(resourceManager.programID, it.location, it.arraySize, dstPtr)
+                                    glGetnUniformfv(resourceManager.programID, uniformResource.location, uniformResource.arraySize, dstPtr)
                                 }
 
                                 is UniformType.Double -> {
-                                    glGetnUniformdv(resourceManager.programID, it.location, it.arraySize, dstPtr)
+                                    glGetnUniformdv(resourceManager.programID, uniformResource.location, uniformResource.arraySize, dstPtr)
                                 }
 
                                 else -> {
@@ -217,19 +220,19 @@ private fun CaptureContext.captureDefaultUniformBlock() {
                                 }
 
                                 is UniformType.Int -> {
-                                    glGetUniformiv(resourceManager.programID, it.location, dstPtr)
+                                    glGetUniformiv(resourceManager.programID, uniformResource.location, dstPtr)
                                 }
 
                                 is UniformType.UInt -> {
-                                    glGetUniformuiv(resourceManager.programID, it.location, dstPtr)
+                                    glGetUniformuiv(resourceManager.programID, uniformResource.location, dstPtr)
                                 }
 
                                 is UniformType.Float -> {
-                                    glGetUniformfv(resourceManager.programID, it.location, dstPtr)
+                                    glGetUniformfv(resourceManager.programID, uniformResource.location, dstPtr)
                                 }
 
                                 is UniformType.Double -> {
-                                    glGetUniformdv(resourceManager.programID, it.location, dstPtr)
+                                    glGetUniformdv(resourceManager.programID, uniformResource.location, dstPtr)
                                 }
 
                                 else -> {
@@ -238,6 +241,7 @@ private fun CaptureContext.captureDefaultUniformBlock() {
                             }
                         }
                     }
+                    
                     when (it.type) {
                         GLSLDataType.Int, GLSLDataType.UInt, GLSLDataType.Float -> {
                             scalar32(it.name)
@@ -518,7 +522,13 @@ private fun CaptureContext.captureImages() {
                         mipLevels = mipLevels,
                         arrayLayers = arrayLayers,
                         format = format,
-                        type = type,
+                        dataType = when (typedFormat) {
+                            is ImageFormat.DepthStencil -> ImageDataType.DEPTH_STENCIL
+                            is ImageFormat.Depth -> ImageDataType.DEPTH
+                            is ImageFormat.Stencil -> ImageDataType.STENCIL
+                            else -> ImageDataType.COLOR
+                        },
+                        viewType = type,
                         levelDataSizes = mipData.map { it.len }
                     )
                 )

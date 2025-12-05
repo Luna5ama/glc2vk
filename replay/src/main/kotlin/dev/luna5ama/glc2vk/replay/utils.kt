@@ -1,5 +1,6 @@
 package dev.luna5ama.glc2vk.replay
 
+import dev.luna5ama.glc2vk.common.ImageDataType
 import net.echonolix.caelum.*
 import net.echonolix.caelum.MemoryStack
 import net.echonolix.caelum.allocate
@@ -19,6 +20,7 @@ import net.echonolix.caelum.vulkan.enums.VkPresentModeKHR
 import net.echonolix.caelum.vulkan.enums.get
 import net.echonolix.caelum.vulkan.flags.VkDebugUtilsMessageSeverityFlagsEXT
 import net.echonolix.caelum.vulkan.flags.VkDebugUtilsMessageTypeFlagsEXT
+import net.echonolix.caelum.vulkan.flags.VkImageAspectFlags
 import net.echonolix.caelum.vulkan.flags.VkQueueFlags
 import net.echonolix.caelum.vulkan.getPhysicalDeviceProperties
 import net.echonolix.caelum.vulkan.getPhysicalDeviceQueueFamilyProperties
@@ -55,6 +57,15 @@ data class SwapchainSupportDetails(
     val formats: List<NPointer<VkSurfaceFormatKHR>>,
     val presentModes: List<VkPresentModeKHR>
 )
+
+fun ImageDataType.toAspectFlags(): VkImageAspectFlags {
+    return when (this) {
+        ImageDataType.COLOR -> VkImageAspectFlags.COLOR
+        ImageDataType.DEPTH -> VkImageAspectFlags.DEPTH
+        ImageDataType.STENCIL -> VkImageAspectFlags.STENCIL
+        ImageDataType.DEPTH_STENCIL -> VkImageAspectFlags.DEPTH + VkImageAspectFlags.STENCIL
+    }
+}
 
 context(_: MemoryStack)
 fun VkPhysicalDevice.querySwapchainSupport(surface: VkSurfaceKHR): SwapchainSupportDetails {

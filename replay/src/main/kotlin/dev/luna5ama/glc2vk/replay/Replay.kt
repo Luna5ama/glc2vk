@@ -144,7 +144,8 @@ fun main(args: Array<String>) {
             queues(queuePriority)
         }
         val deviceExtensions = setOf(
-            VK_KHR_SWAPCHAIN_EXTENSION_NAME
+            VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+            VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME
         )
         val deviceCreateInfo = VkDeviceCreateInfo.allocate {
             queueCreateInfoes(queueCreateInfos)
@@ -269,7 +270,7 @@ fun main(args: Array<String>) {
         }
 
         device.deviceWaitIdle()
-
+        replayInstance.destroy()
 
         for (imageView in swapchainImageViews) {
             device.destroyImageView(imageView, null)

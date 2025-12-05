@@ -1,6 +1,7 @@
 package dev.luna5ama.glc2vk.replay
 
 import dev.luna5ama.glc2vk.common.CaptureData
+import dev.luna5ama.glc2vk.common.ImageDataType
 import dev.luna5ama.glc2vk.common.ImageMetadata
 import it.unimi.dsi.fastutil.longs.LongArrayList
 import net.echonolix.caelum.*
@@ -252,7 +253,7 @@ class ReplayResource(
                 val imageSubAllocator = DoubleData(MemorySuballocator(0L), MemorySuballocator(0L))
 
                 fun NValue<VkImageCreateInfo>.setFrom(metadata: ImageMetadata) {
-                    val imageType = when (metadata.type) {
+                    val imageType = when (metadata.viewType) {
                         dev.luna5ama.glc2vk.common.VkImageViewType.`1D` -> VkImageType.`1D`
                             dev.luna5ama.glc2vk.common.VkImageViewType.`2D` -> VkImageType.`2D`
                             dev.luna5ama.glc2vk.common.VkImageViewType.`3D` -> VkImageType.`3D`
@@ -278,6 +279,7 @@ class ReplayResource(
                         val vkImageGPU = MemoryStack {
                             val createInfo = VkImageCreateInfo.allocate()
                             createInfo.setFrom(it)
+                            createInfo.flags = VkImageCreateFlags.MUTABLE_FORMAT
                             createInfo.tiling = VkImageTiling.OPTIMAL
                             createInfo.initialLayout = VkImageLayout.UNDEFINED
                             createInfo.usage =
@@ -416,10 +418,10 @@ class ReplayResource(
                     val metadata = captureData.metadata.images[imageIndex]
                     val createInfo = VkImageViewCreateInfo.allocate {
                         image = imageList[imageIndex]
-                        viewType = VkImageViewType.fromNativeData(metadata.type.value)
+                        viewType = VkImageViewType.fromNativeData(metadata.viewType.value)
                         format = VkFormat.fromNativeData(metadata.format.value)
                         subresourceRange {
-                            aspectMask = VkImageAspectFlags.COLOR
+                            aspectMask = metadata.dataType.toAspectFlags()
                             baseMipLevel = 0u
                             levelCount = metadata.mipLevels.toUInt()
                             baseArrayLayer = 0u
@@ -441,10 +443,10 @@ class ReplayResource(
                     val metadata = captureData.metadata.images[imageIndex]
                     val createInfo = VkImageViewCreateInfo.allocate {
                         image = imageList[imageIndex]
-                        viewType = VkImageViewType.fromNativeData(metadata.type.value)
+                        viewType = VkImageViewType.fromNativeData(metadata.viewType.value)
                         format = VkFormat.fromNativeData(binding.format.value)
                         subresourceRange {
-                            aspectMask = VkImageAspectFlags.COLOR
+                            aspectMask = metadata.dataType.toAspectFlags()
                             baseMipLevel = 0u
                             levelCount = metadata.mipLevels.toUInt()
                             baseArrayLayer = 0u

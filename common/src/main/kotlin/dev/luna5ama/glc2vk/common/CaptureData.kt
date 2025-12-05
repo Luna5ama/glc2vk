@@ -10,12 +10,7 @@ import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
 import java.nio.file.Path
 import kotlin.concurrent.thread
-import kotlin.io.path.absolutePathString
-import kotlin.io.path.createDirectories
-import kotlin.io.path.deleteExisting
-import kotlin.io.path.deleteIfExists
-import kotlin.io.path.readText
-import kotlin.io.path.writeText
+import kotlin.io.path.*
 
 @Serializable
 sealed interface Command {
@@ -34,6 +29,14 @@ sealed interface Command {
 }
 
 @Serializable
+enum class ImageDataType {
+    COLOR,
+    DEPTH,
+    STENCIL,
+    DEPTH_STENCIL
+}
+
+@Serializable
 data class ImageMetadata(
     val name: String,
     val width: Int,
@@ -42,7 +45,8 @@ data class ImageMetadata(
     val mipLevels: Int,
     val arrayLayers: Int,
     val format: VkFormat,
-    val type: VkImageViewType,
+    val dataType: ImageDataType,
+    val viewType: VkImageViewType,
     val levelDataSizes: List<Long>
 )
 
@@ -167,6 +171,7 @@ class CaptureData(
                             tarOutput.write(data)
                             tarOutput.closeArchiveEntry()
                         }
+
                         fun writeEntry(name: String, data: Arr) {
                             val byteArray = ByteArray(data.len.toInt())
                             memcpy(data.ptr, 0L, byteArray, 0L, data.len)
@@ -208,7 +213,7 @@ class CaptureData(
             TarArchiveInputStream(proc.inputStream).use { tarInput ->
                 var entry = tarInput.nextEntry
                 while (entry != null) {
-                    when  {
+                    when {
                         entry.name.startsWith("image_") -> imageDataBytes[entry.name] = tarInput.readBytes()
                         entry.name.startsWith("buffer_") -> bufferDataBytes[entry.name] = tarInput.readBytes()
                         else -> error("Got unexpected file ${entry.name} in resource capture")

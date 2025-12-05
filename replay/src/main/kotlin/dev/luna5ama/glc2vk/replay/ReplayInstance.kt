@@ -140,9 +140,10 @@ class ReplayInstance(
                         oldLayout = VkImageLayout.UNDEFINED
                         newLayout = VkImageLayout.TRANSFER_DST_OPTIMAL
 
-                        ofWholeImage(image)
+                        ofWholeImage(image, captureData.metadata.images[i].dataType.toAspectFlags())
                     }
                 }
+                imageMemoryBarriers(imageMemoryBarriers)
             }
 
             dependencyInfo2 = VkDependencyInfo.allocate(scope) {
@@ -170,7 +171,7 @@ class ReplayInstance(
                         oldLayout = VkImageLayout.TRANSFER_DST_OPTIMAL
                         newLayout = VkImageLayout.GENERAL
 
-                        ofWholeImage(image)
+                        ofWholeImage(image, captureData.metadata.images[i].dataType.toAspectFlags())
                     }
                 }
                 imageMemoryBarriers(imageMemoryBarriers)
@@ -252,7 +253,8 @@ class ReplayInstance(
                     oldLayout = VkImageLayout.UNDEFINED
                     newLayout = VkImageLayout.PRESENT_SRC_KHR
 
-                    ofWholeImage(swapchainImage)
+                    ofWholeImage(swapchainImage, VkImageAspectFlags.COLOR)
+
                 }
                 imageMemoryBarriers(imageMemoryBarrier)
             }
@@ -285,7 +287,7 @@ class ReplayInstance(
                             bufferImageHeight = 0u
 
                             imageSubresource {
-                                aspectMask = VkImageAspectFlags.COLOR
+                                aspectMask = imageMetadata.dataType.toAspectFlags()
                                 mipLevel = mip.toUInt()
                                 baseArrayLayer = 0u
                                 layerCount = imageMetadata.arrayLayers.toUInt()
@@ -369,6 +371,7 @@ class ReplayInstance(
 
         device.destroyCommandPool(commandPool, null)
 
+        pipelineInfo.destroy(device)
         resource.destroy()
         arena.close()
     }
