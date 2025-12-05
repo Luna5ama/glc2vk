@@ -227,9 +227,9 @@ class ShaderSourceContext(val originalSource: String) {
         // Remove comments
         removeComments()
         removeUnusedConsts()
+        patchUniforms()
         patchSSBO()
         patchUBO()
-        patchUniforms()
 
         return modifiedSource.replace("\n", System.lineSeparator())
     }
