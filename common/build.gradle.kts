@@ -11,6 +11,4 @@ dependencies {
     api(libs.bundles.glWrapper)
     api(libs.kmogus.core)
     implementation(libs.commons.compress)
-
-    testImplementation(kotlin("test"))
 }

@@ -130,7 +130,6 @@ class ShaderSourceContext(val originalSource: String) {
             val (layout, modifiers1, modifiers2, typeStr, name) = it.destructured
 
             if (!checkUsage(name)) {
-                println("Removing unused uniform: $name")
                 // Not used, remove
                 return@replace ""
             }

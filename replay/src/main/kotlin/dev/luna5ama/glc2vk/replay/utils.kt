@@ -89,7 +89,7 @@ fun chooseSwapchainFormat(formats: List<NPointer<VkSurfaceFormatKHR>>) = formats
 }
 
 fun choosePresentMode(modes: List<VkPresentModeKHR>) = modes.find {
-    it == VkPresentModeKHR.MAILBOX_KHR
+    it == VkPresentModeKHR.FIFO_KHR
 } ?: VkPresentModeKHR.FIFO_KHR
 
 context(_: MemoryStack)

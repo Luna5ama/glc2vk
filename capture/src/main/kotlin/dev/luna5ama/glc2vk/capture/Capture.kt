@@ -169,6 +169,7 @@ private fun CaptureContext.captureDefaultUniformBlock() {
         MemoryStack {
             resourceManager.uniformResource.entries.values.asSequence()
                 .filter { it.blockIndex == -1 }
+                .filter { it.location != -1 }
                 .filter { it.type is GLSLDataType.Value }
                 .forEach {
                     fun getData() {
@@ -718,7 +719,7 @@ private fun saveShader(
 
 
     ProcessBuilder()
-        .command("glslang", "-gVS", "--target-env", "vulkan1.3", "-o", spvPath.absolutePathString(), glslPath.absolutePathString())
+        .command("glslang", "-DGLSLANG=1", "-gVS", "--target-env", "vulkan1.3", "-o", spvPath.absolutePathString(), glslPath.absolutePathString())
         .inheritIO()
         .start()
         .waitFor()
@@ -749,7 +750,6 @@ fun captureGlDispatchCompute(
     CaptureData.save(outputPath, resourceCapture) {
         saveShader(outputPath, shaderInfo, ShaderStage.ComputeShader)
     }
-    resourceCapture.free()
 
     glDispatchCompute(num_groups_x, num_groups_y, num_groups_z)
 }

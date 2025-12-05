@@ -12,4 +12,6 @@ dependencies {
     implementation(libs.kotlinxSerializationCore)
     implementation(libs.kmogus.core)
     implementation(libs.fastutil)
+
+    testImplementation(kotlin("test"))
 }
