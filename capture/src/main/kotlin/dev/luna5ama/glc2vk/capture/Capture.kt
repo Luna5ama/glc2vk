@@ -639,19 +639,17 @@ private fun CaptureContext.captureImages() {
             .forEach { uniformEntry ->
                 glGetUniformiv(resourceManager.programID, uniformEntry.location, tempPtr)
                 val textureUnit = tempPtr.getInt()
-                val bindingTargets = listOf(
-                    GL_TEXTURE_BINDING_1D,
-                    GL_TEXTURE_BINDING_2D,
-                    GL_TEXTURE_BINDING_3D,
-                    GL_TEXTURE_BINDING_CUBE_MAP,
-                    GL_TEXTURE_BINDING_1D_ARRAY,
-                    GL_TEXTURE_BINDING_2D_ARRAY,
-                    GL_TEXTURE_BINDING_CUBE_MAP_ARRAY
-                )
-                bindingTargets.find {
-                    glGetIntegeri_v(it, textureUnit, tempPtr)
-                    glIsTexture(tempPtr.getInt())
+                val bindingTarget = when (uniformEntry.type) {
+                    is GLSLDataType.Opaque.Sampler.Sampler1D -> GL_TEXTURE_BINDING_1D
+                    is GLSLDataType.Opaque.Sampler.Sampler2D -> GL_TEXTURE_BINDING_2D
+                    is GLSLDataType.Opaque.Sampler.Sampler3D -> GL_TEXTURE_BINDING_3D
+                    is GLSLDataType.Opaque.Sampler.SamplerCube -> GL_TEXTURE_BINDING_CUBE_MAP
+                    is GLSLDataType.Opaque.Sampler.Sampler1DArray -> GL_TEXTURE_BINDING_1D_ARRAY
+                    is GLSLDataType.Opaque.Sampler.Sampler2DArray -> GL_TEXTURE_BINDING_2D_ARRAY
+                    is GLSLDataType.Opaque.Sampler.SamplerCubeArray -> GL_TEXTURE_BINDING_CUBE_MAP_ARRAY
+                    else -> error("Unsupported sampler type: ${uniformEntry.type}")
                 }
+                glGetIntegeri_v(bindingTarget, textureUnit, tempPtr)
                 val boundImageID = tempPtr.getInt()
                 val imageIndex = getImageIndex(boundImageID)
                 glGetIntegeri_v(GL_SAMPLER_BINDING, textureUnit, tempPtr)
