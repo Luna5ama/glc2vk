@@ -165,13 +165,25 @@ class CaptureData(
                 }
             }
 
+            fun writeUncompressed(path: Path, data: Arr) {
+                Files.newByteChannel(
+                    path,
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.WRITE,
+                    StandardOpenOption.TRUNCATE_EXISTING
+                ).use { channel ->
+                    val buffer = data.ptr.asByteBuffer(data.len.toInt()).order(ByteOrder.nativeOrder())
+                    channel.write(buffer)
+                }
+            }
+
             (capture.metadata.images zip capture.imageData).forEachIndexed { imageIndex, (metadata, data) ->
                 data.levels.forEachIndexed { level, data ->
-                    writeCompressed(outputPath.resolve("image_${imageIndex}_$level.bin.zstd"), data)
+                    writeUncompressed(outputPath.resolve("image_${imageIndex}_$level.bin"), data)
                 }
             }
             capture.metadata.buffers.forEachIndexed { i, metadata ->
-                writeCompressed(outputPath.resolve("buffer_$i.bin.zstd"), capture.bufferData[i])
+                writeUncompressed(outputPath.resolve("buffer_$i.bin"), capture.bufferData[i])
             }
         }
 
