@@ -746,8 +746,9 @@ fun captureGlDispatchCompute(
 
     val resourceCapture = captureContext.build(command)
 
-    CaptureData.save(outputPath, resourceCapture)
-    saveShader(outputPath, shaderInfo, ShaderStage.ComputeShader)
+    CaptureData.save(outputPath, resourceCapture) {
+        saveShader(outputPath, shaderInfo, ShaderStage.ComputeShader)
+    }
     resourceCapture.free()
 
     glDispatchCompute(num_groups_x, num_groups_y, num_groups_z)
@@ -770,9 +771,9 @@ fun captureGlDispatchComputeIndirect(shaderInfo: ShaderInfo, outputPath: Path, i
 
     val resourceCapture = captureContext.build(command)
 
-    CaptureData.save(outputPath, resourceCapture)
-    saveShader(outputPath, shaderInfo, ShaderStage.ComputeShader)
-    resourceCapture.free()
+    CaptureData.save(outputPath, resourceCapture) {
+        saveShader(outputPath, shaderInfo, ShaderStage.ComputeShader)
+    }
 
     glDispatchComputeIndirect(indirect)
 }

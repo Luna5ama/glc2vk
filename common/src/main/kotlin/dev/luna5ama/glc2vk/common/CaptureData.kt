@@ -1,19 +1,19 @@
 package dev.luna5ama.glc2vk.common
 
 import dev.luna5ama.kmogus.Arr
-import dev.luna5ama.kmogus.MemoryStack
-import dev.luna5ama.kmogus.asByteBuffer
+import dev.luna5ama.kmogus.memcpy
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import org.lwjgl.util.zstd.Zstd
-import java.nio.ByteOrder
-import java.nio.channels.FileChannel
-import java.nio.file.Files
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
 import java.nio.file.Path
-import java.nio.file.StandardOpenOption
+import kotlin.concurrent.thread
+import kotlin.io.path.absolutePathString
 import kotlin.io.path.createDirectories
-import kotlin.io.path.fileSize
+import kotlin.io.path.deleteExisting
+import kotlin.io.path.deleteIfExists
 import kotlin.io.path.readText
 import kotlin.io.path.writeText
 
@@ -136,90 +136,100 @@ class CaptureData(
     }
 
     companion object {
-        fun save(outputPath: Path, capture: CaptureData) {
-            @OptIn(ExperimentalSerializationApi::class)
-            val jsonInstance = Json {
-                prettyPrint = true
-                prettyPrintIndent = "    "
-            }
-            outputPath.createDirectories()
-            outputPath.resolve("metadata.json").writeText(jsonInstance.encodeToString(capture.metadata))
-
-            fun writeCompressed(path: Path, data: Arr) {
-                val maxCompressedSize = Zstd.ZSTD_compressBound(data.len)
-                Arr.malloc(maxCompressedSize).use {
-                    val outputBuffer = it.ptr.asByteBuffer(it.len.toInt()).order(ByteOrder.nativeOrder())
-                    val srcAsByteBuffer = data.ptr.asByteBuffer(data.len.toInt()).order(ByteOrder.nativeOrder())
-                    val finalSize = Zstd.ZSTD_compress(outputBuffer, srcAsByteBuffer, Zstd.ZSTD_CLEVEL_DEFAULT)
-                    outputBuffer.clear()
-                    outputBuffer.limit(finalSize.toInt())
-
-                    Files.newByteChannel(
-                        path,
-                        StandardOpenOption.CREATE,
-                        StandardOpenOption.WRITE,
-                        StandardOpenOption.TRUNCATE_EXISTING
-                    ).use { channel ->
-                        channel.write(outputBuffer)
+        fun save(outputPath: Path, capture: CaptureData, block: () -> Unit) {
+            thread(true) {
+                try {
+                    @OptIn(ExperimentalSerializationApi::class)
+                    val jsonInstance = Json {
+                        prettyPrint = true
+                        prettyPrintIndent = "    "
                     }
-                }
-            }
+                    outputPath.createDirectories()
 
-            fun writeUncompressed(path: Path, data: Arr) {
-                Files.newByteChannel(
-                    path,
-                    StandardOpenOption.CREATE,
-                    StandardOpenOption.WRITE,
-                    StandardOpenOption.TRUNCATE_EXISTING
-                ).use { channel ->
-                    val buffer = data.ptr.asByteBuffer(data.len.toInt()).order(ByteOrder.nativeOrder())
-                    channel.write(buffer)
-                }
-            }
+                    val resourceCapturePath = outputPath.resolve("resources.tar.xz")
+                    resourceCapturePath.deleteIfExists()
+                    val metadataPath = outputPath.resolve("resource_metadata.json")
+                    val jsonStr = jsonInstance.encodeToString(capture.metadata)
+                    metadataPath.writeText(jsonStr)
 
-            (capture.metadata.images zip capture.imageData).forEachIndexed { imageIndex, (metadata, data) ->
-                data.levels.forEachIndexed { level, data ->
-                    writeUncompressed(outputPath.resolve("image_${imageIndex}_$level.bin"), data)
+                    val proc = ProcessBuilder()
+                        .command("7z", "a", "-mx1", resourceCapturePath.absolutePathString(), "-si")
+                        .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                        .redirectError(ProcessBuilder.Redirect.DISCARD)
+                        .start()
+
+                    TarArchiveOutputStream(proc.outputStream).use { tarOutput ->
+                        fun writeEntry(name: String, data: ByteArray) {
+                            val entry = TarArchiveEntry(name)
+                            entry.size = data.size.toLong()
+                            tarOutput.putArchiveEntry(entry)
+                            tarOutput.write(data)
+                            tarOutput.closeArchiveEntry()
+                        }
+                        fun writeEntry(name: String, data: Arr) {
+                            val byteArray = ByteArray(data.len.toInt())
+                            memcpy(data.ptr, 0L, byteArray, 0L, data.len)
+                            writeEntry(name, byteArray)
+                        }
+
+                        (capture.metadata.images zip capture.imageData).forEachIndexed { imageIndex, (metadata, data) ->
+                            data.levels.forEachIndexed { level, data ->
+                                writeEntry("image_${imageIndex}_$level.bin", data)
+                            }
+                        }
+                        capture.metadata.buffers.forEachIndexed { i, _ ->
+                            writeEntry("buffer_$i.bin", capture.bufferData[i])
+                        }
+                    }
+                    proc.waitFor()
+                } finally {
+                    capture.free()
                 }
-            }
-            capture.metadata.buffers.forEachIndexed { i, metadata ->
-                writeUncompressed(outputPath.resolve("buffer_$i.bin"), capture.bufferData[i])
+
+                block()
             }
         }
 
         fun load(inputPath: Path): CaptureData {
-            val metadata = Json.decodeFromString<CaptureMetadata>(inputPath.resolve("metadata.json").readText())
-            fun readCompressed(path: Path, uncompressedSize: Long): Arr {
-                return Files.newByteChannel(
-                    path,
-                    StandardOpenOption.READ
-                ).use { channel ->
-                    val outputBuffer = Arr.malloc(uncompressedSize)
-                    Arr.malloc(channel.size()).use {
-                        val inputBuffer = it.ptr.asByteBuffer(it.len.toInt()).order(ByteOrder.nativeOrder())
-                        val outputBufferBB = outputBuffer.ptr.asByteBuffer(outputBuffer.len.toInt()).order(ByteOrder.nativeOrder())
-                        channel.read(inputBuffer)
-                        inputBuffer.clear()
-                        val decompressedSize = Zstd.ZSTD_decompress(
-                            outputBufferBB,
-                            inputBuffer
-                        )
-                        if (decompressedSize != uncompressedSize) {
-                            error("Decompression size mismatch for $path: expected $uncompressedSize, got $decompressedSize")
-                        }
+            val metadataPath = inputPath.resolve("resource_metadata.json")
+            val metadata = Json.decodeFromString<CaptureMetadata>(metadataPath.readText())
+
+            val resourcesPath = inputPath.resolve("resources.tar.xz")
+
+            val proc = ProcessBuilder()
+                .command("7z", "e", resourcesPath.absolutePathString(), "-so")
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+                .start()
+
+            val imageDataBytes = mutableMapOf<String, ByteArray>()
+            val bufferDataBytes = mutableMapOf<String, ByteArray>()
+
+            TarArchiveInputStream(proc.inputStream).use { tarInput ->
+                var entry = tarInput.nextEntry
+                while (entry != null) {
+                    when  {
+                        entry.name.startsWith("image_") -> imageDataBytes[entry.name] = tarInput.readBytes()
+                        entry.name.startsWith("buffer_") -> bufferDataBytes[entry.name] = tarInput.readBytes()
+                        else -> error("Got unexpected file ${entry.name} in resource capture")
                     }
-                    outputBuffer
+                    entry = tarInput.nextEntry
                 }
+            }
+
+            fun ByteArray.toArr(): Arr {
+                val arr = Arr.malloc(this.size.toLong())
+                memcpy(this, 0L, arr.ptr, 0L, this.size.toLong())
+                return arr
             }
 
             val imageData = metadata.images.mapIndexed { i, imageMeta ->
                 val levels = imageMeta.levelDataSizes.mapIndexed { levelIndex, levelSize ->
-                    readCompressed(inputPath.resolve("image_${i}_$levelIndex.bin.zstd"), levelSize)
+                    imageDataBytes["image_${i}_$levelIndex.bin"]!!.toArr()
                 }
                 ImageData(levels)
             }
             val bufferData = metadata.buffers.mapIndexed { i, bufferMeta ->
-                readCompressed(inputPath.resolve("buffer_$i.bin.zstd"), bufferMeta.size)
+                bufferDataBytes["buffer_$i.bin"]!!.toArr()
             }
             return CaptureData(
                 metadata,

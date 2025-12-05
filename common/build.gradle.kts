@@ -5,23 +5,12 @@ plugins {
 }
 
 dependencies {
-    implementation(platform("org.lwjgl:lwjgl-bom:${libs.versions.lwjgl.get()}"))
+    api(libs.kotlinxSerializationCore)
+    implementation(libs.kotlinxSerializationJson)
 
-    implementation("org.lwjgl", "lwjgl")
-    implementation("org.lwjgl", "lwjgl-opengl")
-    implementation("org.lwjgl", "lwjgl-zstd")
-    runtimeOnly("org.lwjgl", "lwjgl", classifier = "natives-windows")
-    runtimeOnly("org.lwjgl", "lwjgl-opengl", classifier = "natives-windows")
-    runtimeOnly("org.lwjgl", "lwjgl-zstd", classifier = "natives-windows")
-
-    api(libs.kotlinxSerializationJson)
-
-    api(libs.fastutil)
-    api(libs.joml)
-
-    api(libs.bundles.kotlinEcosystem)
     api(libs.bundles.glWrapper)
-    api(libs.bundles.kmogus)
+    api(libs.kmogus.core)
+    implementation(libs.commons.compress)
 
     testImplementation(kotlin("test"))
 }

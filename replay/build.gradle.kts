@@ -14,10 +14,10 @@ repositories {
 
 dependencies {
     implementation(project(":glc2vk-common"))
-    implementation(platform("org.lwjgl:lwjgl-bom:${libs.versions.lwjgl.get()}"))
 
-    implementation("org.lwjgl", "lwjgl")
-    runtimeOnly("org.lwjgl", "lwjgl-glfw", classifier = "natives-windows")
+    implementation(libs.kotlinxSerializationCore)
+    implementation(libs.fastutil)
+    implementation(libs.kmogus.core)
 
     implementation("net.echonolix:caelum-core:1.0-SNAPSHOT")
     implementation("net.echonolix:caelum-vulkan:1.0-SNAPSHOT")

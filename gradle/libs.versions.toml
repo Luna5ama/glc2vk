@@ -3,15 +3,13 @@ kotlin = "2.2.21"
 kotlinDSL = "6.4.2"
 
 kotlinxSerialization = "1.8.1"
-kotlinx-coroutines = "1.9.0"
-
 fastutil = "8.5.18"
 
 lwjgl = "3.3.6"
-joml = "1.10.5"
 glWrapper = "1.1.0"
 kmogus = "1.1-SNAPSHOT"
-lwjgl3Awt = "0.2.3"
+
+commons-compress = "1.28.0"
 
 [plugins]
 kotlinxSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
@@ -21,25 +19,17 @@ kotlin = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlinGradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 kotlinDSLGradlePlugin = { module = "org.gradle.kotlin.kotlin-dsl:org.gradle.kotlin.kotlin-dsl.gradle.plugin", version.ref = "kotlinDSL" }
 
-kotlin-reflect = { module = "org.jetbrains.kotlin:kotlin-reflect", version.ref = "kotlin" }
-kotlinx-coroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
-
 kotlinxSerializationCore = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 kotlinxSerializationJson = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 
 fastutil = { module = "it.unimi.dsi:fastutil", version.ref = "fastutil" }
 
-joml = { module = "org.joml:joml", version.ref = "joml" }
-
 glWrapper-core = { module = "dev.luna5ama:gl-wrapper-core", version.ref = "glWrapper" }
 glWrapper-lwjgl3 = { module = "dev.luna5ama:gl-wrapper-lwjgl-3", version.ref = "glWrapper" }
 
 kmogus-core = { module = "dev.luna5ama:kmogus-core", version.ref = "kmogus" }
-kmogus-joml = { module = "dev.luna5ama:kmogus-joml", version.ref = "kmogus" }
 
-lwjgl3-awt = { module = "org.lwjglx:lwjgl3-awt", version.ref = "lwjgl3Awt" }
+commons-compress = { module = "org.apache.commons:commons-compress", version.ref = "commons-compress" }
 
 [bundles]
-kotlinEcosystem = ["kotlin-reflect", "kotlinx-coroutines"]
 glWrapper = ["glWrapper-core", "glWrapper-lwjgl3"]
-kmogus = ["kmogus-core", "kmogus-joml"]
