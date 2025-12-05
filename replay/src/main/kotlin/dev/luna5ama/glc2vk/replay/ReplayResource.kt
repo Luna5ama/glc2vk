@@ -153,7 +153,13 @@ class ReplayResource(
                         bufferList.map { it.cpu },
                         bufferSubAllocator.cpu,
                         bufferSuballocateOffsets.cpu,
-                        memoryTypes.staging
+                        memoryTypes.findType(
+                            VkMemoryPropertyFlags.HOST_VISIBLE +
+                                    VkMemoryPropertyFlags.HOST_COHERENT +
+                                    VkMemoryPropertyFlags.DEVICE_LOCAL,
+                            VkMemoryPropertyFlags.NONE
+                        )
+//                        memoryTypes.staging
 //                    memoryTypes.run {
 //                        findType(
 //                            bufferMemoryTypeBits.cpu,
@@ -334,7 +340,12 @@ class ReplayResource(
                             backupImageList.flatten(),
                             imageSubAllocator.cpu,
                             imageSuballocateOffsets.cpu,
-                            memoryTypes.staging
+                            memoryTypes.findType(
+                                VkMemoryPropertyFlags.HOST_VISIBLE +
+                                        VkMemoryPropertyFlags.HOST_COHERENT +
+                                        VkMemoryPropertyFlags.DEVICE_LOCAL,
+                                VkMemoryPropertyFlags.NONE
+                            )
 //                    memoryTypes.run {
 //                        findType(
 //                            imageMemoryTypeBits.cpu,
