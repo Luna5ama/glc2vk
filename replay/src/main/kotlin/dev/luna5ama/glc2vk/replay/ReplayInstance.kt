@@ -190,30 +190,16 @@ class ReplayInstance(
             device.resetFences(1u, fences.ptr())
 
             val dependencyInfo = VkDependencyInfo.allocate {
-                val flattenBackupImageList = resource.backupImageList.flatten()
-                val imageMemoryBarriers = VkImageMemoryBarrier2.allocate(flattenBackupImageList.size.toLong())
-                flattenBackupImageList.forEachIndexed { i, image ->
-                    imageMemoryBarriers[i.toLong()].apply {
-                        srcStageMask = VkPipelineStageFlags2.HOST
-                        srcAccessMask = VkAccessFlags2.HOST_WRITE
-                        dstStageMask = VkPipelineStageFlags2.COPY
-                        dstAccessMask = VkAccessFlags2.TRANSFER_READ
-                        oldLayout = VkImageLayout.PREINITIALIZED
-                        newLayout = VkImageLayout.TRANSFER_SRC_OPTIMAL
-
-                        ofWholeImage(image)
-                    }
-                }
-                imageMemoryBarriers(imageMemoryBarriers)
-                val bufferMemoryBarriers = VkBufferMemoryBarrier2.allocate(resource.bufferList.size.toLong())
-                resource.bufferList.forEachIndexed { i, buffer ->
+                val allCpuBuffers = resource.bufferList.map { it.cpu } + resource.imageBufferList.map { it.buffer }
+                val bufferMemoryBarriers = VkBufferMemoryBarrier2.allocate(allCpuBuffers.size.toLong())
+                allCpuBuffers.forEachIndexed { i, buffer ->
                     bufferMemoryBarriers[i.toLong()].apply {
                         srcStageMask = VkPipelineStageFlags2.HOST
                         srcAccessMask = VkAccessFlags2.HOST_WRITE
                         dstStageMask = VkPipelineStageFlags2.COPY
                         dstAccessMask = VkAccessFlags2.TRANSFER_READ
 
-                        ofWholeBuffer(buffer.cpu)
+                        ofWholeBuffer(buffer)
                     }
                 }
                 bufferMemoryBarriers(bufferMemoryBarriers)
@@ -287,47 +273,42 @@ class ReplayInstance(
                     }.ptr()
                 )
             }
-            (resource.imageList zip resource.backupImageList).forEachIndexed { imageIndex, (dstImage, srcImages) ->
-                val imageMetadata = captureData.metadata.images[imageIndex]
-                srcImages.forEachIndexed { mip, srcImage ->
-                    cmdBuffer.cmdCopyImage(
-                        srcImage,
-                        VkImageLayout.TRANSFER_SRC_OPTIMAL,
-                        dstImage,
-                        VkImageLayout.TRANSFER_DST_OPTIMAL,
-                        1u,
-                        VkImageCopy.allocate {
-                            srcSubresource {
-                                aspectMask = VkImageAspectFlags.COLOR
-                                mipLevel = 0u
-                                baseArrayLayer = 0u
-                                layerCount = imageMetadata.arrayLayers.toUInt()
-                            }
-                            srcOffset {
-                                x = 0
-                                y = 0
-                                z = 0
-                            }
+            (resource.imageList zip resource.imageBufferList).forEachIndexed { imageIndex, (dstImage, srcImages) ->
+                MemoryStack {
+                    val imageMetadata = captureData.metadata.images[imageIndex]
+                    val copyRegions = VkBufferImageCopy.allocate(srcImages.mipLevelDataOffset.size.toLong())
 
-                            dstSubresource {
+                    for (mip in srcImages.mipLevelDataOffset.indices) {
+                        copyRegions[mip.toLong()].apply {
+                            bufferOffset = srcImages.mipLevelDataOffset.getLong(mip).toULong()
+                            bufferRowLength = 0u
+                            bufferImageHeight = 0u
+
+                            imageSubresource {
                                 aspectMask = VkImageAspectFlags.COLOR
                                 mipLevel = mip.toUInt()
                                 baseArrayLayer = 0u
                                 layerCount = imageMetadata.arrayLayers.toUInt()
                             }
-
-                            dstOffset {
+                            imageOffset {
                                 x = 0
                                 y = 0
                                 z = 0
                             }
-
-                            extent {
+                            imageExtent {
                                 width = maxOf(1, imageMetadata.width shr mip).toUInt()
                                 height = maxOf(1, imageMetadata.height shr mip).toUInt()
                                 depth = maxOf(1, imageMetadata.depth shr mip).toUInt()
                             }
-                        }.ptr()
+                        }
+                    }
+
+                    cmdBuffer.cmdCopyBufferToImage(
+                        srcImages.buffer,
+                        dstImage,
+                        VkImageLayout.TRANSFER_DST_OPTIMAL,
+                        srcImages.mipLevelDataOffset.size.toUInt(),
+                        copyRegions.ptr()
                     )
                 }
             }
@@ -355,6 +336,7 @@ class ReplayInstance(
                         command.offset.toULong()
                     )
                 }
+
                 is Command.DispatchCommand -> {
                     cmdBuffer.cmdDispatch(command.x.toUInt(), command.y.toUInt(), command.z.toUInt())
                 }

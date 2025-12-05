@@ -73,7 +73,7 @@ fun main(args: Array<String>) {
         }
         // endregion
 
-        val useValidationLayer = false
+        val useValidationLayer = true
 
         val layers = if (useValidationLayer) {
             setOf("VK_LAYER_KHRONOS_validation")

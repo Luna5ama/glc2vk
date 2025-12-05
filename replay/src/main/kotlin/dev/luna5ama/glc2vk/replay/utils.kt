@@ -126,10 +126,11 @@ fun populateDebugMessengerCreateInfo(debugCreateInfo: NValue<VkDebugUtilsMesseng
 
     debugCreateInfo.pfnUserCallback { messageSeverity, messageType, pCallbackData, pUserData ->
         if (VkDebugUtilsMessageTypeFlagsEXT.VALIDATION_EXT !in messageType) return@pfnUserCallback VK_FALSE
+        val str = pCallbackData.pMessage.string
         if (VkDebugUtilsMessageSeverityFlagsEXT.ERROR_EXT in messageSeverity) {
-            System.err.println("Validation layer: " + pCallbackData.pMessage.string)
+            System.err.println("Validation layer: " + str)
         } else {
-            println("Validation layer: " + pCallbackData.pMessage.string)
+            println("Validation layer: " + str)
         }
         VK_FALSE
     }
