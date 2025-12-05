@@ -110,7 +110,7 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
                 val str = if (labelLen > 0) {
                     val labelBuffer = malloc(labelLen + 1L)
                     glGetObjectLabel(GL_BUFFER, bufferID, labelLen + 1, tempPtr, labelBuffer.ptr)
-                    MemoryUtil.memUTF8(labelBuffer.ptr.address)
+                    MemoryUtil.memUTF8Safe(labelBuffer.ptr.address) ?: ""
                 } else {
                     ""
                 }
@@ -159,6 +159,7 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
         val imageData = tempGPUBuffer.map(GL_MAP_READ_BIT)
         memcpy(imageData.ptr, 0L, cpuBuffer.ptr, 0L, size)
         tempGPUBuffer.unmap()
+        glFinish()
         return cpuBuffer
     }
 
@@ -386,7 +387,6 @@ private fun CaptureContext.captureImages() {
 
         fun getImageIndex(imageID: Int): Int {
             if (imageIDToIndex.putIfAbsent(imageID, images.size) == null) {
-                val imageIndex = images.size
                 glGetTextureParameteriv(imageID, GL_TEXTURE_TARGET, tempPtr)
                 val target = tempPtr.getInt()
                 val type = glImageTargetToVKImageViewType(target)
@@ -507,7 +507,7 @@ private fun CaptureContext.captureImages() {
                 val str = if (labelLen > 0) {
                     val labelBuffer = malloc(labelLen + 1L)
                     glGetObjectLabel(GL_TEXTURE, imageID, labelLen + 1, tempPtr, labelBuffer.ptr)
-                    MemoryUtil.memUTF8(labelBuffer.ptr.address)
+                    MemoryUtil.memUTF8Safe(labelBuffer.ptr.address) ?: ""
                 } else {
                     ""
                 }
@@ -756,6 +756,7 @@ fun captureGlDispatchCompute(
     num_groups_y: Int,
     num_groups_z: Int
 ) {
+    glFinish()
     val currProgram = glGetInteger(GL_CURRENT_PROGRAM)
     val resourceManager = ShaderProgramResourceManager(currProgram)
 
@@ -773,11 +774,13 @@ fun captureGlDispatchCompute(
     CaptureData.save(outputPath, resourceCapture) {
         saveShader(outputPath, shaderInfo, ShaderStage.ComputeShader)
     }
+    glFinish()
 
     glDispatchCompute(num_groups_x, num_groups_y, num_groups_z)
 }
 
 fun captureGlDispatchComputeIndirect(shaderInfo: ShaderInfo, outputPath: Path, indirect: Long) {
+    glFinish()
     val currProgram = glGetInteger(GL_CURRENT_PROGRAM)
     val resourceManager = ShaderProgramResourceManager(currProgram)
 
@@ -798,5 +801,6 @@ fun captureGlDispatchComputeIndirect(shaderInfo: ShaderInfo, outputPath: Path, i
         saveShader(outputPath, shaderInfo, ShaderStage.ComputeShader)
     }
 
+    glFinish()
     glDispatchComputeIndirect(indirect)
 }
