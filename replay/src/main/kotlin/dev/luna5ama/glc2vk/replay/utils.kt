@@ -2,18 +2,9 @@ package dev.luna5ama.glc2vk.replay
 
 import dev.luna5ama.glc2vk.common.ImageDataType
 import net.echonolix.caelum.*
-import net.echonolix.caelum.MemoryStack
-import net.echonolix.caelum.allocate
-import net.echonolix.caelum.calloc
-import net.echonolix.caelum.copyTo
 import net.echonolix.caelum.glfw.functions.glfwGetWindowSize
 import net.echonolix.caelum.glfw.structs.GLFWWindow
-import net.echonolix.caelum.malloc
-import net.echonolix.caelum.string
-import net.echonolix.caelum.value
 import net.echonolix.caelum.vulkan.*
-import net.echonolix.caelum.vulkan.createShaderModule
-import net.echonolix.caelum.vulkan.enumeratePhysicalDevices
 import net.echonolix.caelum.vulkan.enums.VkFormat
 import net.echonolix.caelum.vulkan.enums.VkPhysicalDeviceType
 import net.echonolix.caelum.vulkan.enums.VkPresentModeKHR
@@ -22,35 +13,10 @@ import net.echonolix.caelum.vulkan.flags.VkDebugUtilsMessageSeverityFlagsEXT
 import net.echonolix.caelum.vulkan.flags.VkDebugUtilsMessageTypeFlagsEXT
 import net.echonolix.caelum.vulkan.flags.VkImageAspectFlags
 import net.echonolix.caelum.vulkan.flags.VkQueueFlags
-import net.echonolix.caelum.vulkan.getPhysicalDeviceProperties
-import net.echonolix.caelum.vulkan.getPhysicalDeviceQueueFamilyProperties
-import net.echonolix.caelum.vulkan.getPhysicalDeviceSurfaceCapabilitiesKHR
-import net.echonolix.caelum.vulkan.getPhysicalDeviceSurfaceFormatsKHR
-import net.echonolix.caelum.vulkan.getPhysicalDeviceSurfacePresentModesKHR
-import net.echonolix.caelum.vulkan.getPhysicalDeviceSurfaceSupportKHR
 import net.echonolix.caelum.vulkan.handles.*
 import net.echonolix.caelum.vulkan.structs.*
-import net.echonolix.caelum.vulkan.structs.allocate
-import net.echonolix.caelum.vulkan.structs.codeSize
-import net.echonolix.caelum.vulkan.structs.currentExtent
-import net.echonolix.caelum.vulkan.structs.deviceType
-import net.echonolix.caelum.vulkan.structs.format
-import net.echonolix.caelum.vulkan.structs.height
-import net.echonolix.caelum.vulkan.structs.maxImageExtent
-import net.echonolix.caelum.vulkan.structs.messageSeverity
-import net.echonolix.caelum.vulkan.structs.messageType
-import net.echonolix.caelum.vulkan.structs.minImageExtent
-import net.echonolix.caelum.vulkan.structs.pCode
-import net.echonolix.caelum.vulkan.structs.pMessage
-import net.echonolix.caelum.vulkan.structs.pfnUserCallback
-import net.echonolix.caelum.vulkan.structs.queueFlags
-import net.echonolix.caelum.vulkan.structs.vendorID
-import net.echonolix.caelum.vulkan.structs.width
-import java.lang.foreign.Arena
-import java.lang.foreign.MemorySegment
-import java.lang.foreign.ValueLayout
-import kotlin.io.path.Path
-import kotlin.io.path.absolutePathString
+
+fun <P1, P2, P3, R> ((P1, P2, P3) -> R).bind(arg1: P1): (P2, P3) -> R = { p2, p3 -> this(arg1, p2, p3) }
 
 data class SwapchainSupportDetails(
     val capabilities: NValue<VkSurfaceCapabilitiesKHR>,
@@ -128,12 +94,12 @@ fun chooseSwapchainExtent(
 
 fun populateDebugMessengerCreateInfo(debugCreateInfo: NValue<VkDebugUtilsMessengerCreateInfoEXT>) {
     debugCreateInfo.messageSeverity = VkDebugUtilsMessageSeverityFlagsEXT.VERBOSE_EXT +
-        VkDebugUtilsMessageSeverityFlagsEXT.WARNING_EXT +
-        VkDebugUtilsMessageSeverityFlagsEXT.ERROR_EXT
+            VkDebugUtilsMessageSeverityFlagsEXT.WARNING_EXT +
+            VkDebugUtilsMessageSeverityFlagsEXT.ERROR_EXT
 
     debugCreateInfo.messageType = VkDebugUtilsMessageTypeFlagsEXT.GENERAL_EXT +
-        VkDebugUtilsMessageTypeFlagsEXT.VALIDATION_EXT +
-        VkDebugUtilsMessageTypeFlagsEXT.PERFORMANCE_EXT
+            VkDebugUtilsMessageTypeFlagsEXT.VALIDATION_EXT +
+            VkDebugUtilsMessageTypeFlagsEXT.PERFORMANCE_EXT
 
     debugCreateInfo.pfnUserCallback { messageSeverity, messageType, pCallbackData, pUserData ->
         if (VkDebugUtilsMessageTypeFlagsEXT.VALIDATION_EXT !in messageType) return@pfnUserCallback VK_FALSE
@@ -219,4 +185,18 @@ fun VkPhysicalDevice.chooseGraphicsQueue(surface: VkSurfaceKHR): Int {
         }
     }
     return graphicsQueueFamilyIndex
+}
+
+fun <T : VkStruct<T>> NValue<out VkStruct<*>>.append(scope: AllocateScope, newType: T): NValue<T> {
+    val new = newType.allocate(scope)
+    this.pNext = new.ptr()
+    return new
+}
+
+fun roundUp(value: Long, alignment: Long): Long {
+    return (value + alignment - 1) / alignment * alignment
+}
+
+fun roundDown(value: Long, alignment: Long): Long {
+    return value / alignment * alignment
 }

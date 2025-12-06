@@ -75,7 +75,7 @@ fun main(args: Array<String>) {
         }
         // endregion
 
-        val useValidationLayer = System.getProperty("dev.luna5ama.glc2vk.validation").toBoolean()
+        val useValidationLayer = System.getProperty("glc2vk.validation").toBoolean()
 
         val layers = if (useValidationLayer) {
             setOf("VK_LAYER_KHRONOS_validation")
@@ -124,10 +124,41 @@ fun main(args: Array<String>) {
 
         val physicalDeviceProperties = VkPhysicalDeviceProperties.allocate()
         val physicalDeviceFeatures = VkPhysicalDeviceFeatures2.allocate()
-        val synchronization2Features = VkPhysicalDeviceSynchronization2Features.allocate()
-        physicalDeviceFeatures.pNext = synchronization2Features.ptr()
-        val shaderAtomicInt64Features = VkPhysicalDeviceShaderAtomicInt64Features.allocate()
-        synchronization2Features.pNext = shaderAtomicInt64Features.ptr()
+
+        val supportedExtensions = MemoryStack {
+            val count = NUInt32.malloc()
+            physicalDevice.enumerateDeviceExtensionProperties(nullptr(), count.ptr(), null).getOrThrow()
+            val c = count.value
+            Arena.ofConfined().useAllocateScope {
+                val availableExtensions = VkExtensionProperties.allocate(this, c.toLong())
+                physicalDevice.enumerateDeviceExtensionProperties(nullptr(), count.ptr(), availableExtensions.ptr()).getOrThrow()
+                buildSet {
+                    repeat(c.toInt()) {
+                        add(availableExtensions[it.toLong()].extensionName.string)
+                    }
+                }
+            }
+        }
+
+
+        var featureChain: NValue<out VkStruct<*>> = physicalDeviceFeatures
+            .append(this,VkPhysicalDeviceSynchronization2Features)
+            .append(this,VkPhysicalDeviceShaderAtomicInt64Features)
+
+
+        val deviceExtensions = mutableSetOf(VK_KHR_SWAPCHAIN_EXTENSION_NAME)
+
+        if (VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME in supportedExtensions) {
+            deviceExtensions.add(VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME)
+        }
+        if (VK_EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION_NAME in supportedExtensions) {
+            deviceExtensions.add(VK_EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION_NAME)
+            featureChain = featureChain
+                .append(this,VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT)
+        }
+        if (VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME in supportedExtensions) {
+            deviceExtensions.add(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME)
+        }
 
         physicalDevice.getPhysicalDeviceProperties(physicalDeviceProperties.ptr())
         physicalDevice.getPhysicalDeviceFeatures2(physicalDeviceFeatures.ptr())
@@ -145,10 +176,7 @@ fun main(args: Array<String>) {
             queueFamilyIndex = graphicsQueueFamilyIndex.toUInt()
             queues(queuePriority)
         }
-        val deviceExtensions = setOf(
-            VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-            VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME
-        )
+
         val deviceCreateInfo = VkDeviceCreateInfo.allocate {
             queueCreateInfoes(queueCreateInfos)
 
@@ -183,7 +211,7 @@ fun main(args: Array<String>) {
 
         val swapchainCreateInfo = VkSwapchainCreateInfoKHR.allocate {
             this.surface = surface
-            minImageCount = 2u
+            minImageCount = 3u
             imageFormat = surfaceFormat.format
             imageColorSpace = surfaceFormat.colorSpace
             imageExtent = swapchainExtent
@@ -234,7 +262,7 @@ fun main(args: Array<String>) {
             captureData,
             device,
             capturePath,
-            graphicsQueueFamilyIndex.toUInt(),
+            graphicsQueueFamilyIndex.toUInt()
         )
 
         replayInstance.init(graphicsQueue)

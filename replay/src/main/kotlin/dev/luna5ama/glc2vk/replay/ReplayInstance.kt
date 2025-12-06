@@ -111,7 +111,6 @@ class ReplayInstance(
                 pImageAvailableSemaphore = VkSemaphore.arrayOf(scope, imageAvailableSemaphore)
             }
 
-
             MemoryStack {
                 val fenceCreateInfo = VkFenceCreateInfo.allocate {
                     flags = VkFenceCreateFlags.SIGNALED
@@ -120,7 +119,7 @@ class ReplayInstance(
                 fences = VkFence.arrayOf(scope, inFlightFence)
             }
 
-            resource = ReplayResource(captureData, device, graphicsQueueFamilyIndex, memoryTypes)
+            resource = ReplayResource(captureData, device, graphicsQueueFamilyIndex, memoryTypes,)
 
             dependencyInfo1 = VkDependencyInfo.allocate(scope) {
                 val bufferMemoryBarriers = VkBufferMemoryBarrier2.allocate(scope, resource.bufferList.size.toLong())
@@ -202,9 +201,9 @@ class ReplayInstance(
                 val bufferMemoryBarriers = VkBufferMemoryBarrier2.allocate(allCpuBuffers.size.toLong())
                 allCpuBuffers.forEachIndexed { i, buffer ->
                     bufferMemoryBarriers[i.toLong()].apply {
-                        srcStageMask = VkPipelineStageFlags2.HOST
+                        srcStageMask = VkPipelineStageFlags2.ALL_COMMANDS
                         srcAccessMask = VkAccessFlags2.HOST_WRITE
-                        dstStageMask = VkPipelineStageFlags2.COPY
+                        dstStageMask = VkPipelineStageFlags2.ALL_COMMANDS
                         dstAccessMask = VkAccessFlags2.TRANSFER_READ
 
                         ofWholeBuffer(buffer)
@@ -275,17 +274,43 @@ class ReplayInstance(
                 cmdBuffers[0].cmdPipelineBarrier2(dependencyInfo1.ptr())
 
                 resource.bufferList.forEachIndexed { i, buffer ->
-                    val bufferMetadata = captureData.metadata.buffers[i]
-                    cmdBuffers[0].cmdCopyBuffer(
-                        buffer.cpu,
-                        buffer.gpu,
-                        1u,
-                        VkBufferCopy.allocate {
-                            srcOffset = 0uL
-                            dstOffset = 0uL
-                            size = bufferMetadata.size.toULong()
-                        }.ptr()
-                    )
+                    MemoryStack {
+                        val bufferMetadata = captureData.metadata.buffers[i]
+                        val bufferSize = bufferMetadata.size.toULong()
+                        val roundDown = roundDown(bufferMetadata.size, 64L).toULong()
+                        val remaining = bufferSize - roundDown
+                        val regionCount: UInt
+                        val regions: NArray<VkBufferCopy>
+                        if (remaining > 0UL) {
+                            regionCount = 2u
+                            regions = VkBufferCopy.allocate(2L)
+                            regions[0].apply {
+                                srcOffset = 0uL
+                                dstOffset = 0uL
+                                size = roundDown
+                            }
+                            regions[1].apply {
+                                srcOffset = roundDown
+                                dstOffset = roundDown
+                                size = remaining
+                            }
+                        } else {
+                            regionCount = 1u
+                            regions = VkBufferCopy.allocate(1L)
+                            regions[0].apply {
+                                srcOffset = 0uL
+                                dstOffset = 0uL
+                                size = bufferSize
+                            }
+                        }
+
+                        cmdBuffers[0].cmdCopyBuffer(
+                            buffer.cpu,
+                            buffer.gpu,
+                            regionCount,
+                            regions.ptr()
+                        )
+                    }
                 }
                 (resource.imageList zip resource.imageBufferList).forEachIndexed { imageIndex, (dstImage, srcImages) ->
                     MemoryStack {

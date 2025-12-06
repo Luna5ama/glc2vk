@@ -9,7 +9,18 @@ import net.echonolix.caelum.vulkan.structs.memoryTypeCount
 import net.echonolix.caelum.vulkan.structs.memoryTypes
 import net.echonolix.caelum.vulkan.structs.propertyFlags
 
+@OptIn(UnsafeAPI::class)
 class MemoryTypeManager(private val memoryProperties: NPointer<VkPhysicalDeviceMemoryProperties>) {
+    init {
+        println("Memory Types:")
+        for (i in 0..<memoryProperties.memoryTypeCount.toLong()) {
+            val type = memoryProperties.memoryTypes[i]
+            println("  Type $i: ${type.propertyFlags}")
+        }
+    }
+
+    val useBarMemory = System.getProperty("glc2vk.useBarMemory").toBoolean()
+
     val device = findType(
         VkMemoryPropertyFlags.DEVICE_LOCAL,
         VkMemoryPropertyFlags(-1) // Exclude all flags
@@ -31,7 +42,7 @@ class MemoryTypeManager(private val memoryProperties: NPointer<VkPhysicalDeviceM
         VkMemoryPropertyFlags.DEVICE_LOCAL +
                 VkMemoryPropertyFlags.HOST_VISIBLE +
                 VkMemoryPropertyFlags.HOST_COHERENT,
-        VkMemoryPropertyFlags.DEVICE_LOCAL
+        VkMemoryPropertyFlags.NONE
     ).findType(
         VkMemoryPropertyFlags.DEVICE_LOCAL +
                 VkMemoryPropertyFlags.HOST_VISIBLE +
@@ -39,6 +50,32 @@ class MemoryTypeManager(private val memoryProperties: NPointer<VkPhysicalDeviceM
                 VkMemoryPropertyFlags.HOST_CACHED,
         VkMemoryPropertyFlags.NONE
     )
+
+    val bar = findType(
+        VkMemoryPropertyFlags.HOST_VISIBLE +
+                VkMemoryPropertyFlags.HOST_COHERENT +
+                VkMemoryPropertyFlags.DEVICE_LOCAL,
+        VkMemoryPropertyFlags.HOST_CACHED
+    ).findType(
+        VkMemoryPropertyFlags.HOST_VISIBLE +
+                VkMemoryPropertyFlags.HOST_COHERENT +
+                VkMemoryPropertyFlags.HOST_CACHED +
+                VkMemoryPropertyFlags.DEVICE_LOCAL,
+        VkMemoryPropertyFlags.NONE
+    ).findType(
+        VkMemoryPropertyFlags.DEVICE_LOCAL +
+                VkMemoryPropertyFlags.HOST_VISIBLE +
+                VkMemoryPropertyFlags.HOST_COHERENT,
+        VkMemoryPropertyFlags.NONE
+    ).findType(
+        VkMemoryPropertyFlags.DEVICE_LOCAL +
+                VkMemoryPropertyFlags.HOST_VISIBLE +
+                VkMemoryPropertyFlags.HOST_COHERENT +
+                VkMemoryPropertyFlags.HOST_CACHED,
+        VkMemoryPropertyFlags.NONE
+    )
+
+    val stagingFast = if (useBarMemory) bar else staging
 
     fun findType(
         inclusive: VkMemoryPropertyFlags,

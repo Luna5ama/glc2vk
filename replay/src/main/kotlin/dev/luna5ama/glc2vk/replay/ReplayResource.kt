@@ -1,7 +1,6 @@
 package dev.luna5ama.glc2vk.replay
 
 import dev.luna5ama.glc2vk.common.CaptureData
-import dev.luna5ama.glc2vk.common.ImageDataType
 import dev.luna5ama.glc2vk.common.ImageMetadata
 import it.unimi.dsi.fastutil.longs.LongArrayList
 import net.echonolix.caelum.*
@@ -11,6 +10,7 @@ import net.echonolix.caelum.vulkan.flags.*
 import net.echonolix.caelum.vulkan.handles.*
 import net.echonolix.caelum.vulkan.structs.*
 import java.lang.foreign.Arena
+import kotlin.math.round
 
 class ReplayResource(
     private val captureData: CaptureData,
@@ -41,21 +41,29 @@ class ReplayResource(
     )
 
     context(_: MemoryStack)
-    private fun allocateAndBindMemoryForBuffers(
-        buffers: List<VkBuffer>,
+    private fun allocateDeviceMemory(
         allocator: MemorySuballocator,
-        suballocateOffsets: LongArrayList,
-        memoryType: UInt
+        memoryType: UInt,
+        memoryPriority: Float
     ): VkDeviceMemory = MemoryStack {
-        // Allocate memory for all buffers
         val memoryAllocateInfo = VkMemoryAllocateInfo.allocate {
             allocationSize = allocator.allocatedSize.toULong()
             memoryTypeIndex = memoryType
+            pNext = VkMemoryPriorityAllocateInfoEXT.allocate {
+                priority = memoryPriority
+            }.ptr()
         }
         val deviceMemoryReturn = VkDeviceMemory.malloc()
         device.allocateMemory(memoryAllocateInfo.ptr(), nullptr(), deviceMemoryReturn.ptr()).getOrThrow()
-        val deviceMemory = VkDeviceMemory.fromNativeData(device, deviceMemoryReturn.value)
+        VkDeviceMemory.fromNativeData(device, deviceMemoryReturn.value)
+    }
 
+    context(_: MemoryStack)
+    private fun bindMemoryForBuffers(
+        deviceMemory: VkDeviceMemory,
+        buffers: List<VkBuffer>,
+        suballocateOffsets: LongArrayList
+    ): VkDeviceMemory = MemoryStack {
         // Using heap allocation because buffer count can be large
         Arena.ofConfined().useAllocateScope {
             val bufferCount = buffers.size.toLong()
@@ -75,21 +83,11 @@ class ReplayResource(
 
 
     context(_: MemoryStack)
-    private fun allocateAndBindMemoryForImages(
+    private fun bindMemoryForImages(
+        deviceMemory: VkDeviceMemory,
         images: List<VkImage>,
-        allocator: MemorySuballocator,
         suballocateOffsets: LongArrayList,
-        memoryType: UInt
     ): VkDeviceMemory = MemoryStack {
-        // Allocate memory for all buffers
-        val memoryAllocateInfo = VkMemoryAllocateInfo.allocate {
-            allocationSize = allocator.allocatedSize.toULong()
-            memoryTypeIndex = memoryType
-        }
-        val deviceMemoryReturn = VkDeviceMemory.malloc()
-        device.allocateMemory(memoryAllocateInfo.ptr(), nullptr(), deviceMemoryReturn.ptr()).getOrThrow()
-        val deviceMemory = VkDeviceMemory.fromNativeData(device, deviceMemoryReturn.value)
-
         // Using heap allocation because buffer count can be large
         Arena.ofConfined().useAllocateScope {
             val bufferCount = images.size.toLong()
@@ -117,20 +115,18 @@ class ReplayResource(
                 bufferList = captureData.metadata.buffers.map {
                     MemoryStack {
                         val gpuBuffer = MemoryStack {
-                            val usages = VkBufferUsageFlags2.STORAGE_TEXEL_BUFFER +
-                                    VkBufferUsageFlags2.UNIFORM_TEXEL_BUFFER +
-                                    VkBufferUsageFlags2.STORAGE_BUFFER +
-                                    VkBufferUsageFlags2.UNIFORM_BUFFER +
-                                    VkBufferUsageFlags2.TRANSFER_DST +
-                                    VkBufferUsageFlags2.INDIRECT_BUFFER
-
                             val createInfo = VkBufferCreateInfo.allocate()
                             createInfo.sharingMode = VkSharingMode.EXCLUSIVE
                             createInfo.queueFamilyIndexes(queueFamiliesIndicesNArray)
                             createInfo.size = it.size.toULong()
 
                             val flagInfo = VkBufferUsageFlags2CreateInfo.allocate {
-                                this.usage = usages
+                                this.usage = VkBufferUsageFlags2.STORAGE_TEXEL_BUFFER +
+                                        VkBufferUsageFlags2.UNIFORM_TEXEL_BUFFER +
+                                        VkBufferUsageFlags2.STORAGE_BUFFER +
+                                        VkBufferUsageFlags2.UNIFORM_BUFFER +
+                                        VkBufferUsageFlags2.TRANSFER_DST +
+                                        VkBufferUsageFlags2.INDIRECT_BUFFER
                             }
                             createInfo.pNext = flagInfo.ptr()
 
@@ -155,15 +151,13 @@ class ReplayResource(
                         }
 
                         val cpuBuffer = MemoryStack {
-                            val usageCPU = VkBufferUsageFlags2.TRANSFER_SRC
-
                             val createInfoCPU = VkBufferCreateInfo.allocate()
                             createInfoCPU.sharingMode = VkSharingMode.EXCLUSIVE
                             createInfoCPU.queueFamilyIndexes(queueFamiliesIndicesNArray)
                             createInfoCPU.size = it.size.toULong()
 
                             val flagInfoCPU = VkBufferUsageFlags2CreateInfo.allocate {
-                                this.usage = usageCPU
+                                this.usage = VkBufferUsageFlags2.TRANSFER_SRC
                             }
                             createInfoCPU.pNext = flagInfoCPU.ptr()
 
@@ -191,28 +185,16 @@ class ReplayResource(
                 }
 
                 bufferDeviceMemory = if (bufferList.isNotEmpty()) {
-                    val cpu = allocateAndBindMemoryForBuffers(
-                        bufferList.map { it.cpu },
+                    val cpu = allocateDeviceMemory(
                         bufferSubAllocator.cpu,
-                        bufferSuballocateOffsets.cpu,
-                        memoryTypes.findType(
-                            VkMemoryPropertyFlags.HOST_VISIBLE +
-                                    VkMemoryPropertyFlags.HOST_COHERENT +
-                                    VkMemoryPropertyFlags.DEVICE_LOCAL,
-                            VkMemoryPropertyFlags.NONE
-                        )
-//                        memoryTypes.staging
-//                    memoryTypes.run {
-//                        findType(
-//                            bufferMemoryTypeBits.cpu,
-//                            VkMemoryPropertyFlags.DEVICE_LOCAL
-//                        ).findType(
-//                            bufferMemoryTypeBits.cpu,
-//                            VkMemoryPropertyFlags.NONE
-//                        )
-//                    }
+                        memoryTypes.stagingFast,
+                        0.0f
                     )
-
+                    bindMemoryForBuffers(
+                        cpu,
+                        bufferList.map { it.cpu },
+                        bufferSuballocateOffsets.cpu
+                    )
 
                     val temp = NPointer.malloc<NUInt8>(1)
                     @Suppress("UNCHECKED_CAST")
@@ -231,19 +213,18 @@ class ReplayResource(
 
                     device.unmapMemory(cpu)
 
-                    DoubleData(
-                        cpu,
-                        allocateAndBindMemoryForBuffers(
-                            bufferList.map { it.gpu },
-                            bufferSubAllocator.gpu,
-                            bufferSuballocateOffsets.gpu,
-                            memoryTypes.device
-//                    memoryTypes.findType(
-//                        bufferMemoryTypeBits.gpu + VkMemoryPropertyFlags.DEVICE_LOCAL,
-//                        VkMemoryPropertyFlags.NONE
-//                    )
-                        )
+                    val gpu = allocateDeviceMemory(
+                        bufferSubAllocator.gpu,
+                        memoryTypes.device,
+                        1.0f
                     )
+                    bindMemoryForBuffers(
+                        gpu,
+                        bufferList.map { it.gpu },
+                        bufferSuballocateOffsets.gpu
+                    )
+
+                    DoubleData(cpu, gpu)
                 } else {
                     null
                 }
@@ -255,12 +236,12 @@ class ReplayResource(
                 fun NValue<VkImageCreateInfo>.setFrom(metadata: ImageMetadata) {
                     val imageType = when (metadata.viewType) {
                         dev.luna5ama.glc2vk.common.VkImageViewType.`1D` -> VkImageType.`1D`
-                            dev.luna5ama.glc2vk.common.VkImageViewType.`2D` -> VkImageType.`2D`
-                            dev.luna5ama.glc2vk.common.VkImageViewType.`3D` -> VkImageType.`3D`
-                            dev.luna5ama.glc2vk.common.VkImageViewType.`1D_ARRAY` -> VkImageType.`1D`
-                            dev.luna5ama.glc2vk.common.VkImageViewType.`2D_ARRAY` -> VkImageType.`2D`
-                            dev.luna5ama.glc2vk.common.VkImageViewType.CUBE -> VkImageType.`2D`
-                            dev.luna5ama.glc2vk.common.VkImageViewType.CUBE_ARRAY -> VkImageType.`2D`
+                        dev.luna5ama.glc2vk.common.VkImageViewType.`2D` -> VkImageType.`2D`
+                        dev.luna5ama.glc2vk.common.VkImageViewType.`3D` -> VkImageType.`3D`
+                        dev.luna5ama.glc2vk.common.VkImageViewType.`1D_ARRAY` -> VkImageType.`1D`
+                        dev.luna5ama.glc2vk.common.VkImageViewType.`2D_ARRAY` -> VkImageType.`2D`
+                        dev.luna5ama.glc2vk.common.VkImageViewType.CUBE -> VkImageType.`2D`
+                        dev.luna5ama.glc2vk.common.VkImageViewType.CUBE_ARRAY -> VkImageType.`2D`
                     }
                     this.imageType = imageType
                     this.format = VkFormat.fromNativeData(metadata.format.value)
@@ -352,27 +333,17 @@ class ReplayResource(
                 }
 
                 imageDeviceMemory = MemoryStack {
-
                     if (imageList.isNotEmpty()) {
-                        val cpu = allocateAndBindMemoryForBuffers(
-                            imageBufferList.map { it.buffer },
+                        val cpu = allocateDeviceMemory(
                             imageSubAllocator.cpu,
-                            imageSuballocateOffsets.cpu,
-                            memoryTypes.findType(
-                                VkMemoryPropertyFlags.HOST_VISIBLE +
-                                        VkMemoryPropertyFlags.HOST_COHERENT +
-                                        VkMemoryPropertyFlags.DEVICE_LOCAL,
-                                VkMemoryPropertyFlags.NONE
-                            )
-//                    memoryTypes.run {
-//                        findType(
-//                            imageMemoryTypeBits.cpu,
-//                            VkMemoryPropertyFlags.DEVICE_LOCAL
-//                        ).findType(
-//                            imageMemoryTypeBits.cpu,
-//                            VkMemoryPropertyFlags.NONE
-//                        )
-//                    }
+                            memoryTypes.stagingFast,
+                            0.0f
+                        )
+
+                        bindMemoryForBuffers(
+                            cpu,
+                            imageBufferList.map { it.buffer },
+                            imageSuballocateOffsets.cpu
                         )
 
                         val temp = NPointer.malloc<NUInt8>(1)
@@ -395,19 +366,20 @@ class ReplayResource(
                         }
 
                         device.unmapMemory(cpu)
-                        DoubleData(
-                            cpu,
-                            allocateAndBindMemoryForImages(
-                                imageList,
-                                imageSubAllocator.gpu,
-                                imageSuballocateOffsets.gpu,
-                                memoryTypes.device
-//                    memoryTypes.findType(
-//                        imageMemoryTypeBits.gpu + VkMemoryPropertyFlags.DEVICE_LOCAL,
-//                        VkMemoryPropertyFlags.NONE
-//                    )
-                            )
+
+                        val gpu = allocateDeviceMemory(
+                            imageSubAllocator.gpu,
+                            memoryTypes.device,
+                            1.0f
                         )
+
+                        bindMemoryForImages(
+                            gpu,
+                            imageList,
+                            imageSuballocateOffsets.gpu
+                        )
+
+                        DoubleData(cpu, gpu)
                     } else {
                         null
                     }
