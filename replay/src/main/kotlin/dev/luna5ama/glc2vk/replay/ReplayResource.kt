@@ -10,7 +10,6 @@ import net.echonolix.caelum.vulkan.flags.*
 import net.echonolix.caelum.vulkan.handles.*
 import net.echonolix.caelum.vulkan.structs.*
 import java.lang.foreign.Arena
-import kotlin.math.round
 
 class ReplayResource(
     private val captureData: CaptureData,
@@ -27,21 +26,16 @@ class ReplayResource(
     val imageMemoryTypeBits = MutableDoubleData(VkMemoryPropertyFlags.NONE, VkMemoryPropertyFlags.NONE)
     val imageSuballocateOffsets = DoubleData(LongArrayList(), LongArrayList())
 
-    val imageList: List<VkImage>
-    val imageBufferList: List<ImageBufferInfo>
+    val imageList: List<DoubleData<VkImage>>
     val samplerImageViewList: List<VkImageView>
     val storageImageViewList: List<VkImageView>
 
     val imageDeviceMemory: DoubleData<VkDeviceMemory>?
     val bufferDeviceMemory: DoubleData<VkDeviceMemory>?
 
-    data class ImageBufferInfo(
-        val buffer: VkBuffer,
-        val mipLevelDataOffset: LongArrayList
-    )
 
     context(_: MemoryStack)
-    private fun allocateDeviceMemory(
+    fun allocateDeviceMemory(
         allocator: MemorySuballocator,
         memoryType: UInt,
         memoryPriority: Float
@@ -59,7 +53,7 @@ class ReplayResource(
     }
 
     context(_: MemoryStack)
-    private fun bindMemoryForBuffers(
+    fun bindMemoryForBuffers(
         deviceMemory: VkDeviceMemory,
         buffers: List<VkBuffer>,
         suballocateOffsets: LongArrayList
@@ -157,7 +151,7 @@ class ReplayResource(
                             createInfoCPU.size = it.size.toULong()
 
                             val flagInfoCPU = VkBufferUsageFlags2CreateInfo.allocate {
-                                this.usage = VkBufferUsageFlags2.TRANSFER_SRC
+                                this.usage = VkBufferUsageFlags2.TRANSFER_SRC + VkBufferUsageFlags2.TRANSFER_DST
                             }
                             createInfoCPU.pNext = flagInfoCPU.ptr()
 
@@ -263,8 +257,7 @@ class ReplayResource(
                             createInfo.flags = VkImageCreateFlags.MUTABLE_FORMAT
                             createInfo.tiling = VkImageTiling.OPTIMAL
                             createInfo.initialLayout = VkImageLayout.UNDEFINED
-                            createInfo.usage =
-                                VkImageUsageFlags.TRANSFER_DST + VkImageUsageFlags.STORAGE + VkImageUsageFlags.SAMPLED
+                            createInfo.usage = VkImageUsageFlags.TRANSFER_DST + VkImageUsageFlags.STORAGE + VkImageUsageFlags.SAMPLED
 
                             val memReq = VkMemoryRequirements.allocate()
                             val vkImage = device.createImage(createInfo.ptr(), nullptr()).getOrThrow()
@@ -284,51 +277,33 @@ class ReplayResource(
                             device.setDebugUtilsObjectNameEXT(debugNameInfo.ptr()).getOrThrow()
                             vkImage
                         }
+                        val vkImageCPU = MemoryStack {
+                            val createInfo = VkImageCreateInfo.allocate()
+                            createInfo.setFrom(it)
+                            createInfo.tiling = VkImageTiling.OPTIMAL
+                            createInfo.initialLayout = VkImageLayout.UNDEFINED
+                            createInfo.usage = VkImageUsageFlags.TRANSFER_SRC + VkImageUsageFlags.TRANSFER_DST
 
-                        vkImageGPU
-                    }
-                }
-                imageBufferList = captureData.metadata.images.map { metadata ->
-                    MemoryStack {
-                        val mipDataSuballocator = MemorySuballocator(0L)
-                        val mipLevelDataOffsets = LongArrayList()
-                        metadata.levelDataSizes.forEach {
-                            mipLevelDataOffsets.add(mipDataSuballocator.allocate(it, 128L))
-                        }
-
-                        val usageCPU = VkBufferUsageFlags2.TRANSFER_SRC
-
-                        val createInfoCPU = VkBufferCreateInfo.allocate()
-                        createInfoCPU.sharingMode = VkSharingMode.EXCLUSIVE
-                        createInfoCPU.queueFamilyIndexes(queueFamiliesIndicesNArray)
-                        createInfoCPU.size = mipDataSuballocator.allocatedSize.toULong()
-
-                        val flagInfoCPU = VkBufferUsageFlags2CreateInfo.allocate {
-                            this.usage = usageCPU
-                        }
-                        createInfoCPU.pNext = flagInfoCPU.ptr()
-
-                        val memReqCPU = VkMemoryRequirements.allocate()
-                        val cpuBuffer = device.createBuffer(createInfoCPU.ptr(), nullptr()).getOrThrow()
-                        device.getBufferMemoryRequirements(cpuBuffer, memReqCPU.ptr())
-                        imageMemoryTypeBits.cpu += VkMemoryPropertyFlags.fromNativeData(memReqCPU.memoryTypeBits.toInt())
-                        imageSuballocateOffsets.cpu.add(
-                            imageSubAllocator.cpu.allocate(
-                                memReqCPU.size.toLong(),
-                                memReqCPU.alignment.toLong()
+                            val memReq = VkMemoryRequirements.allocate()
+                            val vkImage = device.createImage(createInfo.ptr(), nullptr()).getOrThrow()
+                            device.getImageMemoryRequirements(vkImage, memReq.ptr())
+                            imageMemoryTypeBits.cpu += VkMemoryPropertyFlags.fromNativeData(memReq.memoryTypeBits.toInt())
+                            imageSuballocateOffsets.cpu.add(
+                                imageSubAllocator.cpu.allocate(
+                                    memReq.size.toLong(),
+                                    memReq.alignment.toLong()
+                                )
                             )
-                        )
-                        val debugNameInfo = VkDebugUtilsObjectNameInfoEXT.allocate {
-                            objectType = VkObjectType.BUFFER
-                            objectHandle = cpuBuffer.value.toULong()
-                            pObjectName = "${metadata.name}_Backup".c_str()
+                            val debugNameInfo = VkDebugUtilsObjectNameInfoEXT.allocate {
+                                objectType = VkObjectType.IMAGE
+                                objectHandle = vkImage.value.toULong()
+                                pObjectName = "${it.name}_Backup".c_str()
+                            }
+                            device.setDebugUtilsObjectNameEXT(debugNameInfo.ptr()).getOrThrow()
+                            vkImage
                         }
-                        device.setDebugUtilsObjectNameEXT(debugNameInfo.ptr()).getOrThrow()
 
-                        ImageBufferInfo(
-                            cpuBuffer,
-                            mipLevelDataOffsets
-                        )
+                        DoubleData(vkImageCPU, vkImageGPU)
                     }
                 }
 
@@ -336,36 +311,15 @@ class ReplayResource(
                     if (imageList.isNotEmpty()) {
                         val cpu = allocateDeviceMemory(
                             imageSubAllocator.cpu,
-                            memoryTypes.stagingFast,
+                            memoryTypes.device,
                             0.0f
                         )
 
-                        bindMemoryForBuffers(
+                        bindMemoryForImages(
                             cpu,
-                            imageBufferList.map { it.buffer },
+                            imageList.map { it.cpu },
                             imageSuballocateOffsets.cpu
                         )
-
-                        val temp = NPointer.malloc<NUInt8>(1)
-                        @Suppress("UNCHECKED_CAST")
-                        device.mapMemory(
-                            cpu, 0UL, VK_WHOLE_SIZE, VkMemoryMapFlags.NONE,
-                            temp.ptr() as NPointer<NPointer<*>>
-                        ).getOrThrow()
-
-                        val mappedPtr = temp[0]
-
-                        captureData.imageData.forEachIndexed { imageIndex, imageData ->
-                            val bufferOffset = imageSuballocateOffsets.cpu.getLong(imageIndex)
-                            val offsetInBuffer = imageBufferList[imageIndex].mipLevelDataOffset
-                            imageData.levels.forEachIndexed { levelIndex, levelData ->
-                                val offset = bufferOffset + offsetInBuffer.getLong(levelIndex)
-                                val dataWrapped = NPointer<NUInt8>(levelData.ptr.address)
-                                dataWrapped.copyTo(mappedPtr + offset, levelData.len)
-                            }
-                        }
-
-                        device.unmapMemory(cpu)
 
                         val gpu = allocateDeviceMemory(
                             imageSubAllocator.gpu,
@@ -375,7 +329,7 @@ class ReplayResource(
 
                         bindMemoryForImages(
                             gpu,
-                            imageList,
+                            imageList.map { it.gpu },
                             imageSuballocateOffsets.gpu
                         )
 
@@ -389,7 +343,7 @@ class ReplayResource(
                     val imageIndex = binding.imageIndex
                     val metadata = captureData.metadata.images[imageIndex]
                     val createInfo = VkImageViewCreateInfo.allocate {
-                        image = imageList[imageIndex]
+                        image = imageList[imageIndex].gpu
                         viewType = VkImageViewType.fromNativeData(metadata.viewType.value)
                         format = VkFormat.fromNativeData(metadata.format.value)
                         subresourceRange {
@@ -414,7 +368,7 @@ class ReplayResource(
                     val imageIndex = binding.imageIndex
                     val metadata = captureData.metadata.images[imageIndex]
                     val createInfo = VkImageViewCreateInfo.allocate {
-                        image = imageList[imageIndex]
+                        image = imageList[imageIndex].gpu
                         viewType = VkImageViewType.fromNativeData(metadata.viewType.value)
                         format = VkFormat.fromNativeData(binding.format.value)
                         subresourceRange {
@@ -446,10 +400,8 @@ class ReplayResource(
             device.destroyImageView(it, null)
         }
         imageList.forEach {
-            device.destroyImage(it, null)
-        }
-        imageBufferList.forEach {
-            device.destroyBuffer(it.buffer, null)
+            device.destroyImage(it.cpu, null)
+            device.destroyImage(it.gpu, null)
         }
         bufferList.forEach {
             device.destroyBuffer(it.cpu, null)

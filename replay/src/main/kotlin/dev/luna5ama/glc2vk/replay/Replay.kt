@@ -266,7 +266,6 @@ fun main(args: Array<String>) {
         )
 
         replayInstance.init(graphicsQueue)
-
         device.deviceWaitIdle()
 
         while (glfwWindowShouldClose(window) == GLFW_FALSE) {
