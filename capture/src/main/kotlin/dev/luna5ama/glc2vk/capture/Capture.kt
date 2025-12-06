@@ -14,6 +14,8 @@ import java.nio.file.Path
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.writeText
 
+private const val TEMP_SIZE = 8L * 4L * 4L
+
 private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: ShaderProgramResourceManager) {
     val tempGPUBuffer = BufferObject.Immutable()
 
@@ -51,7 +53,8 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
             imageIndex = imageIndex,
             set = 1,
             binding = bindingIndex,
-            format = shaderInfo.imageTypeOverrides[name]?.let { glFormatToVkFormat(it) } ?: imageMetadata[imageIndex].format
+            format = shaderInfo.imageTypeOverrides[name]?.let { glFormatToVkFormat(it) }
+                ?: imageMetadata[imageIndex].format
         )
         imageBindings += binding
     }
@@ -89,6 +92,174 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
     }
 
 
+    val imageIDToIndex = mutableMapOf<Int, Int>()
+
+    fun getImageIndex(imageID: Int): Int = MemoryStack {
+            val temp = malloc(TEMP_SIZE)
+        val tempPtr = temp.ptr
+
+        check(imageID != 0) { "Image ID is 0" }
+        println("Capturing image ID: $imageID")
+        if (imageIDToIndex.putIfAbsent(imageID, images.size) == null) {
+            glGetTextureParameteriv(imageID, GL_TEXTURE_TARGET, tempPtr)
+            val target = tempPtr.getInt()
+            val type = glImageTargetToVKImageViewType(target)
+            val width: Int
+            val height: Int
+            val depth: Int
+            val arrayLayers: Int
+            when (type) {
+                VkImageViewType.`1D` -> {
+                    glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
+                    width = tempPtr.getInt()
+                    height = 1
+                    depth = 1
+                    arrayLayers = 1
+                }
+
+                VkImageViewType.`2D` -> {
+                    glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
+                    width = tempPtr.getInt()
+                    glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_HEIGHT, tempPtr)
+                    height = tempPtr.getInt()
+                    depth = 1
+                    arrayLayers = 1
+                }
+
+                VkImageViewType.`3D` -> {
+                    glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
+                    width = tempPtr.getInt()
+                    glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_HEIGHT, tempPtr)
+                    height = tempPtr.getInt()
+                    glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_DEPTH, tempPtr)
+                    depth = tempPtr.getInt()
+                    arrayLayers = 1
+                }
+
+                VkImageViewType.CUBE -> {
+                    glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
+                    width = tempPtr.getInt()
+                    height = width
+                    depth = 1
+                    arrayLayers = 1
+                }
+
+                VkImageViewType.`1D_ARRAY` -> {
+                    glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
+                    width = tempPtr.getInt()
+                    height = 1
+                    depth = 1
+                    glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_DEPTH, tempPtr)
+                    arrayLayers = tempPtr.getInt()
+                }
+
+                VkImageViewType.`2D_ARRAY` -> {
+                    glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
+                    width = tempPtr.getInt()
+                    glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_HEIGHT, tempPtr)
+                    height = tempPtr.getInt()
+                    depth = 1
+                    glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_DEPTH, tempPtr)
+                    arrayLayers = tempPtr.getInt()
+                }
+
+                VkImageViewType.CUBE_ARRAY -> {
+                    glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
+                    width = tempPtr.getInt()
+                    height = width
+                    depth = 1
+                    glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_DEPTH, tempPtr)
+                    arrayLayers = tempPtr.getInt()
+                }
+            }
+
+            glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_INTERNAL_FORMAT, tempPtr)
+            val typedFormat = ImageFormat[tempPtr.getInt()]
+            val format = glFormatToVkFormat(typedFormat)
+
+            val mipData = mutableListOf<Arr>()
+
+            // Thanks mutable texture storage
+            var mipLevels = 0
+            for (mip in 0 until 69) {
+                glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_WIDTH, tempPtr)
+                val mipWidth = tempPtr.getInt()
+                if (mipWidth == 0) {
+                    break
+                }
+
+                glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_COMPRESSED, tempPtr)
+                val compressed = tempPtr.getInt() != GL_FALSE
+                val size: Int
+                if (compressed) {
+                    glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_COMPRESSED_IMAGE_SIZE, tempPtr)
+                    size = tempPtr.getInt()
+                    ensureTempGPUBufferCapacity(size.toLong())
+                    tempGPUBuffer.bind(GL_PIXEL_PACK_BUFFER)
+                    glGetCompressedTextureImage(imageID, mip, size, 0L)
+                } else {
+                    typedFormat as ImageFormat.Uncompressed
+                    glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_HEIGHT, tempPtr)
+                    val mipHeight = tempPtr.getInt()
+                    glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_DEPTH, tempPtr)
+                    val mipDepth = tempPtr.getInt()
+                    val pixelSize = typedFormat.totalBits / 8
+                    size = mipWidth * mipHeight * mipDepth * pixelSize
+                    ensureTempGPUBufferCapacity(size.toLong())
+                    tempGPUBuffer.bind(GL_PIXEL_PACK_BUFFER)
+                    glGetTextureImage(
+                        imageID,
+                        mip,
+                        typedFormat.pixelFormat.value,
+                        typedFormat.pixelType,
+                        size,
+                        0L
+                    )
+                }
+
+                val cpuImageData = transferBuffer(size.toLong())
+                mipData.add(cpuImageData)
+
+                mipLevels++
+            }
+
+            glGetObjectLabel(GL_TEXTURE, imageID, 0, tempPtr, Ptr.NULL)
+            val labelLen = tempPtr.getInt()
+            val str = if (labelLen > 0) {
+                Arr.malloc(labelLen + 4L).use { labelBuffer ->
+                    glGetObjectLabel(GL_TEXTURE, imageID, labelLen + 4, tempPtr, labelBuffer.ptr)
+                    MemoryUtil.memUTF8Safe(labelBuffer.ptr.address) ?: ""
+                }
+            } else {
+                ""
+            }
+
+            images.add(ImageData(mipData))
+            imageMetadata.add(
+                ImageMetadata(
+                    name = str,
+                    width = width,
+                    height = height,
+                    depth = depth,
+                    mipLevels = mipLevels,
+                    arrayLayers = arrayLayers,
+                    format = format,
+                    dataType = when (typedFormat) {
+                        is ImageFormat.DepthStencil -> ImageDataType.DEPTH_STENCIL
+                        is ImageFormat.Depth -> ImageDataType.DEPTH
+                        is ImageFormat.Stencil -> ImageDataType.STENCIL
+                        else -> ImageDataType.COLOR
+                    },
+                    viewType = type,
+                    levelDataSizes = mipData.map { it.len }
+                )
+            )
+        }
+
+        val imageIndex = imageIDToIndex[imageID]!!
+        return imageIndex
+    }
+
     val bufferIDToIndex = mutableMapOf<Int, Int>()
 
     fun getBufferIndex(bufferID: Int): Int {
@@ -103,14 +274,13 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
 
                 val cpuBufferData = transferBuffer(bufferSize.toLong())
 
-
-
                 glGetObjectLabel(GL_BUFFER, bufferID, 0, tempPtr, Ptr.NULL)
                 val labelLen = tempPtr.getInt()
                 val str = if (labelLen > 0) {
-                    val labelBuffer = malloc(labelLen + 1L)
-                    glGetObjectLabel(GL_BUFFER, bufferID, labelLen + 1, tempPtr, labelBuffer.ptr)
-                    MemoryUtil.memUTF8Safe(labelBuffer.ptr.address) ?: ""
+                    Arr.malloc(labelLen + 4L).use { labelBuffer ->
+                        glGetObjectLabel(GL_BUFFER, bufferID, labelLen + 4, tempPtr, labelBuffer.ptr)
+                        MemoryUtil.memUTF8Safe(labelBuffer.ptr.address) ?: ""
+                    }
                 } else {
                     ""
                 }
@@ -171,200 +341,193 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
 private fun CaptureContext.captureDefaultUniformBlock() {
     val defaultUniformData = Arr.malloc(0L)
 
-    val struct = UniformBlock {
-        MemoryStack {
-            shaderInfo.uniforms.values.asSequence()
-                .filter { it.type is GLSLDataType.Value }
-                .forEach {
-                    fun getData() {
-                        val uniformResource = resourceManager.uniformResource.nameToEntryMap[it.name]
-                        if (uniformResource == null || uniformResource.location == -1 || uniformResource.blockIndex != -1) {
-                            return
-                        }
-                        
-                        val lastAttribute = this@UniformBlock.last
-                        val offset = lastAttribute.alignOffset.toLong()
-                        val size = lastAttribute.baseAlign.toLong()
-                        defaultUniformData.ensureCapacity(offset + size, true)
-                        val dstPtr = defaultUniformData.ptr + offset
-
-                        if (uniformResource.arraySize > 1) {
-                            when (it.type) {
-                                is UniformType.Bool -> {
-                                    throw UnsupportedOperationException("Boolean uniforms are not supported")
-                                }
-
-                                is UniformType.Int -> {
-                                    glGetnUniformiv(resourceManager.programID, uniformResource.location, uniformResource.arraySize, dstPtr)
-                                }
-
-                                is UniformType.UInt -> {
-                                    glGetnUniformuiv(resourceManager.programID, uniformResource.location, uniformResource.arraySize, dstPtr)
-                                }
-
-                                is UniformType.Float -> {
-                                    glGetnUniformfv(resourceManager.programID, uniformResource.location, uniformResource.arraySize, dstPtr)
-                                }
-
-                                is UniformType.Double -> {
-                                    glGetnUniformdv(resourceManager.programID, uniformResource.location, uniformResource.arraySize, dstPtr)
-                                }
-
-                                else -> {
-                                    throw UnsupportedOperationException("Unsupported uniform type: ${it.type}")
-                                }
-                            }
-                        } else {
-                            when (it.type) {
-                                is UniformType.Bool -> {
-                                    throw UnsupportedOperationException("Boolean uniforms are not supported")
-                                }
-
-                                is UniformType.Int -> {
-                                    glGetUniformiv(resourceManager.programID, uniformResource.location, dstPtr)
-                                }
-
-                                is UniformType.UInt -> {
-                                    glGetUniformuiv(resourceManager.programID, uniformResource.location, dstPtr)
-                                }
-
-                                is UniformType.Float -> {
-                                    glGetUniformfv(resourceManager.programID, uniformResource.location, dstPtr)
-                                }
-
-                                is UniformType.Double -> {
-                                    glGetUniformdv(resourceManager.programID, uniformResource.location, dstPtr)
-                                }
-
-                                else -> {
-                                    throw UnsupportedOperationException("Unsupported uniform type: ${it.type}")
-                                }
-                            }
-                        }
+    val struct = struct {
+        shaderInfo.uniforms.values.asSequence()
+            .filter { it.type is GLSLDataType.Value }
+            .forEach {
+                fun getData(elementInfo: StructAllocator.ElementInfo) {
+                    println("Capturing default uniform: ${it.name}")
+                    println("offset=${elementInfo.offset}, size=${elementInfo.size}, totalSize=${this@struct.size}")
+                    val uniformResource = resourceManager.uniformResource.nameToEntryMap[it.name]
+                    if (uniformResource == null || uniformResource.location == -1 || uniformResource.blockIndex != -1) {
+                        return
                     }
-                    
-                    when (it.type) {
-                        GLSLDataType.Int, GLSLDataType.UInt, GLSLDataType.Float -> {
-                            scalar32(it.name)
-                            getData()
-                        }
+                    defaultUniformData.ensureCapacity(this@struct.size.toLong(), true)
+                    val dstPtr = defaultUniformData.ptr + elementInfo.offset.toLong()
 
-                        GLSLDataType.Double -> {
-                            scalar64(it.name)
-                            getData()
-                        }
+                    if (uniformResource.arraySize > 1) {
+                        when (it.type) {
+                            is UniformType.Bool -> {
+                                throw UnsupportedOperationException("Boolean uniforms are not supported")
+                            }
 
-                        GLSLDataType.IVec2, GLSLDataType.UVec2, GLSLDataType.Vec2 -> {
-                            vec2Scalar32(it.name)
-                            getData()
-                        }
+                            is UniformType.Int -> {
+                                glGetnUniformiv(
+                                    resourceManager.programID,
+                                    uniformResource.location,
+                                    uniformResource.arraySize,
+                                    dstPtr
+                                )
+                            }
 
-                        GLSLDataType.IVec3, GLSLDataType.UVec3, GLSLDataType.Vec3 -> {
-                            vec3Scalar32(it.name)
-                            getData()
-                        }
+                            is UniformType.UInt -> {
+                                glGetnUniformuiv(
+                                    resourceManager.programID,
+                                    uniformResource.location,
+                                    uniformResource.arraySize,
+                                    dstPtr
+                                )
+                            }
 
-                        GLSLDataType.IVec4, GLSLDataType.UVec4, GLSLDataType.Vec4 -> {
-                            vec4Scalar32(it.name)
-                            getData()
-                        }
+                            is UniformType.Float -> {
+                                glGetnUniformfv(
+                                    resourceManager.programID,
+                                    uniformResource.location,
+                                    uniformResource.arraySize,
+                                    dstPtr
+                                )
+                            }
 
-                        GLSLDataType.Mat2 -> {
-                            mat2Scalar32(it.name)
-                            getData()
-                        }
+                            is UniformType.Double -> {
+                                glGetnUniformdv(
+                                    resourceManager.programID,
+                                    uniformResource.location,
+                                    uniformResource.arraySize,
+                                    dstPtr
+                                )
+                            }
 
-                        GLSLDataType.Mat3 -> {
-                            mat3Scalar32(it.name)
-                            getData()
+                            else -> {
+                                throw UnsupportedOperationException("Unsupported uniform type: ${it.type}")
+                            }
                         }
+                    } else {
+                        when (it.type) {
+                            is UniformType.Bool -> {
+                                throw UnsupportedOperationException("Boolean uniforms are not supported")
+                            }
 
-                        GLSLDataType.Mat4 -> {
-                            mat4Scalar32(it.name)
-                            getData()
-                        }
+                            is UniformType.Int -> {
+                                glGetUniformiv(resourceManager.programID, uniformResource.location, dstPtr)
+                            }
 
-                        GLSLDataType.Mat2x3 -> {
-                            mat2x3Scalar32(it.name)
-                            getData()
-                        }
+                            is UniformType.UInt -> {
+                                glGetUniformuiv(resourceManager.programID, uniformResource.location, dstPtr)
+                            }
 
-                        GLSLDataType.Mat2x4 -> {
-                            mat2x4Scalar32(it.name)
-                            getData()
-                        }
+                            is UniformType.Float -> {
+                                glGetUniformfv(resourceManager.programID, uniformResource.location, dstPtr)
+                            }
 
-                        GLSLDataType.Mat3x2 -> {
-                            mat3x2Scalar32(it.name)
-                            getData()
-                        }
+                            is UniformType.Double -> {
+                                glGetUniformdv(resourceManager.programID, uniformResource.location, dstPtr)
+                            }
 
-                        GLSLDataType.Mat3x4 -> {
-                            mat3x4Scalar32(it.name)
-                            getData()
-                        }
-
-                        GLSLDataType.Mat4x2 -> {
-                            mat4x2Scalar32(it.name)
-                            getData()
-                        }
-
-                        GLSLDataType.Mat4x3 -> {
-                            mat4x3Scalar32(it.name)
-                            getData()
-                        }
-
-                        GLSLDataType.DMat2 -> {
-                            mat2Scalar64(it.name)
-                            getData()
-                        }
-
-                        GLSLDataType.DMat3 -> {
-                            mat3Scalar64(it.name)
-                            getData()
-                        }
-
-                        GLSLDataType.DMat4 -> {
-                            mat4Scalar64(it.name)
-                            getData()
-                        }
-
-                        GLSLDataType.DMat2x3 -> {
-                            mat2x3Scalar64(it.name)
-                            getData()
-                        }
-
-                        GLSLDataType.DMat2x4 -> {
-                            mat2x4Scalar64(it.name)
-                            getData()
-                        }
-
-                        GLSLDataType.DMat3x2 -> {
-                            mat3x2Scalar64(it.name)
-                            getData()
-                        }
-
-                        GLSLDataType.DMat3x4 -> {
-                            mat3x4Scalar64(it.name)
-                            getData()
-                        }
-
-                        GLSLDataType.DMat4x2 -> {
-                            mat4x2Scalar64(it.name)
-                            getData()
-                        }
-
-                        GLSLDataType.DMat4x3 -> {
-                            mat4x3Scalar64(it.name)
-                            getData()
-                        }
-
-                        else -> {
-                            throw UnsupportedOperationException("Unsupported uniform type: ${it.type}")
+                            else -> {
+                                throw UnsupportedOperationException("Unsupported uniform type: ${it.type}")
+                            }
                         }
                     }
                 }
-        }
+
+                when (it.type) {
+                    GLSLDataType.Int, GLSLDataType.UInt, GLSLDataType.Float -> {
+                        getData(scalar(32))
+                    }
+
+                    GLSLDataType.Double -> {
+                        getData(scalar(64))
+                    }
+
+                    GLSLDataType.IVec2, GLSLDataType.UVec2, GLSLDataType.Vec2 -> {
+                        getData(vector(2, 32))
+                    }
+
+                    GLSLDataType.IVec3, GLSLDataType.UVec3, GLSLDataType.Vec3 -> {
+                        getData(vector(3, 32))
+                    }
+
+                    GLSLDataType.IVec4, GLSLDataType.UVec4, GLSLDataType.Vec4 -> {
+                        getData(vector(4, 32))
+                    }
+
+                    GLSLDataType.Mat2 -> {
+                        getData(matrix(2, 2, 32))
+                    }
+
+                    GLSLDataType.Mat3 -> {
+                        getData(matrix(3, 3, 32))
+                    }
+
+                    GLSLDataType.Mat4 -> {
+                        getData(matrix(4, 4, 32))
+                    }
+
+                    GLSLDataType.Mat2x3 -> {
+                        getData(matrix(2, 3, 32))
+                    }
+
+                    GLSLDataType.Mat2x4 -> {
+                        getData(matrix(2, 4, 32))
+                    }
+
+                    GLSLDataType.Mat3x2 -> {
+                        getData(matrix(3, 2, 32))
+                    }
+
+                    GLSLDataType.Mat3x4 -> {
+                        getData(matrix(3, 4, 32))
+                    }
+
+                    GLSLDataType.Mat4x2 -> {
+                        getData(matrix(4, 2, 32))
+                    }
+
+                    GLSLDataType.Mat4x3 -> {
+                        getData(matrix(4, 3, 32))
+                    }
+
+                    GLSLDataType.DMat2 -> {
+                        getData(matrix(2, 2, 64))
+                    }
+
+                    GLSLDataType.DMat3 -> {
+                        getData(matrix(3, 3, 64))
+                    }
+
+                    GLSLDataType.DMat4 -> {
+                        getData(matrix(4, 4, 64))
+                    }
+
+                    GLSLDataType.DMat2x3 -> {
+                        getData(matrix(2, 3, 64))
+                    }
+
+                    GLSLDataType.DMat2x4 -> {
+                        getData(matrix(2, 4, 64))
+                    }
+
+                    GLSLDataType.DMat3x2 -> {
+                        getData(matrix(3, 2, 64))
+                    }
+
+                    GLSLDataType.DMat3x4 -> {
+                        getData(matrix(3, 4, 64))
+                    }
+
+                    GLSLDataType.DMat4x2 -> {
+                        getData(matrix(4, 2, 64))
+                    }
+
+                    GLSLDataType.DMat4x3 -> {
+                        getData(matrix(4, 3, 64))
+                    }
+
+                    else -> {
+                        throw UnsupportedOperationException("Unsupported uniform type: ${it.type}")
+                    }
+                }
+            }
     }
 
     check(buffers.isEmpty())
@@ -373,274 +536,122 @@ private fun CaptureContext.captureDefaultUniformBlock() {
     buffers += defaultUniformData.realloc(struct.size.toLong(), false)
     bufferMetadata += BufferMetadata(
         name = "",
-        size = buffers.last().len
+        size = struct.size.toLong()
     )
     uniformBufferBinding("DefaultUniforms", 0, shaderInfo.ubos["DefaultUniforms"]!!.binding, 0L)
 }
 
+private fun getTextureDefaultSamplerInfo(imageID: Int): SamplerInfo = MemoryStack {
+        val temp = malloc(TEMP_SIZE)
+    val tempPtr = temp.ptr
+    fun glGetTextureParameteri(texture: Int, pname: Int): Int {
+        glGetTextureParameteriv(texture, pname, tempPtr)
+        return tempPtr.getInt()
+    }
+
+    fun glGetTextureParameterf(texture: Int, pname: Int): Float {
+        glGetTextureParameterfv(texture, pname, tempPtr)
+        return tempPtr.getFloat()
+    }
+
+    val magFilter = glGetTextureParameteri(imageID, GL_TEXTURE_MAG_FILTER)
+    val minFilter = glGetTextureParameteri(imageID, GL_TEXTURE_MIN_FILTER)
+    val warpU = glGetTextureParameteri(imageID, GL_TEXTURE_WRAP_S)
+    val warpV = glGetTextureParameteri(imageID, GL_TEXTURE_WRAP_T)
+    val warpW = glGetTextureParameteri(imageID, GL_TEXTURE_WRAP_R)
+    val mipLodBias = glGetTextureParameterf(imageID, GL_TEXTURE_LOD_BIAS)
+    val maxAnisotropy = glGetTextureParameterf(imageID, GL_TEXTURE_MAX_ANISOTROPY)
+    val compareMode = glGetTextureParameteri(imageID, GL_TEXTURE_COMPARE_MODE)
+    val compareFunc = glGetTextureParameteri(imageID, GL_TEXTURE_COMPARE_FUNC)
+    val minLod = glGetTextureParameterf(imageID, GL_TEXTURE_MIN_LOD)
+    val maxLod = glGetTextureParameterf(imageID, GL_TEXTURE_MAX_LOD)
+    glGetTextureParameterfv(imageID, GL_TEXTURE_BORDER_COLOR, tempPtr)
+    val borderColorR = tempPtr.getFloat(0)
+    val borderColorG = tempPtr.getFloat(4)
+    val borderColorB = tempPtr.getFloat(8)
+    val borderColorA = tempPtr.getFloat(12)
+
+    return SamplerInfo(
+        magFilter = glMagFilterToVkFilter(magFilter),
+        minFilter = glMinFilterToVkFilter(minFilter),
+        mipmapMode = glMinFilterTOVkSamplerMipmapMode(minFilter),
+        addressModeU = glWarpModeToVkSamplerAddressMode(warpU),
+        addressModeV = glWarpModeToVkSamplerAddressMode(warpV),
+        addressModeW = glWarpModeToVkSamplerAddressMode(warpW),
+        mipLodBias = mipLodBias,
+        anisotropyEnable = maxAnisotropy > 1.0f,
+        maxAnisotropy = maxAnisotropy,
+        compareEnable = compareMode != GL_NONE,
+        compareOp = glCompareFuncToVkCompareOp(compareFunc),
+        minLod = minLod,
+        maxLod = maxLod,
+        boarderColorR = borderColorR,
+        boarderColorG = borderColorG,
+        boarderColorB = borderColorB,
+        boarderColorA = borderColorA,
+        false
+    )
+}
+
+private fun getSamplerInfo(samplerID: Int): SamplerInfo = MemoryStack {
+        val temp = malloc(TEMP_SIZE)
+    val tempPtr = temp.ptr
+    fun glGetSamplerParameteri(sampler: Int, pname: Int): Int {
+        glGetSamplerParameteriv(sampler, pname, tempPtr)
+        return tempPtr.getInt()
+    }
+
+    fun glGetSamplerParameterf(sampler: Int, pname: Int): Float {
+        glGetSamplerParameterfv(sampler, pname, tempPtr)
+        return tempPtr.getFloat()
+    }
+
+    val magFilter = glGetSamplerParameteri(samplerID, GL_TEXTURE_MAG_FILTER)
+    val minFilter = glGetSamplerParameteri(samplerID, GL_TEXTURE_MIN_FILTER)
+    val warpU = glGetSamplerParameteri(samplerID, GL_TEXTURE_WRAP_S)
+    val warpV = glGetSamplerParameteri(samplerID, GL_TEXTURE_WRAP_T)
+    val warpW = glGetSamplerParameteri(samplerID, GL_TEXTURE_WRAP_R)
+    val mipLodBias = glGetSamplerParameterf(samplerID, GL_TEXTURE_LOD_BIAS)
+    val maxAnisotropy = glGetSamplerParameterf(samplerID, GL_TEXTURE_MAX_ANISOTROPY)
+    val compareMode = glGetSamplerParameteri(samplerID, GL_TEXTURE_COMPARE_MODE)
+    val compareFunc = glGetSamplerParameteri(samplerID, GL_TEXTURE_COMPARE_FUNC)
+    val minLod = glGetSamplerParameterf(samplerID, GL_TEXTURE_MIN_LOD)
+    val maxLod = glGetSamplerParameterf(samplerID, GL_TEXTURE_MAX_LOD)
+    glGetSamplerParameterfv(samplerID, GL_TEXTURE_BORDER_COLOR, tempPtr)
+    val borderColorR = tempPtr.getFloat(0)
+    val borderColorG = tempPtr.getFloat(4)
+    val borderColorB = tempPtr.getFloat(8)
+    val borderColorA = tempPtr.getFloat(12)
+
+    return SamplerInfo(
+        magFilter = glMagFilterToVkFilter(magFilter),
+        minFilter = glMinFilterToVkFilter(minFilter),
+        mipmapMode = glMinFilterTOVkSamplerMipmapMode(minFilter),
+        addressModeU = glWarpModeToVkSamplerAddressMode(warpU),
+        addressModeV = glWarpModeToVkSamplerAddressMode(warpV),
+        addressModeW = glWarpModeToVkSamplerAddressMode(warpW),
+        mipLodBias = mipLodBias,
+        anisotropyEnable = maxAnisotropy > 1.0f,
+        maxAnisotropy = maxAnisotropy,
+        compareEnable = compareMode != GL_NONE,
+        compareOp = glCompareFuncToVkCompareOp(compareFunc),
+        minLod = minLod,
+        maxLod = maxLod,
+        boarderColorR = borderColorR,
+        boarderColorG = borderColorG,
+        boarderColorB = borderColorB,
+        boarderColorA = borderColorA,
+        false
+    )
+}
+
 private fun CaptureContext.captureImages() {
-    val imageIDToIndex = mutableMapOf<Int, Int>()
-
-    MemoryStack {
-        val temp = malloc(8 * 4 * 4L)
-        val tempPtr = temp.ptr
-
-        fun getImageIndex(imageID: Int): Int {
-            if (imageIDToIndex.putIfAbsent(imageID, images.size) == null) {
-                glGetTextureParameteriv(imageID, GL_TEXTURE_TARGET, tempPtr)
-                val target = tempPtr.getInt()
-                val type = glImageTargetToVKImageViewType(target)
-                val width: Int
-                val height: Int
-                val depth: Int
-                val arrayLayers: Int
-                when (type) {
-                    VkImageViewType.`1D` -> {
-                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
-                        width = tempPtr.getInt()
-                        height = 1
-                        depth = 1
-                        arrayLayers = 1
-                    }
-
-                    VkImageViewType.`2D` -> {
-                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
-                        width = tempPtr.getInt()
-                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_HEIGHT, tempPtr)
-                        height = tempPtr.getInt()
-                        depth = 1
-                        arrayLayers = 1
-                    }
-
-                    VkImageViewType.`3D` -> {
-                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
-                        width = tempPtr.getInt()
-                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_HEIGHT, tempPtr)
-                        height = tempPtr.getInt()
-                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_DEPTH, tempPtr)
-                        depth = tempPtr.getInt()
-                        arrayLayers = 1
-                    }
-
-                    VkImageViewType.CUBE -> {
-                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
-                        width = tempPtr.getInt()
-                        height = width
-                        depth = 1
-                        arrayLayers = 1
-                    }
-
-                    VkImageViewType.`1D_ARRAY` -> {
-                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
-                        width = tempPtr.getInt()
-                        height = 1
-                        depth = 1
-                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_DEPTH, tempPtr)
-                        arrayLayers = tempPtr.getInt()
-                    }
-
-                    VkImageViewType.`2D_ARRAY` -> {
-                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
-                        width = tempPtr.getInt()
-                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_HEIGHT, tempPtr)
-                        height = tempPtr.getInt()
-                        depth = 1
-                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_DEPTH, tempPtr)
-                        arrayLayers = tempPtr.getInt()
-                    }
-
-                    VkImageViewType.CUBE_ARRAY -> {
-                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_WIDTH, tempPtr)
-                        width = tempPtr.getInt()
-                        height = width
-                        depth = 1
-                        glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_DEPTH, tempPtr)
-                        arrayLayers = tempPtr.getInt()
-                    }
-                }
-
-                glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_INTERNAL_FORMAT, tempPtr)
-                val typedFormat = ImageFormat[tempPtr.getInt()]
-                val format = glFormatToVkFormat(typedFormat)
-
-                val mipData = mutableListOf<Arr>()
-
-                // Thanks mutable texture storage
-                var mipLevels = 0
-                for (mip in 0 until 69) {
-                    glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_WIDTH, tempPtr)
-                    val mipWidth = tempPtr.getInt()
-                    if (mipWidth == 0) {
-                        break
-                    }
-
-                    glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_COMPRESSED, tempPtr)
-                    val compressed = tempPtr.getInt() != GL_FALSE
-                    val size: Int
-                    if (compressed) {
-                        glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_COMPRESSED_IMAGE_SIZE, tempPtr)
-                        size = tempPtr.getInt()
-                        ensureTempGPUBufferCapacity(size.toLong())
-                        tempGPUBuffer.bind(GL_PIXEL_PACK_BUFFER)
-                        glGetCompressedTextureImage(imageID, mip, size, 0L)
-                    } else {
-                        typedFormat as ImageFormat.Uncompressed
-                        glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_HEIGHT, tempPtr)
-                        val mipHeight = tempPtr.getInt()
-                        glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_DEPTH, tempPtr)
-                        val mipDepth = tempPtr.getInt()
-                        val pixelSize = typedFormat.totalBits / 8
-                        size = mipWidth * mipHeight * mipDepth * pixelSize
-                        ensureTempGPUBufferCapacity(size.toLong())
-                        tempGPUBuffer.bind(GL_PIXEL_PACK_BUFFER)
-                        glGetTextureImage(imageID, mip, typedFormat.pixelFormat.value, typedFormat.pixelType, size, 0L)
-                    }
-
-                    val cpuImageData = transferBuffer(size.toLong())
-                    mipData.add(cpuImageData)
-
-                    mipLevels++
-                }
-
-                glGetObjectLabel(GL_TEXTURE, imageID, 0, tempPtr, Ptr.NULL)
-                val labelLen = tempPtr.getInt()
-                val str = if (labelLen > 0) {
-                    val labelBuffer = malloc(labelLen + 1L)
-                    glGetObjectLabel(GL_TEXTURE, imageID, labelLen + 1, tempPtr, labelBuffer.ptr)
-                    MemoryUtil.memUTF8Safe(labelBuffer.ptr.address) ?: ""
-                } else {
-                    ""
-                }
-
-                images.add(ImageData(mipData))
-                imageMetadata.add(
-                    ImageMetadata(
-                        name = str,
-                        width = width,
-                        height = height,
-                        depth = depth,
-                        mipLevels = mipLevels,
-                        arrayLayers = arrayLayers,
-                        format = format,
-                        dataType = when (typedFormat) {
-                            is ImageFormat.DepthStencil -> ImageDataType.DEPTH_STENCIL
-                            is ImageFormat.Depth -> ImageDataType.DEPTH
-                            is ImageFormat.Stencil -> ImageDataType.STENCIL
-                            else -> ImageDataType.COLOR
-                        },
-                        viewType = type,
-                        levelDataSizes = mipData.map { it.len }
-                    )
-                )
-            }
-
-            val imageIndex = imageIDToIndex[imageID]!!
-            return imageIndex
-        }
-
-        fun getTextureDefaultSamplerInfo(imageID: Int): SamplerInfo {
-            fun glGetTextureParameteri(texture: Int, pname: Int): Int {
-                glGetTextureParameteriv(texture, pname, tempPtr)
-                return tempPtr.getInt()
-            }
-
-            fun glGetTextureParameterf(texture: Int, pname: Int): Float {
-                glGetTextureParameterfv(texture, pname, tempPtr)
-                return tempPtr.getFloat()
-            }
-
-            val magFilter = glGetTextureParameteri(imageID, GL_TEXTURE_MAG_FILTER)
-            val minFilter = glGetTextureParameteri(imageID, GL_TEXTURE_MIN_FILTER)
-            val warpU = glGetTextureParameteri(imageID, GL_TEXTURE_WRAP_S)
-            val warpV = glGetTextureParameteri(imageID, GL_TEXTURE_WRAP_T)
-            val warpW = glGetTextureParameteri(imageID, GL_TEXTURE_WRAP_R)
-            val mipLodBias = glGetTextureParameterf(imageID, GL_TEXTURE_LOD_BIAS)
-            val maxAnisotropy = glGetTextureParameterf(imageID, GL_TEXTURE_MAX_ANISOTROPY)
-            val compareMode = glGetTextureParameteri(imageID, GL_TEXTURE_COMPARE_MODE)
-            val compareFunc = glGetTextureParameteri(imageID, GL_TEXTURE_COMPARE_FUNC)
-            val minLod = glGetTextureParameterf(imageID, GL_TEXTURE_MIN_LOD)
-            val maxLod = glGetTextureParameterf(imageID, GL_TEXTURE_MAX_LOD)
-            glGetTextureParameterfv(imageID, GL_TEXTURE_BORDER_COLOR, tempPtr)
-            val borderColorR = tempPtr.getFloat(0)
-            val borderColorG = tempPtr.getFloat(4)
-            val borderColorB = tempPtr.getFloat(8)
-            val borderColorA = tempPtr.getFloat(12)
-
-            return SamplerInfo(
-                magFilter = glMagFilterToVkFilter(magFilter),
-                minFilter = glMinFilterToVkFilter(minFilter),
-                mipmapMode = glMinFilterTOVkSamplerMipmapMode(minFilter),
-                addressModeU = glWarpModeToVkSamplerAddressMode(warpU),
-                addressModeV = glWarpModeToVkSamplerAddressMode(warpV),
-                addressModeW = glWarpModeToVkSamplerAddressMode(warpW),
-                mipLodBias = mipLodBias,
-                anisotropyEnable = maxAnisotropy > 1.0f,
-                maxAnisotropy = maxAnisotropy,
-                compareEnable = compareMode != GL_NONE,
-                compareOp = glCompareFuncToVkCompareOp(compareFunc),
-                minLod = minLod,
-                maxLod = maxLod,
-                boarderColorR = borderColorR,
-                boarderColorG = borderColorG,
-                boarderColorB = borderColorB,
-                boarderColorA = borderColorA,
-                false
-            )
-        }
-
-        fun getSamplerInfo(samplerID: Int): SamplerInfo {
-            fun glGetSamplerParameteri(sampler: Int, pname: Int): Int {
-                glGetSamplerParameteriv(sampler, pname, tempPtr)
-                return tempPtr.getInt()
-            }
-
-            fun glGetSamplerParameterf(sampler: Int, pname: Int): Float {
-                glGetSamplerParameterfv(sampler, pname, tempPtr)
-                return tempPtr.getFloat()
-            }
-
-            val magFilter = glGetSamplerParameteri(samplerID, GL_TEXTURE_MAG_FILTER)
-            val minFilter = glGetSamplerParameteri(samplerID, GL_TEXTURE_MIN_FILTER)
-            val warpU = glGetSamplerParameteri(samplerID, GL_TEXTURE_WRAP_S)
-            val warpV = glGetSamplerParameteri(samplerID, GL_TEXTURE_WRAP_T)
-            val warpW = glGetSamplerParameteri(samplerID, GL_TEXTURE_WRAP_R)
-            val mipLodBias = glGetSamplerParameterf(samplerID, GL_TEXTURE_LOD_BIAS)
-            val maxAnisotropy = glGetSamplerParameterf(samplerID, GL_TEXTURE_MAX_ANISOTROPY)
-            val compareMode = glGetSamplerParameteri(samplerID, GL_TEXTURE_COMPARE_MODE)
-            val compareFunc = glGetSamplerParameteri(samplerID, GL_TEXTURE_COMPARE_FUNC)
-            val minLod = glGetSamplerParameterf(samplerID, GL_TEXTURE_MIN_LOD)
-            val maxLod = glGetSamplerParameterf(samplerID, GL_TEXTURE_MAX_LOD)
-            glGetSamplerParameterfv(samplerID, GL_TEXTURE_BORDER_COLOR, tempPtr)
-            val borderColorR = tempPtr.getFloat(0)
-            val borderColorG = tempPtr.getFloat(4)
-            val borderColorB = tempPtr.getFloat(8)
-            val borderColorA = tempPtr.getFloat(12)
-
-            return SamplerInfo(
-                magFilter = glMagFilterToVkFilter(magFilter),
-                minFilter = glMinFilterToVkFilter(minFilter),
-                mipmapMode = glMinFilterTOVkSamplerMipmapMode(minFilter),
-                addressModeU = glWarpModeToVkSamplerAddressMode(warpU),
-                addressModeV = glWarpModeToVkSamplerAddressMode(warpV),
-                addressModeW = glWarpModeToVkSamplerAddressMode(warpW),
-                mipLodBias = mipLodBias,
-                anisotropyEnable = maxAnisotropy > 1.0f,
-                maxAnisotropy = maxAnisotropy,
-                compareEnable = compareMode != GL_NONE,
-                compareOp = glCompareFuncToVkCompareOp(compareFunc),
-                minLod = minLod,
-                maxLod = maxLod,
-                boarderColorR = borderColorR,
-                boarderColorG = borderColorG,
-                boarderColorB = borderColorB,
-                boarderColorA = borderColorA,
-                false
-            )
-        }
-
-        resourceManager.uniformResource.entries.values.asSequence()
-            .filter { it.type is GLSLDataType.Opaque.Image }
-            .forEach {
+    resourceManager.uniformResource.entries.values.asSequence()
+        .filter { it.type is GLSLDataType.Opaque.Image }
+        .forEach {
+            MemoryStack {
+                val temp = malloc(TEMP_SIZE)
+                val tempPtr = temp.ptr
                 glGetUniformiv(resourceManager.programID, it.location, tempPtr)
                 val imageUnit = tempPtr.getInt()
                 glGetIntegeri_v(GL_IMAGE_BINDING_NAME, imageUnit, tempPtr)
@@ -649,10 +660,14 @@ private fun CaptureContext.captureImages() {
 
                 imageBinding(it.name, imageIndex, shaderInfo.uniforms[it.name]!!.binding)
             }
+        }
 
-        resourceManager.uniformResource.entries.values.asSequence()
-            .filter { it.type is GLSLDataType.Opaque.Sampler }
-            .forEach { uniformEntry ->
+    resourceManager.uniformResource.entries.values.asSequence()
+        .filter { it.type is GLSLDataType.Opaque.Sampler }
+        .forEach { uniformEntry ->
+            MemoryStack {
+                val temp = malloc(TEMP_SIZE)
+                val tempPtr = temp.ptr
                 glGetUniformiv(resourceManager.programID, uniformEntry.location, tempPtr)
                 val textureUnit = tempPtr.getInt()
                 val bindingTarget = when (uniformEntry.type) {
@@ -683,15 +698,14 @@ private fun CaptureContext.captureImages() {
                     shaderInfo.uniforms[uniformEntry.name]!!.binding
                 )
             }
-    }
+        }
 }
 
 private fun CaptureContext.captureBuffers() {
-    MemoryStack {
-        val temp = malloc(8 * 4 * 4L)
-        val tempPtr = temp.ptr
-
-        resourceManager.shaderStorageBlockResource.entries.values.forEach {
+    resourceManager.shaderStorageBlockResource.entries.values.forEach {
+        MemoryStack {
+            val temp = malloc(TEMP_SIZE)
+            val tempPtr = temp.ptr
             glGetIntegeri_v(GL_SHADER_STORAGE_BUFFER_BINDING, it.bindingIndex, tempPtr)
             val boundBufferID = tempPtr.getInt()
             val bufferIndex = getBufferIndex(boundBufferID)
@@ -701,8 +715,12 @@ private fun CaptureContext.captureBuffers() {
 
             storageBufferBinding(it.name, bufferIndex, shaderInfo.ssbos[it.name]!!.binding, bufferOffset)
         }
+    }
 
-        resourceManager.uniformBlockResource.entries.values.forEach {
+    resourceManager.uniformBlockResource.entries.values.forEach {
+        MemoryStack {
+            val temp = malloc(TEMP_SIZE)
+            val tempPtr = temp.ptr
             glGetIntegeri_v(GL_UNIFORM_BUFFER_BINDING, it.bindingIndex, tempPtr)
             val boundBufferID = tempPtr.getInt()
             val bufferIndex = getBufferIndex(boundBufferID)
@@ -716,8 +734,11 @@ private fun CaptureContext.captureBuffers() {
 }
 
 private fun CaptureContext.captureShaderProgramResources() {
+    println("Capturing default uniform block...")
     captureDefaultUniformBlock()
+    println("Capturing images...")
     captureImages()
+    println("Capturing buffers...")
     captureBuffers()
 }
 
@@ -770,6 +791,7 @@ fun captureGlDispatchCompute(
     )
 
     val resourceCapture = captureContext.build(command)
+    captureContext.destroy()
 
     CaptureData.save(outputPath, resourceCapture) {
         saveShader(outputPath, shaderInfo, ShaderStage.ComputeShader)
@@ -796,8 +818,10 @@ fun captureGlDispatchComputeIndirect(shaderInfo: ShaderInfo, outputPath: Path, i
     )
 
     val resourceCapture = captureContext.build(command)
+    captureContext.destroy()
 
     CaptureData.save(outputPath, resourceCapture) {
+        println("Saving shader...")
         saveShader(outputPath, shaderInfo, ShaderStage.ComputeShader)
     }
 
