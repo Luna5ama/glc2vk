@@ -445,7 +445,7 @@ class ReplayInstance(
                     val remaining = bufferSize - roundDown
                     val regionCount: UInt
                     val regions: NArray<VkBufferCopy>
-                    if (remaining > 0UL) {
+                    if (bufferSize >= 64UL && remaining > 0UL) {
                         regionCount = 2u
                         regions = VkBufferCopy.allocate(2L)
                         regions[0].apply {
