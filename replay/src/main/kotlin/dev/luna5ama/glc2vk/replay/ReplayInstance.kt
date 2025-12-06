@@ -26,13 +26,14 @@ class ReplayInstance(
     val memoryTypes: MemoryTypeManager
 
     val commandPool: VkCommandPool
-    val pCommandBuffer: NArray<VkCommandBufferHandle>
-    val cmdBuffer: VkCommandBuffer
+    val cmdBuffers: List<VkCommandBuffer>
 
     val renderFinishedSemaphore: VkSemaphore
+    val copyFinishedSemaphore: VkSemaphore
     val imageAvailableSemaphore: VkSemaphore
 
     val pRenderFinishedSemaphore: NArray<VkSemaphoreHandle>
+    val pCopyFinishedSemaphore: NArray<VkSemaphoreHandle>
     val pImageAvailableSemaphore: NArray<VkSemaphoreHandle>
 
 
@@ -74,8 +75,7 @@ class ReplayInstance(
             }
 
             val commandPoolCreateInfo = VkCommandPoolCreateInfo.allocate {
-                flags = VkCommandPoolCreateFlags.RESET_COMMAND_BUFFER
-                queueFamilyIndex = graphicsQueueFamilyIndex.toUInt()
+                queueFamilyIndex = graphicsQueueFamilyIndex
             }
             commandPool = device.createCommandPool(commandPoolCreateInfo.ptr(), null).getOrThrow()
 
@@ -85,24 +85,29 @@ class ReplayInstance(
 
 
             MemoryStack {
-                pCommandBuffer = VkCommandBuffer.malloc(scope, 1)
+                val cmdBufCount = 2
+                val returnValues  = VkCommandBuffer.malloc(scope, cmdBufCount.toLong())
                 val commandBufferAllocateInfo = VkCommandBufferAllocateInfo.allocate {
                     commandPool = this@ReplayInstance.commandPool
                     level = VkCommandBufferLevel.PRIMARY
-                    commandBufferCount = 1u
+                    commandBufferCount = cmdBufCount.toUInt()
                 }
-                device.allocateCommandBuffers(commandBufferAllocateInfo.ptr(), pCommandBuffer.ptr())
-                cmdBuffer = VkCommandBuffer.fromNativeData(commandPool, pCommandBuffer[0])
+                device.allocateCommandBuffers(commandBufferAllocateInfo.ptr(), returnValues.ptr())
+                cmdBuffers = List(cmdBufCount) {
+                    VkCommandBuffer.fromNativeData(commandPool, returnValues[it.toLong()])
+                }
             }
 
 
             MemoryStack {
                 val semaphoreCreateInfo = VkSemaphoreCreateInfo.allocate {}
                 renderFinishedSemaphore = device.createSemaphore(semaphoreCreateInfo.ptr(), null).getOrThrow()
+                copyFinishedSemaphore = device.createSemaphore(semaphoreCreateInfo.ptr(), null).getOrThrow()
                 imageAvailableSemaphore = device.createSemaphore(semaphoreCreateInfo.ptr(), null).getOrThrow()
 
 
                 pRenderFinishedSemaphore = VkSemaphore.arrayOf(scope, renderFinishedSemaphore)
+                pCopyFinishedSemaphore = VkSemaphore.arrayOf(scope, copyFinishedSemaphore)
                 pImageAvailableSemaphore = VkSemaphore.arrayOf(scope, imageAvailableSemaphore)
             }
 
@@ -190,6 +195,8 @@ class ReplayInstance(
             device.waitForFences(1u, fences.ptr(), VK_TRUE, ULong.MAX_VALUE)
             device.resetFences(1u, fences.ptr())
 
+            device.resetCommandPool(commandPool, VkCommandPoolResetFlags.NONE)
+
             val dependencyInfo = VkDependencyInfo.allocate {
                 val allCpuBuffers = resource.bufferList.map { it.cpu } + resource.imageBufferList.map { it.buffer }
                 val bufferMemoryBarriers = VkBufferMemoryBarrier2.allocate(allCpuBuffers.size.toLong())
@@ -205,15 +212,16 @@ class ReplayInstance(
                 }
                 bufferMemoryBarriers(bufferMemoryBarriers)
             }
-            cmdBuffer.resetCommandBuffer(VkCommandBufferResetFlags.NONE)
 
-            val beginInfo = VkCommandBufferBeginInfo.allocate {}
-            cmdBuffer.beginCommandBuffer(beginInfo.ptr())
-            cmdBuffer.cmdPipelineBarrier2(dependencyInfo.ptr())
-            cmdBuffer.endCommandBuffer()
+            val beginInfo = VkCommandBufferBeginInfo.allocate {
+                flags = VkCommandBufferUsageFlags.ONE_TIME_SUBMIT
+            }
+            cmdBuffers[0].beginCommandBuffer(beginInfo.ptr())
+            cmdBuffers[0].cmdPipelineBarrier2(dependencyInfo.ptr())
+            cmdBuffers[0].endCommandBuffer()
 
             val submitInfo = VkSubmitInfo.allocate {
-                commandBuffers(pCommandBuffer)
+                commandBuffers(VkCommandBuffer.arrayOf(cmdBuffers[0]))
             }
 
             queue.queueSubmit(
@@ -237,128 +245,159 @@ class ReplayInstance(
     context(_: MemoryStack)
     fun execute(queue: VkQueue, swapchainImage: VkImage) {
         MemoryStack {
-            cmdBuffer.resetCommandBuffer(VkCommandBufferResetFlags.NONE)
+            device.resetCommandPool(commandPool, VkCommandPoolResetFlags.NONE)
 
-            val beginInfo = VkCommandBufferBeginInfo.allocate {}
-            cmdBuffer.beginCommandBuffer(beginInfo.ptr())
-            cmdBuffer.cmdBeginDebugUtilsLabelEXT(setupLabel.ptr())
+            val beginInfo = VkCommandBufferBeginInfo.allocate {
+                flags = VkCommandBufferUsageFlags.ONE_TIME_SUBMIT
+            }
 
-            val dependencyInfo0 = VkDependencyInfo.allocate {
-                val imageMemoryBarrier = VkImageMemoryBarrier2.allocate(1L)
-                imageMemoryBarrier[0].apply {
-                    srcStageMask = VkPipelineStageFlags2.ALL_COMMANDS
-                    srcAccessMask = VkAccessFlags2.NONE
-                    dstStageMask = VkPipelineStageFlags2.ALL_COMMANDS
-                    dstAccessMask = VkAccessFlags2.NONE
-                    oldLayout = VkImageLayout.UNDEFINED
-                    newLayout = VkImageLayout.PRESENT_SRC_KHR
+            MemoryStack {
+                cmdBuffers[0].beginCommandBuffer(beginInfo.ptr())
+                cmdBuffers[0].cmdBeginDebugUtilsLabelEXT(setupLabel.ptr())
 
-                    ofWholeImage(swapchainImage, VkImageAspectFlags.COLOR)
+                val dependencyInfo0 = VkDependencyInfo.allocate {
+                    val imageMemoryBarrier = VkImageMemoryBarrier2.allocate(1L)
+                    imageMemoryBarrier[0].apply {
+                        srcStageMask = VkPipelineStageFlags2.ALL_COMMANDS
+                        srcAccessMask = VkAccessFlags2.NONE
+                        dstStageMask = VkPipelineStageFlags2.ALL_COMMANDS
+                        dstAccessMask = VkAccessFlags2.NONE
+                        oldLayout = VkImageLayout.UNDEFINED
+                        newLayout = VkImageLayout.PRESENT_SRC_KHR
 
+                        ofWholeImage(swapchainImage, VkImageAspectFlags.COLOR)
+
+                    }
+                    imageMemoryBarriers(imageMemoryBarrier)
                 }
-                imageMemoryBarriers(imageMemoryBarrier)
-            }
-            cmdBuffer.cmdPipelineBarrier2(dependencyInfo0.ptr())
+                cmdBuffers[0].cmdPipelineBarrier2(dependencyInfo0.ptr())
 
-            cmdBuffer.cmdPipelineBarrier2(dependencyInfo1.ptr())
+                cmdBuffers[0].cmdPipelineBarrier2(dependencyInfo1.ptr())
 
-            resource.bufferList.forEachIndexed { i, buffer ->
-                val bufferMetadata = captureData.metadata.buffers[i]
-                cmdBuffer.cmdCopyBuffer(
-                    buffer.cpu,
-                    buffer.gpu,
-                    1u,
-                    VkBufferCopy.allocate {
-                        srcOffset = 0uL
-                        dstOffset = 0uL
-                        size = bufferMetadata.size.toULong()
-                    }.ptr()
-                )
-            }
-            (resource.imageList zip resource.imageBufferList).forEachIndexed { imageIndex, (dstImage, srcImages) ->
-                MemoryStack {
-                    val imageMetadata = captureData.metadata.images[imageIndex]
-                    val copyRegions = VkBufferImageCopy.allocate(srcImages.mipLevelDataOffset.size.toLong())
+                resource.bufferList.forEachIndexed { i, buffer ->
+                    val bufferMetadata = captureData.metadata.buffers[i]
+                    cmdBuffers[0].cmdCopyBuffer(
+                        buffer.cpu,
+                        buffer.gpu,
+                        1u,
+                        VkBufferCopy.allocate {
+                            srcOffset = 0uL
+                            dstOffset = 0uL
+                            size = bufferMetadata.size.toULong()
+                        }.ptr()
+                    )
+                }
+                (resource.imageList zip resource.imageBufferList).forEachIndexed { imageIndex, (dstImage, srcImages) ->
+                    MemoryStack {
+                        val imageMetadata = captureData.metadata.images[imageIndex]
+                        val copyRegions = VkBufferImageCopy.allocate(srcImages.mipLevelDataOffset.size.toLong())
 
-                    for (mip in srcImages.mipLevelDataOffset.indices) {
-                        copyRegions[mip.toLong()].apply {
-                            bufferOffset = srcImages.mipLevelDataOffset.getLong(mip).toULong()
-                            bufferRowLength = 0u
-                            bufferImageHeight = 0u
+                        for (mip in srcImages.mipLevelDataOffset.indices) {
+                            copyRegions[mip.toLong()].apply {
+                                bufferOffset = srcImages.mipLevelDataOffset.getLong(mip).toULong()
+                                bufferRowLength = 0u
+                                bufferImageHeight = 0u
 
-                            imageSubresource {
-                                aspectMask = imageMetadata.dataType.toAspectFlags()
-                                mipLevel = mip.toUInt()
-                                baseArrayLayer = 0u
-                                layerCount = imageMetadata.arrayLayers.toUInt()
-                            }
-                            imageOffset {
-                                x = 0
-                                y = 0
-                                z = 0
-                            }
-                            imageExtent {
-                                width = maxOf(1, imageMetadata.width shr mip).toUInt()
-                                height = maxOf(1, imageMetadata.height shr mip).toUInt()
-                                depth = maxOf(1, imageMetadata.depth shr mip).toUInt()
+                                imageSubresource {
+                                    aspectMask = imageMetadata.dataType.toAspectFlags()
+                                    mipLevel = mip.toUInt()
+                                    baseArrayLayer = 0u
+                                    layerCount = imageMetadata.arrayLayers.toUInt()
+                                }
+                                imageOffset {
+                                    x = 0
+                                    y = 0
+                                    z = 0
+                                }
+                                imageExtent {
+                                    width = maxOf(1, imageMetadata.width shr mip).toUInt()
+                                    height = maxOf(1, imageMetadata.height shr mip).toUInt()
+                                    depth = maxOf(1, imageMetadata.depth shr mip).toUInt()
+                                }
                             }
                         }
+
+                        cmdBuffers[0].cmdCopyBufferToImage(
+                            srcImages.buffer,
+                            dstImage,
+                            VkImageLayout.TRANSFER_DST_OPTIMAL,
+                            srcImages.mipLevelDataOffset.size.toUInt(),
+                            copyRegions.ptr()
+                        )
+                    }
+                }
+                cmdBuffers[0].cmdPipelineBarrier2(dependencyInfo2.ptr())
+                cmdBuffers[0].cmdEndDebugUtilsLabelEXT()
+                cmdBuffers[0].endCommandBuffer()
+
+                val submitInfo1 = VkSubmitInfo.allocate {
+                    waitSemaphores(
+                        pImageAvailableSemaphore,
+                        VkPipelineStageFlags.arrayOf(VkPipelineStageFlags.ALL_COMMANDS)
+                    )
+                    commandBuffers(VkCommandBuffer.arrayOf(cmdBuffers[0]))
+                    signalSemaphores(pCopyFinishedSemaphore)
+                }
+                queue.queueSubmit(
+                    1u,
+                    submitInfo1.ptr(),
+                    inFlightFence
+                )
+            }
+
+            device.waitForFences(1u, fences.ptr(), VK_TRUE, ULong.MAX_VALUE)
+            device.resetFences(1u, fences.ptr())
+            device.deviceWaitIdle()
+
+            Thread.sleep(0)
+            Thread.yield()
+
+            MemoryStack {
+                cmdBuffers[1].beginCommandBuffer(beginInfo.ptr())
+                cmdBuffers[1].cmdBeginDebugUtilsLabelEXT(replayLabel.ptr())
+                cmdBuffers[1].cmdBindPipeline(VkPipelineBindPoint.COMPUTE, pipelineInfo.pipeline)
+
+                val pDescriptorSets = VkDescriptorSet.arrayOf(*pipelineInfo.descriptorInfo.descriptorSets.toTypedArray())
+                cmdBuffers[1].cmdBindDescriptorSets(
+                    VkPipelineBindPoint.COMPUTE,
+                    pipelineInfo.pipelineLayout,
+                    0u,
+                    pipelineInfo.descriptorInfo.descriptorSets.size.toUInt(),
+                    pDescriptorSets.ptr(),
+                    0u,
+                    nullptr()
+                )
+
+                // Replay commands
+                when (val command = captureData.metadata.command) {
+                    is Command.DispatchIndirectCommand -> {
+                        cmdBuffers[1].cmdDispatchIndirect(
+                            resource.bufferList[command.bufferIndex].gpu,
+                            command.offset.toULong()
+                        )
                     }
 
-                    cmdBuffer.cmdCopyBufferToImage(
-                        srcImages.buffer,
-                        dstImage,
-                        VkImageLayout.TRANSFER_DST_OPTIMAL,
-                        srcImages.mipLevelDataOffset.size.toUInt(),
-                        copyRegions.ptr()
+                    is Command.DispatchCommand -> {
+                        cmdBuffers[1].cmdDispatch(command.x.toUInt(), command.y.toUInt(), command.z.toUInt())
+                    }
+                }
+                cmdBuffers[1].cmdEndDebugUtilsLabelEXT()
+                cmdBuffers[1].endCommandBuffer()
+
+                val submitInfo2 = VkSubmitInfo.allocate {
+                    waitSemaphores(
+                        pCopyFinishedSemaphore,
+                        VkPipelineStageFlags.arrayOf(VkPipelineStageFlags.ALL_COMMANDS)
                     )
+                    commandBuffers(VkCommandBuffer.arrayOf(cmdBuffers[1]))
+                    signalSemaphores(pRenderFinishedSemaphore)
                 }
-            }
-            cmdBuffer.cmdPipelineBarrier2(dependencyInfo2.ptr())
-            cmdBuffer.cmdEndDebugUtilsLabelEXT()
-            cmdBuffer.cmdBeginDebugUtilsLabelEXT(replayLabel.ptr())
-            cmdBuffer.cmdBindPipeline(VkPipelineBindPoint.COMPUTE, pipelineInfo.pipeline)
-
-            val pDescriptorSets = VkDescriptorSet.arrayOf(*pipelineInfo.descriptorInfo.descriptorSets.toTypedArray())
-            cmdBuffer.cmdBindDescriptorSets(
-                VkPipelineBindPoint.COMPUTE,
-                pipelineInfo.pipelineLayout,
-                0u,
-                pipelineInfo.descriptorInfo.descriptorSets.size.toUInt(),
-                pDescriptorSets.ptr(),
-                0u,
-                nullptr()
-            )
-
-            // Replay commands
-            when (val command = captureData.metadata.command) {
-                is Command.DispatchIndirectCommand -> {
-                    cmdBuffer.cmdDispatchIndirect(
-                        resource.bufferList[command.bufferIndex].gpu,
-                        command.offset.toULong()
-                    )
-                }
-
-                is Command.DispatchCommand -> {
-                    cmdBuffer.cmdDispatch(command.x.toUInt(), command.y.toUInt(), command.z.toUInt())
-                }
-            }
-            cmdBuffer.cmdEndDebugUtilsLabelEXT()
-            cmdBuffer.endCommandBuffer()
-
-            val submitInfo = VkSubmitInfo.allocate {
-                waitSemaphores(
-                    pImageAvailableSemaphore,
-                    VkPipelineStageFlags.arrayOf(VkPipelineStageFlags.ALL_COMMANDS)
+                queue.queueSubmit(
+                    1u,
+                    submitInfo2.ptr(),
+                    inFlightFence
                 )
-                commandBuffers(pCommandBuffer)
-                signalSemaphores(pRenderFinishedSemaphore)
             }
-            queue.queueSubmit(
-                1u,
-                submitInfo.ptr(),
-                inFlightFence
-            )
         }
     }
 
