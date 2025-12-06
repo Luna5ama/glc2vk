@@ -6,6 +6,7 @@ import net.echonolix.caelum.glfw.consts.GLFW_CLIENT_API
 import net.echonolix.caelum.glfw.consts.GLFW_FALSE
 import net.echonolix.caelum.glfw.consts.GLFW_NO_API
 import net.echonolix.caelum.glfw.consts.GLFW_RESIZABLE
+import net.echonolix.caelum.glfw.consts.GLFW_TRUE
 import net.echonolix.caelum.glfw.functions.*
 import net.echonolix.caelum.vulkan.*
 import net.echonolix.caelum.vulkan.enums.*
@@ -59,7 +60,6 @@ fun main(args: Array<String>) {
     check(args.size == 1) { "Expected 1 argument: <path to capture>" }
     val capturePath = Path(args[0])
     check(capturePath.exists()) { "Capture file does not exist: $capturePath" }
-    val captureData = CaptureData.load(capturePath)
 
     loadLibrary("glfw3")
 
@@ -258,6 +258,7 @@ fun main(args: Array<String>) {
             }
         }
 
+        val captureData = CaptureData.load(capturePath)
         val replayInstance = ReplayInstance(
             captureData,
             device,
@@ -267,6 +268,11 @@ fun main(args: Array<String>) {
 
         replayInstance.init(graphicsQueue)
         device.deviceWaitIdle()
+
+        var focused = true
+        glfwSetWindowFocusCallback(window) { _, focus ->
+            focused = focus == GLFW_TRUE
+        }
 
         while (glfwWindowShouldClose(window) == GLFW_FALSE) {
             glfwPollEvents()
@@ -296,6 +302,9 @@ fun main(args: Array<String>) {
                 graphicsQueue.queuePresentKHR(presentInfo.ptr())
             }
             device.deviceWaitIdle()
+            if (!focused) {
+                Thread.sleep(500)
+            }
         }
 
         device.deviceWaitIdle()
