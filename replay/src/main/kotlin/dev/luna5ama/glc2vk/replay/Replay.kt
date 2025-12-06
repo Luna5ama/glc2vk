@@ -19,6 +19,7 @@ import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.Path
+import kotlin.io.path.createDirectories
 import kotlin.io.path.exists
 import kotlin.io.path.pathString
 
@@ -42,6 +43,7 @@ private fun loadLibrary(libName: String) {
         libraryPath.path
     } else {
         val dst = tempLibDir.resolve(libraryFileName)
+        tempLibDir.createDirectories()
         if (!dst.exists()) {
             libraryPath.openStream().use {
                 Files.copy(it, dst)

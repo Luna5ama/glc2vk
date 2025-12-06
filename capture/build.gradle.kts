@@ -12,6 +12,7 @@ dependencies {
     implementation(libs.kotlinxSerializationCore)
     implementation(libs.kmogus.core)
     implementation(libs.fastutil)
+    implementation(libs.bundles.glWrapper)
 
     testImplementation(kotlin("test"))
 }

@@ -8,7 +8,6 @@ dependencies {
     api(libs.kotlinxSerializationCore)
     implementation(libs.kotlinxSerializationJson)
 
-    api(libs.bundles.glWrapper)
     api(libs.kmogus.core)
     implementation(libs.commons.compress)
 }
