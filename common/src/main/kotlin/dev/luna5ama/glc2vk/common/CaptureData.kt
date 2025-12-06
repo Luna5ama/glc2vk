@@ -146,7 +146,7 @@ class CaptureData(
 
     companion object {
         fun save(outputPath: Path, capture: CaptureData, block: () -> Unit) {
-//            thread(true) {
+            thread(true) {
                 try {
                     println("Saving resource capture")
                     @OptIn(ExperimentalSerializationApi::class)
@@ -209,7 +209,7 @@ class CaptureData(
                 }
 
                 block()
-//            }
+            }
         }
 
         fun load(inputPath: Path): CaptureData {
