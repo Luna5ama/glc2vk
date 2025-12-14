@@ -57,9 +57,11 @@ private fun loadLibrary(libName: String) {
 }
 
 fun main(args: Array<String>) {
-    check(args.size == 1) { "Expected 1 argument: <path to capture>" }
+    check(args.isNotEmpty()) { "Expected at least 1 argument: <path to capture>" }
     val capturePath = Path(args[0])
     check(capturePath.exists()) { "Capture file does not exist: $capturePath" }
+
+    val exitDelay = args.getOrNull(1)?.toLongOrNull() ?: Long.MAX_VALUE
 
     loadLibrary("glfw3")
 
@@ -274,8 +276,13 @@ fun main(args: Array<String>) {
             focused = focus == GLFW_TRUE
         }
 
+        var frameCount = 0
+
         while (glfwWindowShouldClose(window) == GLFW_FALSE) {
             glfwPollEvents()
+            if (frameCount++ >= exitDelay) {
+                break
+            }
             MemoryStack {
                 device.waitForFences(1u, replayInstance.fences.ptr(), VK_TRUE, ULong.MAX_VALUE)
                 device.resetFences(1u, replayInstance.fences.ptr())
@@ -325,7 +332,7 @@ fun main(args: Array<String>) {
     }
 }
 
-public inline fun <R> Path.useMapped(crossinline block: (NArray<NUInt8>) -> R): R {
+inline fun <R> Path.useMapped(crossinline block: (NArray<NUInt8>) -> R): R {
     return try {
         FileChannel.open(this).use { fileChannel ->
             Arena.ofConfined().use { arena ->
@@ -344,177 +351,3 @@ public inline fun <R> Path.useMapped(crossinline block: (NArray<NUInt8>) -> R): 
         }
     }
 }
-
-context(_: MemoryStack)
-@OptIn(UnsafeAPI::class)
-private fun makePipeline(
-    vkTestShaderModule: VkShaderModule,
-    swapchainExtent: NPointer<VkExtent2D>,
-    device: VkDevice,
-    swapchainImageFormat: VkFormat
-): Triple<VkPipelineLayout, VkRenderPass, VkPipeline> {
-    MemoryStack {
-        val shaderStages = VkPipelineShaderStageCreateInfo.allocate(2)
-        shaderStages[0].apply {
-            stage = VkShaderStageFlags.VERTEX
-            module = vkTestShaderModule
-            pName = "vertexMain".c_str()
-        }
-        shaderStages[1].apply {
-            stage = VkShaderStageFlags.FRAGMENT
-            module = vkTestShaderModule
-            pName = "fragmentMain".c_str()
-        }
-
-        val vertexInputStateCreateInfo = VkPipelineVertexInputStateCreateInfo.allocate {
-            vertexBindingDescriptionCount = 0u
-            pVertexBindingDescriptions = nullptr()
-            vertexAttributeDescriptionCount = 0u
-            pVertexAttributeDescriptions = nullptr()
-        }
-
-        val inputAssemblyStateCreateInfo = VkPipelineInputAssemblyStateCreateInfo.allocate {
-            topology = VkPrimitiveTopology.TRIANGLE_LIST
-            primitiveRestartEnable = 0u
-        }
-
-        val viewport = VkViewport.allocate()
-        viewport.x = 0.0f
-        viewport.y = 0.0f
-        viewport.width = swapchainExtent.width.toFloat()
-        viewport.height = swapchainExtent.height.toFloat()
-        viewport.minDepth = 0.0f
-        viewport.maxDepth = 1.0f
-
-        val scissor = VkRect2D.allocate()
-        scissor.offset.x = 0
-        scissor.offset.y = 0
-        scissor.extent = swapchainExtent
-
-        val viewportStateCreateInfo = VkPipelineViewportStateCreateInfo.allocate {
-            viewportCount = 1u
-            pViewports = viewport.ptr()
-            scissorCount = 1u
-            pScissors = scissor.ptr()
-        }
-
-        val rasterizationStateCreateInfo = VkPipelineRasterizationStateCreateInfo.allocate {
-            depthClampEnable = VK_FALSE
-            rasterizerDiscardEnable = VK_FALSE
-            polygonMode = VkPolygonMode.FILL
-            lineWidth = 1f
-            cullMode = VkCullModeFlags.NONE
-            frontFace = VkFrontFace.CLOCKWISE
-            depthBiasEnable = VK_FALSE
-            depthBiasConstantFactor = 0.0f // Optional
-            depthBiasClamp = 0.0f // Optional
-            depthBiasSlopeFactor = 0.0f // Optional
-        }
-
-        val multisampleStateCreateInfo = VkPipelineMultisampleStateCreateInfo.allocate {
-            sampleShadingEnable = VK_FALSE
-            rasterizationSamples = VkSampleCountFlags.`1_BIT`
-            minSampleShading = 1.0f // Optional
-            pSampleMask = nullptr() // Optional
-            alphaToCoverageEnable = VK_FALSE // Optional
-            alphaToOneEnable = VK_FALSE // Optional
-        }
-
-        val colorBlendAttachmentState = VkPipelineColorBlendAttachmentState.allocate {
-            colorWriteMask =
-                VkColorComponentFlags.R + VkColorComponentFlags.G + VkColorComponentFlags.B + VkColorComponentFlags.A
-            blendEnable = VK_FALSE
-            srcColorBlendFactor = VkBlendFactor.ONE // Optional
-            dstColorBlendFactor = VkBlendFactor.ZERO // Optional
-            colorBlendOp = VkBlendOp.ADD // Optional
-            srcAlphaBlendFactor = VkBlendFactor.ONE // Optional
-            dstAlphaBlendFactor = VkBlendFactor.ZERO // Optional
-            alphaBlendOp = VkBlendOp.ADD // Optional
-        }
-
-        val colorBlendState = VkPipelineColorBlendStateCreateInfo.allocate {
-            logicOpEnable = VK_FALSE
-            logicOp = VkLogicOp.COPY // Optional
-            attachmentCount = 1u
-            pAttachments = colorBlendAttachmentState.ptr()
-            blendConstants[0] = 0.0f // Optional
-            blendConstants[1] = 0.0f // Optional
-            blendConstants[2] = 0.0f // Optional
-            blendConstants[3] = 0.0f // Optional
-        }
-
-        val pipelineLayoutCreateInfo = VkPipelineLayoutCreateInfo.allocate {
-            setLayoutCount = 0u // Optional
-            pSetLayouts = nullptr() // Optional
-            pushConstantRangeCount = 0u // Optional
-            pPushConstantRanges = nullptr() // Optional
-        }
-
-        val pipelineLayout = device.createPipelineLayout(pipelineLayoutCreateInfo.ptr(), null).getOrThrow()
-
-        val colorAttachment = VkAttachmentDescription.allocate {
-            format = swapchainImageFormat
-            samples = VkSampleCountFlags.`1_BIT`
-            loadOp = VkAttachmentLoadOp.CLEAR
-            storeOp = VkAttachmentStoreOp.STORE
-            stencilLoadOp = VkAttachmentLoadOp.DONT_CARE
-            stencilStoreOp = VkAttachmentStoreOp.DONT_CARE
-            initialLayout = VkImageLayout.UNDEFINED
-            finalLayout = VkImageLayout.PRESENT_SRC_KHR
-        }
-
-        val colorAttachmentRef = VkAttachmentReference.allocate {
-            attachment = 0u
-            layout = VkImageLayout.COLOR_ATTACHMENT_OPTIMAL
-        }
-
-        val subpass = VkSubpassDescription.allocate {
-            pipelineBindPoint = VkPipelineBindPoint.GRAPHICS
-            colorAttachmentCount = 1u
-            pColorAttachments = colorAttachmentRef.ptr()
-        }
-
-        val subpassDependency = VkSubpassDependency.allocate {
-            srcSubpass = VK_SUBPASS_EXTERNAL
-            dstSubpass = 0u
-            srcStageMask = VkPipelineStageFlags.COLOR_ATTACHMENT_OUTPUT
-            srcAccessMask = VkAccessFlags.NONE
-            dstStageMask = VkPipelineStageFlags.COLOR_ATTACHMENT_OUTPUT
-            dstAccessMask = VkAccessFlags.COLOR_ATTACHMENT_WRITE
-        }
-
-        val renderPassCreateInfo = VkRenderPassCreateInfo.allocate {
-            attachmentCount = 1u
-            pAttachments = colorAttachment.ptr()
-            subpassCount = 1u
-            pSubpasses = subpass.ptr()
-            dependencyCount = 1u
-            pDependencies = subpassDependency.ptr()
-        }
-
-        val renderPass = device.createRenderPass(renderPassCreateInfo.ptr(), null).getOrThrow()
-
-        val pipelineCreateInfo = VkGraphicsPipelineCreateInfo.allocate {
-            stageCount = 2u
-            pStages = shaderStages.ptr()
-            pVertexInputState = vertexInputStateCreateInfo.ptr()
-            pInputAssemblyState = inputAssemblyStateCreateInfo.ptr()
-            pViewportState = viewportStateCreateInfo.ptr()
-            pRasterizationState = rasterizationStateCreateInfo.ptr()
-            pMultisampleState = multisampleStateCreateInfo.ptr()
-            pDepthStencilState = nullptr()
-            pColorBlendState = colorBlendState.ptr()
-            pDynamicState = nullptr()
-            layout = pipelineLayout
-            this.renderPass = renderPass
-            this.subpass = 0u
-        }
-
-
-        val pipeline = device.createGraphicsPipelines(
-            VkPipelineCache.fromNativeData(device, 0L), 1u, pipelineCreateInfo.ptr(), null
-        ).getOrThrow()
-        return Triple(pipelineLayout, renderPass, pipeline)
-    }
-}
-
