@@ -264,7 +264,7 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
 
     fun getBufferIndex(bufferID: Int): Int {
         MemoryStack {
-            val temp = malloc(8L)
+            val temp = malloc(TEMP_SIZE)
             val tempPtr = temp.ptr
             if (bufferIDToIndex.putIfAbsent(bufferID, buffers.size) == null) {
                 glGetNamedBufferParameteriv(bufferID, GL_BUFFER_SIZE, tempPtr)
@@ -365,7 +365,7 @@ private fun CaptureContext.captureDefaultUniformBlock() {
                                 glGetnUniformiv(
                                     resourceManager.programID,
                                     uniformResource.location,
-                                    uniformResource.arraySize,
+                                    uniformResource.arraySize * 4,
                                     dstPtr
                                 )
                             }
@@ -374,7 +374,7 @@ private fun CaptureContext.captureDefaultUniformBlock() {
                                 glGetnUniformuiv(
                                     resourceManager.programID,
                                     uniformResource.location,
-                                    uniformResource.arraySize,
+                                    uniformResource.arraySize * 4,
                                     dstPtr
                                 )
                             }
@@ -383,7 +383,7 @@ private fun CaptureContext.captureDefaultUniformBlock() {
                                 glGetnUniformfv(
                                     resourceManager.programID,
                                     uniformResource.location,
-                                    uniformResource.arraySize,
+                                    uniformResource.arraySize * 4,
                                     dstPtr
                                 )
                             }
@@ -392,7 +392,7 @@ private fun CaptureContext.captureDefaultUniformBlock() {
                                 glGetnUniformdv(
                                     resourceManager.programID,
                                     uniformResource.location,
-                                    uniformResource.arraySize,
+                                    uniformResource.arraySize * 8,
                                     dstPtr
                                 )
                             }
@@ -828,3 +828,4 @@ fun captureGlDispatchComputeIndirect(shaderInfo: ShaderInfo, outputPath: Path, i
     glFinish()
     glDispatchComputeIndirect(indirect)
 }
+
