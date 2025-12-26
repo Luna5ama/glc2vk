@@ -283,34 +283,35 @@ fun main(args: Array<String>) {
             if (frameCount++ >= exitDelay) {
                 break
             }
-            MemoryStack {
-                device.waitForFences(1u, replayInstance.fences.ptr(), VK_TRUE, ULong.MAX_VALUE)
-                device.resetFences(1u, replayInstance.fences.ptr())
-
-                val pImageIndex = NUInt32.malloc(1)
-                device.acquireNextImageKHR(
-                    swapchain,
-                    ULong.MAX_VALUE,
-                    replayInstance.imageAvailableSemaphore,
-                    VkFence.fromNativeData(device, 0L),
-                    pImageIndex.ptr()
-                )
-
-                replayInstance.execute(
-                    graphicsQueue,
-                    swapchainImages[pImageIndex[0].toInt()]
-                )
-
-                val presentInfo = VkPresentInfoKHR.allocate {
-                    waitSemaphores(replayInstance.pRenderFinishedSemaphore)
-                    val dummy = VkResult.malloc(1)
-                    swapchains(VkSwapchainKHR.arrayOf(swapchain), pImageIndex, dummy)
-                }
-                graphicsQueue.queuePresentKHR(presentInfo.ptr())
-            }
-            device.deviceWaitIdle()
             if (!focused) {
-                Thread.sleep(500)
+                Thread.sleep(50)
+            } else {
+                MemoryStack {
+                    device.waitForFences(1u, replayInstance.fences.ptr(), VK_TRUE, ULong.MAX_VALUE)
+                    device.resetFences(1u, replayInstance.fences.ptr())
+
+                    val pImageIndex = NUInt32.malloc(1)
+                    device.acquireNextImageKHR(
+                        swapchain,
+                        ULong.MAX_VALUE,
+                        replayInstance.imageAvailableSemaphore,
+                        VkFence.fromNativeData(device, 0L),
+                        pImageIndex.ptr()
+                    )
+
+                    replayInstance.execute(
+                        graphicsQueue,
+                        swapchainImages[pImageIndex[0].toInt()]
+                    )
+
+                    val presentInfo = VkPresentInfoKHR.allocate {
+                        waitSemaphores(replayInstance.pRenderFinishedSemaphore)
+                        val dummy = VkResult.malloc(1)
+                        swapchains(VkSwapchainKHR.arrayOf(swapchain), pImageIndex, dummy)
+                    }
+                    graphicsQueue.queuePresentKHR(presentInfo.ptr())
+                }
+                device.deviceWaitIdle()
             }
         }
 
