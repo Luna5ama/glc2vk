@@ -242,38 +242,42 @@ class ReplayInstance(
             }
         }
 
-        val imageStagingBufferDeviceMemory = resource.allocateDeviceMemory(
-            imageSubAllocator,
-            memoryTypes.stagingFast,
-            0.0f
-        )
+        val imageStagingBufferDeviceMemory = if (imageBufferList.isNotEmpty()) {
+            val imageStagingBufferDeviceMemory =resource.allocateDeviceMemory(
+                imageSubAllocator,
+                memoryTypes.stagingFast,
+                0.0f
+            )
 
-        val temp = NPointer.malloc<NUInt8>(1)
-        @Suppress("UNCHECKED_CAST")
-        device.mapMemory(
-            imageStagingBufferDeviceMemory, 0UL, VK_WHOLE_SIZE, VkMemoryMapFlags.NONE,
-            temp.ptr() as NPointer<NPointer<*>>
-        ).getOrThrow()
+            val temp = NPointer.malloc<NUInt8>(1)
+            @Suppress("UNCHECKED_CAST")
+            device.mapMemory(
+                imageStagingBufferDeviceMemory, 0UL, VK_WHOLE_SIZE, VkMemoryMapFlags.NONE,
+                temp.ptr() as NPointer<NPointer<*>>
+            ).getOrThrow()
 
-        val mappedPtr = temp[0]
+            val mappedPtr = temp[0]
 
-        captureData.imageData.forEachIndexed { imageIndex, imageData ->
-            val bufferOffset = imageStagingBufferSubAllocationOffsets.getLong(imageIndex)
-            val offsetInBuffer = imageBufferList[imageIndex].mipLevelDataOffset
-            imageData.levels.forEachIndexed { levelIndex, levelData ->
-                val offset = bufferOffset + offsetInBuffer.getLong(levelIndex)
-                val dataWrapped = NPointer<NUInt8>(levelData.ptr.address)
-                dataWrapped.copyTo(mappedPtr + offset, levelData.len)
+            captureData.imageData.forEachIndexed { imageIndex, imageData ->
+                val bufferOffset = imageStagingBufferSubAllocationOffsets.getLong(imageIndex)
+                val offsetInBuffer = imageBufferList[imageIndex].mipLevelDataOffset
+                imageData.levels.forEachIndexed { levelIndex, levelData ->
+                    val offset = bufferOffset + offsetInBuffer.getLong(levelIndex)
+                    val dataWrapped = NPointer<NUInt8>(levelData.ptr.address)
+                    dataWrapped.copyTo(mappedPtr + offset, levelData.len)
+                }
             }
+
+            device.unmapMemory(imageStagingBufferDeviceMemory)
+
+            resource.bindMemoryForBuffers(
+                imageStagingBufferDeviceMemory,
+                imageBufferList.map { it.buffer },
+                imageStagingBufferSubAllocationOffsets
+            )
+        } else {
+            null
         }
-
-        device.unmapMemory(imageStagingBufferDeviceMemory)
-
-        resource.bindMemoryForBuffers(
-            imageStagingBufferDeviceMemory,
-            imageBufferList.map { it.buffer },
-            imageStagingBufferSubAllocationOffsets
-        )
 
         MemoryStack {
             device.waitForFences(1u, fences.ptr(), VK_TRUE, ULong.MAX_VALUE)
@@ -394,7 +398,10 @@ class ReplayInstance(
             imageBufferList.forEach {
                 device.destroyBuffer(it.buffer, null)
             }
-            device.freeMemory(imageStagingBufferDeviceMemory, null)
+
+            if (imageStagingBufferDeviceMemory != null) {
+                device.freeMemory(imageStagingBufferDeviceMemory, null)
+            }
         }
     }
 
