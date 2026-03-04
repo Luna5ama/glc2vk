@@ -358,7 +358,12 @@ private fun CaptureContext.captureDefaultUniformBlock() {
                     if (uniformResource.arraySize > 1) {
                         when (it.type) {
                             is UniformType.Bool -> {
-                                throw UnsupportedOperationException("Boolean uniforms are not supported")
+                                glGetnUniformiv(
+                                    resourceManager.programID,
+                                    uniformResource.location,
+                                    uniformResource.arraySize * 4,
+                                    dstPtr
+                                )
                             }
 
                             is UniformType.Int -> {
@@ -404,7 +409,7 @@ private fun CaptureContext.captureDefaultUniformBlock() {
                     } else {
                         when (it.type) {
                             is UniformType.Bool -> {
-                                throw UnsupportedOperationException("Boolean uniforms are not supported")
+                                glGetUniformiv(resourceManager.programID, uniformResource.location, dstPtr)
                             }
 
                             is UniformType.Int -> {
@@ -431,7 +436,7 @@ private fun CaptureContext.captureDefaultUniformBlock() {
                 }
 
                 when (it.type) {
-                    GLSLDataType.Int, GLSLDataType.UInt, GLSLDataType.Float -> {
+                    GLSLDataType.Int, GLSLDataType.Bool, GLSLDataType.UInt, GLSLDataType.Float -> {
                         getData(scalar(32))
                     }
 
@@ -439,15 +444,15 @@ private fun CaptureContext.captureDefaultUniformBlock() {
                         getData(scalar(64))
                     }
 
-                    GLSLDataType.IVec2, GLSLDataType.UVec2, GLSLDataType.Vec2 -> {
+                    GLSLDataType.BVec2, GLSLDataType.IVec2, GLSLDataType.UVec2, GLSLDataType.Vec2 -> {
                         getData(vector(2, 32))
                     }
 
-                    GLSLDataType.IVec3, GLSLDataType.UVec3, GLSLDataType.Vec3 -> {
+                    GLSLDataType.BVec3, GLSLDataType.IVec3, GLSLDataType.UVec3, GLSLDataType.Vec3 -> {
                         getData(vector(3, 32))
                     }
 
-                    GLSLDataType.IVec4, GLSLDataType.UVec4, GLSLDataType.Vec4 -> {
+                    GLSLDataType.BVec4, GLSLDataType.IVec4, GLSLDataType.UVec4, GLSLDataType.Vec4 -> {
                         getData(vector(4, 32))
                     }
 
