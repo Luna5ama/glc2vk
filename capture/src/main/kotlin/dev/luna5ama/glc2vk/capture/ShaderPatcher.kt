@@ -8,7 +8,7 @@ private const val INDENT = "\t"
 private val LINE_COMMENT_REGEX = """//.*?$""".toRegex(RegexOption.MULTILINE)
 private val BLOCK_COMMENT_REGEX = """/\*.*?\*/""".toRegex(RegexOption.DOT_MATCHES_ALL)
 
-private val TOKEN_DELIMITER_REGEX = """\s+|(?=[{}()\[\];,.])|(?<=[{}()\[\];,.])""".toRegex()
+private val TOKEN_DELIMITER_REGEX = """\s+|(?<=[()\[\]{};,.+\-*/%<>!&|^?:=])(?![()\[\]{};,.+\-*/%<>!&|^?:=])|(?<![()\[\]{};,.+\-*/%<>!&|^?:=])(?=[()\[\]{};,.+\-*/%<>!&|^?:=])""".toRegex()
 private val NON_TOKEN_REGEX = """[\w_]+""".toRegex()
 private val UNIFORM_REGEX =
     """^((?:layout\(.+?\))?)\s*((?:${NON_TOKEN_REGEX.pattern}\s+)*?)uniform\s+((?:${NON_TOKEN_REGEX.pattern}\s+)*?)(\S+)\s+(\S+)\s*;\s*""".toRegex(
@@ -23,7 +23,7 @@ private val UBO_REGEX =
         RegexOption.MULTILINE
     )
 private val CONST_REGEX =
-    """^const\s+(\S+)\s+(\S+)\s*=\s*(.+?)\s*;\s*""".toRegex(
+    """^const\s+(\S+)\s+(${NON_TOKEN_REGEX.pattern})\s*(\[\d*])?\s*=\s*([\s\S]+?)\s*;\s*""".toRegex(
         RegexOption.MULTILINE
     )
 
@@ -224,6 +224,7 @@ class ShaderSourceContext(val originalSource: String) {
             val (_, name, _) = it.destructured
 
             if (!checkUsage(name)) {
+                println(name)
                 // Not used, remove
                 return@replace ""
             }
