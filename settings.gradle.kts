@@ -16,6 +16,7 @@ listOf(
     "common",
     "capture",
     "replay-vk",
+    "replay-gl",
 ).map {
     "${rootProject.name}-$it" to file(it)
 }.forEach { (name, dir) ->
