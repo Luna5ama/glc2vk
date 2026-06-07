@@ -15,7 +15,7 @@ pluginManagement {
 listOf(
     "common",
     "capture",
-    "replay",
+    "replay-vk",
 ).map {
     "${rootProject.name}-$it" to file(it)
 }.forEach { (name, dir) ->

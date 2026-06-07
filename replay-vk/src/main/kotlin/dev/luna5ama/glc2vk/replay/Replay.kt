@@ -73,7 +73,7 @@ fun main(args: Array<String>) {
             glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE)
             val width = 800
             val height = 600
-            glfwCreateWindow(width, height, "Vulkan".c_str(), nullptr(), nullptr())
+            glfwCreateWindow(width, height, "glc2vk Vulkan".c_str(), nullptr(), nullptr())
         }
         // endregion
 
