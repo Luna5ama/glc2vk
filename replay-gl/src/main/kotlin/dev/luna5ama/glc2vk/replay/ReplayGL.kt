@@ -1,5 +1,6 @@
 package dev.luna5ama.glc2vk.replay
 
+import dev.luna5ama.glc2vk.common.CaptureData
 import dev.luna5ama.glwrapper.base.glFinish
 import dev.luna5ama.kmogus.Arr
 import dev.luna5ama.kmogus.MemoryStack
@@ -44,7 +45,7 @@ fun main(args: Array<String>) {
             glfwWindowHint(GLFW_SAMPLES, 0)
             val width = 800
             val height = 600
-            glfwCreateWindow(width, height, "glc2vk Vulkan", 0L, 0L)
+            glfwCreateWindow(width, height, "glc2vk OpenGL", 0L, 0L)
         }
         // endregion
 
@@ -61,20 +62,31 @@ fun main(args: Array<String>) {
         runCatching { GL.create() }
         glCapabilities = GL.createCapabilities()
 
-        while (!glfwWindowShouldClose(window)) {
-            glfwPollEvents()
-            if (frameCount++ >= exitDelay) {
-                break
-            }
-            if (focused) {
-                Thread.sleep(5)
-            } else {
-                Thread.sleep(25)
-            }
-            MemoryStack {
+        val captureData = CaptureData.load(capturePath)
+        val replayInstance = runCatching {
+            GLReplayInstance(captureData, capturePath)
+        }.onFailure {
+            captureData.free()
+        }.getOrThrow()
 
+        try {
+            while (!glfwWindowShouldClose(window)) {
+                glfwPollEvents()
+                if (frameCount++ >= exitDelay) {
+                    break
+                }
+                if (focused) {
+                    Thread.sleep(5)
+                } else {
+                    Thread.sleep(25)
+                }
+                MemoryStack {
+                    replayInstance.execute()
+                }
+                glFinish()
             }
-            glFinish()
+        } finally {
+            replayInstance.destroy()
         }
 
 
