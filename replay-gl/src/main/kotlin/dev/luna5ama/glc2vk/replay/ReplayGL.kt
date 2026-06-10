@@ -82,6 +82,7 @@ fun main(args: Array<String>) {
                     MemoryStack {
                         replayInstance.execute()
                     }
+                    glfwSwapBuffers(window)
                     glFinish()
                     println("Finished OpenGL replay frame $frame")
                 }
@@ -96,6 +97,7 @@ fun main(args: Array<String>) {
                     MemoryStack {
                         replayInstance.execute()
                     }
+                    glfwSwapBuffers(window)
                     glFinish()
                 }
             }

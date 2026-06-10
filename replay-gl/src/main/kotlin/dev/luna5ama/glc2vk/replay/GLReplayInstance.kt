@@ -26,7 +26,7 @@ import java.nio.file.Path
 class GLReplayInstance(
     private val captureData: CaptureData,
     private val capturePath: Path,
-    shaderOverridePath: Path? = null
+    private val shaderOverridePath: Path? = null
 ) {
     private val commands = captureData.metadata.commandsForReplay()
     private val shaderSourceResolver = ShaderSourceResolver(capturePath, shaderOverridePath)
@@ -42,7 +42,9 @@ class GLReplayInstance(
             ).also {
                 it.patchShaderForVulkan()
             }.toShaderInfo()
-        commands.filter { it.shaderIndex() == shaderIndex }.forEach(shaderInfo::validateCapturedBindings)
+        if (shaderOverridePath != null) {
+            commands.filter { it.shaderIndex() == shaderIndex }.forEach(shaderInfo::validateCapturedBindings)
+        }
         loadOpenGLComputeProgram(resolved.source, resolved.path)
     }
     private val resources = runCatching {

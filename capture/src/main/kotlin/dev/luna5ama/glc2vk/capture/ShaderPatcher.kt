@@ -258,7 +258,6 @@ class ShaderSourceContext(val originalSource: String) {
             val (_, name, _) = it.destructured
 
             if (!checkUsage(name)) {
-                println(name)
                 // Not used, remove
                 return@replace ""
             }
