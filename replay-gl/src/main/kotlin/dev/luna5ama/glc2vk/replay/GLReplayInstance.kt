@@ -105,5 +105,5 @@ class GLReplayInstance(
         captureData.free()
     }
 
-    fun bufferId(index: Int): Int = resources.buffers[index].id
+    fun bufferId(index: Int): Int = resources.buffers[index].buffer.id
 }
