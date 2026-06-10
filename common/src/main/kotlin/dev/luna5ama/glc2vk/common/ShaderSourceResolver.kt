@@ -10,12 +10,14 @@ import kotlin.io.path.readText
 
 data class ResolvedShaderSource(
     val source: String,
-    val path: Path
+    val path: Path,
+    val isOverride: Boolean
 )
 
 class ShaderSourceResolver(
     private val captureDir: Path,
-    private val shaderOverridePath: Path?
+    private val shaderOverridePath: Path?,
+    private val shaderPasses: Set<String> = emptySet()
 ) {
     fun resolve(metadata: CaptureMetadata, shaderIndex: Int): ResolvedShaderSource {
         val override = shaderOverridePath
@@ -24,14 +26,21 @@ class ShaderSourceResolver(
         }
 
         if (override.isRegularFile()) {
-            return ResolvedShaderSource(override.readText(), override)
+            return ResolvedShaderSource(override.readText(), override, true)
         }
 
         check(override.isDirectory()) { "Shader override path is neither a file nor a directory: $override" }
 
         val shaderMetadata = metadata.shaderMetadata(shaderIndex)
         val passName = shaderMetadata.passName
-            ?: error("Capture shader $shaderIndex has no passName metadata; cannot resolve from override directory $override")
+            ?: if (shaderPasses.isNotEmpty()) {
+                return resolveCaptured(shaderIndex)
+            } else {
+                error("Capture shader $shaderIndex has no passName metadata; cannot resolve from override directory $override")
+            }
+        if (shaderPasses.isNotEmpty() && passName !in shaderPasses) {
+            return resolveCaptured(shaderIndex)
+        }
 
         val root = override.resolve("shaders").takeIf { it.isDirectory() } ?: override
         val candidate = resolveDirectoryCandidate(root, shaderMetadata, passName)
@@ -42,17 +51,17 @@ class ShaderSourceResolver(
         } else {
             candidate.readText()
         }
-        return ResolvedShaderSource(source, candidate)
+        return ResolvedShaderSource(source, candidate, true)
     }
 
     private fun resolveCaptured(shaderIndex: Int): ResolvedShaderSource {
         val indexed = captureDir.resolve("shader_$shaderIndex.comp.glsl")
         if (indexed.exists()) {
-            return ResolvedShaderSource(indexed.readText(), indexed)
+            return ResolvedShaderSource(indexed.readText(), indexed, false)
         }
         val legacy = captureDir.resolve("shader.comp.glsl")
         check(legacy.exists()) { "Capture shader source does not exist: $indexed or $legacy" }
-        return ResolvedShaderSource(legacy.readText(), legacy)
+        return ResolvedShaderSource(legacy.readText(), legacy, false)
     }
 
     private fun resolveDirectoryCandidate(

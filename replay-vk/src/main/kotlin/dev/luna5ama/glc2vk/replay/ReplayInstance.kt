@@ -22,7 +22,8 @@ class ReplayInstance(
     private val device: VkDevice,
     private val captureDir: Path,
     private val graphicsQueueFamilyIndex: UInt,
-    shaderOverridePath: Path? = null
+    shaderOverridePath: Path? = null,
+    shaderPasses: Set<String> = emptySet()
 ) {
     private val arena = Arena.ofShared()
     private val scope = arena.asAllocateScope()
@@ -52,7 +53,7 @@ class ReplayInstance(
 
     val resource: ReplayResource
     private val replayCommands = captureData.metadata.commandsForReplay()
-    private val shaderCompiler = ReplayShaderCompiler(captureData, captureDir, shaderOverridePath)
+    private val shaderCompiler = ReplayShaderCompiler(captureData, captureDir, shaderOverridePath, shaderPasses)
     private val pipelineInfos: List<ComputePipelineInfo>
 
     init {

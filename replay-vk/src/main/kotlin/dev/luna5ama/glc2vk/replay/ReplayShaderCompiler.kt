@@ -15,10 +15,10 @@ import kotlin.io.path.writeText
 class ReplayShaderCompiler(
     private val captureData: CaptureData,
     private val captureDir: Path,
-    shaderOverridePath: Path?
+    shaderOverridePath: Path?,
+    shaderPasses: Set<String> = emptySet()
 ) {
-    private val useCapturedSpv = shaderOverridePath == null
-    private val resolver = ShaderSourceResolver(captureDir, shaderOverridePath)
+    private val resolver = ShaderSourceResolver(captureDir, shaderOverridePath, shaderPasses)
     private val tempDir = Files.createTempDirectory("glc2vk-replay-vk-shaders-")
     private val compiledShaders = mutableMapOf<Int, Path>()
     private val shaderInfos = mutableMapOf<Int, dev.luna5ama.glc2vk.capture.ShaderInfo>()
@@ -27,13 +27,13 @@ class ReplayShaderCompiler(
         val shaderIndex = command.shaderIndex()
         val capturedSpv = captureDir.resolve("shader_$shaderIndex.comp.spv").takeIf { it.exists() }
             ?: captureDir.resolve("shader.comp.spv").takeIf { it.exists() }
-        if (useCapturedSpv && capturedSpv != null) {
-            return capturedSpv
-        }
 
         val shaderInfo = shaderInfos.getOrPut(shaderIndex) {
             val shaderMetadata = captureData.metadata.shaderMetadata(shaderIndex)
             val resolved = resolver.resolve(captureData.metadata, shaderIndex)
+            if (!resolved.isOverride && capturedSpv != null) {
+                return capturedSpv
+            }
             ShaderSourceContext(resolved.source)
                 .setIdentity(
                     passName = shaderMetadata.passName,

@@ -267,7 +267,8 @@ fun main(args: Array<String>) {
             device,
             capturePath,
             graphicsQueueFamilyIndex.toUInt(),
-            options.shaderPath
+            options.shaderPath,
+            options.shaderPasses
         )
 
         replayInstance.init(graphicsQueue)

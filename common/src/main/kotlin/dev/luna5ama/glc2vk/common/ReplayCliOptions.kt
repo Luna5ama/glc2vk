@@ -6,7 +6,8 @@ import kotlin.io.path.Path
 data class ReplayCliOptions(
     val capturePath: Path,
     val frameLimit: Long?,
-    val shaderPath: Path?
+    val shaderPath: Path?,
+    val shaderPasses: Set<String>
 )
 
 fun parseReplayCliOptions(args: Array<String>): ReplayCliOptions {
@@ -14,12 +15,19 @@ fun parseReplayCliOptions(args: Array<String>): ReplayCliOptions {
 
     var frameLimit: Long? = null
     var shaderPath: Path? = null
+    val shaderPasses = linkedSetOf<String>()
     var index = 1
     while (index < args.size) {
         when (val arg = args[index]) {
             "--shader-path", "--shader-root" -> {
                 check(index + 1 < args.size) { "$arg requires a path argument" }
                 shaderPath = Path(args[index + 1])
+                index += 2
+            }
+
+            "--shader-pass" -> {
+                check(index + 1 < args.size) { "$arg requires a pass name argument" }
+                shaderPasses += args[index + 1]
                 index += 2
             }
 
@@ -36,6 +44,7 @@ fun parseReplayCliOptions(args: Array<String>): ReplayCliOptions {
     return ReplayCliOptions(
         capturePath = Path(args[0]),
         frameLimit = frameLimit,
-        shaderPath = shaderPath
+        shaderPath = shaderPath,
+        shaderPasses = shaderPasses
     )
 }

@@ -69,7 +69,7 @@ fun main(args: Array<String>) {
         val captureData = CaptureData.load(capturePath)
         println("Creating OpenGL replay instance")
         val replayInstance = runCatching {
-            GLReplayInstance(captureData, capturePath, options.shaderPath)
+            GLReplayInstance(captureData, capturePath, options.shaderPath, options.shaderPasses)
         }.onFailure {
             captureData.free()
         }.getOrThrow()
