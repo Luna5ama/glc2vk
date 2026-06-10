@@ -15,6 +15,7 @@ repositories {
 
 dependencies {
     implementation(project(":glc2vk-common"))
+    implementation(project(":glc2vk-capture"))
 
     implementation(libs.kotlinxSerializationCore)
     implementation(libs.fastutil)

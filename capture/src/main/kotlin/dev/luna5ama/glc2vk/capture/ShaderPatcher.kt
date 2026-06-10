@@ -1,5 +1,11 @@
 package dev.luna5ama.glc2vk.capture
 
+import dev.luna5ama.glc2vk.common.Command
+import dev.luna5ama.glc2vk.common.defaultUniformBindings
+import dev.luna5ama.glc2vk.common.imageBindings
+import dev.luna5ama.glc2vk.common.samplerBindings
+import dev.luna5ama.glc2vk.common.storageBufferBindings
+import dev.luna5ama.glc2vk.common.uniformBufferBindings
 import dev.luna5ama.glwrapper.enums.GLSLDataType
 import dev.luna5ama.glwrapper.enums.ImageFormat
 
@@ -46,7 +52,11 @@ data class ShaderInfo(
     val uniforms: Map<String, Uniform>,
     val ssbos: Map<String, Buffer>,
     val ubos: Map<String, Buffer>,
-    val imageTypeOverrides: Map<String, ImageFormat>
+    val imageTypeOverrides: Map<String, ImageFormat>,
+    val passName: String? = null,
+    val programType: String? = null,
+    val sourcePath: String? = null,
+    val stage: String = "compute"
 ) {
     data class Uniform(val name: String, val type: GLSLDataType, val set: Int, val binding: Int)
     data class Buffer(val name: String, val set: Int, val binding: Int)
@@ -54,6 +64,10 @@ data class ShaderInfo(
 
 class ShaderSourceContext(val originalSource: String) {
     var modifiedSource: String = originalSource
+    var passName: String? = null
+    var programType: String? = null
+    var sourcePath: String? = null
+    var stage: String = "compute"
 
     val uniforms = mutableMapOf<String, ShaderInfo.Uniform>()
     val ssbos = mutableMapOf<String, ShaderInfo.Buffer>()
@@ -81,8 +95,26 @@ class ShaderSourceContext(val originalSource: String) {
             uniforms = uniforms,
             ssbos = ssbos,
             ubos = ubos,
-            imageTypeOverrides = imageTypeOverride
+            imageTypeOverrides = imageTypeOverride,
+            passName = passName,
+            programType = programType,
+            sourcePath = sourcePath,
+            stage = stage
         )
+    }
+
+    @JvmOverloads
+    fun setIdentity(
+        passName: String?,
+        programType: String? = null,
+        sourcePath: String? = null,
+        stage: String = "compute"
+    ): ShaderSourceContext {
+        this.passName = passName
+        this.programType = programType
+        this.sourcePath = sourcePath
+        this.stage = stage
+        return this
     }
 
     private fun patchSSBO() {
@@ -247,5 +279,56 @@ class ShaderSourceContext(val originalSource: String) {
         patchUBO()
 
         return modifiedSource.replace("\n", System.lineSeparator())
+    }
+}
+
+fun ShaderInfo.validateCapturedBindings(command: Command) {
+    val missing = mutableListOf<String>()
+    val samplerNames = command.samplerBindings().mapTo(HashSet()) { it.name }
+    val imageNames = command.imageBindings().mapTo(HashSet()) { it.name }
+    val storageBufferNames = command.storageBufferBindings().mapTo(HashSet()) { it.name }
+    val uniformBufferNames = command.uniformBufferBindings().mapTo(HashSet()) { it.name }
+    val defaultUniformNames = command.defaultUniformBindings().mapTo(HashSet()) { it.name }
+
+    uniforms.values.forEach { uniform ->
+        when (uniform.type) {
+            is GLSLDataType.Value -> {
+                if (uniform.name !in defaultUniformNames) {
+                    missing += "default uniform ${uniform.name}"
+                }
+            }
+
+            is GLSLDataType.Opaque.Sampler -> {
+                if (uniform.name !in samplerNames) {
+                    missing += "sampler ${uniform.name}"
+                }
+            }
+
+            is GLSLDataType.Opaque.Image -> {
+                if (uniform.name !in imageNames) {
+                    missing += "image ${uniform.name}"
+                }
+            }
+
+            else -> {
+                missing += "opaque uniform ${uniform.name} (${uniform.type.codeStr})"
+            }
+        }
+    }
+
+    ssbos.values.forEach { buffer ->
+        if (buffer.name !in storageBufferNames) {
+            missing += "storage buffer ${buffer.name}"
+        }
+    }
+    ubos.values.forEach { buffer ->
+        if (buffer.name != "DefaultUniforms" && buffer.name !in uniformBufferNames) {
+            missing += "uniform buffer ${buffer.name}"
+        }
+    }
+
+    check(missing.isEmpty()) {
+        val label = passName?.let { " for pass $it" }.orEmpty()
+        "Replacement shader$label references resources that were not captured: ${missing.joinToString()}"
     }
 }

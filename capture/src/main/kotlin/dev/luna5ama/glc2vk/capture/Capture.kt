@@ -303,7 +303,12 @@ private class CaptureContext {
 
     fun shaderIndex(shaderInfo: ShaderInfo): Int {
         val index = shaderInfos.indexOfFirst {
-            it.originalSource == shaderInfo.originalSource && it.patchedSource == shaderInfo.patchedSource
+            it.originalSource == shaderInfo.originalSource &&
+                it.patchedSource == shaderInfo.patchedSource &&
+                it.passName == shaderInfo.passName &&
+                it.programType == shaderInfo.programType &&
+                it.sourcePath == shaderInfo.sourcePath &&
+                it.stage == shaderInfo.stage
         }
         if (index >= 0) return index
         shaderInfos += shaderInfo
@@ -328,7 +333,15 @@ private class CaptureContext {
             uniformBufferBindings = uniformBufferBindings,
             command = commands.singleOrNull(),
             commands = commands,
-            shaderCount = shaderInfos.size
+            shaderCount = shaderInfos.size,
+            shaders = shaderInfos.map {
+                ShaderMetadata(
+                    passName = it.passName,
+                    programType = it.programType,
+                    sourcePath = it.sourcePath,
+                    stage = it.stage
+                )
+            }
         )
         return CaptureData(
             metadata = metadata,
@@ -970,17 +983,25 @@ fun captureGlDispatchComputeIndirect(shaderInfo: ShaderInfo, outputPath: Path, i
 }
 
 fun captureGlPushDebugGroup(source: Int, id: Int, message: String) {
-    activeCaptureContext?.debugLabelStack?.add(message)
+    captureDebugLabelPush(message)
     glPushDebugGroup(source, id, message)
 }
 
 fun captureGlPopDebugGroup() {
+    captureDebugLabelPop()
+    glPopDebugGroup()
+}
+
+fun captureDebugLabelPush(message: String) {
+    activeCaptureContext?.debugLabelStack?.add(message)
+}
+
+fun captureDebugLabelPop() {
     activeCaptureContext?.debugLabelStack?.let {
         if (it.isNotEmpty()) {
             it.removeAt(it.lastIndex)
         }
     }
-    glPopDebugGroup()
 }
 
 inline fun glDebugGroupCaptureAware(name: String, block: () -> Unit) {

@@ -30,6 +30,10 @@ fun loadOpenGLComputeProgram(shaderPath: Path): Int {
     return compileComputeProgram(source, shaderPath)
 }
 
+fun loadOpenGLComputeProgram(source: String, sourcePath: Path): Int {
+    return compileComputeProgram(source.normalizeVulkanGlslForOpenGL(), sourcePath)
+}
+
 fun String.normalizeVulkanGlslForOpenGL(): String {
     val lines = lineSequence().map { line ->
             if ("layout(" !in line || "set" !in line) {

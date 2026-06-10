@@ -1,6 +1,7 @@
 package dev.luna5ama.glc2vk.replay
 
 import dev.luna5ama.glc2vk.common.CaptureData
+import dev.luna5ama.glc2vk.common.parseReplayCliOptions
 import net.echonolix.caelum.*
 import net.echonolix.caelum.glfw.consts.GLFW_CLIENT_API
 import net.echonolix.caelum.glfw.consts.GLFW_FALSE
@@ -57,11 +58,11 @@ private fun loadLibrary(libName: String) {
 }
 
 fun main(args: Array<String>) {
-    check(args.isNotEmpty()) { "Expected at least 1 argument: <path to capture>" }
-    val capturePath = Path(args[0])
+    val options = parseReplayCliOptions(args)
+    val capturePath = options.capturePath
     check(capturePath.exists()) { "Capture file does not exist: $capturePath" }
 
-    val exitDelay = args.getOrNull(1)?.toLongOrNull() ?: Long.MAX_VALUE
+    val exitDelay = options.frameLimit ?: Long.MAX_VALUE
 
     loadLibrary("glfw3")
 
@@ -265,7 +266,8 @@ fun main(args: Array<String>) {
             captureData,
             device,
             capturePath,
-            graphicsQueueFamilyIndex.toUInt()
+            graphicsQueueFamilyIndex.toUInt(),
+            options.shaderPath
         )
 
         replayInstance.init(graphicsQueue)

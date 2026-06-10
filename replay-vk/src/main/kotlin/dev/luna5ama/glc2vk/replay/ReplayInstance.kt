@@ -5,7 +5,6 @@ import dev.luna5ama.glc2vk.common.Command
 import dev.luna5ama.glc2vk.common.debugLabels
 import dev.luna5ama.glc2vk.common.imageBindings
 import dev.luna5ama.glc2vk.common.samplerBindings
-import dev.luna5ama.glc2vk.common.shaderIndex
 import dev.luna5ama.glc2vk.common.storageBufferBindings
 import dev.luna5ama.glc2vk.common.uniformBufferBindings
 import it.unimi.dsi.fastutil.longs.LongArrayList
@@ -22,7 +21,8 @@ class ReplayInstance(
     private val captureData: CaptureData,
     private val device: VkDevice,
     private val captureDir: Path,
-    private val graphicsQueueFamilyIndex: UInt
+    private val graphicsQueueFamilyIndex: UInt,
+    shaderOverridePath: Path? = null
 ) {
     private val arena = Arena.ofShared()
     private val scope = arena.asAllocateScope()
@@ -52,6 +52,7 @@ class ReplayInstance(
 
     val resource: ReplayResource
     private val replayCommands = captureData.metadata.commandsForReplay()
+    private val shaderCompiler = ReplayShaderCompiler(captureData, captureDir, shaderOverridePath)
     private val pipelineInfos: List<ComputePipelineInfo>
 
     init {
@@ -892,8 +893,7 @@ class ReplayInstance(
     context(_: MemoryStack)
     @OptIn(UnsafeAPI::class)
     private fun makeComputePipeline(command: Command): ComputePipelineInfo = MemoryStack {
-        val shaderPath = captureDir.resolve("shader_${command.shaderIndex()}.comp.spv").takeIf { it.toFile().exists() }
-            ?: captureDir.resolve("shader.comp.spv")
+        val shaderPath = shaderCompiler.shaderPath(command)
         val shaderModule = shaderPath.useMapped { spvData ->
             val createInfo = VkShaderModuleCreateInfo.allocate {
                 codeSize = spvData.count

@@ -133,6 +133,14 @@ data class DefaultUniformBinding(
 )
 
 @Serializable
+data class ShaderMetadata(
+    val passName: String? = null,
+    val programType: String? = null,
+    val sourcePath: String? = null,
+    val stage: String = "compute"
+)
+
+@Serializable
 data class CaptureMetadata(
     val images: List<ImageMetadata>,
     val buffers: List<BufferMetadata>,
@@ -142,7 +150,8 @@ data class CaptureMetadata(
     val uniformBufferBindings: List<BufferBinding>,
     val command: Command? = null,
     val commands: List<Command> = emptyList(),
-    val shaderCount: Int = 1
+    val shaderCount: Int = 1,
+    val shaders: List<ShaderMetadata> = emptyList()
 ) {
     fun commandsForReplay(): List<Command> {
         val sourceCommands = commands.ifEmpty { command?.let(::listOf).orEmpty() }
@@ -154,7 +163,8 @@ data class CaptureMetadata(
                     samplerBindings = samplerBindings,
                     imageBindings = imageBindings,
                     storageBufferBindings = storageBufferBindings,
-                    uniformBufferBindings = uniformBufferBindings
+                    uniformBufferBindings = uniformBufferBindings,
+                    defaultUniformBindings = emptyList()
                 )
             }
         }
@@ -167,6 +177,10 @@ data class CaptureMetadata(
     fun allStorageBufferBindings(): List<BufferBinding> = commandsForReplay().flatMap { it.storageBufferBindings() }.distinct()
 
     fun allUniformBufferBindings(): List<BufferBinding> = commandsForReplay().flatMap { it.uniformBufferBindings() }.distinct()
+
+    fun shaderMetadata(shaderIndex: Int): ShaderMetadata {
+        return shaders.getOrNull(shaderIndex) ?: ShaderMetadata()
+    }
 }
 
 fun Command.shaderIndex(): Int = when (this) {
@@ -216,20 +230,23 @@ fun Command.withBindings(
     samplerBindings: List<SamplerBinding>,
     imageBindings: List<ImageBinding>,
     storageBufferBindings: List<BufferBinding>,
-    uniformBufferBindings: List<BufferBinding>
+    uniformBufferBindings: List<BufferBinding>,
+    defaultUniformBindings: List<DefaultUniformBinding>
 ): Command = when (this) {
     is Command.DispatchCommand -> copy(
         samplerBindings = samplerBindings,
         imageBindings = imageBindings,
         storageBufferBindings = storageBufferBindings,
-        uniformBufferBindings = uniformBufferBindings
+        uniformBufferBindings = uniformBufferBindings,
+        defaultUniformBindings = defaultUniformBindings
     )
 
     is Command.DispatchIndirectCommand -> copy(
         samplerBindings = samplerBindings,
         imageBindings = imageBindings,
         storageBufferBindings = storageBufferBindings,
-        uniformBufferBindings = uniformBufferBindings
+        uniformBufferBindings = uniformBufferBindings,
+        defaultUniformBindings = defaultUniformBindings
     )
 }
 

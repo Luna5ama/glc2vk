@@ -1,6 +1,7 @@
 package dev.luna5ama.glc2vk.replay
 
 import dev.luna5ama.glc2vk.common.CaptureData
+import dev.luna5ama.glc2vk.common.parseReplayCliOptions
 import dev.luna5ama.glwrapper.base.glFinish
 import dev.luna5ama.kmogus.Arr
 import dev.luna5ama.kmogus.MemoryStack
@@ -21,12 +22,12 @@ import kotlin.io.path.exists
 lateinit var glCapabilities: GLCapabilities
 
 fun main(args: Array<String>) {
-    check(args.isNotEmpty()) { "Expected at least 1 argument: <path to capture>" }
-    val capturePath = Path(args[0])
+    val options = parseReplayCliOptions(args)
+    val capturePath = options.capturePath
     check(capturePath.exists()) { "Capture file does not exist: $capturePath" }
     println("Loading OpenGL replay capture from $capturePath")
 
-        val replayFrames = args.getOrNull(1)?.toLongOrNull()
+        val replayFrames = options.frameLimit
 
     MemoryStack {
         // region Init GLFW
@@ -68,7 +69,7 @@ fun main(args: Array<String>) {
         val captureData = CaptureData.load(capturePath)
         println("Creating OpenGL replay instance")
         val replayInstance = runCatching {
-            GLReplayInstance(captureData, capturePath)
+            GLReplayInstance(captureData, capturePath, options.shaderPath)
         }.onFailure {
             captureData.free()
         }.getOrThrow()

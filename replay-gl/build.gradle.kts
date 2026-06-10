@@ -15,6 +15,7 @@ repositories {
 
 dependencies {
     implementation(project(":glc2vk-common"))
+    implementation(project(":glc2vk-capture"))
 
 
     implementation(platform("org.lwjgl:lwjgl-bom:${libs.versions.lwjgl.get()}"))
@@ -30,7 +31,6 @@ dependencies {
     implementation(libs.kmogus.core)
     implementation(libs.bundles.glWrapper)
 
-    testImplementation(project(":glc2vk-capture"))
     testImplementation(kotlin("test"))
 }
 

@@ -2,8 +2,11 @@ package dev.luna5ama.glc2vk.replay
 
 import dev.luna5ama.glc2vk.common.CaptureData
 import dev.luna5ama.glc2vk.common.Command
+import dev.luna5ama.glc2vk.common.ShaderSourceResolver
 import dev.luna5ama.glc2vk.common.debugLabels
 import dev.luna5ama.glc2vk.common.shaderIndex
+import dev.luna5ama.glc2vk.capture.ShaderSourceContext
+import dev.luna5ama.glc2vk.capture.validateCapturedBindings
 import dev.luna5ama.glwrapper.base.GL_BUFFER_UPDATE_BARRIER_BIT
 import dev.luna5ama.glwrapper.base.GL_DEBUG_SOURCE_APPLICATION
 import dev.luna5ama.glwrapper.base.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT
@@ -19,17 +22,28 @@ import dev.luna5ama.glwrapper.base.glPopDebugGroup
 import dev.luna5ama.glwrapper.base.glPushDebugGroup
 import dev.luna5ama.glwrapper.base.glUseProgram
 import java.nio.file.Path
-import kotlin.io.path.exists
 
 class GLReplayInstance(
     private val captureData: CaptureData,
-    private val capturePath: Path
+    private val capturePath: Path,
+    shaderOverridePath: Path? = null
 ) {
     private val commands = captureData.metadata.commandsForReplay()
+    private val shaderSourceResolver = ShaderSourceResolver(capturePath, shaderOverridePath)
     private val programs = List(captureData.metadata.shaderCount) { shaderIndex ->
-        val shaderPath = capturePath.resolve("shader_$shaderIndex.comp.glsl").takeIf { it.exists() }
-            ?: capturePath.resolve("shader.comp.glsl")
-        loadOpenGLComputeProgram(shaderPath)
+        val resolved = shaderSourceResolver.resolve(captureData.metadata, shaderIndex)
+        val shaderMetadata = captureData.metadata.shaderMetadata(shaderIndex)
+        val shaderInfo = ShaderSourceContext(resolved.source)
+            .setIdentity(
+                passName = shaderMetadata.passName,
+                programType = shaderMetadata.programType,
+                sourcePath = shaderMetadata.sourcePath,
+                stage = shaderMetadata.stage
+            ).also {
+                it.patchShaderForVulkan()
+            }.toShaderInfo()
+        commands.filter { it.shaderIndex() == shaderIndex }.forEach(shaderInfo::validateCapturedBindings)
+        loadOpenGLComputeProgram(resolved.source, resolved.path)
     }
     private val resources = runCatching {
         GLReplayResource(captureData)
