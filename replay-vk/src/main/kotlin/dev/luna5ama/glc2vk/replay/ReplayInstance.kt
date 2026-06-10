@@ -2,6 +2,12 @@ package dev.luna5ama.glc2vk.replay
 
 import dev.luna5ama.glc2vk.common.CaptureData
 import dev.luna5ama.glc2vk.common.Command
+import dev.luna5ama.glc2vk.common.debugLabels
+import dev.luna5ama.glc2vk.common.imageBindings
+import dev.luna5ama.glc2vk.common.samplerBindings
+import dev.luna5ama.glc2vk.common.shaderIndex
+import dev.luna5ama.glc2vk.common.storageBufferBindings
+import dev.luna5ama.glc2vk.common.uniformBufferBindings
 import it.unimi.dsi.fastutil.longs.LongArrayList
 import net.echonolix.caelum.*
 import net.echonolix.caelum.vulkan.*
@@ -45,30 +51,31 @@ class ReplayInstance(
     val dependencyInfo2: NValue<VkDependencyInfo>
 
     val resource: ReplayResource
-    private val pipelineInfo: ComputePipelineInfo
+    private val replayCommands = captureData.metadata.commandsForReplay()
+    private val pipelineInfos: List<ComputePipelineInfo>
 
     init {
         MemoryStack {
             MemoryStack {
-                val extra = 4u
+                val extra = maxOf(4u, replayCommands.size.toUInt())
                 val createInfo = VkDescriptorPoolCreateInfo.allocate {
-                    maxSets = 4u
+                    maxSets = maxOf(4u, replayCommands.size.toUInt() * 3u)
                     val poolSizes = VkDescriptorPoolSize.allocate(4L)
                     poolSizes[0L].apply {
                         type = VkDescriptorType.UNIFORM_BUFFER
-                        descriptorCount = maxOf(16u, captureData.metadata.uniformBufferBindings.size.toUInt() * extra)
+                        descriptorCount = maxOf(16u, captureData.metadata.allUniformBufferBindings().size.toUInt() * extra)
                     }
                     poolSizes[1L].apply {
                         type = VkDescriptorType.STORAGE_BUFFER
-                        descriptorCount = maxOf(16u, captureData.metadata.storageBufferBindings.size.toUInt() * extra)
+                        descriptorCount = maxOf(16u, captureData.metadata.allStorageBufferBindings().size.toUInt() * extra)
                     }
                     poolSizes[2L].apply {
                         type = VkDescriptorType.STORAGE_IMAGE
-                        descriptorCount = maxOf(16u, captureData.metadata.imageBindings.size.toUInt() * extra)
+                        descriptorCount = maxOf(16u, captureData.metadata.allImageBindings().size.toUInt() * extra)
                     }
                     poolSizes[3L].apply {
                         type = VkDescriptorType.COMBINED_IMAGE_SAMPLER
-                        descriptorCount = maxOf(16u, captureData.metadata.samplerBindings.size.toUInt() * extra)
+                        descriptorCount = maxOf(16u, captureData.metadata.allSamplerBindings().size.toUInt() * extra)
                     }
                     poolSizes(poolSizes)
                 }
@@ -183,7 +190,7 @@ class ReplayInstance(
             }
 
             MemoryStack {
-                pipelineInfo = makeComputePipeline()
+                pipelineInfos = replayCommands.map { makeComputePipeline(it) }
             }
         }
     }
@@ -562,31 +569,59 @@ class ReplayInstance(
         MemoryStack {
             cmdBuffers[1].beginCommandBuffer(beginInfo.ptr())
             cmdBuffers[1].cmdBeginDebugUtilsLabelEXT(replayLabel.ptr())
-            cmdBuffers[1].cmdBindPipeline(VkPipelineBindPoint.COMPUTE, pipelineInfo.pipeline)
 
-            val pDescriptorSets =
-                VkDescriptorSet.arrayOf(*pipelineInfo.descriptorInfo.descriptorSets.toTypedArray())
-            cmdBuffers[1].cmdBindDescriptorSets(
-                VkPipelineBindPoint.COMPUTE,
-                pipelineInfo.pipelineLayout,
-                0u,
-                pipelineInfo.descriptorInfo.descriptorSets.size.toUInt(),
-                pDescriptorSets.ptr(),
-                0u,
-                nullptr()
-            )
-
-            // Replay commands
-            when (val command = captureData.metadata.command) {
-                is Command.DispatchIndirectCommand -> {
-                    cmdBuffers[1].cmdDispatchIndirect(
-                        resource.bufferList[command.bufferIndex].gpu,
-                        command.offset.toULong()
-                    )
+            replayCommands.forEachIndexed { commandIndex, command ->
+                command.debugLabels().forEach { label ->
+                    val debugLabel = VkDebugUtilsLabelEXT.allocate {
+                        pLabelName = label.c_str()
+                    }
+                    cmdBuffers[1].cmdBeginDebugUtilsLabelEXT(debugLabel.ptr())
                 }
 
-                is Command.DispatchCommand -> {
-                    cmdBuffers[1].cmdDispatch(command.x.toUInt(), command.y.toUInt(), command.z.toUInt())
+                val pipelineInfo = pipelineInfos[commandIndex]
+                cmdBuffers[1].cmdBindPipeline(VkPipelineBindPoint.COMPUTE, pipelineInfo.pipeline)
+
+                val pDescriptorSets =
+                    VkDescriptorSet.arrayOf(*pipelineInfo.descriptorInfo.descriptorSets.toTypedArray())
+                cmdBuffers[1].cmdBindDescriptorSets(
+                    VkPipelineBindPoint.COMPUTE,
+                    pipelineInfo.pipelineLayout,
+                    0u,
+                    pipelineInfo.descriptorInfo.descriptorSets.size.toUInt(),
+                    pDescriptorSets.ptr(),
+                    0u,
+                    nullptr()
+                )
+
+                when (command) {
+                    is Command.DispatchIndirectCommand -> {
+                        cmdBuffers[1].cmdDispatchIndirect(
+                            resource.bufferList[command.bufferIndex].gpu,
+                            command.offset.toULong()
+                        )
+                    }
+
+                    is Command.DispatchCommand -> {
+                        cmdBuffers[1].cmdDispatch(command.x.toUInt(), command.y.toUInt(), command.z.toUInt())
+                    }
+                }
+
+                MemoryStack {
+                    val memoryBarrier = VkMemoryBarrier2.allocate(1L)
+                    memoryBarrier[0].apply {
+                        srcStageMask = VkPipelineStageFlags2.ALL_COMMANDS
+                        srcAccessMask = VkAccessFlags2.MEMORY_WRITE
+                        dstStageMask = VkPipelineStageFlags2.ALL_COMMANDS
+                        dstAccessMask = VkAccessFlags2.MEMORY_READ + VkAccessFlags2.MEMORY_WRITE
+                    }
+                    val dependencyInfo = VkDependencyInfo.allocate {
+                        memoryBarriers(memoryBarrier)
+                    }
+                    cmdBuffers[1].cmdPipelineBarrier2(dependencyInfo.ptr())
+                }
+
+                repeat(command.debugLabels().size) {
+                    cmdBuffers[1].cmdEndDebugUtilsLabelEXT()
                 }
             }
             cmdBuffers[1].cmdEndDebugUtilsLabelEXT()
@@ -617,7 +652,7 @@ class ReplayInstance(
 
         device.destroyCommandPool(commandPool, null)
 
-        pipelineInfo.destroy(device)
+        pipelineInfos.forEach { it.destroy(device) }
         resource.destroy()
         arena.close()
     }
@@ -655,8 +690,13 @@ class ReplayInstance(
 
     context(_: MemoryStack)
     @OptIn(UnsafeAPI::class)
-    private fun makeDescriptors(): DescriptorInfo = MemoryStack {
-        val samplers = captureData.metadata.samplerBindings.map {
+    private fun makeDescriptors(command: Command): DescriptorInfo = MemoryStack {
+        val samplerBindings = command.samplerBindings()
+        val imageBindings = command.imageBindings()
+        val storageBufferBindings = command.storageBufferBindings()
+        val uniformBufferBindings = command.uniformBufferBindings()
+
+        val samplers = samplerBindings.map {
             val samplerInfo = it.samplerInfo
             val samplerCreateInfo = VkSamplerCreateInfo.allocate {
                 magFilter = VkFilter.fromNativeData(samplerInfo.minFilter.value)
@@ -681,10 +721,10 @@ class ReplayInstance(
 
         val descriptorSet0Layout = MemoryStack {
             val set0BindingCount =
-                captureData.metadata.imageBindings.size + captureData.metadata.samplerBindings.size
+                imageBindings.size + samplerBindings.size
             val layoutBindings = VkDescriptorSetLayoutBinding.allocate(set0BindingCount.toLong())
 
-            captureData.metadata.imageBindings.forEachIndexed { i, imageBinding ->
+            imageBindings.forEachIndexed { i, imageBinding ->
                 layoutBindings[i.toLong()].apply {
                     binding = imageBinding.binding.toUInt()
                     descriptorType = VkDescriptorType.STORAGE_IMAGE
@@ -693,8 +733,8 @@ class ReplayInstance(
                 }
             }
 
-            captureData.metadata.samplerBindings.forEachIndexed { i, samplerBinding ->
-                val acutalIndex = captureData.metadata.imageBindings.size + i
+            samplerBindings.forEachIndexed { i, samplerBinding ->
+                val acutalIndex = imageBindings.size + i
                 layoutBindings[acutalIndex.toLong()].apply {
                     binding = samplerBinding.binding.toUInt()
                     descriptorType = VkDescriptorType.COMBINED_IMAGE_SAMPLER
@@ -713,8 +753,8 @@ class ReplayInstance(
 
         val descriptorSet1Layout = MemoryStack {
             val layoutBindings =
-                VkDescriptorSetLayoutBinding.allocate(captureData.metadata.storageBufferBindings.size.toLong())
-            captureData.metadata.storageBufferBindings.forEachIndexed { i, bufferBinding ->
+                VkDescriptorSetLayoutBinding.allocate(storageBufferBindings.size.toLong())
+            storageBufferBindings.forEachIndexed { i, bufferBinding ->
                 layoutBindings[i.toLong()].apply {
                     binding = bufferBinding.binding.toUInt()
                     descriptorType = VkDescriptorType.STORAGE_BUFFER
@@ -732,8 +772,8 @@ class ReplayInstance(
 
         val descriptorSet2Layout = MemoryStack {
             val layoutBindings =
-                VkDescriptorSetLayoutBinding.allocate(captureData.metadata.uniformBufferBindings.size.toLong())
-            captureData.metadata.uniformBufferBindings.forEachIndexed { i, bufferBinding ->
+                VkDescriptorSetLayoutBinding.allocate(uniformBufferBindings.size.toLong())
+            uniformBufferBindings.forEachIndexed { i, bufferBinding ->
                 layoutBindings[i.toLong()].apply {
                     binding = bufferBinding.binding.toUInt()
                     descriptorType = VkDescriptorType.UNIFORM_BUFFER
@@ -767,12 +807,12 @@ class ReplayInstance(
 
         MemoryStack {
             val set0BindingCount =
-                captureData.metadata.imageBindings.size + captureData.metadata.samplerBindings.size
+                imageBindings.size + samplerBindings.size
             val writeDescs = VkWriteDescriptorSet.allocate(set0BindingCount.toLong())
             var writeIndex = 0L
-            captureData.metadata.imageBindings.forEachIndexed { i, imageBinding ->
+            imageBindings.forEach { imageBinding ->
                 val descriptorImageInfo = VkDescriptorImageInfo.allocate {
-                    imageView = resource.storageImageViewList[i]
+                    imageView = resource.storageImageView(imageBinding)
                     imageLayout = VkImageLayout.GENERAL
                 }
                 writeDescs[writeIndex++].apply {
@@ -784,10 +824,10 @@ class ReplayInstance(
                     pImageInfo = descriptorImageInfo.ptr()
                 }
             }
-            captureData.metadata.samplerBindings.forEachIndexed { i, samplerBinding ->
+            samplerBindings.forEachIndexed { i, samplerBinding ->
                 val descriptorImageInfo = VkDescriptorImageInfo.allocate {
                     sampler = samplers[i]
-                    imageView = resource.samplerImageViewList[i]
+                    imageView = resource.samplerImageView(samplerBinding)
                     imageLayout = VkImageLayout.GENERAL
                 }
                 writeDescs[writeIndex++].apply {
@@ -805,9 +845,9 @@ class ReplayInstance(
 
         MemoryStack {
             val writeCount =
-                captureData.metadata.storageBufferBindings.size + captureData.metadata.uniformBufferBindings.size
+                storageBufferBindings.size + uniformBufferBindings.size
             val writeDescs = VkWriteDescriptorSet.allocate(writeCount.toLong())
-            captureData.metadata.storageBufferBindings.forEachIndexed { i, bufferBinding ->
+            storageBufferBindings.forEachIndexed { i, bufferBinding ->
                 val descriptorBufferInfo = VkDescriptorBufferInfo.allocate {
                     buffer = resource.bufferList[bufferBinding.bufferIndex].gpu
                     val offsetV = bufferBinding.offset.toULong()
@@ -823,14 +863,14 @@ class ReplayInstance(
                     pBufferInfo = descriptorBufferInfo.ptr()
                 }
             }
-            captureData.metadata.uniformBufferBindings.forEachIndexed { i, bufferBinding ->
+            uniformBufferBindings.forEachIndexed { i, bufferBinding ->
                 val descriptorBufferInfo = VkDescriptorBufferInfo.allocate {
                     buffer = resource.bufferList[bufferBinding.bufferIndex].gpu
                     val offsetV = bufferBinding.offset.toULong()
                     offset = offsetV
                     range = captureData.metadata.buffers[bufferBinding.bufferIndex].size.toULong() - offsetV
                 }
-                writeDescs[captureData.metadata.storageBufferBindings.size + i.toLong()].apply {
+                writeDescs[storageBufferBindings.size + i.toLong()].apply {
                     dstSet = descriptorSets[2]
                     dstBinding = bufferBinding.binding.toUInt()
                     dstArrayElement = 0u
@@ -851,8 +891,10 @@ class ReplayInstance(
 
     context(_: MemoryStack)
     @OptIn(UnsafeAPI::class)
-    private fun makeComputePipeline(): ComputePipelineInfo = MemoryStack {
-        val shaderModule = captureDir.resolve("shader.comp.spv").useMapped { spvData ->
+    private fun makeComputePipeline(command: Command): ComputePipelineInfo = MemoryStack {
+        val shaderPath = captureDir.resolve("shader_${command.shaderIndex()}.comp.spv").takeIf { it.toFile().exists() }
+            ?: captureDir.resolve("shader.comp.spv")
+        val shaderModule = shaderPath.useMapped { spvData ->
             val createInfo = VkShaderModuleCreateInfo.allocate {
                 codeSize = spvData.count
                 @OptIn(UnsafeAPI::class)
@@ -862,7 +904,7 @@ class ReplayInstance(
             device.createShaderModule(createInfo.ptr(), null).getOrThrow()
         }
 
-        val descriptors = makeDescriptors()
+        val descriptors = makeDescriptors(command)
         val pipelineLayout = MemoryStack {
             val createInfo = VkPipelineLayoutCreateInfo.allocate {
                 setLayouts(VkDescriptorSetLayout.arrayOf(*descriptors.descriptorSetLayouts.toTypedArray()))

@@ -16,8 +16,11 @@ import kotlin.io.path.writeText
 
 private const val TEMP_SIZE = 8L * 4L * 4L
 
-private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: ShaderProgramResourceManager) {
+private class CaptureContext {
     val tempGPUBuffer = BufferObject.Immutable()
+    val shaderInfos = mutableListOf<ShaderInfo>()
+    val commands = mutableListOf<Command>()
+    val debugLabelStack = mutableListOf<String>()
 
     fun ensureTempGPUBufferCapacity(size: Long) {
         if (tempGPUBuffer.size < size) {
@@ -45,7 +48,7 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
         samplerBindings += binding
     }
 
-    fun imageBinding(name: String, imageIndex: Int, bindingIndex: Int) {
+    fun imageBinding(name: String, imageIndex: Int, bindingIndex: Int, shaderInfo: ShaderInfo) {
         val prev = imageNames[imageIndex]
         imageNames[imageIndex] = prev?.let { "${it}_$name" } ?: name
         val binding = ImageBinding(
@@ -298,11 +301,20 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
         }
     }
 
-    fun build(command: Command): CaptureData {
+    fun shaderIndex(shaderInfo: ShaderInfo): Int {
+        val index = shaderInfos.indexOfFirst {
+            it.originalSource == shaderInfo.originalSource && it.patchedSource == shaderInfo.patchedSource
+        }
+        if (index >= 0) return index
+        shaderInfos += shaderInfo
+        return shaderInfos.lastIndex
+    }
+
+    fun build(): CaptureData {
         val metadata = CaptureMetadata(
             images = imageMetadata.mapIndexed { i, metadata ->
                 metadata.copy(name = metadata.name.ifEmpty {
-                    imageNames[i] ?: "buffer_$i"
+                    imageNames[i] ?: "image_$i"
                 })
             },
             buffers = bufferMetadata.mapIndexed { i, metadata ->
@@ -314,7 +326,9 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
             imageBindings = imageBindings,
             storageBufferBindings = storageBufferBindings,
             uniformBufferBindings = uniformBufferBindings,
-            command = command
+            command = commands.singleOrNull(),
+            commands = commands,
+            shaderCount = shaderInfos.size
         )
         return CaptureData(
             metadata = metadata,
@@ -338,8 +352,13 @@ private class CaptureContext(val shaderInfo: ShaderInfo, val resourceManager: Sh
     }
 }
 
-private fun CaptureContext.captureDefaultUniformBlock() {
+private fun CaptureContext.captureDefaultUniformBlock(
+    shaderInfo: ShaderInfo,
+    resourceManager: ShaderProgramResourceManager
+): List<DefaultUniformBinding> {
     val defaultUniformData = Arr.malloc(0L)
+    val defaultUniformBufferIndex = buffers.size
+    val defaultUniformBindings = mutableListOf<DefaultUniformBinding>()
 
     val struct = struct {
         shaderInfo.uniforms.values.asSequence()
@@ -354,6 +373,13 @@ private fun CaptureContext.captureDefaultUniformBlock() {
                     }
                     defaultUniformData.ensureCapacity(this@struct.size.toLong(), true)
                     val dstPtr = defaultUniformData.ptr + elementInfo.offset.toLong()
+                    defaultUniformBindings += DefaultUniformBinding(
+                        name = it.name,
+                        type = it.type.codeStr,
+                        bufferIndex = defaultUniformBufferIndex,
+                        offset = elementInfo.offset.toLong(),
+                        arraySize = uniformResource.arraySize
+                    )
 
                     if (uniformResource.arraySize > 1) {
                         when (it.type) {
@@ -535,15 +561,13 @@ private fun CaptureContext.captureDefaultUniformBlock() {
             }
     }
 
-    check(buffers.isEmpty())
-    check(bufferMetadata.isEmpty())
-
     buffers += defaultUniformData.realloc(struct.size.toLong(), false)
     bufferMetadata += BufferMetadata(
         name = "",
         size = struct.size.toLong()
     )
-    uniformBufferBinding("DefaultUniforms", 0, shaderInfo.ubos["DefaultUniforms"]!!.binding, 0L)
+    uniformBufferBinding("DefaultUniforms", defaultUniformBufferIndex, shaderInfo.ubos["DefaultUniforms"]!!.binding, 0L)
+    return defaultUniformBindings
 }
 
 private fun getTextureDefaultSamplerInfo(imageID: Int): SamplerInfo = MemoryStack {
@@ -650,7 +674,10 @@ private fun getSamplerInfo(samplerID: Int): SamplerInfo = MemoryStack {
     )
 }
 
-private fun CaptureContext.captureImages() {
+private fun CaptureContext.captureImages(
+    shaderInfo: ShaderInfo,
+    resourceManager: ShaderProgramResourceManager
+) {
     resourceManager.uniformResource.entries.values.asSequence()
         .filter { it.type is GLSLDataType.Opaque.Image }
         .forEach {
@@ -663,7 +690,7 @@ private fun CaptureContext.captureImages() {
                 val boundImageID = tempPtr.getInt()
                 val imageIndex = getImageIndex(boundImageID)
 
-                imageBinding(it.name, imageIndex, shaderInfo.uniforms[it.name]!!.binding)
+                imageBinding(it.name, imageIndex, shaderInfo.uniforms[it.name]!!.binding, shaderInfo)
             }
         }
 
@@ -706,7 +733,10 @@ private fun CaptureContext.captureImages() {
         }
 }
 
-private fun CaptureContext.captureBuffers() {
+private fun CaptureContext.captureBuffers(
+    shaderInfo: ShaderInfo,
+    resourceManager: ShaderProgramResourceManager
+) {
     resourceManager.shaderStorageBlockResource.entries.values.forEach {
         MemoryStack {
             val temp = malloc(TEMP_SIZE)
@@ -738,40 +768,180 @@ private fun CaptureContext.captureBuffers() {
     }
 }
 
-private fun CaptureContext.captureShaderProgramResources() {
+private data class CapturedBindings(
+    val samplerBindings: List<SamplerBinding>,
+    val imageBindings: List<ImageBinding>,
+    val storageBufferBindings: List<BufferBinding>,
+    val uniformBufferBindings: List<BufferBinding>,
+    val defaultUniformBindings: List<DefaultUniformBinding>
+)
+
+private fun CaptureContext.captureShaderProgramResources(
+    shaderInfo: ShaderInfo,
+    resourceManager: ShaderProgramResourceManager
+): CapturedBindings {
+    val samplerStart = samplerBindings.size
+    val imageStart = imageBindings.size
+    val storageBufferStart = storageBufferBindings.size
+    val uniformBufferStart = uniformBufferBindings.size
+
     println("Capturing default uniform block...")
-    captureDefaultUniformBlock()
+    val defaultUniformBindings = captureDefaultUniformBlock(shaderInfo, resourceManager)
     println("Capturing images...")
-    captureImages()
+    captureImages(shaderInfo, resourceManager)
     println("Capturing buffers...")
-    captureBuffers()
+    captureBuffers(shaderInfo, resourceManager)
+
+    return CapturedBindings(
+        samplerBindings = samplerBindings.subList(samplerStart, samplerBindings.size).toList(),
+        imageBindings = imageBindings.subList(imageStart, imageBindings.size).toList(),
+        storageBufferBindings = storageBufferBindings.subList(storageBufferStart, storageBufferBindings.size).toList(),
+        uniformBufferBindings = uniformBufferBindings.subList(uniformBufferStart, uniformBufferBindings.size).toList(),
+        defaultUniformBindings = defaultUniformBindings
+    )
 }
 
 private fun saveShader(
     outputPath: Path,
     shaderInfo: ShaderInfo,
-    stage: ShaderStage
+    stage: ShaderStage,
+    shaderIndex: Int,
+    legacyName: Boolean
 ) {
     val extension = "${stage.shortName}.glsl"
-    val glslPath = outputPath.resolve("shader.$extension")
-    val spvPath = outputPath.resolve("shader.${stage.shortName}.spv")
-    glslPath.writeText(shaderInfo.patchedSource)
+    val glslPath = outputPath.resolve("shader_$shaderIndex.$extension")
+    val vkGlslPath = outputPath.resolve("shader_$shaderIndex.${stage.shortName}.vk.glsl")
+    val spvPath = outputPath.resolve("shader_$shaderIndex.${stage.shortName}.spv")
+    glslPath.writeText(shaderInfo.originalSource)
+    vkGlslPath.writeText(shaderInfo.patchedSource)
 
+    if (legacyName) {
+        outputPath.resolve("shader.$extension").writeText(shaderInfo.originalSource)
+    }
 
-    ProcessBuilder()
+    val exitCode = ProcessBuilder()
         .command(
             "glslang",
             "-DGLSLANG=1",
             "-gVS",
+            "-S",
+            stage.shortName,
             "--target-env",
             "vulkan1.3",
             "-o",
             spvPath.absolutePathString(),
-            glslPath.absolutePathString()
+            vkGlslPath.absolutePathString()
         )
         .inheritIO()
         .start()
         .waitFor()
+    check(exitCode == 0) { "glslang failed with exit code $exitCode for $vkGlslPath" }
+
+    if (legacyName) {
+        outputPath.resolve("shader.${stage.shortName}.spv").toFile().writeBytes(spvPath.toFile().readBytes())
+        outputPath.resolve("shader.${stage.shortName}.vk.glsl").writeText(shaderInfo.patchedSource)
+    }
+}
+
+@Suppress("LocalVariableName")
+private fun CaptureContext.recordDispatchCompute(
+    shaderInfo: ShaderInfo,
+    num_groups_x: Int,
+    num_groups_y: Int,
+    num_groups_z: Int
+) {
+    glFinish()
+    val currProgram = glGetInteger(GL_CURRENT_PROGRAM)
+    val resourceManager = ShaderProgramResourceManager(currProgram)
+
+    val shaderIndex = shaderIndex(shaderInfo)
+    val bindings = captureShaderProgramResources(shaderInfo, resourceManager)
+    commands += Command.DispatchCommand(
+        x = num_groups_x,
+        y = num_groups_y,
+        z = num_groups_z,
+        shaderIndex = shaderIndex,
+        debugLabels = debugLabelStack.toList(),
+        samplerBindings = bindings.samplerBindings,
+        imageBindings = bindings.imageBindings,
+        storageBufferBindings = bindings.storageBufferBindings,
+        uniformBufferBindings = bindings.uniformBufferBindings,
+        defaultUniformBindings = bindings.defaultUniformBindings
+    )
+}
+
+private fun CaptureContext.recordDispatchComputeIndirect(shaderInfo: ShaderInfo, indirect: Long) {
+    glFinish()
+    val currProgram = glGetInteger(GL_CURRENT_PROGRAM)
+    val resourceManager = ShaderProgramResourceManager(currProgram)
+
+    val shaderIndex = shaderIndex(shaderInfo)
+    val bindings = captureShaderProgramResources(shaderInfo, resourceManager)
+
+    val boundIndirectBuffer = glGetInteger(GL_DISPATCH_INDIRECT_BUFFER_BINDING)
+    val bufferIndex = getBufferIndex(boundIndirectBuffer)
+
+    commands += Command.DispatchIndirectCommand(
+        bufferIndex = bufferIndex,
+        offset = indirect,
+        shaderIndex = shaderIndex,
+        debugLabels = debugLabelStack.toList(),
+        samplerBindings = bindings.samplerBindings,
+        imageBindings = bindings.imageBindings,
+        storageBufferBindings = bindings.storageBufferBindings,
+        uniformBufferBindings = bindings.uniformBufferBindings,
+        defaultUniformBindings = bindings.defaultUniformBindings
+    )
+}
+
+private var activeCaptureContext: CaptureContext? = null
+private var activeCaptureOutputPath: Path? = null
+
+fun beginGlCapture(outputPath: Path) {
+    check(activeCaptureContext == null) { "A glc2vk capture is already active" }
+    glFinish()
+    activeCaptureContext = CaptureContext()
+    activeCaptureOutputPath = outputPath
+}
+
+fun endGlCapture(): Thread {
+    val captureContext = checkNotNull(activeCaptureContext) { "No active glc2vk capture" }
+    val outputPath = checkNotNull(activeCaptureOutputPath) { "No active glc2vk capture output path" }
+    glFinish()
+
+    val resourceCapture = captureContext.build()
+    activeCaptureContext = null
+    activeCaptureOutputPath = null
+    captureContext.destroy()
+
+    return CaptureData.save(outputPath, resourceCapture) {
+        println("Saving shaders...")
+        captureContext.shaderInfos.forEachIndexed { index, shaderInfo ->
+            saveShader(
+                outputPath = outputPath,
+                shaderInfo = shaderInfo,
+                stage = ShaderStage.ComputeShader,
+                shaderIndex = index,
+                legacyName = index == 0
+            )
+        }
+    }
+}
+
+@Suppress("LocalVariableName")
+fun captureGlDispatchCompute(
+    shaderInfo: ShaderInfo,
+    num_groups_x: Int,
+    num_groups_y: Int,
+    num_groups_z: Int
+) {
+    activeCaptureContext?.recordDispatchCompute(shaderInfo, num_groups_x, num_groups_y, num_groups_z)
+    glDispatchCompute(num_groups_x, num_groups_y, num_groups_z)
+}
+
+fun captureGlDispatchComputeIndirect(shaderInfo: ShaderInfo, indirect: Long) {
+    activeCaptureContext?.recordDispatchComputeIndirect(shaderInfo, indirect)
+    glDispatchComputeIndirect(indirect)
 }
 
 @Suppress("LocalVariableName")
@@ -782,55 +952,43 @@ fun captureGlDispatchCompute(
     num_groups_y: Int,
     num_groups_z: Int
 ) {
-    glFinish()
-    val currProgram = glGetInteger(GL_CURRENT_PROGRAM)
-    val resourceManager = ShaderProgramResourceManager(currProgram)
-
-    val captureContext = CaptureContext(shaderInfo, resourceManager)
-    captureContext.captureShaderProgramResources()
-
-    val command = Command.DispatchCommand(
-        x = num_groups_x,
-        y = num_groups_y,
-        z = num_groups_z
-    )
-
-    val resourceCapture = captureContext.build(command)
-    captureContext.destroy()
-
-    CaptureData.save(outputPath, resourceCapture) {
-        saveShader(outputPath, shaderInfo, ShaderStage.ComputeShader)
+    beginGlCapture(outputPath)
+    try {
+        captureGlDispatchCompute(shaderInfo, num_groups_x, num_groups_y, num_groups_z)
+    } finally {
+        endGlCapture()
     }
-    glFinish()
-
-    glDispatchCompute(num_groups_x, num_groups_y, num_groups_z)
 }
 
 fun captureGlDispatchComputeIndirect(shaderInfo: ShaderInfo, outputPath: Path, indirect: Long) {
-    glFinish()
-    val currProgram = glGetInteger(GL_CURRENT_PROGRAM)
-    val resourceManager = ShaderProgramResourceManager(currProgram)
-
-    val captureContext = CaptureContext(shaderInfo, resourceManager)
-    captureContext.captureShaderProgramResources()
-
-    val boundIndirectBuffer = glGetInteger(GL_DISPATCH_INDIRECT_BUFFER_BINDING)
-    val bufferIndex = captureContext.getBufferIndex(boundIndirectBuffer)
-
-    val command = Command.DispatchIndirectCommand(
-        bufferIndex = bufferIndex,
-        offset = indirect
-    )
-
-    val resourceCapture = captureContext.build(command)
-    captureContext.destroy()
-
-    CaptureData.save(outputPath, resourceCapture) {
-        println("Saving shader...")
-        saveShader(outputPath, shaderInfo, ShaderStage.ComputeShader)
+    beginGlCapture(outputPath)
+    try {
+        captureGlDispatchComputeIndirect(shaderInfo, indirect)
+    } finally {
+        endGlCapture()
     }
+}
 
-    glFinish()
-    glDispatchComputeIndirect(indirect)
+fun captureGlPushDebugGroup(source: Int, id: Int, message: String) {
+    activeCaptureContext?.debugLabelStack?.add(message)
+    glPushDebugGroup(source, id, message)
+}
+
+fun captureGlPopDebugGroup() {
+    activeCaptureContext?.debugLabelStack?.let {
+        if (it.isNotEmpty()) {
+            it.removeAt(it.lastIndex)
+        }
+    }
+    glPopDebugGroup()
+}
+
+inline fun glDebugGroupCaptureAware(name: String, block: () -> Unit) {
+    captureGlPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, 0, name)
+    try {
+        block()
+    } finally {
+        captureGlPopDebugGroup()
+    }
 }
 

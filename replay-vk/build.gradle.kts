@@ -55,7 +55,9 @@ tasks {
 
     val optimizeFatJar = jarOptimizer.register(
         fatJar,
-        "dev.luna5ama.glc2vk", "org.lwjgl"
+        "dev.luna5ama.glc2vk",
+        "dev.luna5ama.kmogus",
+        "net.echonolix"
     )
 
     artifacts {

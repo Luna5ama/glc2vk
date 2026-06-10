@@ -42,6 +42,7 @@ private inline fun String.transformLines(block: (List<String>) -> List<String>):
 
 data class ShaderInfo(
     val patchedSource: String,
+    val originalSource: String = patchedSource,
     val uniforms: Map<String, Uniform>,
     val ssbos: Map<String, Buffer>,
     val ubos: Map<String, Buffer>,
@@ -76,6 +77,7 @@ class ShaderSourceContext(val originalSource: String) {
     fun toShaderInfo(): ShaderInfo {
         return ShaderInfo(
             patchedSource = modifiedSource,
+            originalSource = originalSource,
             uniforms = uniforms,
             ssbos = ssbos,
             ubos = ubos,

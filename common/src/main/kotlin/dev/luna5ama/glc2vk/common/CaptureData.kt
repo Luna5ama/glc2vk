@@ -22,13 +22,27 @@ sealed interface Command {
     data class DispatchCommand(
         val x: Int,
         val y: Int,
-        val z: Int
+        val z: Int,
+        val shaderIndex: Int = 0,
+        val debugLabels: List<String> = emptyList(),
+        val samplerBindings: List<SamplerBinding> = emptyList(),
+        val imageBindings: List<ImageBinding> = emptyList(),
+        val storageBufferBindings: List<BufferBinding> = emptyList(),
+        val uniformBufferBindings: List<BufferBinding> = emptyList(),
+        val defaultUniformBindings: List<DefaultUniformBinding> = emptyList()
     ) : Command
 
     @Serializable
     data class DispatchIndirectCommand(
         val bufferIndex: Int,
-        val offset: Long
+        val offset: Long,
+        val shaderIndex: Int = 0,
+        val debugLabels: List<String> = emptyList(),
+        val samplerBindings: List<SamplerBinding> = emptyList(),
+        val imageBindings: List<ImageBinding> = emptyList(),
+        val storageBufferBindings: List<BufferBinding> = emptyList(),
+        val uniformBufferBindings: List<BufferBinding> = emptyList(),
+        val defaultUniformBindings: List<DefaultUniformBinding> = emptyList()
     ) : Command
 }
 
@@ -110,6 +124,15 @@ data class BufferBinding(
 )
 
 @Serializable
+data class DefaultUniformBinding(
+    val name: String,
+    val type: String,
+    val bufferIndex: Int,
+    val offset: Long,
+    val arraySize: Int = 1
+)
+
+@Serializable
 data class CaptureMetadata(
     val images: List<ImageMetadata>,
     val buffers: List<BufferMetadata>,
@@ -117,8 +140,98 @@ data class CaptureMetadata(
     val imageBindings: List<ImageBinding>,
     val storageBufferBindings: List<BufferBinding>,
     val uniformBufferBindings: List<BufferBinding>,
-    val command: Command
-)
+    val command: Command? = null,
+    val commands: List<Command> = emptyList(),
+    val shaderCount: Int = 1
+) {
+    fun commandsForReplay(): List<Command> {
+        val sourceCommands = commands.ifEmpty { command?.let(::listOf).orEmpty() }
+        return sourceCommands.map { command ->
+            if (command.hasBindings()) {
+                command
+            } else {
+                command.withBindings(
+                    samplerBindings = samplerBindings,
+                    imageBindings = imageBindings,
+                    storageBufferBindings = storageBufferBindings,
+                    uniformBufferBindings = uniformBufferBindings
+                )
+            }
+        }
+    }
+
+    fun allSamplerBindings(): List<SamplerBinding> = commandsForReplay().flatMap { it.samplerBindings() }.distinct()
+
+    fun allImageBindings(): List<ImageBinding> = commandsForReplay().flatMap { it.imageBindings() }.distinct()
+
+    fun allStorageBufferBindings(): List<BufferBinding> = commandsForReplay().flatMap { it.storageBufferBindings() }.distinct()
+
+    fun allUniformBufferBindings(): List<BufferBinding> = commandsForReplay().flatMap { it.uniformBufferBindings() }.distinct()
+}
+
+fun Command.shaderIndex(): Int = when (this) {
+    is Command.DispatchCommand -> shaderIndex
+    is Command.DispatchIndirectCommand -> shaderIndex
+}
+
+fun Command.debugLabels(): List<String> = when (this) {
+    is Command.DispatchCommand -> debugLabels
+    is Command.DispatchIndirectCommand -> debugLabels
+}
+
+fun Command.samplerBindings(): List<SamplerBinding> = when (this) {
+    is Command.DispatchCommand -> samplerBindings
+    is Command.DispatchIndirectCommand -> samplerBindings
+}
+
+fun Command.imageBindings(): List<ImageBinding> = when (this) {
+    is Command.DispatchCommand -> imageBindings
+    is Command.DispatchIndirectCommand -> imageBindings
+}
+
+fun Command.storageBufferBindings(): List<BufferBinding> = when (this) {
+    is Command.DispatchCommand -> storageBufferBindings
+    is Command.DispatchIndirectCommand -> storageBufferBindings
+}
+
+fun Command.uniformBufferBindings(): List<BufferBinding> = when (this) {
+    is Command.DispatchCommand -> uniformBufferBindings
+    is Command.DispatchIndirectCommand -> uniformBufferBindings
+}
+
+fun Command.defaultUniformBindings(): List<DefaultUniformBinding> = when (this) {
+    is Command.DispatchCommand -> defaultUniformBindings
+    is Command.DispatchIndirectCommand -> defaultUniformBindings
+}
+
+fun Command.hasBindings(): Boolean {
+    return samplerBindings().isNotEmpty() ||
+            imageBindings().isNotEmpty() ||
+            storageBufferBindings().isNotEmpty() ||
+            uniformBufferBindings().isNotEmpty() ||
+            defaultUniformBindings().isNotEmpty()
+}
+
+fun Command.withBindings(
+    samplerBindings: List<SamplerBinding>,
+    imageBindings: List<ImageBinding>,
+    storageBufferBindings: List<BufferBinding>,
+    uniformBufferBindings: List<BufferBinding>
+): Command = when (this) {
+    is Command.DispatchCommand -> copy(
+        samplerBindings = samplerBindings,
+        imageBindings = imageBindings,
+        storageBufferBindings = storageBufferBindings,
+        uniformBufferBindings = uniformBufferBindings
+    )
+
+    is Command.DispatchIndirectCommand -> copy(
+        samplerBindings = samplerBindings,
+        imageBindings = imageBindings,
+        storageBufferBindings = storageBufferBindings,
+        uniformBufferBindings = uniformBufferBindings
+    )
+}
 
 class ImageData(
     val levels: List<Arr>
@@ -145,8 +258,8 @@ class CaptureData(
     }
 
     companion object {
-        fun save(outputPath: Path, capture: CaptureData, block: () -> Unit) {
-            thread(true) {
+        fun save(outputPath: Path, capture: CaptureData, block: () -> Unit): Thread {
+            return thread(true) {
                 try {
                     println("Saving resource capture")
                     @OptIn(ExperimentalSerializationApi::class)

@@ -29,6 +29,13 @@ dependencies {
     implementation(libs.fastutil)
     implementation(libs.kmogus.core)
     implementation(libs.bundles.glWrapper)
+
+    testImplementation(project(":glc2vk-capture"))
+    testImplementation(kotlin("test"))
+}
+
+tasks.test {
+    systemProperty("glc2vk.runtimeTest", providers.gradleProperty("glc2vk.runtimeTest").orElse("false").get())
 }
 
 tasks {
@@ -61,7 +68,10 @@ tasks {
 
     val optimizeFatJar = jarOptimizer.register(
         fatJar,
-        "dev.luna5ama.glc2vk", "org.lwjgl"
+        "dev.luna5ama.glc2vk",
+        "dev.luna5ama.glwrapper",
+        "dev.luna5ama.kmogus",
+        "org.lwjgl"
     )
 
     artifacts {

@@ -2,6 +2,8 @@ package dev.luna5ama.glc2vk.replay
 
 import dev.luna5ama.glc2vk.common.CaptureData
 import dev.luna5ama.glc2vk.common.ImageMetadata
+import dev.luna5ama.glc2vk.common.ImageBinding
+import dev.luna5ama.glc2vk.common.SamplerBinding
 import it.unimi.dsi.fastutil.longs.LongArrayList
 import net.echonolix.caelum.*
 import net.echonolix.caelum.vulkan.*
@@ -29,6 +31,10 @@ class ReplayResource(
     val imageList: List<DoubleData<VkImage>>
     val samplerImageViewList: List<VkImageView>
     val storageImageViewList: List<VkImageView>
+    private val samplerBindings: List<SamplerBinding>
+    private val imageBindings: List<ImageBinding>
+    private val samplerImageViewMap: Map<SamplerBinding, VkImageView>
+    private val storageImageViewMap: Map<ImageBinding, VkImageView>
 
     val imageDeviceMemory: DoubleData<VkDeviceMemory>?
     val bufferDeviceMemory: DoubleData<VkDeviceMemory>?
@@ -339,7 +345,10 @@ class ReplayResource(
                     }
                 }
 
-                samplerImageViewList = captureData.metadata.samplerBindings.map { binding ->
+                samplerBindings = captureData.metadata.allSamplerBindings()
+                imageBindings = captureData.metadata.allImageBindings()
+
+                samplerImageViewList = samplerBindings.map { binding ->
                     val imageIndex = binding.imageIndex
                     val metadata = captureData.metadata.images[imageIndex]
                     val createInfo = VkImageViewCreateInfo.allocate {
@@ -364,7 +373,7 @@ class ReplayResource(
                     imageView
                 }
 
-                storageImageViewList = captureData.metadata.imageBindings.map { binding ->
+                storageImageViewList = imageBindings.map { binding ->
                     val imageIndex = binding.imageIndex
                     val metadata = captureData.metadata.images[imageIndex]
                     val createInfo = VkImageViewCreateInfo.allocate {
@@ -388,9 +397,15 @@ class ReplayResource(
                     device.setDebugUtilsObjectNameEXT(debugNameInfo.ptr()).getOrThrow()
                     imageView
                 }
+                samplerImageViewMap = samplerBindings.zip(samplerImageViewList).toMap()
+                storageImageViewMap = imageBindings.zip(storageImageViewList).toMap()
             }
         }
     }
+
+    fun samplerImageView(binding: SamplerBinding): VkImageView = samplerImageViewMap.getValue(binding)
+
+    fun storageImageView(binding: ImageBinding): VkImageView = storageImageViewMap.getValue(binding)
 
     fun destroy() {
         samplerImageViewList.forEach {

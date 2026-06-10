@@ -24,12 +24,14 @@ fun main(args: Array<String>) {
     check(args.isNotEmpty()) { "Expected at least 1 argument: <path to capture>" }
     val capturePath = Path(args[0])
     check(capturePath.exists()) { "Capture file does not exist: $capturePath" }
+    println("Loading OpenGL replay capture from $capturePath")
 
-    val exitDelay = args.getOrNull(1)?.toLongOrNull() ?: Long.MAX_VALUE
+        val replayFrames = args.getOrNull(1)?.toLongOrNull()
 
     MemoryStack {
         // region Init GLFW
         val window = run {
+            println("Initializing GLFW/OpenGL context")
             glfwInit()
             GLFWErrorCallback.createPrint(System.err).set()
 
@@ -43,13 +45,12 @@ fun main(args: Array<String>) {
             glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, 0)
             glfwWindowHint(GLFW_DOUBLEBUFFER, GLFW_TRUE)
             glfwWindowHint(GLFW_SAMPLES, 0)
+            glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE)
             val width = 800
             val height = 600
             glfwCreateWindow(width, height, "glc2vk OpenGL", 0L, 0L)
         }
         // endregion
-
-        var frameCount = 0
 
         var focused = true
         glfwSetWindowFocusCallback(window) { _, focus ->
@@ -61,40 +62,58 @@ fun main(args: Array<String>) {
 
         runCatching { GL.create() }
         glCapabilities = GL.createCapabilities()
+        println("OpenGL context ready")
 
+        println("Loading capture resources")
         val captureData = CaptureData.load(capturePath)
+        println("Creating OpenGL replay instance")
         val replayInstance = runCatching {
             GLReplayInstance(captureData, capturePath)
         }.onFailure {
             captureData.free()
         }.getOrThrow()
+        println("OpenGL replay instance ready")
 
         try {
-            while (!glfwWindowShouldClose(window)) {
-                glfwPollEvents()
-                if (frameCount++ >= exitDelay) {
-                    break
+            if (replayFrames != null) {
+                repeat(replayFrames.toInt()) { frame ->
+                    println("Executing OpenGL replay frame $frame")
+                    MemoryStack {
+                        replayInstance.execute()
+                    }
+                    glFinish()
+                    println("Finished OpenGL replay frame $frame")
                 }
-                if (focused) {
-                    Thread.sleep(5)
-                } else {
-                    Thread.sleep(25)
+            } else {
+                while (!glfwWindowShouldClose(window)) {
+                    glfwPollEvents()
+                    if (focused) {
+                        Thread.sleep(5)
+                    } else {
+                        Thread.sleep(25)
+                    }
+                    MemoryStack {
+                        replayInstance.execute()
+                    }
+                    glFinish()
                 }
-                MemoryStack {
-                    replayInstance.execute()
-                }
-                glFinish()
             }
         } finally {
+            println("Destroying OpenGL replay instance")
             replayInstance.destroy()
         }
 
-
+        println("Destroying OpenGL context")
         GL.destroy()
+        println("Destroying GLFW window")
         glfwFreeCallbacks(window)
         glfwDestroyWindow(window)
 
-        glfwTerminate()
+        if (replayFrames == null) {
+            println("Terminating GLFW")
+            glfwTerminate()
+        }
+        println("OpenGL replay finished")
     }
 }
 
