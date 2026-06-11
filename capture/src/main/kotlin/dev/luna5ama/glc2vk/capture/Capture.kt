@@ -578,7 +578,7 @@ private fun CaptureContext.captureDefaultUniformBlock(
     val newBuffer = ByteBuffer.allocateDirect(struct.size)
     val newArr = Arr.wrap(newBuffer)
     val newLen = struct.size.toLong()
-    memcpy(defaultUniformData.ptr, 0L, newArr.ptr, 0L, newLen)
+    memcpy(defaultUniformData.ptr, 0L, newArr.ptr, 0L, minOf(defaultUniformData.len, newLen))
 
     buffers += BufferData(newArr, newBuffer)
     bufferMetadata += BufferMetadata(
