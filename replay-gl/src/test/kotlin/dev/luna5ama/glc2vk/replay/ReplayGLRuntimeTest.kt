@@ -7,7 +7,6 @@ import dev.luna5ama.glc2vk.capture.endGlCapture
 import dev.luna5ama.glc2vk.capture.glDebugGroupCaptureAware
 import dev.luna5ama.glc2vk.common.CaptureData
 import dev.luna5ama.glc2vk.common.Command
-import dev.luna5ama.glc2vk.common.storageBufferBindings
 import dev.luna5ama.glwrapper.base.GL_COMPILE_STATUS
 import dev.luna5ama.glwrapper.base.GL_COMPUTE_SHADER
 import dev.luna5ama.glwrapper.base.GL_DYNAMIC_STORAGE_BIT
@@ -150,7 +149,6 @@ class ReplayGLRuntimeTest {
             }
             metadataOnly.free()
 
-            val captureData = CaptureData.load(outputPath)
             val replay = GLReplayInstance(captureData, outputPath)
             try {
                 replay.execute()

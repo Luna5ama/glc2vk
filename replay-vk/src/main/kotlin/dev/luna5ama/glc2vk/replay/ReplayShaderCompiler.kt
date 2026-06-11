@@ -5,7 +5,6 @@ import dev.luna5ama.glc2vk.capture.validateCapturedBindings
 import dev.luna5ama.glc2vk.common.CaptureData
 import dev.luna5ama.glc2vk.common.Command
 import dev.luna5ama.glc2vk.common.ShaderSourceResolver
-import dev.luna5ama.glc2vk.common.shaderIndex
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.absolutePathString
@@ -23,8 +22,8 @@ class ReplayShaderCompiler(
     private val compiledShaders = mutableMapOf<Int, Path>()
     private val shaderInfos = mutableMapOf<Int, dev.luna5ama.glc2vk.capture.ShaderInfo>()
 
-    fun shaderPath(command: Command): Path {
-        val shaderIndex = command.shaderIndex()
+    fun shaderPath(command: Command.PassCommand): Path {
+        val shaderIndex = command.passInfo.shaderIndex
         val capturedSpv = captureDir.resolve("shader_$shaderIndex.comp.spv").takeIf { it.exists() }
             ?: captureDir.resolve("shader.comp.spv").takeIf { it.exists() }
 
@@ -44,7 +43,7 @@ class ReplayShaderCompiler(
                     it.patchShaderForVulkan()
                 }.toShaderInfo()
         }
-        shaderInfo.validateCapturedBindings(command)
+        shaderInfo.validateCapturedBindings(command.passInfo)
 
         return compiledShaders.getOrPut(shaderIndex) {
             compileShader(shaderIndex, shaderInfo.patchedSource)

@@ -3,8 +3,6 @@ package dev.luna5ama.glc2vk.replay
 import dev.luna5ama.glc2vk.common.CaptureData
 import dev.luna5ama.glc2vk.common.Command
 import dev.luna5ama.glc2vk.common.ShaderSourceResolver
-import dev.luna5ama.glc2vk.common.debugLabels
-import dev.luna5ama.glc2vk.common.shaderIndex
 import dev.luna5ama.glwrapper.base.GL_BUFFER_UPDATE_BARRIER_BIT
 import dev.luna5ama.glwrapper.base.GL_DEBUG_SOURCE_APPLICATION
 import dev.luna5ama.glwrapper.base.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT
@@ -28,13 +26,14 @@ class GLReplayInstance(
     shaderPasses: Set<String> = emptySet()
 ) {
     private val commands = captureData.metadata.commandsForReplay()
+    private val passCommands = commands.filterIsInstance<Command.PassCommand>()
     private val shaderSourceResolver = ShaderSourceResolver(capturePath, shaderOverridePath, shaderPasses)
     private val programs = List(captureData.metadata.shaderCount) { shaderIndex ->
         val resolved = shaderSourceResolver.resolve(captureData.metadata, shaderIndex)
         val program = loadOpenGLComputeProgram(resolved.source, resolved.path)
         if (resolved.isOverride) {
             val passName = captureData.metadata.shaderMetadata(shaderIndex).passName
-            commands.filter { it.shaderIndex() == shaderIndex }.forEach {
+            passCommands.filter { it.passInfo.shaderIndex == shaderIndex }.forEach {
                 validateOpenGLCapturedBindings(program, passName, it)
             }
         }
@@ -57,35 +56,39 @@ class GLReplayInstance(
         )
 
         commands.forEach { command ->
-            command.debugLabels().forEach { label ->
-                glPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, 0, label)
-            }
-
-            glUseProgram(programs[command.shaderIndex()])
-            resources.useProgram(programs[command.shaderIndex()])
-            resources.bind(command)
-
             when (command) {
-                is Command.DispatchCommand -> {
-                    glDispatchCompute(command.x, command.y, command.z)
+                is Command.PushDebugLabelCommand -> {
+                    glPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, 0, command.label)
                 }
 
-                is Command.DispatchIndirectCommand -> {
-                    resources.bindDispatchIndirectBuffer(command.bufferIndex)
-                    glDispatchComputeIndirect(command.offset)
+                Command.PopDebugLabelCommand -> {
+                    glPopDebugGroup()
                 }
-            }
 
-            glMemoryBarrier(
-                GL_SHADER_STORAGE_BARRIER_BIT or
-                    GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
-                    GL_TEXTURE_FETCH_BARRIER_BIT or
-                    GL_BUFFER_UPDATE_BARRIER_BIT or
-                    GL_UNIFORM_BARRIER_BIT
-            )
+                is Command.PassCommand -> {
+                    glUseProgram(programs[command.passInfo.shaderIndex])
+                    resources.useProgram(programs[command.passInfo.shaderIndex])
+                    resources.bind(command)
 
-            repeat(command.debugLabels().size) {
-                glPopDebugGroup()
+                    when (command) {
+                        is Command.DispatchCommand -> {
+                            glDispatchCompute(command.x, command.y, command.z)
+                        }
+
+                        is Command.DispatchIndirectCommand -> {
+                            resources.bindDispatchIndirectBuffer(command.bufferIndex)
+                            glDispatchComputeIndirect(command.offset)
+                        }
+                    }
+
+                    glMemoryBarrier(
+                        GL_SHADER_STORAGE_BARRIER_BIT or
+                            GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
+                            GL_TEXTURE_FETCH_BARRIER_BIT or
+                            GL_BUFFER_UPDATE_BARRIER_BIT or
+                            GL_UNIFORM_BARRIER_BIT
+                    )
+                }
             }
         }
 

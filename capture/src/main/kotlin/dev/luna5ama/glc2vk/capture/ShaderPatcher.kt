@@ -1,11 +1,6 @@
 package dev.luna5ama.glc2vk.capture
 
-import dev.luna5ama.glc2vk.common.Command
-import dev.luna5ama.glc2vk.common.defaultUniformBindings
-import dev.luna5ama.glc2vk.common.imageBindings
-import dev.luna5ama.glc2vk.common.samplerBindings
-import dev.luna5ama.glc2vk.common.storageBufferBindings
-import dev.luna5ama.glc2vk.common.uniformBufferBindings
+import dev.luna5ama.glc2vk.common.PassInfo
 import dev.luna5ama.glwrapper.enums.GLSLDataType
 import dev.luna5ama.glwrapper.enums.ImageFormat
 
@@ -281,13 +276,13 @@ class ShaderSourceContext(val originalSource: String) {
     }
 }
 
-fun ShaderInfo.validateCapturedBindings(command: Command) {
+fun ShaderInfo.validateCapturedBindings(info: PassInfo) {
     val missing = mutableListOf<String>()
-    val samplerNames = command.samplerBindings().mapTo(HashSet()) { it.name }
-    val imageNames = command.imageBindings().mapTo(HashSet()) { it.name }
-    val storageBufferNames = command.storageBufferBindings().mapTo(HashSet()) { it.name }
-    val uniformBufferNames = command.uniformBufferBindings().mapTo(HashSet()) { it.name }
-    val defaultUniformNames = command.defaultUniformBindings().mapTo(HashSet()) { it.name }
+    val samplerNames = info.samplerBindings.mapTo(HashSet()) { it.name }
+    val imageNames = info.imageBindings.mapTo(HashSet()) { it.name }
+    val storageBufferNames = info.storageBufferBindings.mapTo(HashSet()) { it.name }
+    val uniformBufferNames = info.uniformBufferBindings.mapTo(HashSet()) { it.name }
+    val defaultUniformNames = info.defaultUniformBindings.mapTo(HashSet()) { it.name }
 
     uniforms.values.forEach { uniform ->
         when (uniform.type) {

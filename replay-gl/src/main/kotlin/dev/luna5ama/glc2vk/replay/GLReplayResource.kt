@@ -30,12 +30,12 @@ class GLReplayResource(private val captureData: CaptureData) {
         }
     }
 
-    fun bind(command: Command) {
+    fun bind(command: Command.PassCommand) {
         bindUniforms(command)
         bindImages(command)
         bindSamplers(command)
-        bindBuffers(command.storageBufferBindings(), GL_SHADER_STORAGE_BUFFER)
-        bindBuffers(command.uniformBufferBindings(), GL_UNIFORM_BUFFER)
+        bindBuffers(command.passInfo.storageBufferBindings, GL_SHADER_STORAGE_BUFFER)
+        bindBuffers(command.passInfo.uniformBufferBindings, GL_UNIFORM_BUFFER)
     }
 
     fun bindDispatchIndirectBuffer(bufferIndex: Int) {
@@ -48,8 +48,8 @@ class GLReplayResource(private val captureData: CaptureData) {
         buffers.forEach { it.destroy() }
     }
 
-    private fun bindImages(command: Command) {
-        command.imageBindings().forEach { binding ->
+    private fun bindImages(command: Command.PassCommand) {
+        command.passInfo.imageBindings.forEach { binding ->
             setOpaqueUniformUnit(binding.name, binding.binding)
             val image = textures[binding.imageIndex]
             val imageFormat = binding.format.toGLImageFormat()
@@ -66,8 +66,8 @@ class GLReplayResource(private val captureData: CaptureData) {
         }
     }
 
-    private fun bindSamplers(command: Command) {
-        command.samplerBindings().forEach { binding ->
+    private fun bindSamplers(command: Command.PassCommand) {
+        command.passInfo.samplerBindings.forEach { binding ->
             setOpaqueUniformUnit(binding.name, binding.binding)
             val texture = textures[binding.imageIndex].texture
             texture.bindTextureUnit(binding.binding)
@@ -88,8 +88,8 @@ class GLReplayResource(private val captureData: CaptureData) {
         currentProgram = program
     }
 
-    private fun bindUniforms(command: Command) {
-        command.defaultUniformBindings().forEach { uniform ->
+    private fun bindUniforms(command: Command.PassCommand) {
+        command.passInfo.defaultUniformBindings.forEach { uniform ->
             val location = glGetUniformLocation(currentProgram, uniform.name)
             if (location < 0) return@forEach
 

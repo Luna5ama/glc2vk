@@ -3,6 +3,7 @@ package dev.luna5ama.glc2vk.common
 import dev.luna5ama.kmogus.Arr
 import kotlinx.coroutines.*
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.nio.ByteBuffer
@@ -19,33 +20,48 @@ import kotlin.coroutines.resume
 import kotlin.io.path.*
 
 @Serializable
-sealed interface Command {
+data class PassInfo(
+    val shaderIndex: Int = 0,
+    val samplerBindings: List<SamplerBinding> = emptyList(),
+    val imageBindings: List<ImageBinding> = emptyList(),
+    val storageBufferBindings: List<BufferBinding> = emptyList(),
+    val uniformBufferBindings: List<BufferBinding> = emptyList(),
+    val defaultUniformBindings: List<DefaultUniformBinding> = emptyList(),
+)
+
+@Serializable
+sealed class Command {
     @Serializable
+    sealed class PassCommand : Command() {
+        abstract val passInfo: PassInfo
+    }
+
+    @Serializable
+    @SerialName("PushDebugLabel")
+    data class PushDebugLabelCommand(
+        val label: String
+    ) : Command()
+
+    @Serializable
+    @SerialName("PopDebugLabel")
+    object PopDebugLabelCommand : Command()
+
+    @Serializable
+    @SerialName("Dispatch")
     data class DispatchCommand(
         val x: Int,
         val y: Int,
         val z: Int,
-        val shaderIndex: Int = 0,
-        val debugLabels: List<String> = emptyList(),
-        val samplerBindings: List<SamplerBinding> = emptyList(),
-        val imageBindings: List<ImageBinding> = emptyList(),
-        val storageBufferBindings: List<BufferBinding> = emptyList(),
-        val uniformBufferBindings: List<BufferBinding> = emptyList(),
-        val defaultUniformBindings: List<DefaultUniformBinding> = emptyList()
-    ) : Command
+        override val passInfo: PassInfo = PassInfo()
+    ) : PassCommand()
 
     @Serializable
+    @SerialName("DispatchIndirect")
     data class DispatchIndirectCommand(
         val bufferIndex: Int,
         val offset: Long,
-        val shaderIndex: Int = 0,
-        val debugLabels: List<String> = emptyList(),
-        val samplerBindings: List<SamplerBinding> = emptyList(),
-        val imageBindings: List<ImageBinding> = emptyList(),
-        val storageBufferBindings: List<BufferBinding> = emptyList(),
-        val uniformBufferBindings: List<BufferBinding> = emptyList(),
-        val defaultUniformBindings: List<DefaultUniformBinding> = emptyList()
-    ) : Command
+        override val passInfo: PassInfo = PassInfo()
+    ) : PassCommand()
 }
 
 @Serializable
@@ -157,105 +173,61 @@ data class CaptureMetadata(
 ) {
     fun commandsForReplay(): List<Command> {
         val sourceCommands = commands.ifEmpty { command?.let(::listOf).orEmpty() }
-        return sourceCommands.map { command ->
-            if (command.hasBindings()) {
-                command
-            } else {
-                command.withBindings(
-                    samplerBindings = samplerBindings,
-                    imageBindings = imageBindings,
-                    storageBufferBindings = storageBufferBindings,
-                    uniformBufferBindings = uniformBufferBindings,
-                    defaultUniformBindings = emptyList()
-                )
-            }
-        }
+
+        return sourceCommands.normalizeExplicitDebugLabelCommands()
     }
 
-    fun allSamplerBindings(): List<SamplerBinding> = commandsForReplay().flatMap { it.samplerBindings() }.distinct()
+    fun allSamplerBindings(): List<SamplerBinding> = commandsForReplay().asSequence()
+        .filterIsInstance<Command.PassCommand>()
+        .flatMap { it.passInfo.samplerBindings }
+        .distinct()
+        .toList()
 
-    fun allImageBindings(): List<ImageBinding> = commandsForReplay().flatMap { it.imageBindings() }.distinct()
+    fun allImageBindings(): List<ImageBinding> = commandsForReplay().asSequence()
+        .filterIsInstance<Command.PassCommand>()
+        .flatMap { it.passInfo.imageBindings }
+        .distinct()
+        .toList()
 
-    fun allStorageBufferBindings(): List<BufferBinding> = commandsForReplay().flatMap { it.storageBufferBindings() }.distinct()
+    fun allStorageBufferBindings(): List<BufferBinding> = commandsForReplay().asSequence()
+        .filterIsInstance<Command.PassCommand>()
+        .flatMap { it.passInfo.storageBufferBindings }
+        .distinct()
+        .toList()
 
-    fun allUniformBufferBindings(): List<BufferBinding> = commandsForReplay().flatMap { it.uniformBufferBindings() }.distinct()
+    fun allUniformBufferBindings(): List<BufferBinding> = commandsForReplay().asSequence()
+        .filterIsInstance<Command.PassCommand>()
+        .flatMap { it.passInfo.uniformBufferBindings }
+        .distinct()
+        .toList()
 
     fun shaderMetadata(shaderIndex: Int): ShaderMetadata {
         return shaders.getOrNull(shaderIndex) ?: ShaderMetadata()
     }
 }
 
-fun Command.shaderIndex(): Int = when (this) {
-    is Command.DispatchCommand -> shaderIndex
-    is Command.DispatchIndirectCommand -> shaderIndex
-}
+private fun List<Command>.normalizeExplicitDebugLabelCommands(): List<Command> {
+    val normalized = this.toMutableList()
+    val depth = this.sumOf {
+        when (it) {
+            is Command.PushDebugLabelCommand -> 1
+            Command.PopDebugLabelCommand -> -1
+            else -> 0
+        }
+    }
 
-fun Command.debugLabels(): List<String> = when (this) {
-    is Command.DispatchCommand -> debugLabels
-    is Command.DispatchIndirectCommand -> debugLabels
-}
+    repeat(depth) {
+        normalized += Command.PopDebugLabelCommand
+    }
 
-fun Command.samplerBindings(): List<SamplerBinding> = when (this) {
-    is Command.DispatchCommand -> samplerBindings
-    is Command.DispatchIndirectCommand -> samplerBindings
-}
-
-fun Command.imageBindings(): List<ImageBinding> = when (this) {
-    is Command.DispatchCommand -> imageBindings
-    is Command.DispatchIndirectCommand -> imageBindings
-}
-
-fun Command.storageBufferBindings(): List<BufferBinding> = when (this) {
-    is Command.DispatchCommand -> storageBufferBindings
-    is Command.DispatchIndirectCommand -> storageBufferBindings
-}
-
-fun Command.uniformBufferBindings(): List<BufferBinding> = when (this) {
-    is Command.DispatchCommand -> uniformBufferBindings
-    is Command.DispatchIndirectCommand -> uniformBufferBindings
-}
-
-fun Command.defaultUniformBindings(): List<DefaultUniformBinding> = when (this) {
-    is Command.DispatchCommand -> defaultUniformBindings
-    is Command.DispatchIndirectCommand -> defaultUniformBindings
-}
-
-fun Command.hasBindings(): Boolean {
-    return samplerBindings().isNotEmpty() ||
-            imageBindings().isNotEmpty() ||
-            storageBufferBindings().isNotEmpty() ||
-            uniformBufferBindings().isNotEmpty() ||
-            defaultUniformBindings().isNotEmpty()
-}
-
-fun Command.withBindings(
-    samplerBindings: List<SamplerBinding>,
-    imageBindings: List<ImageBinding>,
-    storageBufferBindings: List<BufferBinding>,
-    uniformBufferBindings: List<BufferBinding>,
-    defaultUniformBindings: List<DefaultUniformBinding>
-): Command = when (this) {
-    is Command.DispatchCommand -> copy(
-        samplerBindings = samplerBindings,
-        imageBindings = imageBindings,
-        storageBufferBindings = storageBufferBindings,
-        uniformBufferBindings = uniformBufferBindings,
-        defaultUniformBindings = defaultUniformBindings
-    )
-
-    is Command.DispatchIndirectCommand -> copy(
-        samplerBindings = samplerBindings,
-        imageBindings = imageBindings,
-        storageBufferBindings = storageBufferBindings,
-        uniformBufferBindings = uniformBufferBindings,
-        defaultUniformBindings = defaultUniformBindings
-    )
+    return normalized
 }
 
 class ImageData(
     val levels: List<Arr>,
     val levelRaw: List<ByteBuffer>
 )
+
 class BufferData(
     val arr: Arr,
     val raw: ByteBuffer
@@ -269,65 +241,65 @@ class CaptureData(
     companion object {
         fun save(outputPath: Path, capture: CaptureData, block: () -> Unit): Thread {
             return thread(true) {
-                    println("Saving resource capture")
-                    @OptIn(ExperimentalSerializationApi::class)
-                    val jsonInstance = Json {
-                        prettyPrint = true
-                        prettyPrintIndent = "    "
+                println("Saving resource capture")
+                @OptIn(ExperimentalSerializationApi::class)
+                val jsonInstance = Json {
+                    prettyPrint = true
+                    prettyPrintIndent = "    "
+                }
+                println("Creating output directory: $outputPath")
+                outputPath.createDirectories()
+
+                println("Deleting existing resource capture if exists")
+                val resourceCapturePath = outputPath.resolve("resources.zip.xz")
+                resourceCapturePath.deleteIfExists()
+                println("Writing metadata")
+                val metadataPath = outputPath.resolve("resource_metadata.json")
+                val jsonStr = jsonInstance.encodeToString(capture.metadata)
+                metadataPath.writeText(jsonStr)
+
+                println("Writing resource data to ${resourceCapturePath.absolutePathString()} using 7z")
+                val proc = ProcessBuilder()
+                    .command("7z", "a", "-mx1", resourceCapturePath.absolutePathString(), "-si")
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .redirectError(ProcessBuilder.Redirect.DISCARD)
+                    .start()
+
+                println("Writing zip entries")
+                ZipOutputStream(proc.outputStream).use { zipOutput ->
+                    val channel = Channels.newChannel(zipOutput)
+                    zipOutput.setMethod(ZipOutputStream.STORED)
+                    fun writeEntry(name: String, data: ByteBuffer) {
+                        val entry = ZipEntry(name)
+                        entry.size = data.remaining().toLong()
+                        entry.compressedSize = data.remaining().toLong()
+                        val crc32 = CRC32()
+
+                        data.rewind()
+                        crc32.update(data)
+
+                        entry.crc = crc32.value
+                        zipOutput.putNextEntry(entry)
+                        data.rewind()
+                        channel.write(data)
+                        zipOutput.closeEntry()
                     }
-                    println("Creating output directory: $outputPath")
-                    outputPath.createDirectories()
 
-                    println("Deleting existing resource capture if exists")
-                    val resourceCapturePath = outputPath.resolve("resources.zip.xz")
-                    resourceCapturePath.deleteIfExists()
-                    println("Writing metadata")
-                    val metadataPath = outputPath.resolve("resource_metadata.json")
-                    val jsonStr = jsonInstance.encodeToString(capture.metadata)
-                    metadataPath.writeText(jsonStr)
+                    fun writeEntry(name: String, data: ByteBuffer, arr: Arr) {
+                        if (GLC2VK_DEBUG) println("Writing entry $name, size=${arr.len}, ptr=${"0x%016X".format(arr.ptr.address)}")
+                        writeEntry(name, data)
+                    }
 
-                    println("Writing resource data to ${resourceCapturePath.absolutePathString()} using 7z")
-                    val proc = ProcessBuilder()
-                        .command("7z", "a", "-mx1", resourceCapturePath.absolutePathString(), "-si")
-                        .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                        .redirectError(ProcessBuilder.Redirect.DISCARD)
-                        .start()
-
-                    println("Writing zip entries")
-                    ZipOutputStream(proc.outputStream).use { zipOutput ->
-                        val channel = Channels.newChannel(zipOutput)
-                        zipOutput.setMethod(ZipOutputStream.STORED)
-                        fun writeEntry(name: String, data: ByteBuffer) {
-                            val entry = ZipEntry(name)
-                            entry.size = data.remaining().toLong()
-                            entry.compressedSize = data.remaining().toLong()
-                            val crc32 = CRC32()
-
-                            data.rewind()
-                            crc32.update(data)
-
-                            entry.crc = crc32.value
-                            zipOutput.putNextEntry(entry)
-                            data.rewind()
-                            channel.write(data)
-                            zipOutput.closeEntry()
-                        }
-
-                        fun writeEntry(name: String, data: ByteBuffer, arr: Arr) {
-                            if (GLC2VK_DEBUG) println("Writing entry $name, size=${arr.len}, ptr=${"0x%016X".format(arr.ptr.address)}")
-                            writeEntry(name, data)
-                        }
-
-                        capture.imageData.forEachIndexed { imageIndex, data ->
-                            data.levelRaw.indices.forEach { level ->
-                                writeEntry("image_${imageIndex}_$level.bin", data.levelRaw[level], data.levels[level])
-                            }
-                        }
-                        capture.bufferData.forEachIndexed {  i, bufferData ->
-                            writeEntry("buffer_$i.bin", bufferData.raw, bufferData.arr)
+                    capture.imageData.forEachIndexed { imageIndex, data ->
+                        data.levelRaw.indices.forEach { level ->
+                            writeEntry("image_${imageIndex}_$level.bin", data.levelRaw[level], data.levels[level])
                         }
                     }
-                    proc.waitFor()
+                    capture.bufferData.forEachIndexed { i, bufferData ->
+                        writeEntry("buffer_$i.bin", bufferData.raw, bufferData.arr)
+                    }
+                }
+                proc.waitFor()
 
                 block()
             }
@@ -389,10 +361,12 @@ class CaptureData(
                             imageDataBytes[entry.name] = byteBuffer
                             imageDataCallback[entry.name]?.resume(byteBuffer)
                         }
+
                         entry.name.startsWith("buffer_") -> {
                             bufferDataBytes[entry.name] = byteBuffer
                             bufferDataCallback[entry.name]?.resume(byteBuffer)
                         }
+
                         else -> error("Got unexpected file ${entry.name} in resource capture")
                     }
                     entry = zipInput.nextEntry
@@ -407,3 +381,4 @@ class CaptureData(
         }
     }
 }
+

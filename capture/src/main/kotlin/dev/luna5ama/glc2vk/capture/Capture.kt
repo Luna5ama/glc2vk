@@ -332,7 +332,7 @@ private class CaptureContext {
             imageBindings = imageBindings,
             storageBufferBindings = storageBufferBindings,
             uniformBufferBindings = uniformBufferBindings,
-            command = commands.singleOrNull(),
+            command = commands.filterIsInstance<Command.PassCommand>().singleOrNull(),
             commands = commands,
             shaderCount = shaderInfos.size,
             shaders = shaderInfos.map {
@@ -787,18 +787,10 @@ private fun CaptureContext.captureBuffers(
     }
 }
 
-private data class CapturedBindings(
-    val samplerBindings: List<SamplerBinding>,
-    val imageBindings: List<ImageBinding>,
-    val storageBufferBindings: List<BufferBinding>,
-    val uniformBufferBindings: List<BufferBinding>,
-    val defaultUniformBindings: List<DefaultUniformBinding>
-)
-
 private fun CaptureContext.captureShaderProgramResources(
     shaderInfo: ShaderInfo,
     resourceManager: ShaderProgramResourceManager
-): CapturedBindings {
+): PassInfo {
     val samplerStart = samplerBindings.size
     val imageStart = imageBindings.size
     val storageBufferStart = storageBufferBindings.size
@@ -811,7 +803,8 @@ private fun CaptureContext.captureShaderProgramResources(
     println("Capturing buffers...")
     captureBuffers(shaderInfo, resourceManager)
 
-    return CapturedBindings(
+    return PassInfo(
+        shaderIndex = shaderIndex(shaderInfo),
         samplerBindings = samplerBindings.subList(samplerStart, samplerBindings.size).toList(),
         imageBindings = imageBindings.subList(imageStart, imageBindings.size).toList(),
         storageBufferBindings = storageBufferBindings.subList(storageBufferStart, storageBufferBindings.size).toList(),
@@ -879,20 +872,13 @@ private fun CaptureContext.recordDispatchCompute(
     glFinish()
     val currProgram = glGetInteger(GL_CURRENT_PROGRAM)
     val resourceManager = ShaderProgramResourceManager(currProgram)
+    val passInfo = captureShaderProgramResources(shaderInfo, resourceManager)
 
-    val shaderIndex = shaderIndex(shaderInfo)
-    val bindings = captureShaderProgramResources(shaderInfo, resourceManager)
     commands += Command.DispatchCommand(
         x = num_groups_x,
         y = num_groups_y,
         z = num_groups_z,
-        shaderIndex = shaderIndex,
-        debugLabels = debugLabelStack.toList(),
-        samplerBindings = bindings.samplerBindings,
-        imageBindings = bindings.imageBindings,
-        storageBufferBindings = bindings.storageBufferBindings,
-        uniformBufferBindings = bindings.uniformBufferBindings,
-        defaultUniformBindings = bindings.defaultUniformBindings
+        passInfo = passInfo
     )
 }
 
@@ -901,8 +887,7 @@ private fun CaptureContext.recordDispatchComputeIndirect(shaderInfo: ShaderInfo,
     val currProgram = glGetInteger(GL_CURRENT_PROGRAM)
     val resourceManager = ShaderProgramResourceManager(currProgram)
 
-    val shaderIndex = shaderIndex(shaderInfo)
-    val bindings = captureShaderProgramResources(shaderInfo, resourceManager)
+    val passInfo = captureShaderProgramResources(shaderInfo, resourceManager)
 
     val boundIndirectBuffer = glGetInteger(GL_DISPATCH_INDIRECT_BUFFER_BINDING)
     val bufferIndex = getBufferIndex(boundIndirectBuffer)
@@ -910,13 +895,7 @@ private fun CaptureContext.recordDispatchComputeIndirect(shaderInfo: ShaderInfo,
     commands += Command.DispatchIndirectCommand(
         bufferIndex = bufferIndex,
         offset = indirect,
-        shaderIndex = shaderIndex,
-        debugLabels = debugLabelStack.toList(),
-        samplerBindings = bindings.samplerBindings,
-        imageBindings = bindings.imageBindings,
-        storageBufferBindings = bindings.storageBufferBindings,
-        uniformBufferBindings = bindings.uniformBufferBindings,
-        defaultUniformBindings = bindings.defaultUniformBindings
+        passInfo = passInfo,
     )
 }
 
@@ -1009,13 +988,17 @@ fun captureGlPopDebugGroup() {
 }
 
 fun captureDebugLabelPush(message: String) {
-    activeCaptureContext?.debugLabelStack?.add(message)
+    activeCaptureContext?.let {
+        it.debugLabelStack += message
+        it.commands += Command.PushDebugLabelCommand(message)
+    }
 }
 
 fun captureDebugLabelPop() {
     activeCaptureContext?.debugLabelStack?.let {
         if (it.isNotEmpty()) {
             it.removeAt(it.lastIndex)
+            activeCaptureContext?.commands?.add(Command.PopDebugLabelCommand)
         }
     }
 }

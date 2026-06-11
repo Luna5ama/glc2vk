@@ -2,7 +2,6 @@ package dev.luna5ama.glc2vk.replay
 
 import dev.luna5ama.glc2vk.common.CaptureData
 import dev.luna5ama.glc2vk.common.Command
-import dev.luna5ama.glc2vk.common.debugLabels
 import dev.luna5ama.glc2vk.common.imageBindings
 import dev.luna5ama.glc2vk.common.samplerBindings
 import dev.luna5ama.glc2vk.common.storageBufferBindings
@@ -53,15 +52,16 @@ class ReplayInstance(
 
     val resource: ReplayResource
     private val replayCommands = captureData.metadata.commandsForReplay()
+    private val replayPassCommands = replayCommands.filterIsInstance<Command.PassCommand>()
     private val shaderCompiler = ReplayShaderCompiler(captureData, captureDir, shaderOverridePath, shaderPasses)
     private val pipelineInfos: List<ComputePipelineInfo>
 
     init {
         MemoryStack {
             MemoryStack {
-                val extra = maxOf(4u, replayCommands.size.toUInt())
+                val extra = maxOf(4u, replayPassCommands.size.toUInt())
                 val createInfo = VkDescriptorPoolCreateInfo.allocate {
-                    maxSets = maxOf(4u, replayCommands.size.toUInt() * 3u)
+                    maxSets = maxOf(4u, replayPassCommands.size.toUInt() * 3u)
                     val poolSizes = VkDescriptorPoolSize.allocate(4L)
                     poolSizes[0L].apply {
                         type = VkDescriptorType.UNIFORM_BUFFER
@@ -192,7 +192,7 @@ class ReplayInstance(
             }
 
             MemoryStack {
-                pipelineInfos = replayCommands.map { makeComputePipeline(it) }
+                pipelineInfos = replayPassCommands.map { makeComputePipeline(it) }
             }
         }
     }
@@ -572,58 +572,63 @@ class ReplayInstance(
             cmdBuffers[1].beginCommandBuffer(beginInfo.ptr())
             cmdBuffers[1].cmdBeginDebugUtilsLabelEXT(replayLabel.ptr())
 
-            replayCommands.forEachIndexed { commandIndex, command ->
-                command.debugLabels().forEach { label ->
-                    val debugLabel = VkDebugUtilsLabelEXT.allocate {
-                        pLabelName = label.c_str()
-                    }
-                    cmdBuffers[1].cmdBeginDebugUtilsLabelEXT(debugLabel.ptr())
-                }
-
-                val pipelineInfo = pipelineInfos[commandIndex]
-                cmdBuffers[1].cmdBindPipeline(VkPipelineBindPoint.COMPUTE, pipelineInfo.pipeline)
-
-                val pDescriptorSets =
-                    VkDescriptorSet.arrayOf(*pipelineInfo.descriptorInfo.descriptorSets.toTypedArray())
-                cmdBuffers[1].cmdBindDescriptorSets(
-                    VkPipelineBindPoint.COMPUTE,
-                    pipelineInfo.pipelineLayout,
-                    0u,
-                    pipelineInfo.descriptorInfo.descriptorSets.size.toUInt(),
-                    pDescriptorSets.ptr(),
-                    0u,
-                    nullptr()
-                )
-
+            var pipelineIndex = 0
+            replayCommands.forEach { command ->
                 when (command) {
-                    is Command.DispatchIndirectCommand -> {
-                        cmdBuffers[1].cmdDispatchIndirect(
-                            resource.bufferList[command.bufferIndex].gpu,
-                            command.offset.toULong()
+                    is Command.PushDebugLabelCommand -> {
+                        val debugLabel = VkDebugUtilsLabelEXT.allocate {
+                            pLabelName = command.label.c_str()
+                        }
+                        cmdBuffers[1].cmdBeginDebugUtilsLabelEXT(debugLabel.ptr())
+                    }
+
+                    Command.PopDebugLabelCommand -> {
+                        cmdBuffers[1].cmdEndDebugUtilsLabelEXT()
+                    }
+
+                    is Command.PassCommand -> {
+                        val pipelineInfo = pipelineInfos[pipelineIndex++]
+                        cmdBuffers[1].cmdBindPipeline(VkPipelineBindPoint.COMPUTE, pipelineInfo.pipeline)
+
+                        val pDescriptorSets =
+                            VkDescriptorSet.arrayOf(*pipelineInfo.descriptorInfo.descriptorSets.toTypedArray())
+                        cmdBuffers[1].cmdBindDescriptorSets(
+                            VkPipelineBindPoint.COMPUTE,
+                            pipelineInfo.pipelineLayout,
+                            0u,
+                            pipelineInfo.descriptorInfo.descriptorSets.size.toUInt(),
+                            pDescriptorSets.ptr(),
+                            0u,
+                            nullptr()
                         )
-                    }
 
-                    is Command.DispatchCommand -> {
-                        cmdBuffers[1].cmdDispatch(command.x.toUInt(), command.y.toUInt(), command.z.toUInt())
-                    }
-                }
+                        when (command) {
+                            is Command.DispatchIndirectCommand -> {
+                                cmdBuffers[1].cmdDispatchIndirect(
+                                    resource.bufferList[command.bufferIndex].gpu,
+                                    command.offset.toULong()
+                                )
+                            }
 
-                MemoryStack {
-                    val memoryBarrier = VkMemoryBarrier2.allocate(1L)
-                    memoryBarrier[0].apply {
-                        srcStageMask = VkPipelineStageFlags2.ALL_COMMANDS
-                        srcAccessMask = VkAccessFlags2.MEMORY_WRITE
-                        dstStageMask = VkPipelineStageFlags2.ALL_COMMANDS
-                        dstAccessMask = VkAccessFlags2.MEMORY_READ + VkAccessFlags2.MEMORY_WRITE
-                    }
-                    val dependencyInfo = VkDependencyInfo.allocate {
-                        memoryBarriers(memoryBarrier)
-                    }
-                    cmdBuffers[1].cmdPipelineBarrier2(dependencyInfo.ptr())
-                }
+                            is Command.DispatchCommand -> {
+                                cmdBuffers[1].cmdDispatch(command.x.toUInt(), command.y.toUInt(), command.z.toUInt())
+                            }
+                        }
 
-                repeat(command.debugLabels().size) {
-                    cmdBuffers[1].cmdEndDebugUtilsLabelEXT()
+                        MemoryStack {
+                            val memoryBarrier = VkMemoryBarrier2.allocate(1L)
+                            memoryBarrier[0].apply {
+                                srcStageMask = VkPipelineStageFlags2.ALL_COMMANDS
+                                srcAccessMask = VkAccessFlags2.MEMORY_WRITE
+                                dstStageMask = VkPipelineStageFlags2.ALL_COMMANDS
+                                dstAccessMask = VkAccessFlags2.MEMORY_READ + VkAccessFlags2.MEMORY_WRITE
+                            }
+                            val dependencyInfo = VkDependencyInfo.allocate {
+                                memoryBarriers(memoryBarrier)
+                            }
+                            cmdBuffers[1].cmdPipelineBarrier2(dependencyInfo.ptr())
+                        }
+                    }
                 }
             }
             cmdBuffers[1].cmdEndDebugUtilsLabelEXT()
@@ -692,11 +697,11 @@ class ReplayInstance(
 
     context(_: MemoryStack)
     @OptIn(UnsafeAPI::class)
-    private fun makeDescriptors(command: Command): DescriptorInfo = MemoryStack {
-        val samplerBindings = command.samplerBindings()
-        val imageBindings = command.imageBindings()
-        val storageBufferBindings = command.storageBufferBindings()
-        val uniformBufferBindings = command.uniformBufferBindings()
+    private fun makeDescriptors(command: Command.PassCommand): DescriptorInfo = MemoryStack {
+        val samplerBindings = command.passInfo.samplerBindings
+        val imageBindings = command.passInfo.imageBindings
+        val storageBufferBindings = command.passInfo.storageBufferBindings
+        val uniformBufferBindings = command.passInfo.uniformBufferBindings
 
         val samplers = samplerBindings.map {
             val samplerInfo = it.samplerInfo
@@ -893,7 +898,7 @@ class ReplayInstance(
 
     context(_: MemoryStack)
     @OptIn(UnsafeAPI::class)
-    private fun makeComputePipeline(command: Command): ComputePipelineInfo = MemoryStack {
+    private fun makeComputePipeline(command: Command.PassCommand): ComputePipelineInfo = MemoryStack {
         val shaderPath = shaderCompiler.shaderPath(command)
         val shaderModule = shaderPath.useMapped { spvData ->
             val createInfo = VkShaderModuleCreateInfo.allocate {
