@@ -1,12 +1,7 @@
 package dev.luna5ama.glc2vk.common
 
 import dev.luna5ama.kmogus.Arr
-import dev.luna5ama.kmogus.memcpy
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.*
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -303,14 +298,17 @@ class CaptureData(
                         val channel = Channels.newChannel(zipOutput)
                         zipOutput.setMethod(ZipOutputStream.STORED)
                         fun writeEntry(name: String, data: ByteBuffer) {
-                            data.rewind()
                             val entry = ZipEntry(name)
                             entry.size = data.remaining().toLong()
                             entry.compressedSize = data.remaining().toLong()
                             val crc32 = CRC32()
+
+                            data.rewind()
                             crc32.update(data)
+
                             entry.crc = crc32.value
                             zipOutput.putNextEntry(entry)
+                            data.rewind()
                             channel.write(data)
                             zipOutput.closeEntry()
                         }
