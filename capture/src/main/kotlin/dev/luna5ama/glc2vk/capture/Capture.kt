@@ -103,7 +103,7 @@ private class CaptureContext {
         val tempPtr = temp.ptr
 
         check(imageID != 0) { "Image ID is 0" }
-        println("Capturing image ID: $imageID")
+        if (GLC2VK_DEBUG) println("Capturing image ID: $imageID")
         if (imageIDToIndex.putIfAbsent(imageID, images.size) == null) {
             glGetTextureParameteriv(imageID, GL_TEXTURE_TARGET, tempPtr)
             val target = tempPtr.getInt()
@@ -379,8 +379,8 @@ private fun CaptureContext.captureDefaultUniformBlock(
             .filter { it.type is GLSLDataType.Value }
             .forEach {
                 fun getData(elementInfo: StructAllocator.ElementInfo) {
-                    println("Capturing default uniform: ${it.name}")
-                    println("offset=${elementInfo.offset}, size=${elementInfo.size}, totalSize=${this@struct.size}")
+                    if (GLC2VK_DEBUG) println("Capturing default uniform: ${it.name}")
+                    if (GLC2VK_DEBUG) println("offset=${elementInfo.offset}, size=${elementInfo.size}, totalSize=${this@struct.size}")
                     val uniformResource = resourceManager.uniformResource.nameToEntryMap[it.name]
                     if (uniformResource == null || uniformResource.location == -1 || uniformResource.blockIndex != -1) {
                         return
@@ -851,7 +851,14 @@ private fun saveShader(
             spvPath.absolutePathString(),
             vkGlslPath.absolutePathString()
         )
-        .inheritIO()
+        .apply {
+            if (GLC2VK_DEBUG) {
+                redirectOutput(ProcessBuilder.Redirect.INHERIT)
+            } else {
+                redirectOutput(ProcessBuilder.Redirect.DISCARD)
+            }
+            redirectError(ProcessBuilder.Redirect.INHERIT)
+        }
         .start()
         .waitFor()
     check(exitCode == 0) { "glslang failed with exit code $exitCode for $vkGlslPath" }

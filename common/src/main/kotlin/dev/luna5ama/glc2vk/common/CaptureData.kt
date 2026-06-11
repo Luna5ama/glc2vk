@@ -314,7 +314,7 @@ class CaptureData(
                         }
 
                         fun writeEntry(name: String, data: ByteBuffer, arr: Arr) {
-                            println("Writing entry $name, size=${arr.len}, ptr=${"0x%016X".format(arr.ptr.address)}")
+                            if (GLC2VK_DEBUG) println("Writing entry $name, size=${arr.len}, ptr=${"0x%016X".format(arr.ptr.address)}")
                             writeEntry(name, data)
                         }
 
