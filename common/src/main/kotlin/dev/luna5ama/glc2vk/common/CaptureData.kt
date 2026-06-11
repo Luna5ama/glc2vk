@@ -300,33 +300,33 @@ class CaptureData(
 
                     println("Writing zip entries")
                     ZipOutputStream(proc.outputStream).use { zipOutput ->
+                        val channel = Channels.newChannel(zipOutput)
                         zipOutput.setMethod(ZipOutputStream.STORED)
-                        fun writeEntry(name: String, data: ByteArray) {
+                        fun writeEntry(name: String, data: ByteBuffer) {
+                            data.rewind()
                             val entry = ZipEntry(name)
-                            entry.size = data.size.toLong()
-                            entry.compressedSize = data.size.toLong()
+                            entry.size = data.remaining().toLong()
+                            entry.compressedSize = data.remaining().toLong()
                             val crc32 = CRC32()
                             crc32.update(data)
                             entry.crc = crc32.value
                             zipOutput.putNextEntry(entry)
-                            zipOutput.write(data)
+                            channel.write(data)
                             zipOutput.closeEntry()
                         }
 
-                        fun writeEntry(name: String, data: Arr, len: Long) {
-                            println("Writing entry $name, size=${data.len}, ptr=${"0x%016X".format(data.ptr.address)}")
-                            val byteArray = ByteArray(len.toInt())
-                            memcpy(data.ptr, 0L, byteArray, 0L, len)
-                            writeEntry(name, byteArray)
+                        fun writeEntry(name: String, data: ByteBuffer, arr: Arr) {
+                            println("Writing entry $name, size=${arr.len}, ptr=${"0x%016X".format(arr.ptr.address)}")
+                            writeEntry(name, data)
                         }
 
-                        (capture.metadata.images zip capture.imageData).forEachIndexed { imageIndex, (metadata, data) ->
-                            data.levels.forEachIndexed { level, data ->
-                                writeEntry("image_${imageIndex}_$level.bin", data, metadata.levelDataSizes[level])
+                        capture.imageData.forEachIndexed { imageIndex, data ->
+                            data.levelRaw.indices.forEach { level ->
+                                writeEntry("image_${imageIndex}_$level.bin", data.levelRaw[level], data.levels[level])
                             }
                         }
-                        capture.metadata.buffers.forEachIndexed { i, _ ->
-                            writeEntry("buffer_$i.bin", capture.bufferData[i].arr, capture.metadata.buffers[i].size)
+                        capture.bufferData.forEachIndexed {  i, bufferData ->
+                            writeEntry("buffer_$i.bin", bufferData.raw, bufferData.arr)
                         }
                     }
                     proc.waitFor()
