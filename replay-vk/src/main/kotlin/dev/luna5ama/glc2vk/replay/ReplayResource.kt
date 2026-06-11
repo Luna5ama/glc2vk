@@ -207,8 +207,8 @@ class ReplayResource(
 
                     captureData.bufferData.forEachIndexed { index, data ->
                         val offset = bufferSuballocateOffsets.cpu.getLong(index)
-                        val dataWrapped = NPointer<NUInt8>(data.ptr.address)
-                        dataWrapped.copyTo(mappedPtr + offset, data.len)
+                        val dataWrapped = NPointer<NUInt8>(data.arr.ptr.address)
+                        dataWrapped.copyTo(mappedPtr + offset, data.arr.len)
                     }
 
                     device.unmapMemory(cpu)
