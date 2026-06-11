@@ -28,7 +28,7 @@ class GLReplayInstance(
     private val commands = captureData.metadata.commandsForReplay()
     private val passCommands = commands.filterIsInstance<Command.PassCommand>()
     private val shaderSourceResolver = ShaderSourceResolver(capturePath, shaderOverridePath, shaderPasses)
-    private val programs = List(captureData.metadata.shaderCount) { shaderIndex ->
+    private val programs = List(captureData.metadata.shaders.size) { shaderIndex ->
         val resolved = shaderSourceResolver.resolve(captureData.metadata, shaderIndex)
         val program = loadOpenGLComputeProgram(resolved.source, resolved.path)
         if (resolved.isOverride) {

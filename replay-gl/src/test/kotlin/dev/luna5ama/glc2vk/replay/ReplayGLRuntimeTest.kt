@@ -1,5 +1,4 @@
 package dev.luna5ama.glc2vk.replay
-
 import dev.luna5ama.glc2vk.capture.ShaderSourceContext
 import dev.luna5ama.glc2vk.capture.beginGlCapture
 import dev.luna5ama.glc2vk.capture.captureGlDispatchCompute
@@ -38,14 +37,14 @@ import dev.luna5ama.kmogus.MemoryStack
 import org.lwjgl.glfw.Callbacks.glfwFreeCallbacks
 import org.lwjgl.glfw.GLFW.GLFW_CLIENT_API
 import org.lwjgl.glfw.GLFW.GLFW_CONTEXT_CREATION_API
+import org.lwjgl.glfw.GLFW.GLFW_CONTEXT_VERSION_MAJOR
+import org.lwjgl.glfw.GLFW.GLFW_CONTEXT_VERSION_MINOR
 import org.lwjgl.glfw.GLFW.GLFW_FALSE
 import org.lwjgl.glfw.GLFW.GLFW_NATIVE_CONTEXT_API
 import org.lwjgl.glfw.GLFW.GLFW_OPENGL_API
 import org.lwjgl.glfw.GLFW.GLFW_OPENGL_CORE_PROFILE
 import org.lwjgl.glfw.GLFW.GLFW_OPENGL_FORWARD_COMPAT
 import org.lwjgl.glfw.GLFW.GLFW_OPENGL_PROFILE
-import org.lwjgl.glfw.GLFW.GLFW_CONTEXT_VERSION_MAJOR
-import org.lwjgl.glfw.GLFW.GLFW_CONTEXT_VERSION_MINOR
 import org.lwjgl.glfw.GLFW.GLFW_VISIBLE
 import org.lwjgl.glfw.GLFW.glfwCreateWindow
 import org.lwjgl.glfw.GLFW.glfwDefaultWindowHints
@@ -59,21 +58,18 @@ import kotlin.io.path.Path
 import kotlin.io.path.exists
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 import kotlin.test.assertIs
-
+import kotlin.test.assertTrue
 class ReplayGLRuntimeTest {
     @Test
     fun captureAndReplayTwoDispatches() {
         if (!System.getProperty("glc2vk.runtimeTest").toBoolean()) {
             return
         }
-
         val outputPath = Path("build/runtime-capture-test/gl-two-dispatch")
         if (outputPath.exists()) {
             outputPath.toFile().deleteRecursively()
         }
-
         val source = """
             #version 460 core
             layout(local_size_x = 1) in;
@@ -88,7 +84,6 @@ class ReplayGLRuntimeTest {
             patchShaderForVulkan()
             toShaderInfo()
         }
-
         check(glfwInit()) { "Failed to initialize GLFW" }
         val window = try {
             glfwDefaultWindowHints()
@@ -106,11 +101,9 @@ class ReplayGLRuntimeTest {
             glfwTerminate()
             throw t
         }
-
         try {
             glfwMakeContextCurrent(window)
             GL.createCapabilities()
-
             val program = compileComputeProgram(source)
             val buffer = BufferObject.Immutable()
             val initialData = Arr.malloc(16L)
@@ -119,10 +112,8 @@ class ReplayGLRuntimeTest {
                 buffer.allocate(16L, GL_DYNAMIC_STORAGE_BIT)
                 buffer.upload(0L, 16L, initialData.ptr)
                 buffer.label = "runtime-test-data"
-
                 glUseProgram(program)
                 glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, buffer.id)
-
                 beginGlCapture(outputPath)
                 glDebugGroupCaptureAware("runtime-test-group") {
                     captureGlDispatchCompute(shaderInfo, 4, 1, 1)
@@ -139,20 +130,19 @@ class ReplayGLRuntimeTest {
                 glUseProgram(0)
                 glDeleteProgram(program)
             }
-
-            val metadataOnly = CaptureData.load(outputPath)
-            val commands = metadataOnly.metadata.commandsForReplay()
-            assertEquals(2, commands.size)
-            commands.forEach {
-                assertIs<Command.DispatchCommand>(it)
-                assertEquals(listOf("runtime-test-group"), it.debugLabels)
+            val captureData = CaptureData.load(outputPath)
+            val commands = captureData.metadata.commandsForReplay()
+            assertEquals(4, commands.size)
+            assertIs<Command.PushDebugLabelCommand>(commands[0]).also {
+                assertEquals("runtime-test-group", it.label)
             }
-            metadataOnly.free()
-
+            val dispatchCommands = commands.filterIsInstance<Command.DispatchCommand>()
+            assertEquals(2, dispatchCommands.size)
+            assertEquals(Command.PopDebugLabelCommand, commands[3])
             val replay = GLReplayInstance(captureData, outputPath)
             try {
                 replay.execute()
-                val bufferIndex = commands.first().storageBufferBindings().first { it.name == "Data" }.bufferIndex
+                val bufferIndex = dispatchCommands.first().passInfo.storageBufferBindings.first { it.name == "Data" }.bufferIndex
                 MemoryStack {
                     val readback = malloc(16L)
                     glGetNamedBufferSubData(replay.bufferId(bufferIndex), 0L, 16L, readback.ptr)
@@ -171,7 +161,6 @@ class ReplayGLRuntimeTest {
             glfwTerminate()
         }
     }
-
     private fun compileComputeProgram(source: String): Int {
         val shader = glCreateShader(GL_COMPUTE_SHADER)
         glShaderSource(shader, source)
@@ -181,7 +170,6 @@ class ReplayGLRuntimeTest {
             glDeleteShader(shader)
             error("Failed to compile runtime test shader:\n$log")
         }
-
         val program = glCreateProgram()
         glAttachShader(program, shader)
         glLinkProgram(program)
@@ -192,7 +180,6 @@ class ReplayGLRuntimeTest {
             glDeleteProgram(program)
             error("Failed to link runtime test shader:\n$log")
         }
-
         glDetachShader(program, shader)
         glDeleteShader(shader)
         return program

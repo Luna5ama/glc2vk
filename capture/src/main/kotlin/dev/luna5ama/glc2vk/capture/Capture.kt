@@ -328,16 +328,9 @@ private class CaptureContext {
                     bufferNames[i] ?: "buffer_$i"
                 })
             },
-            samplerBindings = samplerBindings,
-            imageBindings = imageBindings,
-            storageBufferBindings = storageBufferBindings,
-            uniformBufferBindings = uniformBufferBindings,
-            command = commands.filterIsInstance<Command.PassCommand>().singleOrNull(),
             commands = commands,
-            shaderCount = shaderInfos.size,
             shaders = shaderInfos.map {
                 ShaderMetadata(
-                    passName = it.passName,
                     programType = it.programType,
                     sourcePath = it.sourcePath,
                     stage = it.stage

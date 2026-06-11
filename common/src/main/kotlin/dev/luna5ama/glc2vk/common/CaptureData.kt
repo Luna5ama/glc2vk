@@ -162,20 +162,10 @@ data class ShaderMetadata(
 data class CaptureMetadata(
     val images: List<ImageMetadata>,
     val buffers: List<BufferMetadata>,
-    val samplerBindings: List<SamplerBinding>,
-    val imageBindings: List<ImageBinding>,
-    val storageBufferBindings: List<BufferBinding>,
-    val uniformBufferBindings: List<BufferBinding>,
-    val command: Command? = null,
     val commands: List<Command> = emptyList(),
-    val shaderCount: Int = 1,
     val shaders: List<ShaderMetadata> = emptyList()
 ) {
-    fun commandsForReplay(): List<Command> {
-        val sourceCommands = commands.ifEmpty { command?.let(::listOf).orEmpty() }
-
-        return sourceCommands.normalizeExplicitDebugLabelCommands()
-    }
+    fun commandsForReplay(): List<Command> = commands.normalizeExplicitDebugLabelCommands()
 
     fun allSamplerBindings(): List<SamplerBinding> = commandsForReplay().asSequence()
         .filterIsInstance<Command.PassCommand>()
