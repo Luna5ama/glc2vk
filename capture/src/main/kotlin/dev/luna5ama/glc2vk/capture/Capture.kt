@@ -935,15 +935,18 @@ fun endGlCapture(): Thread {
 
     return CaptureData.save(outputPath, resourceCapture) {
         println("Saving shaders...")
-        captureContext.shaderInfos.forEachIndexed { index, shaderInfo ->
-            saveShader(
-                outputPath = outputPath,
-                shaderInfo = shaderInfo,
-                stage = ShaderStage.ComputeShader,
-                shaderIndex = index,
-                legacyName = index == 0
-            )
-        }
+        captureContext.shaderInfos
+            .mapIndexed { index, info -> index to info }
+            .parallelStream()
+            .forEach { (index, shaderInfo) ->
+                saveShader(
+                    outputPath = outputPath,
+                    shaderInfo = shaderInfo,
+                    stage = ShaderStage.ComputeShader,
+                    shaderIndex = index,
+                    legacyName = index == 0
+                )
+            }
     }
 }
 
