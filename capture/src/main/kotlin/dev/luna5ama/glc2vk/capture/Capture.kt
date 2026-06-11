@@ -10,6 +10,7 @@ import dev.luna5ama.glwrapper.enums.ShaderStage
 import dev.luna5ama.glwrapper.objects.BufferObject
 import dev.luna5ama.kmogus.*
 import org.lwjgl.system.MemoryUtil
+import java.nio.ByteBuffer
 import java.nio.file.Path
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.writeText
@@ -63,7 +64,7 @@ private class CaptureContext {
     }
 
     val bufferNames = mutableMapOf<Int, String>()
-    val buffers = mutableListOf<Arr>()
+    val buffers = mutableListOf<BufferData>()
     val bufferMetadata = mutableListOf<BufferMetadata>()
     val storageBufferBindings = mutableListOf<BufferBinding>()
     val uniformBufferBindings = mutableListOf<BufferBinding>()
@@ -180,7 +181,7 @@ private class CaptureContext {
             val typedFormat = ImageFormat[tempPtr.getInt()]
             val format = glFormatToVkFormat(typedFormat)
 
-            val mipData = mutableListOf<Arr>()
+            val mipData = mutableListOf<ByteBuffer>()
 
             // Thanks mutable texture storage
             var mipLevels = 0
@@ -237,7 +238,7 @@ private class CaptureContext {
                 ""
             }
 
-            images.add(ImageData(mipData))
+            images.add(ImageData(mipData.map { Arr.wrap(it) }, mipData))
             imageMetadata.add(
                 ImageMetadata(
                     name = str,
@@ -254,7 +255,7 @@ private class CaptureContext {
                         else -> ImageDataType.COLOR
                     },
                     viewType = type,
-                    levelDataSizes = mipData.map { it.len }
+                    levelDataSizes = mipData.map { it.capacity().toLong() }
                 )
             )
         }
@@ -288,7 +289,7 @@ private class CaptureContext {
                     ""
                 }
 
-                buffers.add(cpuBufferData)
+                buffers.add(BufferData(Arr.wrap(cpuBufferData), cpuBufferData))
                 bufferMetadata.add(
                     BufferMetadata(
                         name = str,
@@ -350,11 +351,11 @@ private class CaptureContext {
         )
     }
 
-    fun transferBuffer(size: Long): Arr {
+    fun transferBuffer(size: Long): ByteBuffer {
         glFinish()
-        val cpuBuffer = Arr.malloc(size)
+        val cpuBuffer = ByteBuffer.allocateDirect(size.toInt())
         val imageData = tempGPUBuffer.map(GL_MAP_READ_BIT)
-        memcpy(imageData.ptr, 0L, cpuBuffer.ptr, 0L, size)
+        memcpy(imageData.ptr, 0L, Arr.wrap(cpuBuffer).ptr, 0L, size)
         tempGPUBuffer.unmap()
         glFinish()
         return cpuBuffer
@@ -574,10 +575,15 @@ private fun CaptureContext.captureDefaultUniformBlock(
             }
     }
 
-    buffers += defaultUniformData.realloc(struct.size.toLong(), false)
+    val newBuffer = ByteBuffer.allocateDirect(struct.size)
+    val newArr = Arr.wrap(newBuffer)
+    val newLen = struct.size.toLong()
+    memcpy(defaultUniformData.ptr, 0L, newArr.ptr, 0L, newLen)
+
+    buffers += BufferData(newArr, newBuffer)
     bufferMetadata += BufferMetadata(
         name = "",
-        size = struct.size.toLong()
+        size = newLen
     )
     uniformBufferBinding("DefaultUniforms", defaultUniformBufferIndex, shaderInfo.ubos["DefaultUniforms"]!!.binding, 0L)
     return defaultUniformBindings

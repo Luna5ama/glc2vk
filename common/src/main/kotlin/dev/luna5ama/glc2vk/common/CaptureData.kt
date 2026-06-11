@@ -2,18 +2,25 @@ package dev.luna5ama.glc2vk.common
 
 import dev.luna5ama.kmogus.Arr
 import dev.luna5ama.kmogus.memcpy
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import org.apache.commons.compress.archivers.tar.TarArchiveEntry
-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
-import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
+import java.nio.ByteBuffer
+import java.nio.channels.Channels
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.CRC32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 import kotlin.concurrent.thread
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.resume
 import kotlin.io.path.*
 
 @Serializable
@@ -251,33 +258,22 @@ fun Command.withBindings(
 }
 
 class ImageData(
-    val levels: List<Arr>
-) {
-    fun free() {
-        for (level in levels) {
-            level.free()
-        }
-    }
-}
+    val levels: List<Arr>,
+    val levelRaw: List<ByteBuffer>
+)
+class BufferData(
+    val arr: Arr,
+    val raw: ByteBuffer
+)
 
 class CaptureData(
     val metadata: CaptureMetadata,
     val imageData: List<ImageData>,
-    val bufferData: List<Arr>,
+    val bufferData: List<BufferData>
 ) {
-    fun free() {
-        for (image in imageData) {
-            image.free()
-        }
-        for (buffer in bufferData) {
-            buffer.free()
-        }
-    }
-
     companion object {
         fun save(outputPath: Path, capture: CaptureData, block: () -> Unit): Thread {
             return thread(true) {
-                try {
                     println("Saving resource capture")
                     @OptIn(ExperimentalSerializationApi::class)
                     val jsonInstance = Json {
@@ -330,21 +326,51 @@ class CaptureData(
                             }
                         }
                         capture.metadata.buffers.forEachIndexed { i, _ ->
-                            writeEntry("buffer_$i.bin", capture.bufferData[i], capture.metadata.buffers[i].size)
+                            writeEntry("buffer_$i.bin", capture.bufferData[i].arr, capture.metadata.buffers[i].size)
                         }
                     }
                     proc.waitFor()
-                } finally {
-                    capture.free()
-                }
 
                 block()
             }
         }
 
-        fun load(inputPath: Path): CaptureData {
-            val metadataPath = inputPath.resolve("resource_metadata.json")
-            val metadata = Json.decodeFromString<CaptureMetadata>(metadataPath.readText())
+        fun load(inputPath: Path): CaptureData = runBlocking {
+            val metadata = async(Dispatchers.IO) {
+                val metadataPath = inputPath.resolve("resource_metadata.json")
+                Json.decodeFromString<CaptureMetadata>(metadataPath.readText())
+            }
+
+            val imageDataBytes = ConcurrentHashMap<String, ByteBuffer>()
+            val bufferDataBytes = ConcurrentHashMap<String, ByteBuffer>()
+
+            val imageDataCallback = ConcurrentHashMap<String, Continuation<ByteBuffer>>()
+            val bufferDataCallback = ConcurrentHashMap<String, Continuation<ByteBuffer>>()
+
+            val imageData = async(Dispatchers.Default) {
+                metadata.await().images.mapIndexed { i, imageMeta ->
+                    async {
+                        val levels = imageMeta.levelDataSizes.indices.map { levelIndex ->
+                            val key = "image_${i}_$levelIndex.bin"
+                            imageDataBytes[key] ?: suspendCancellableCoroutine {
+                                imageDataCallback[key] = it
+                            }
+                        }
+                        ImageData(levels.map { Arr.wrap(it) }, levels)
+                    }
+                }.awaitAll()
+            }
+            val bufferData = async(Dispatchers.Default) {
+                metadata.await().buffers.indices.map { i ->
+                    async {
+                        val key = "buffer_$i.bin"
+                        val raw = bufferDataBytes[key] ?: suspendCancellableCoroutine {
+                            bufferDataCallback[key] = it
+                        }
+                        BufferData(Arr.wrap(raw), raw)
+                    }
+                }.awaitAll()
+            }
 
             val resourcesPath = inputPath.resolve("resources.zip.xz")
 
@@ -353,40 +379,32 @@ class CaptureData(
                 .redirectError(ProcessBuilder.Redirect.DISCARD)
                 .start()
 
-            val imageDataBytes = mutableMapOf<String, ByteArray>()
-            val bufferDataBytes = mutableMapOf<String, ByteArray>()
-
             ZipInputStream(proc.inputStream).use { zipInput ->
+                val channel = Channels.newChannel(zipInput)
                 var entry = zipInput.nextEntry
                 while (entry != null) {
+                    val byteBuffer = ByteBuffer.allocateDirect(entry.size.toInt())
+                    channel.read(byteBuffer)
+                    byteBuffer.flip()
                     when {
-                        entry.name.startsWith("image_") -> imageDataBytes[entry.name] = zipInput.readBytes()
-                        entry.name.startsWith("buffer_") -> bufferDataBytes[entry.name] = zipInput.readBytes()
+                        entry.name.startsWith("image_") -> {
+                            imageDataBytes[entry.name] = byteBuffer
+                            imageDataCallback[entry.name]?.resume(byteBuffer)
+                        }
+                        entry.name.startsWith("buffer_") -> {
+                            bufferDataBytes[entry.name] = byteBuffer
+                            bufferDataCallback[entry.name]?.resume(byteBuffer)
+                        }
                         else -> error("Got unexpected file ${entry.name} in resource capture")
                     }
                     entry = zipInput.nextEntry
                 }
             }
 
-            fun ByteArray.toArr(): Arr {
-                val arr = Arr.malloc(this.size.toLong())
-                memcpy(this, 0L, arr.ptr, 0L, this.size.toLong())
-                return arr
-            }
-
-            val imageData = metadata.images.mapIndexed { i, imageMeta ->
-                val levels = imageMeta.levelDataSizes.mapIndexed { levelIndex, levelSize ->
-                    imageDataBytes["image_${i}_$levelIndex.bin"]!!.toArr()
-                }
-                ImageData(levels)
-            }
-            val bufferData = metadata.buffers.mapIndexed { i, bufferMeta ->
-                bufferDataBytes["buffer_$i.bin"]!!.toArr()
-            }
-            return CaptureData(
-                metadata,
-                imageData,
-                bufferData
+            CaptureData(
+                metadata.await(),
+                imageData.await(),
+                bufferData.await()
             )
         }
     }

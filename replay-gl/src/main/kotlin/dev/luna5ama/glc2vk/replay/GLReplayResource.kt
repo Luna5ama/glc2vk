@@ -93,7 +93,7 @@ class GLReplayResource(private val captureData: CaptureData) {
             val location = glGetUniformLocation(currentProgram, uniform.name)
             if (location < 0) return@forEach
 
-            val data = captureData.bufferData[uniform.bufferIndex].ptr + uniform.offset
+            val data = captureData.bufferData[uniform.bufferIndex].arr.ptr + uniform.offset
             val count = uniform.arraySize
             when (uniform.type) {
                 "bool", "int" -> glUniform1iv(location, count, data)
@@ -135,7 +135,7 @@ class GLReplayResource(private val captureData: CaptureData) {
 
         init {
             val bufferSize = max(1L, metadata.size)
-            copySource.allocate(bufferSize, if (metadata.size > 1) data.ptr else Ptr.NULL, 0)
+            copySource.allocate(bufferSize, if (metadata.size > 1) data.arr.ptr else Ptr.NULL, 0)
             buffer.allocate(bufferSize, 0)
         }
 

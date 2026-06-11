@@ -18,6 +18,10 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.Path
 import kotlin.io.path.exists
+import kotlin.system.measureNanoTime
+import kotlin.system.measureTimeMillis
+import kotlin.time.DurationUnit
+import kotlin.time.measureTime
 
 lateinit var glCapabilities: GLCapabilities
 
@@ -66,13 +70,14 @@ fun main(args: Array<String>) {
         println("OpenGL context ready")
 
         println("Loading capture resources")
-        val captureData = CaptureData.load(capturePath)
+        val captureData: CaptureData
+        measureTime {
+            captureData=  CaptureData.load(capturePath)
+        }.also {
+            println("%.2f ms".format(it.toDouble(DurationUnit.MILLISECONDS)))
+        }
         println("Creating OpenGL replay instance")
-        val replayInstance = runCatching {
-            GLReplayInstance(captureData, capturePath, options.shaderPath, options.shaderPasses)
-        }.onFailure {
-            captureData.free()
-        }.getOrThrow()
+        val replayInstance = GLReplayInstance(captureData, capturePath, options.shaderPath, options.shaderPasses)
         println("OpenGL replay instance ready")
 
         try {

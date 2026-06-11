@@ -21,9 +21,9 @@ dependencies {
     implementation(libs.fastutil)
     implementation(libs.kmogus.core)
 
-    implementation("net.echonolix:caelum-core:1.0-SNAPSHOT")
-    implementation("net.echonolix:caelum-vulkan:1.0-SNAPSHOT")
-    implementation("net.echonolix:caelum-glfw-vulkan:1.0-SNAPSHOT")
+    implementation(libs.caelum.core)
+    implementation(libs.caelum.vulkan)
+    implementation(libs.caelum.glfw.vulkan)
 }
 
 tasks {

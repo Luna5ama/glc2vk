@@ -7,6 +7,7 @@ plugins {
 dependencies {
     api(libs.kotlinxSerializationCore)
     implementation(libs.kotlinxSerializationJson)
+    implementation(libs.kotlinx.coroutines)
 
     api(libs.kmogus.core)
     implementation(libs.commons.compress)

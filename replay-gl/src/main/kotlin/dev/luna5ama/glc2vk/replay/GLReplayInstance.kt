@@ -102,7 +102,6 @@ class GLReplayInstance(
         glUseProgram(0)
         programs.forEach(::glDeleteProgram)
         resources.destroy()
-        captureData.free()
     }
 
     fun bufferId(index: Int): Int = resources.buffers[index].buffer.id
