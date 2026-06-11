@@ -2,10 +2,6 @@ package dev.luna5ama.glc2vk.replay
 
 import dev.luna5ama.glc2vk.common.CaptureData
 import dev.luna5ama.glc2vk.common.Command
-import dev.luna5ama.glc2vk.common.imageBindings
-import dev.luna5ama.glc2vk.common.samplerBindings
-import dev.luna5ama.glc2vk.common.storageBufferBindings
-import dev.luna5ama.glc2vk.common.uniformBufferBindings
 import it.unimi.dsi.fastutil.longs.LongArrayList
 import net.echonolix.caelum.*
 import net.echonolix.caelum.vulkan.*
@@ -16,7 +12,7 @@ import net.echonolix.caelum.vulkan.structs.*
 import java.lang.foreign.Arena
 import java.nio.file.Path
 
-class ReplayInstance(
+class VKReplayInstance(
     private val captureData: CaptureData,
     private val device: VkDevice,
     private val captureDir: Path,
@@ -50,10 +46,10 @@ class ReplayInstance(
     val dependencyInfo1: NValue<VkDependencyInfo>
     val dependencyInfo2: NValue<VkDependencyInfo>
 
-    val resource: ReplayResource
+    val resource: VKReplayResource
     private val replayCommands = captureData.metadata.commandsForReplay()
     private val replayPassCommands = replayCommands.filterIsInstance<Command.PassCommand>()
-    private val shaderCompiler = ReplayShaderCompiler(captureData, captureDir, shaderOverridePath, shaderPasses)
+    private val shaderCompiler = VKReplayShaderCompiler(captureData, captureDir, shaderOverridePath, shaderPasses)
     private val pipelineInfos: List<ComputePipelineInfo>
 
     init {
@@ -98,7 +94,7 @@ class ReplayInstance(
                 val cmdBufCount = 2
                 val returnValues = VkCommandBuffer.malloc(scope, cmdBufCount.toLong())
                 val commandBufferAllocateInfo = VkCommandBufferAllocateInfo.allocate {
-                    commandPool = this@ReplayInstance.commandPool
+                    commandPool = this@VKReplayInstance.commandPool
                     level = VkCommandBufferLevel.PRIMARY
                     commandBufferCount = cmdBufCount.toUInt()
                 }
@@ -129,7 +125,7 @@ class ReplayInstance(
                 fences = VkFence.arrayOf(scope, inFlightFence)
             }
 
-            resource = ReplayResource(captureData, device, graphicsQueueFamilyIndex, memoryTypes)
+            resource = VKReplayResource(captureData, device, graphicsQueueFamilyIndex, memoryTypes)
 
             dependencyInfo1 = VkDependencyInfo.allocate(scope) {
                 val bufferMemoryBarriers = VkBufferMemoryBarrier2.allocate(scope, resource.bufferList.size.toLong())
@@ -804,7 +800,7 @@ class ReplayInstance(
 
         val descriptorSets = MemoryStack {
             val allocateInfo = VkDescriptorSetAllocateInfo.allocate {
-                descriptorPool = this@ReplayInstance.descriptorPool
+                descriptorPool = this@VKReplayInstance.descriptorPool
                 descriptorSets(VkDescriptorSetLayout.arrayOf(*descriptorSetLayouts))
             }
             val returns = VkDescriptorSet.malloc(descriptorSetLayouts.size.toLong())

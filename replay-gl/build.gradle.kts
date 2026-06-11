@@ -41,7 +41,7 @@ tasks.test {
 tasks {
     jar {
         manifest {
-            attributes["Main-Class"] = "dev.luna5ama.glc2vk.replay.ReplayGLKt"
+            attributes["Main-Class"] = "dev.luna5ama.glc2vk.replay.GLReplayKt"
         }
     }
 

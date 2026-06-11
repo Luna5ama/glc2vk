@@ -29,7 +29,7 @@ dependencies {
 tasks {
     jar {
         manifest {
-            attributes["Main-Class"] = "dev.luna5ama.glc2vk.replay.ReplayKt"
+            attributes["Main-Class"] = "dev.luna5ama.glc2vk.replay.VKReplayKt"
         }
     }
 

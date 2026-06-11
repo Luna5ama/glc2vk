@@ -11,7 +11,7 @@ import kotlin.io.path.absolutePathString
 import kotlin.io.path.exists
 import kotlin.io.path.writeText
 
-class ReplayShaderCompiler(
+class VKReplayShaderCompiler(
     private val captureData: CaptureData,
     private val captureDir: Path,
     shaderOverridePath: Path?,

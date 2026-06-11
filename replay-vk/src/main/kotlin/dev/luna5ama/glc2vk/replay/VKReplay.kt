@@ -262,7 +262,7 @@ fun main(args: Array<String>) {
         }
 
         val captureData = CaptureData.load(capturePath)
-        val replayInstance = ReplayInstance(
+        val replayInstance = VKReplayInstance(
             captureData,
             device,
             capturePath,

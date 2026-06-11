@@ -13,7 +13,7 @@ import net.echonolix.caelum.vulkan.handles.*
 import net.echonolix.caelum.vulkan.structs.*
 import java.lang.foreign.Arena
 
-class ReplayResource(
+class VKReplayResource(
     private val captureData: CaptureData,
     private val device: VkDevice,
     private val graphicsQueueFamilyIndex: UInt,
