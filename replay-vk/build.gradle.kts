@@ -46,7 +46,7 @@ tasks {
         })
 
         manifest {
-            attributes["Main-Class"] = "dev.luna5ama.glc2vk.replay.ReplayKt"
+            attributes["Main-Class"] = "dev.luna5ama.glc2vk.replay.VKReplayKt"
         }
 
         duplicatesStrategy = DuplicatesStrategy.INCLUDE
