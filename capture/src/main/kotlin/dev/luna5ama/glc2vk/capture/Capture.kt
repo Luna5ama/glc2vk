@@ -179,7 +179,8 @@ private class CaptureContext {
 
             glGetTextureLevelParameteriv(imageID, 0, GL_TEXTURE_INTERNAL_FORMAT, tempPtr)
             val typedFormat = ImageFormat[tempPtr.getInt()]
-            val format = glFormatToVkFormat(typedFormat)
+            val captureFormat = captureImageFormat(typedFormat)
+            val format = glFormatToVkFormat(captureFormat)
 
             val mipData = mutableListOf<ByteBuffer>()
 
@@ -202,20 +203,20 @@ private class CaptureContext {
                     tempGPUBuffer.bind(GL_PIXEL_PACK_BUFFER)
                     glGetCompressedTextureImage(imageID, mip, size, 0L)
                 } else {
-                    typedFormat as ImageFormat.Uncompressed
+                    captureFormat as ImageFormat.Uncompressed
                     glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_HEIGHT, tempPtr)
                     val mipHeight = tempPtr.getInt()
                     glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_DEPTH, tempPtr)
                     val mipDepth = tempPtr.getInt()
-                    val pixelSize = typedFormat.totalBits / 8
+                    val pixelSize = captureFormat.totalBits / 8
                     size = mipWidth * mipHeight * mipDepth * pixelSize
                     ensureTempGPUBufferCapacity(size.toLong())
                     tempGPUBuffer.bind(GL_PIXEL_PACK_BUFFER)
                     glGetTextureImage(
                         imageID,
                         mip,
-                        typedFormat.pixelFormat.value,
-                        typedFormat.pixelType,
+                        captureFormat.pixelFormat.value,
+                        captureFormat.pixelType,
                         size,
                         0L
                     )

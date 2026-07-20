@@ -4,6 +4,23 @@ import dev.luna5ama.glc2vk.common.*
 import dev.luna5ama.glwrapper.base.*
 import dev.luna5ama.glwrapper.enums.ImageFormat
 
+fun captureImageFormat(format: ImageFormat): ImageFormat = when (format) {
+    ImageFormat.R8G8B8_UN -> ImageFormat.R8G8B8A8_UN
+    ImageFormat.R8G8B8_SN -> ImageFormat.R8G8B8A8_SN
+    ImageFormat.R8G8B8_UI -> ImageFormat.R8G8B8A8_UI
+    ImageFormat.R8G8B8_SI -> ImageFormat.R8G8B8A8_SI
+    ImageFormat.R8G8B8_SRGB -> ImageFormat.R8G8B8A8_SRGB
+    ImageFormat.R16G16B16_UN -> ImageFormat.R16G16B16A16_UN
+    ImageFormat.R16G16B16_SN -> ImageFormat.R16G16B16A16_SN
+    ImageFormat.R16G16B16_UI -> ImageFormat.R16G16B16A16_UI
+    ImageFormat.R16G16B16_SI -> ImageFormat.R16G16B16A16_SI
+    ImageFormat.R16G16B16_F -> ImageFormat.R16G16B16A16_F
+    ImageFormat.R32G32B32_UI -> ImageFormat.R32G32B32A32_UI
+    ImageFormat.R32G32B32_SI -> ImageFormat.R32G32B32A32_SI
+    ImageFormat.R32G32B32_F -> ImageFormat.R32G32B32A32_F
+    else -> format
+}
+
 fun glImageTargetToVKImageViewType(target: Int): VkImageViewType = when (target) {
     GL_TEXTURE_1D -> VkImageViewType.`1D`
     GL_TEXTURE_2D -> VkImageViewType.`2D`
