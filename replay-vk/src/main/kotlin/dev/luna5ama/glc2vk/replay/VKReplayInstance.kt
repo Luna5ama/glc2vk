@@ -410,8 +410,8 @@ class VKReplayInstance(
         }
     }
 
-    private val setupLabel = VkDebugUtilsLabelEXT.allocate(scope) {
-        pLabelName = "Setup".c_str(scope)
+    private val copyLabel = VkDebugUtilsLabelEXT.allocate(scope) {
+        pLabelName = "Copy".c_str(scope)
     }
 
     private val replayLabel = VkDebugUtilsLabelEXT.allocate(scope) {
@@ -428,7 +428,7 @@ class VKReplayInstance(
 
         MemoryStack {
             cmdBuffers[0].beginCommandBuffer(beginInfo.ptr())
-            cmdBuffers[0].cmdBeginDebugUtilsLabelEXT(setupLabel.ptr())
+            cmdBuffers[0].cmdBeginDebugUtilsLabelEXT(copyLabel.ptr())
 
             val dependencyInfo0 = VkDependencyInfo.allocate {
                 val imageMemoryBarrier = VkImageMemoryBarrier2.allocate(1L)
@@ -628,6 +628,9 @@ class VKReplayInstance(
                 }
             }
             cmdBuffers[1].cmdEndDebugUtilsLabelEXT()
+            if (replayPassCommands.isNotEmpty()) {
+                cmdBuffers[1].cmdDispatch(0u, 0u, 0u)
+            }
             cmdBuffers[1].endCommandBuffer()
 
             val submitInfo2 = VkSubmitInfo.allocate {

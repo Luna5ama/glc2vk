@@ -46,6 +46,7 @@ class GLReplayInstance(
     }.getOrThrow()
 
     fun execute() {
+        glPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, 0, "Copy")
         resources.resetCapturedData()
         glMemoryBarrier(
             GL_BUFFER_UPDATE_BARRIER_BIT or
@@ -54,7 +55,9 @@ class GLReplayInstance(
                 GL_SHADER_STORAGE_BARRIER_BIT or
                 GL_UNIFORM_BARRIER_BIT
         )
+        glPopDebugGroup()
 
+        glPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, 0, "Replay")
         commands.forEach { command ->
             when (command) {
                 is Command.PushDebugLabelCommand -> {
@@ -98,6 +101,10 @@ class GLReplayInstance(
                 GL_TEXTURE_FETCH_BARRIER_BIT or
                 GL_BUFFER_UPDATE_BARRIER_BIT
         )
+        glPopDebugGroup()
+        if (passCommands.isNotEmpty()) {
+            glDispatchCompute(0, 0, 0)
+        }
         glFinish()
     }
 
