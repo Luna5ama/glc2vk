@@ -14,8 +14,8 @@ repositories {
 }
 
 dependencies {
-    implementation(project(":glc2vk-common"))
-    implementation(project(":glc2vk-capture"))
+    implementation(project(":vibris-common"))
+    implementation(project(":vibris-capture"))
 
     implementation(libs.kotlinxSerializationCore)
     implementation(libs.fastutil)
@@ -29,7 +29,7 @@ dependencies {
 tasks {
     jar {
         manifest {
-            attributes["Main-Class"] = "dev.luna5ama.glc2vk.replay.VKReplayKt"
+            attributes["Main-Class"] = "dev.luna5ama.vibris.replay.VKReplayKt"
         }
     }
 
@@ -46,7 +46,7 @@ tasks {
         })
 
         manifest {
-            attributes["Main-Class"] = "dev.luna5ama.glc2vk.replay.VKReplayKt"
+            attributes["Main-Class"] = "dev.luna5ama.vibris.replay.VKReplayKt"
         }
 
         duplicatesStrategy = DuplicatesStrategy.INCLUDE
@@ -56,7 +56,7 @@ tasks {
 
     val optimizeFatJar = jarOptimizer.register(
         fatJar,
-        "dev.luna5ama.glc2vk",
+        "dev.luna5ama.vibris",
         "dev.luna5ama.kmogus",
         "net.echonolix"
     )

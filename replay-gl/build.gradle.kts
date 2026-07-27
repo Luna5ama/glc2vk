@@ -14,8 +14,8 @@ repositories {
 }
 
 dependencies {
-    implementation(project(":glc2vk-common"))
-    implementation(project(":glc2vk-capture"))
+    implementation(project(":vibris-common"))
+    implementation(project(":vibris-capture"))
 
 
     implementation(platform("org.lwjgl:lwjgl-bom:${libs.versions.lwjgl.get()}"))
@@ -35,13 +35,13 @@ dependencies {
 }
 
 tasks.test {
-    systemProperty("glc2vk.runtimeTest", providers.gradleProperty("glc2vk.runtimeTest").orElse("false").get())
+    systemProperty("vibris.runtimeTest", providers.gradleProperty("vibris.runtimeTest").orElse("false").get())
 }
 
 tasks {
     jar {
         manifest {
-            attributes["Main-Class"] = "dev.luna5ama.glc2vk.replay.GLReplayKt"
+            attributes["Main-Class"] = "dev.luna5ama.vibris.replay.GLReplayKt"
         }
     }
 
@@ -58,7 +58,7 @@ tasks {
         })
 
         manifest {
-            attributes["Main-Class"] = "dev.luna5ama.glc2vk.replay.GLReplayKt"
+            attributes["Main-Class"] = "dev.luna5ama.vibris.replay.GLReplayKt"
         }
 
         duplicatesStrategy = DuplicatesStrategy.INCLUDE
@@ -68,7 +68,7 @@ tasks {
 
     val optimizeFatJar = jarOptimizer.register(
         fatJar,
-        "dev.luna5ama.glc2vk",
+        "dev.luna5ama.vibris",
         "dev.luna5ama.glwrapper",
         "dev.luna5ama.kmogus",
         "org.lwjgl"

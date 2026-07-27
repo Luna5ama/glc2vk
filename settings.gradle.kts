@@ -1,4 +1,4 @@
-rootProject.name = "glc2vk"
+rootProject.name = "vibris"
 
 pluginManagement {
     repositories {

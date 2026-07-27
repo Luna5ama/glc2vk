@@ -4,7 +4,7 @@ plugins {
 }
 
 dependencies {
-    implementation(project(":glc2vk-common"))
+    implementation(project(":vibris-common"))
     implementation(platform("org.lwjgl:lwjgl-bom:${libs.versions.lwjgl.get()}"))
     implementation("org.lwjgl", "lwjgl")
     runtimeOnly("org.lwjgl", "lwjgl", classifier = "natives-windows")
@@ -21,5 +21,5 @@ dependencies {
 }
 
 tasks.test {
-    systemProperty("glc2vk.runtimeTest", providers.gradleProperty("glc2vk.runtimeTest").orElse("false").get())
+    systemProperty("vibris.runtimeTest", providers.gradleProperty("vibris.runtimeTest").orElse("false").get())
 }

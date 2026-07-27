@@ -1,4 +1,4 @@
-# glc2vk
+# vibris
 OpenGL capture to Vulkan replay tool
 
 ## Hardware Requirements
