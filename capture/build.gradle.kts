@@ -14,4 +14,12 @@ dependencies {
     implementation(libs.fastutil)
 
     testImplementation(kotlin("test"))
+    testImplementation("org.lwjgl", "lwjgl-opengl")
+    testImplementation("org.lwjgl", "lwjgl-glfw")
+    testRuntimeOnly("org.lwjgl", "lwjgl-opengl", classifier = "natives-windows")
+    testRuntimeOnly("org.lwjgl", "lwjgl-glfw", classifier = "natives-windows")
+}
+
+tasks.test {
+    systemProperty("glc2vk.runtimeTest", providers.gradleProperty("glc2vk.runtimeTest").orElse("false").get())
 }

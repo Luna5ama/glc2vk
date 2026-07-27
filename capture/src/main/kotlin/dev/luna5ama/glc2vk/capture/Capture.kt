@@ -17,7 +17,7 @@ import kotlin.io.path.writeText
 
 private const val TEMP_SIZE = 8L * 4L * 4L
 
-private class CaptureContext {
+internal class CaptureContext {
     val tempGPUBuffer = BufferObject.Immutable()
     val shaderInfos = mutableListOf<ShaderInfo>()
     val commands = mutableListOf<Command>()
@@ -186,46 +186,52 @@ private class CaptureContext {
 
             // Thanks mutable texture storage
             var mipLevels = 0
-            for (mip in 0 until 69) {
-                glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_WIDTH, tempPtr)
-                val mipWidth = tempPtr.getInt()
-                if (mipWidth == 0) {
-                    break
+            val packSkipPixels = glGetInteger(GL_PACK_SKIP_PIXELS)
+            glPixelStorei(GL_PACK_SKIP_PIXELS, 0)
+            try {
+                for (mip in 0 until 69) {
+                    glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_WIDTH, tempPtr)
+                    val mipWidth = tempPtr.getInt()
+                    if (mipWidth == 0) {
+                        break
+                    }
+
+                    glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_COMPRESSED, tempPtr)
+                    val compressed = tempPtr.getInt() != GL_FALSE
+                    val size: Int
+                    if (compressed) {
+                        glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_COMPRESSED_IMAGE_SIZE, tempPtr)
+                        size = tempPtr.getInt()
+                        ensureTempGPUBufferCapacity(size.toLong())
+                        tempGPUBuffer.bind(GL_PIXEL_PACK_BUFFER)
+                        glGetCompressedTextureImage(imageID, mip, size, 0L)
+                    } else {
+                        captureFormat as ImageFormat.Uncompressed
+                        glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_HEIGHT, tempPtr)
+                        val mipHeight = tempPtr.getInt()
+                        glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_DEPTH, tempPtr)
+                        val mipDepth = tempPtr.getInt()
+                        val pixelSize = captureFormat.totalBits / 8
+                        size = mipWidth * mipHeight * mipDepth * pixelSize
+                        ensureTempGPUBufferCapacity(size.toLong())
+                        tempGPUBuffer.bind(GL_PIXEL_PACK_BUFFER)
+                        glGetTextureImage(
+                            imageID,
+                            mip,
+                            captureFormat.pixelFormat.value,
+                            captureFormat.pixelType,
+                            size,
+                            0L
+                        )
+                    }
+
+                    val cpuImageData = transferBuffer(size.toLong())
+                    mipData.add(cpuImageData)
+
+                    mipLevels++
                 }
-
-                glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_COMPRESSED, tempPtr)
-                val compressed = tempPtr.getInt() != GL_FALSE
-                val size: Int
-                if (compressed) {
-                    glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_COMPRESSED_IMAGE_SIZE, tempPtr)
-                    size = tempPtr.getInt()
-                    ensureTempGPUBufferCapacity(size.toLong())
-                    tempGPUBuffer.bind(GL_PIXEL_PACK_BUFFER)
-                    glGetCompressedTextureImage(imageID, mip, size, 0L)
-                } else {
-                    captureFormat as ImageFormat.Uncompressed
-                    glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_HEIGHT, tempPtr)
-                    val mipHeight = tempPtr.getInt()
-                    glGetTextureLevelParameteriv(imageID, mip, GL_TEXTURE_DEPTH, tempPtr)
-                    val mipDepth = tempPtr.getInt()
-                    val pixelSize = captureFormat.totalBits / 8
-                    size = mipWidth * mipHeight * mipDepth * pixelSize
-                    ensureTempGPUBufferCapacity(size.toLong())
-                    tempGPUBuffer.bind(GL_PIXEL_PACK_BUFFER)
-                    glGetTextureImage(
-                        imageID,
-                        mip,
-                        captureFormat.pixelFormat.value,
-                        captureFormat.pixelType,
-                        size,
-                        0L
-                    )
-                }
-
-                val cpuImageData = transferBuffer(size.toLong())
-                mipData.add(cpuImageData)
-
-                mipLevels++
+            } finally {
+                glPixelStorei(GL_PACK_SKIP_PIXELS, packSkipPixels)
             }
 
             glGetObjectLabel(GL_TEXTURE, imageID, 0, tempPtr, Ptr.NULL)
@@ -1005,4 +1011,3 @@ inline fun glDebugGroupCaptureAware(name: String, block: () -> Unit) {
         captureGlPopDebugGroup()
     }
 }
-
