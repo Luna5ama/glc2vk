@@ -15,12 +15,13 @@ It is a Kotlin/Java Gradle multi-project with shared schema, an embedded capture
 vibris/
 ├── common/     # Serialized capture contract, I/O, replay CLI, shader-source resolution
 ├── capture/    # OpenGL capture hooks, GL-to-Vulkan conversion, shader patching
+├── mcp/        # Published authenticated loopback transport and stdio MCP bridge
 ├── replay-gl/  # Java 24 OpenGL replay executable and GPU integration tests
 ├── replay-vk/  # Java 24 Vulkan/Caelum replay executable, native resource handling
 └── buildSrc/   # Java 21/Kotlin compiler and publication convention plugins
 ```
 
-Physical module directories map to Gradle projects named `:vibris-common`, `:vibris-capture`,
+Physical module directories map to Gradle projects named `:vibris-common`, `:vibris-capture`, `:vibris-mcp`,
 `:vibris-replay-gl`, and `:vibris-replay-vk`.
 
 ## WHERE TO LOOK
@@ -31,6 +32,7 @@ Physical module directories map to Gradle projects named `:vibris-common`, `:vib
 | Replay CLI / overrides | `common/.../ReplayCliOptions.kt` | See also `ShaderSourceResolver.kt` |
 | OpenGL capture lifecycle | `capture/.../Capture.kt` | `beginGlCapture` / capture-aware dispatch / `endGlCapture` |
 | GLSL-to-Vulkan patching | `capture/.../ShaderPatcher.kt` | Descriptor sets and uniform-block rewrites |
+| MCP transport and stdio bridge | `mcp/.../CaptureControlServer.kt`, `mcp/src/main/python/vibris_capture_mcp.py` | Authenticated HTTP transport and stdio JSON-RPC/MCP |
 | OpenGL replay | `replay-gl/.../GLReplay.kt`, `GLReplayInstance.kt` | Hidden GLFW OpenGL 4.6 context |
 | Vulkan replay | `replay-vk/.../VKReplay.kt`, `VKReplayInstance.kt` | Caelum backend, Vulkan resources and sync |
 | Vulkan resources | `replay-vk/.../` | Mixed Kotlin/Java allocation code |
@@ -58,7 +60,7 @@ Reference centrality is therefore unmeasured.
   Do not run a formatter that silently changes trailing-comma or wrapping policy.
 - Base convention plugins target Java 21; both replay executables explicitly target Java 24.
 - Use prefixed Gradle project paths (`:vibris-capture:*`), never physical-directory paths such as `:capture:*`.
-- `common` and `capture` are published libraries; replay modules package optimized executable fat JARs.
+- `common`, `capture`, and `mcp` are published libraries; replay modules package optimized executable fat JARs.
 - Both replay modules intentionally use package `dev.luna5ama.vibris.replay`; module location distinguishes the backend.
 
 ## ANTI-PATTERNS (THIS PROJECT)
@@ -90,7 +92,7 @@ Reference centrality is therefore unmeasured.
 .\gradlew.bat :vibris-capture:test
 .\gradlew.bat :vibris-replay-gl:assemble
 .\gradlew.bat :vibris-replay-vk:assemble
-.\gradlew.bat :vibris-common:publishToMavenLocal :vibris-capture:publishToMavenLocal
+.\gradlew.bat :vibris-common:publishToMavenLocal :vibris-capture:publishToMavenLocal :vibris-mcp:publishToMavenLocal
 ```
 
 Run an optimized replay JAR with:

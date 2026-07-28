@@ -25,6 +25,10 @@ CaptureControlServer server = new CaptureControlServer(
 server.start(Path.of("vibris-capture-control.json"));
 ```
 
+`CaptureControlServer` retains its source-compatible FQCN,
+`dev.luna5ama.vibris.capture.CaptureControlServer`, but is published by `dev.luna5ama:vibris-mcp`. Embedding hosts
+must depend on `vibris-mcp`; bundlers with transitivity disabled must include both `vibris-mcp` and `vibris-capture`.
+
 The three-argument constructor remains available for capture-only hosts. In that mode `reload_shader` uses the
 supplied callback and shader-debug MCP tools and resources are unavailable.
 
