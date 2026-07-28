@@ -6,7 +6,9 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -23,10 +25,11 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.FutureTask
 
-class CaptureControlServer(
+class CaptureControlServer @JvmOverloads constructor(
     private val captureManager: CaptureManager,
     private val dispatcher: Executor,
-    private val reloadShader: Callable<Void>
+    private val reloadShader: Callable<Void>,
+    private val shaderDebugControl: ShaderDebugControl? = null
 ) : AutoCloseable {
     private var server: HttpServer? = null
     private var httpExecutor: ExecutorService? = null
@@ -49,6 +52,18 @@ class CaptureControlServer(
                 createContext("/reload_shader") { handleReloadShader(it, token) }
                 createContext("/capture_pass") { handleCapturePass(it, token) }
                 createContext("/capture_multi") { handleCaptureMulti(it, token) }
+                if (shaderDebugControl != null) {
+                    createContext("/shader/status") { handleShaderStatus(it, token) }
+                    createContext("/shader/errors") { handleShaderErrors(it, token) }
+                    createContext("/shader/screenshot") { handleShaderScreenshot(it, token) }
+                    createContext("/shader/screenshot_result") { handleShaderScreenshotResult(it, token) }
+                    createContext("/shader/metrics") { handleShaderMetrics(it, token) }
+                    createContext("/shader/storage_buffers") { handleShaderStorageBuffers(it, token) }
+                    createContext("/shader/ssbo") { handleShaderStorageBufferDump(it, token) }
+                    createContext("/shader/textures") { handleShaderTextures(it, token) }
+                    createContext("/shader/texture") { handleShaderTextureDump(it, token) }
+                    createContext("/shader/patched_shaders") { handleShaderPatchedShaders(it, token) }
+                }
                 setExecutor(executor)
                 start()
             }
@@ -106,8 +121,13 @@ class CaptureControlServer(
 
     private fun handleReloadShader(exchange: HttpExchange, token: String) {
         handle(exchange, token) {
-            runOnDispatcher(reloadShader)
-            sendOk(exchange)
+            val control = shaderDebugControl
+            if (control == null) {
+                runOnDispatcher(reloadShader)
+                sendOk(exchange)
+            } else {
+                sendJson(exchange, 200, runOnDispatcher(Callable(control::reload)))
+            }
         }
     }
 
@@ -134,6 +154,86 @@ class CaptureControlServer(
                 null
             })
             sendQueued(exchange, path)
+        }
+    }
+
+    private fun handleShaderStatus(exchange: HttpExchange, token: String) {
+        handle(exchange, token) {
+            val control = requireShaderDebugControl()
+            sendJson(exchange, 200, runOnDispatcher(Callable(control::status)))
+        }
+    }
+
+    private fun handleShaderErrors(exchange: HttpExchange, token: String) {
+        handle(exchange, token) {
+            sendJson(exchange, 200, requireShaderDebugControl().errorsJson())
+        }
+    }
+
+    private fun handleShaderScreenshot(exchange: HttpExchange, token: String) {
+        handle(exchange, token) {
+            val control = requireShaderDebugControl()
+            val frames = optionalInt(readJson(exchange), "frames", 1)
+            val response = runOnDispatcher(Callable {
+                control.scheduleScreenshot(frames)
+                buildJsonObject {
+                    put("scheduled", true)
+                    put("frames", frames)
+                }
+            })
+            sendJson(exchange, 200, response)
+        }
+    }
+
+    private fun handleShaderScreenshotResult(exchange: HttpExchange, token: String) {
+        handle(exchange, token) {
+            sendJson(exchange, 200, requireShaderDebugControl().screenshotResult())
+        }
+    }
+
+    private fun handleShaderMetrics(exchange: HttpExchange, token: String) {
+        handle(exchange, token) {
+            sendJson(exchange, 200, requireShaderDebugControl().metricsJson())
+        }
+    }
+
+    private fun handleShaderStorageBuffers(exchange: HttpExchange, token: String) {
+        handle(exchange, token) {
+            val control = requireShaderDebugControl()
+            sendJson(exchange, 200, runOnDispatcher(Callable(control::storageBuffersJson)))
+        }
+    }
+
+    private fun handleShaderStorageBufferDump(exchange: HttpExchange, token: String) {
+        handle(exchange, token) {
+            val control = requireShaderDebugControl()
+            val index = optionalInt(readJson(exchange), "index", 0)
+            sendJson(exchange, 200, runOnDispatcher(Callable { control.dumpStorageBuffer(index) }))
+        }
+    }
+
+    private fun handleShaderTextures(exchange: HttpExchange, token: String) {
+        handle(exchange, token) {
+            val control = requireShaderDebugControl()
+            sendJson(exchange, 200, runOnDispatcher(Callable(control::texturesJson)))
+        }
+    }
+
+    private fun handleShaderTextureDump(exchange: HttpExchange, token: String) {
+        handle(exchange, token) {
+            val control = requireShaderDebugControl()
+            val request = readJson(exchange)
+            val name = optionalString(request, "name")
+            val id = optionalInt(request, "id")
+            val raw = optionalBoolean(request, "raw", false)
+            sendJson(exchange, 200, runOnDispatcher(Callable { control.dumpTexture(name, id, raw) }))
+        }
+    }
+
+    private fun handleShaderPatchedShaders(exchange: HttpExchange, token: String) {
+        handle(exchange, token) {
+            val control = requireShaderDebugControl()
+            sendJson(exchange, 200, runOnDispatcher(Callable(control::patchedShadersJson)))
         }
     }
 
@@ -165,11 +265,34 @@ class CaptureControlServer(
         return value.jsonPrimitive.content
     }
 
+    private fun optionalString(json: JsonObject, key: String): String? {
+        val value = json[key]
+        return if (value == null || value is JsonNull) null else value.jsonPrimitive.content
+    }
+
+    private fun optionalInt(json: JsonObject, key: String, defaultValue: Int): Int {
+        val value = json[key]
+        return if (value == null || value is JsonNull) defaultValue else value.jsonPrimitive.int
+    }
+
+    private fun optionalInt(json: JsonObject, key: String): Int? {
+        val value = json[key]
+        return if (value == null || value is JsonNull) null else value.jsonPrimitive.int
+    }
+
+    private fun optionalBoolean(json: JsonObject, key: String, defaultValue: Boolean): Boolean {
+        val value = json[key]
+        return if (value == null || value is JsonNull) defaultValue else value.jsonPrimitive.boolean
+    }
+
     private fun optionalPath(json: JsonObject, key: String, defaultPath: Path): Path {
         val value = json[key]
         if (value == null || value is JsonNull || value.jsonPrimitive.content.isBlank()) return defaultPath
         return Path.of(value.jsonPrimitive.content)
     }
+
+    private fun requireShaderDebugControl(): ShaderDebugControl =
+        checkNotNull(shaderDebugControl) { "Shader debug control is not configured" }
 
     private fun <T> runOnDispatcher(callable: Callable<T>): T {
         val task = FutureTask(callable)

@@ -1,156 +1,122 @@
 # Capture control and MCP bridge
 
-`vibris-capture` owns capture request state, pass matching, capture-aware dispatch, the loopback HTTP control
-server, and the stdio MCP bridge. An embedding host owns the application-specific edges: reload and thread-dispatch
-callbacks, frame-boundary calls, compute shader source and pass-name extraction, and the native dispatch fallback.
+`vibris-capture` owns capture request state, shader-debug state, OpenGL resource dumping, the authenticated
+loopback transport, and the stdio MCP bridge. The embedding host owns shader reload, screenshots, render-thread
+dispatch, shader-pack metadata, and discovery of active resources.
 
-Iris is one such host. Its glue constructs the Vibris manager and server, forwards frame and compute events, and keeps
-the normal OpenGL dispatch when Vibris reports that a dispatch was not captured. Iris also forwards OpenGL debug-group
-push/pop events to Vibris. Session state and remote protocol handling do not live in Iris.
+Iris constructs one `ShaderDebugControl` shared by its render hooks and `CaptureControlServer`. Iris does not own MCP
+schemas, JSON-RPC dispatch, transport routing, GPU timing history, or GL resource serialization.
 
-## Capture manager
-
-Create one `CaptureManager` for the lifetime of the host integration.
-
-- `prepareSingleCapture(path, passName)` queues an exact, case-sensitive pass-name match.
-- `prepareMultiCapture(path, programType)` accepts `prepare`, `begin`, `deferred`, or `composite`, case-insensitively.
-  It matches the normalized type followed by an optional pass number from 1 through 99 and an optional lowercase
-  letter suffix, for example `composite`, `composite7`, or `composite7_a`.
-- `startFrame()` consumes a pending request and starts the underlying GL capture. Call it at the start of each rendered
-  frame.
-- `dispatchCompute(source, passName, x, y, z)` and `dispatchComputeIndirect(source, passName, offset)` return `true`
-  when Vibris handled the dispatch. The host must perform its normal OpenGL dispatch only when they return `false`.
-  A single-pass capture finishes after its first matching dispatch; any still-active capture finishes in `endFrame()`.
-- `endFrame()` finishes the active capture and starts its asynchronous save. Call it at the end of each rendered frame.
-- `status()` returns `pending`, `active`, `saving`, `lastOutputPath`, and `lastError`. `saving` remains true while the
-  thread returned by the capture writer is alive.
-- `defaultOutputPath(name)` returns a relative path shaped like `vibris/<name>-yyyyMMdd-HHmmss`. Relative paths are
-  resolved from the host process's working directory.
-
-Preparing a new request replaces an existing pending request. An unsupported multi-capture type throws
-`IllegalArgumentException`.
-
-## HTTP control server
-
-Construct `CaptureControlServer` with the shared manager, an `Executor` that schedules work on the host's required
-thread, and a `Callable<Void>` that reloads the active shader:
+## Host integration
 
 ```java
 CaptureManager manager = new CaptureManager();
+ShaderDebugControl shaderDebug = new ShaderDebugControl(new HostShaderDebugAdapter());
 CaptureControlServer server = new CaptureControlServer(
     manager,
     runnable -> hostExecutor.execute(runnable),
     () -> {
         reloadShader();
         return null;
-    }
+    },
+    shaderDebug
 );
 server.start(Path.of("vibris-capture-control.json"));
 ```
 
-`start()` is idempotent while the server is running. It binds an ephemeral port on `127.0.0.1`, creates a random token,
-and writes the selected control file. Calling `start()` without a path uses `vibris-capture-control.json`. A host that
-owns a server should call `close()` during its shutdown path; `close()` stops HTTP work and deletes the control file.
-Failed startup also removes a partially written control file.
+The three-argument constructor remains available for capture-only hosts. In that mode `reload_shader` uses the
+supplied callback and shader-debug MCP tools and resources are unavailable.
 
-Iris deliberately preserves its existing runtime filename:
+The host forwards frame and compute capture events to `CaptureManager`. It also forwards GL debug groups, draw and
+compute timing scopes, screenshot render-tail ticks, and shader errors to the shared `ShaderDebugControl`.
 
-```java
-server.start(Path.of("iris-capture-control.json"));
-```
+## Authenticated control transport
 
-With the normal Fabric development working directory, that file is
-`I:\code\Iris\fabric\run\iris-capture-control.json`. The current Iris integration starts the server but does not call
-`close()` during shutdown.
-
-The control file is JSON:
+`start()` binds an ephemeral port on `127.0.0.1`, creates a random bearer token, and writes the selected control file.
+Iris uses `iris-capture-control.json`. The file has this shape:
 
 ```json
 {"host":"127.0.0.1","port":49152,"token":"<random UUID>"}
 ```
 
-The port is chosen at runtime. Every request must contain the exact, case-sensitive header
-`Authorization: Bearer <token>`; a missing or different value returns HTTP 401 with `Unauthorized`. The server is
-loopback-only, so it is not reachable directly from another machine, but any local process that can read the control
-file can use its token. Treat the file as a capability secret and do not publish or copy it to an untrusted location.
+Every internal request must contain the exact header `Authorization: Bearer <token>`. Treat the control file as a
+local capability secret. `close()` stops the server and deletes the file; failed startup also cleans up.
 
-The bridge uses these routes. The server currently does not reject a route solely because a different HTTP method was
-used; clients should use the methods shown here.
-
-- `GET /status`
-  - Body: none.
-  - Success: `{"pending":false,"active":false,"saving":false,"lastOutputPath":null,"lastError":null}`.
-- `POST /reload_shader`
-  - Body: `{}`.
-  - Success: `{"ok":true}`.
-- `POST /capture_pass`
-  - Body: `{"pass":"<exact pass>","path":"<optional output path>"}`.
-  - Success: `{"ok":true,"path":"<selected output path>"}`.
-- `POST /capture_multi`
-  - Body: `{"type":"prepare|begin|deferred|composite","path":"<optional output path>"}`.
-  - Success: `{"ok":true,"path":"<selected output path>"}`.
-
-Omit `path`, set it to `null`, or pass an empty string to use `defaultOutputPath`.
-Invalid JSON, missing required fields,
-unsupported multi-capture types, and callback failures return HTTP 500 as
-`{"ok":false,"error":"<message>"}`.
-
-`reload_shader`, `capture_pass`, and `capture_multi` run through the supplied dispatcher. The HTTP request waits for
-that dispatched task to finish, so a success response means the reload or queue mutation has completed, not merely
-that it was submitted. The host must supply an executor that can make progress independently of the HTTP handler.
+The HTTP routes are private transport details for the stdio bridge. There is no fixed port 7150, unauthenticated
+shader-debug listener, or OpenAPI endpoint.
 
 ## MCP bridge
 
-`tools/vibris_capture_mcp.py` is a Python 3.10+ stdio JSON-RPC bridge. It reads the control file for each tool call and
-forwards the request to the live HTTP server. Run it for Iris with:
+Run the Python 3.10+ stdio server for Iris with:
 
 ```powershell
-py -3 I:\code\vibris\tools\vibris_capture_mcp.py --control-file I:\code\Iris\fabric\run\iris-capture-control.json
+py -3 I:\code\vibris\tools\vibris_capture_mcp.py --control-file `
+  I:\code\Iris\fabric\run\iris-capture-control.json
 ```
 
-It advertises MCP protocol `2024-11-05`, server name `vibris-capture`, version `0.1.0`, and these tools in order:
+The bridge advertises protocol `2024-11-05`, server `vibris-capture` version `0.1.0`, and both `tools` and `resources`
+capabilities. It rereads the control file for every call, so a restarted host may rotate its port and token without
+restarting the MCP process.
 
-1. `reload_shader` — no arguments.
-2. `capture_pass` — required string `pass`, optional string `path`.
-3. `capture_multi` — required string `type`, optional string `path`.
-4. `status` — no arguments.
+Tool results contain one text content item whose `text` is the result JSON.
 
-Tool results contain one text item whose text is the HTTP response serialized as JSON. Unknown JSON-RPC methods return
-error `-32601`; bridge, control-file, HTTP, and tool failures return error `-32000`. JSON-RPC notifications without an
-`id` are ignored.
+### Tools
 
-This PowerShell command exercises initialization without requiring a running host, because initialization does not
-read the control file:
+| Tool | Arguments | Result |
+|------|-----------|--------|
+| `reload_shader` | none | `success` and captured `errors` |
+| `capture_pass` | required `pass`, optional `path` | queued capture path |
+| `capture_multi` | required `type`, optional `path` | queued capture path |
+| `status` | none | capture state, output path, and error |
+| `schedule_screenshot` | optional `frames`, default 1, minimum 1 | scheduling acknowledgement |
+| `dump_ssbo` | optional `index`, default 0, minimum 0 | dump path, buffer id, and byte count |
+| `dump_texture` | optional `name` or `id`, optional `raw` | dump metadata and path |
 
-```powershell
-'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' |
-  py -3 I:\code\vibris\tools\vibris_capture_mcp.py --control-file I:\code\Iris\fabric\run\iris-capture-control.json
-```
+For `dump_texture`, `name` takes precedence when both selectors are supplied. If neither is supplied, OpenGL id 0 is
+used for compatibility with the previous shader-debug API. `raw=false` writes PNG; `raw=true` writes the normalized
+binary representation described by the result metadata.
 
-Expected output:
+`schedule_screenshot` is asynchronous. A value of 1 captures at the next render-tail tick. Read
+`vibris://shader/screenshot-result` for the last completed path.
 
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": {
-    "protocolVersion": "2024-11-05",
-    "capabilities": {"tools": {}},
-    "serverInfo": {"name": "vibris-capture", "version": "0.1.0"}
-  }
-}
-```
+### Resources
+
+| URI | JSON snapshot |
+|-----|---------------|
+| `vibris://shader/status` | loaded shader-pack name and state |
+| `vibris://shader/errors` | newest 100 captured shader errors |
+| `vibris://shader/screenshot-result` | last completed screenshot path |
+| `vibris://shader/metrics` | GPU timing histories and statistics |
+| `vibris://shader/storage-buffers` | active SSBO indices and OpenGL ids |
+| `vibris://shader/textures` | available render-target and custom textures |
+| `vibris://shader/patched-shaders` | debug-output state, directory, and sorted file names |
+
+`resources/read` returns one `application/json` text content item. Dumps and screenshots remain local files; MCP
+returns their paths rather than embedding binary data.
+
+Unknown JSON-RPC methods return `-32601`. Unknown tools, resources, control-file failures, transport errors,
+validation failures, and host exceptions return `-32000`. Notifications without an `id` are ignored.
+
+## Capture behavior
+
+`prepareSingleCapture` queues an exact case-sensitive pass match. `prepareMultiCapture` accepts `prepare`, `begin`,
+`deferred`, or `composite` case-insensitively. A new request replaces an existing pending request.
+
+`defaultOutputPath(name)` returns `vibris/<name>-yyyyMMdd-HHmmss`. Relative paths resolve from the host process
+working directory. `status.saving` remains true until the capture writer thread exits.
 
 ## Verification
 
 From `I:\code\vibris`:
 
 ```powershell
-.\gradlew.bat :vibris-capture:test
 py -3 -m unittest tools\test_vibris_capture_mcp.py
+.\gradlew.bat :vibris-capture:test
+.\gradlew.bat '-Pvibris.runtimeTest=true' :vibris-capture:test `
+  --tests dev.luna5ama.vibris.capture.ShaderDebugRuntimeTest
 ```
 
-From `I:\code\Iris`, with the sibling Vibris composite build and local Sodium dependency available:
+From `I:\code\Iris`:
 
 ```powershell
 .\gradlew.bat :common:compileJava :fabric:compileJava :fabric:remapJar

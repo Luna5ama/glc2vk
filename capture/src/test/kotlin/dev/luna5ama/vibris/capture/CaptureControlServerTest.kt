@@ -174,7 +174,15 @@ class CaptureControlServerTest {
 
             val tools = exchange("""{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}""")
             assertEquals(
-                listOf("reload_shader", "capture_pass", "capture_multi", "status"),
+                listOf(
+                    "reload_shader",
+                    "capture_pass",
+                    "capture_multi",
+                    "status",
+                    "schedule_screenshot",
+                    "dump_ssbo",
+                    "dump_texture"
+                ),
                 tools["result"]!!.jsonObject["tools"]!!.jsonArray.map {
                     it.jsonObject["name"]!!.jsonPrimitive.content
                 }

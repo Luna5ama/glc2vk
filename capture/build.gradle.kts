@@ -7,6 +7,7 @@ dependencies {
     implementation(project(":vibris-common"))
     implementation(platform("org.lwjgl:lwjgl-bom:${libs.versions.lwjgl.get()}"))
     implementation("org.lwjgl", "lwjgl")
+    implementation("org.lwjgl", "lwjgl-opengl")
     runtimeOnly("org.lwjgl", "lwjgl", classifier = "natives-windows")
     implementation(libs.bundles.glWrapper)
     implementation(libs.kotlinxSerializationCore)
@@ -14,7 +15,6 @@ dependencies {
     implementation(libs.fastutil)
 
     testImplementation(kotlin("test"))
-    testImplementation("org.lwjgl", "lwjgl-opengl")
     testImplementation("org.lwjgl", "lwjgl-glfw")
     testRuntimeOnly("org.lwjgl", "lwjgl-opengl", classifier = "natives-windows")
     testRuntimeOnly("org.lwjgl", "lwjgl-glfw", classifier = "natives-windows")
