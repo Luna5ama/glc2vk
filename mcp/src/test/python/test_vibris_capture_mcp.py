@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 
-SCRIPT = Path(__file__).with_name("vibris_capture_mcp.py")
+SCRIPT = Path(__file__).parents[2] / "main" / "python" / "vibris_capture_mcp.py"
 
 
 def run_proxy(*messages, control_file=None):

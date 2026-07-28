@@ -37,7 +37,7 @@ class ShaderDebugMcpTest {
         assertTrue(probe.waitFor(5, TimeUnit.SECONDS), "Python launcher did not answer within five seconds")
         assertEquals(0, probe.exitValue(), probe.inputStream.bufferedReader().readText())
 
-        val script = Path.of(System.getProperty("user.dir"), "..", "tools", "vibris_capture_mcp.py").normalize()
+        val script = Path.of(System.getProperty("user.dir"), "src", "main", "python", "vibris_capture_mcp.py")
         assertTrue(script.exists(), "Missing Python bridge: $script")
         val temp = createTempDirectory("vibris-shader-debug-mcp")
         val controlFile = temp.resolve("control.json")

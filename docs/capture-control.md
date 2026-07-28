@@ -1,11 +1,12 @@
 # Capture control and MCP bridge
 
-`vibris-capture` owns capture request state, shader-debug state, OpenGL resource dumping, the authenticated
-loopback transport, and the stdio MCP bridge. The embedding host owns shader reload, screenshots, render-thread
-dispatch, shader-pack metadata, and discovery of active resources.
+`vibris-capture` owns capture request state, shader-debug state, and OpenGL resource dumping. `vibris-mcp` owns the
+authenticated loopback transport and stdio MCP bridge. The embedding host owns shader reload, screenshots,
+render-thread dispatch, shader-pack metadata, and discovery of active resources.
 
 Iris constructs one `ShaderDebugControl` shared by its render hooks and `CaptureControlServer`. Iris does not own MCP
-schemas, JSON-RPC dispatch, transport routing, GPU timing history, or GL resource serialization.
+schemas, JSON-RPC dispatch, transport routing, GPU timing history, or GL resource serialization. The first three live
+in `vibris-mcp`; the latter two remain in `vibris-capture`.
 
 ## Host integration
 
@@ -50,7 +51,7 @@ shader-debug listener, or OpenAPI endpoint.
 Run the Python 3.10+ stdio server for Iris with:
 
 ```powershell
-py -3 I:\code\vibris\tools\vibris_capture_mcp.py --control-file `
+py -3 I:\code\vibris\mcp\src\main\python\vibris_capture_mcp.py --control-file `
   I:\code\Iris\fabric\run\iris-capture-control.json
 ```
 
@@ -110,7 +111,8 @@ working directory. `status.saving` remains true until the capture writer thread 
 From `I:\code\vibris`:
 
 ```powershell
-py -3 -m unittest tools\test_vibris_capture_mcp.py
+py -3 -m unittest mcp\src\test\python\test_vibris_capture_mcp.py
+.\gradlew.bat :vibris-mcp:check
 .\gradlew.bat :vibris-capture:test
 .\gradlew.bat '-Pvibris.runtimeTest=true' :vibris-capture:test `
   --tests dev.luna5ama.vibris.capture.ShaderDebugRuntimeTest

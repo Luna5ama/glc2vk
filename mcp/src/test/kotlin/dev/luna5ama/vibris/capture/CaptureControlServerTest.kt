@@ -142,7 +142,7 @@ class CaptureControlServerTest {
         val probeOutput = probe.inputStream.bufferedReader().readText()
         assertEquals(0, probe.exitValue(), probeOutput)
 
-        val script = Path.of(System.getProperty("user.dir"), "..", "tools", "vibris_capture_mcp.py").normalize()
+        val script = Path.of(System.getProperty("user.dir"), "src", "main", "python", "vibris_capture_mcp.py")
         assertTrue(script.exists(), "Missing Python bridge: $script")
         val temp = createTempDirectory("vibris-control-bridge-test")
         val controlFile = temp.resolve("control.json")

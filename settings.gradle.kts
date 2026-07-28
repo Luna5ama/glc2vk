@@ -15,6 +15,7 @@ pluginManagement {
 listOf(
     "common",
     "capture",
+    "mcp",
     "replay-vk",
     "replay-gl",
 ).map {
