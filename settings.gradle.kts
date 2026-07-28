@@ -13,11 +13,16 @@ pluginManagement {
 }
 
 listOf(
+    "api",
     "common",
     "capture",
+    "core",
+    "integration-tests",
     "mcp",
+    "protocol-java",
     "replay-vk",
     "replay-gl",
+    "test-runtime",
 ).map {
     "${rootProject.name}-$it" to file(it)
 }.forEach { (name, dir) ->

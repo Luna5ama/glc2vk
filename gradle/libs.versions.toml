@@ -11,6 +11,9 @@ glWrapper = "1.1.0"
 kmogus = "1.1-SNAPSHOT"
 
 commons-compress = "1.28.0"
+protobufPlugin = "0.10.0"
+grpcJava = "1.76.0"
+protobuf = "3.25.8"
 
 jarOptimizer = "1.2.2"
 
@@ -20,6 +23,7 @@ caelum = "1.0-SNAPSHOT"
 kotlinxSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 kotlin = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 jarOptimizer = { id = "dev.luna5ama.jar-optimizer", version.ref = "jarOptimizer" }
+protobuf = { id = "com.google.protobuf", version.ref = "protobufPlugin" }
 
 [libraries]
 kotlinGradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
@@ -38,6 +42,9 @@ glWrapper-lwjgl3 = { module = "dev.luna5ama:gl-wrapper-lwjgl-3", version.ref = "
 kmogus-core = { module = "dev.luna5ama:kmogus-core", version.ref = "kmogus" }
 
 commons-compress = { module = "org.apache.commons:commons-compress", version.ref = "commons-compress" }
+grpc-protobuf = { module = "io.grpc:grpc-protobuf", version.ref = "grpcJava" }
+grpc-stub = { module = "io.grpc:grpc-stub", version.ref = "grpcJava" }
+protobuf-java = { module = "com.google.protobuf:protobuf-java", version.ref = "protobuf" }
 
 caelum-core = { module = "net.echonolix:caelum-core", version.ref = "caelum" }
 caelum-vulkan = { module = "net.echonolix:caelum-vulkan", version.ref = "caelum" }
