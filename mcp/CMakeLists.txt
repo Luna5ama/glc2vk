@@ -8,6 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Protobuf CONFIG REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 set(PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../proto")
 set(PROTO_FILE "${PROTO_ROOT}/vibris_control.proto")
@@ -41,17 +42,109 @@ target_link_libraries(vibris-protocol-smoke PRIVATE vibris_control_protocol)
 add_executable(vibris-descriptor-dump src/main/cpp/descriptor_dump.cpp)
 target_link_libraries(vibris-descriptor-dump PRIVATE vibris_control_protocol)
 
+add_library(vibris_mcp_core STATIC
+    src/main/cpp/config_document.cpp
+    src/main/cpp/config_store.cpp
+    src/main/cpp/grpc_client.cpp
+    src/main/cpp/grpc_control_stream.cpp
+    src/main/cpp/grpc_unary_calls.cpp
+    src/main/cpp/mcp_stdio_server.cpp
+    src/main/cpp/pending_request_registry.cpp
+    src/main/cpp/phase_one_backend.cpp
+    src/main/cpp/result_mapper.cpp
+    src/main/cpp/tool_registry.cpp
+    src/main/cpp/workspace_binding.cpp
+    src/main/cpp/worktree_lock.cpp)
+target_include_directories(vibris_mcp_core PUBLIC src/main/cpp)
+target_link_libraries(vibris_mcp_core PUBLIC vibris_control_protocol nlohmann_json::nlohmann_json)
+
+add_executable(vibris-mcp src/main/cpp/main.cpp)
+target_link_libraries(vibris-mcp PRIVATE vibris_mcp_core)
+
 if(MSVC)
     target_compile_options(vibris-protocol-smoke PRIVATE /W4 /permissive-)
     target_compile_options(vibris-descriptor-dump PRIVATE /W4 /permissive-)
+    target_compile_options(vibris_mcp_core PRIVATE /W4 /permissive-)
+    target_compile_options(vibris-mcp PRIVATE /W4 /permissive-)
 endif()
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(vibris-state-tests src/test/cpp/state_tests.cpp)
+    target_link_libraries(vibris-state-tests PRIVATE vibris_mcp_core)
+
+    add_executable(vibris-stdio-fixture-test src/test/cpp/stdio_fixture_test.cpp)
+    target_link_libraries(vibris-stdio-fixture-test PRIVATE nlohmann_json::nlohmann_json)
+
+    add_executable(vibris-grpc-tests src/test/cpp/grpc_reconnect_tests.cpp)
+    target_include_directories(vibris-grpc-tests PRIVATE src/test/cpp)
+    target_link_libraries(vibris-grpc-tests PRIVATE vibris_mcp_core)
+
+    if(MSVC)
+        target_compile_options(vibris-state-tests PRIVATE /W4 /permissive-)
+        target_compile_options(vibris-stdio-fixture-test PRIVATE /W4 /permissive-)
+        target_compile_options(vibris-grpc-tests PRIVATE /W4 /permissive-)
+    endif()
+
+    add_custom_target(mcp-tests
+        DEPENDS vibris-state-tests vibris-stdio-fixture-test vibris-grpc-tests)
+
     add_test(
         NAME descriptor-dump
         COMMAND vibris-descriptor-dump
             --output "$<TARGET_FILE_DIR:vibris-descriptor-dump>/vibris_control_descriptor.bin")
     add_test(NAME protocol-smoke-cli-validation COMMAND vibris-protocol-smoke)
     set_tests_properties(protocol-smoke-cli-validation PROPERTIES WILL_FAIL TRUE)
+
+    add_test(
+        NAME stdio-fixture-contract
+        COMMAND vibris-stdio-fixture-test
+            "${CMAKE_CURRENT_SOURCE_DIR}/../integration-tests/fixtures/mcp/happy-six-tools.jsonl")
+
+    foreach(scenario
+            ConfigValidAtomicRoundTrip
+            SameWorktreeMutex
+            MalformedConfigPreservesLastGood
+            OversizeJsonRejected)
+        add_test(NAME ${scenario} COMMAND vibris-state-tests ${scenario})
+    endforeach()
+
+    add_test(
+        NAME AsyncGrpcReconnectAndBoundedRegistry
+        COMMAND vibris-grpc-tests
+            --scenario async-reconnect-registry
+            --port 55063
+            --request-count 256
+            --drop-after 64
+            --registry-limit 256)
+    add_test(
+        NAME NoDetachedThreads
+        COMMAND vibris-grpc-tests
+            --scenario no-detached-threads
+            --port 55064
+            --request-count 1
+            --drop-after 0
+            --registry-limit 1)
+    set_tests_properties(
+        AsyncGrpcReconnectAndBoundedRegistry NoDetachedThreads
+        PROPERTIES RUN_SERIAL TRUE TIMEOUT 30)
+
+    function(add_stdio_mcp_probe test_name)
+        add_test(
+            NAME ${test_name}
+            COMMAND powershell.exe -NoLogo -NoProfile -File
+                "${CMAKE_CURRENT_SOURCE_DIR}/../integration-tests/scripts/stdio-mcp-probe.ps1"
+                -Exe "$<TARGET_FILE:vibris-mcp>"
+                -WorkspaceRoot
+                    "${CMAKE_CURRENT_SOURCE_DIR}/../.omo/tmp/ulw-v1-g002-c001/worktree"
+                -FakeServerJar
+                    "${CMAKE_CURRENT_SOURCE_DIR}/../test-runtime/build/libs/vibris-test-runtime.jar"
+                -Requests
+                    "${CMAKE_CURRENT_SOURCE_DIR}/../integration-tests/fixtures/mcp/happy-six-tools.jsonl")
+        set_tests_properties(${test_name} PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
+    endfunction()
+
+    add_stdio_mcp_probe(StdioMcpSixToolHappyPath)
+    add_stdio_mcp_probe(ConfigPersistence)
+    add_stdio_mcp_probe(FakeServerStatus)
 endif()

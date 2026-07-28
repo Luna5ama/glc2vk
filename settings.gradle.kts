@@ -18,7 +18,6 @@ listOf(
     "capture",
     "core",
     "integration-tests",
-    "mcp",
     "protocol-java",
     "replay-vk",
     "replay-gl",

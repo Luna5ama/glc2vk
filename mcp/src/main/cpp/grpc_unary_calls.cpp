@@ -1,0 +1,77 @@
+#include "grpc_client_impl.hpp"
+
+#include <algorithm>
+#include <chrono>
+#include <utility>
+
+namespace vibris::mcp {
+
+template <typename Request, typename Response, typename Completion>
+void GrpcClient::Impl::UnaryTag<Request, Response, Completion>::complete(const bool ok) noexcept {
+    owner.finish_unary(*this, ok);
+}
+
+template <typename Request, typename Response, typename Completion, typename StartCall>
+bool GrpcClient::Impl::start_unary(Request request, Completion completion, StartCall start_call) {
+    std::scoped_lock lock(mutex_);
+    if (!started_ || stopping_ || !completion ||
+        pending_.size() + unary_in_flight_ >= options_.pending_request_limit) {
+        return false;
+    }
+    ensure_stub_locked();
+    using Call = UnaryTag<Request, Response, Completion>;
+    auto call = std::make_unique<Call>(*this, std::move(request), std::move(completion));
+    call->context.set_deadline(std::chrono::system_clock::now() + options_.unary_deadline);
+    call->reader = start_call(*stub_, call->context, call->request, queue_);
+    Call* const tag = call.release();
+    ++unary_in_flight_;
+    peak_pending_ = std::max(peak_pending_, pending_.size() + unary_in_flight_);
+    tag->reader->Finish(&tag->response, &tag->status, tag);
+    return true;
+}
+
+template <typename Call>
+void GrpcClient::Impl::finish_unary(Call& call, const bool ok) noexcept {
+    {
+        std::scoped_lock lock(mutex_);
+        --unary_in_flight_;
+    }
+    if (!ok && call.status.ok()) {
+        call.status = grpc::Status(grpc::StatusCode::CANCELLED, "gRPC completion queue stopped");
+    }
+    try {
+        call.completion(call.status, call.response);
+    } catch (...) {
+        // User callbacks must not terminate the completion-queue worker.
+    }
+}
+
+bool GrpcClient::Impl::list_presets(ListPresetsCompletion completion) {
+    return start_unary<proto::ListPresetsRequest, proto::ListPresetsResponse>(
+        {}, std::move(completion),
+        [](proto::VibrisControl::Stub& stub, grpc::ClientContext& context,
+            const proto::ListPresetsRequest& request, grpc::CompletionQueue& queue) {
+            return stub.AsyncListPresets(&context, request, &queue);
+        });
+}
+
+bool GrpcClient::Impl::validate_context(proto::ValidateContextRequest request,
+    ValidateContextCompletion completion) {
+    return start_unary<proto::ValidateContextRequest, proto::ValidateContextResponse>(
+        std::move(request), std::move(completion),
+        [](proto::VibrisControl::Stub& stub, grpc::ClientContext& context,
+            const proto::ValidateContextRequest& value, grpc::CompletionQueue& queue) {
+            return stub.AsyncValidateContext(&context, value, &queue);
+        });
+}
+
+bool GrpcClient::Impl::get_status(GetStatusCompletion completion) {
+    return start_unary<proto::GetStatusRequest, proto::GetStatusResponse>(
+        {}, std::move(completion),
+        [](proto::VibrisControl::Stub& stub, grpc::ClientContext& context,
+            const proto::GetStatusRequest& request, grpc::CompletionQueue& queue) {
+            return stub.AsyncGetStatus(&context, request, &queue);
+        });
+}
+
+}

@@ -1,0 +1,143 @@
+#include "grpc_client_impl.hpp"
+
+#include <algorithm>
+#include <chrono>
+#include <stdexcept>
+#include <utility>
+
+namespace vibris::mcp {
+namespace {
+
+constexpr std::uint32_t protocol_major = 1;
+constexpr std::uint32_t protocol_minor = 0;
+
+bool is_loopback_target(const std::string& target) {
+    return target.starts_with("127.0.0.1:") || target.starts_with("localhost:") ||
+        target.starts_with("[::1]:");
+}
+
+}
+
+bool GrpcClient::Impl::submit(proto::ClientMessage message, GrpcCompletion completion) {
+    std::scoped_lock lock(mutex_);
+    if (!started_ || stopping_ || pending_.size() + unary_in_flight_ >= options_.pending_request_limit) {
+        return false;
+    }
+    if (message.protocol_version().major() == 0) {
+        message.mutable_protocol_version()->set_major(protocol_major);
+        message.mutable_protocol_version()->set_minor(protocol_minor);
+    }
+    if (message.workspace_id().empty()) {
+        message.set_workspace_id(options_.workspace_id);
+    }
+    if (!pending_.add(message, std::move(completion))) {
+        return false;
+    }
+    peak_pending_ = std::max(peak_pending_, pending_.size() + unary_in_flight_);
+    submitted_.push_back(std::move(message));
+    schedule_alarm_locked(AlarmKind::wake, std::chrono::milliseconds::zero());
+    return true;
+}
+
+GrpcClient::Impl::Impl(GrpcClientOptions options)
+    : options_(std::move(options)), pending_(options_.pending_request_limit) {
+    if (!is_loopback_target(options_.target) || options_.workspace_id.empty() || options_.mcp_version.empty() ||
+        options_.process_instance_uuid.empty() || options_.reconnect_delay.count() < 0 ||
+        options_.unary_deadline.count() <= 0) {
+        throw std::invalid_argument("invalid gRPC client options");
+    }
+}
+
+GrpcClient::Impl::~Impl() {
+    shutdown();
+}
+
+void GrpcClient::Impl::start() {
+    std::scoped_lock lock(mutex_);
+    if (started_) {
+        return;
+    }
+    started_ = true;
+    worker_ = std::jthread([this](const std::stop_token stop) { run(stop); });
+    workers_started_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void GrpcClient::Impl::shutdown() {
+    {
+        std::scoped_lock lock(mutex_);
+        if (!started_ || stopping_) {
+            return;
+        }
+        stopping_ = true;
+        worker_.request_stop();
+        if (control_context_) {
+            control_context_->TryCancel();
+        }
+        queue_.Shutdown();
+    }
+    if (worker_.joinable()) {
+        worker_.join();
+        workers_joined_.fetch_add(1, std::memory_order_relaxed);
+    }
+    pending_.fail_all(grpc::Status(grpc::StatusCode::CANCELLED, "gRPC client stopped"));
+    std::scoped_lock lock(mutex_);
+    stream_.reset();
+    control_context_.reset();
+    channel_.reset();
+    stub_.reset();
+}
+
+GrpcClientStats GrpcClient::Impl::stats() const {
+    std::size_t unary_in_flight;
+    std::size_t peak_pending;
+    {
+        std::scoped_lock lock(mutex_);
+        unary_in_flight = unary_in_flight_;
+        peak_pending = peak_pending_;
+    }
+    return {
+        .completion_queue_count = 1,
+        .peak_pending_requests = peak_pending,
+        .pending_requests = pending_.size() + unary_in_flight,
+        .worker_threads_started = workers_started_.load(std::memory_order_relaxed),
+        .worker_threads_joined = workers_joined_.load(std::memory_order_relaxed),
+        .control_connected = connected_.load(std::memory_order_relaxed),
+    };
+}
+
+void GrpcClient::Impl::run(const std::stop_token stop) noexcept {
+    void* raw_tag = nullptr;
+    bool ok = false;
+    while (queue_.Next(&raw_tag, &ok)) {
+        std::unique_ptr<Tag> tag(static_cast<Tag*>(raw_tag));
+        tag->complete(ok);
+        if (stop.stop_requested()) {
+            continue;
+        }
+    }
+}
+
+void GrpcClient::Impl::ensure_stub_locked() {
+    if (stub_) {
+        return;
+    }
+    channel_ = grpc::CreateChannel(options_.target, grpc::InsecureChannelCredentials());
+    stub_ = proto::VibrisControl::NewStub(channel_);
+}
+
+GrpcClient::GrpcClient(GrpcClientOptions options) : impl_(std::make_unique<Impl>(std::move(options))) {}
+GrpcClient::~GrpcClient() = default;
+void GrpcClient::start() { impl_->start(); }
+bool GrpcClient::list_presets(ListPresetsCompletion completion) { return impl_->list_presets(std::move(completion)); }
+bool GrpcClient::validate_context(::vibris::control::v1::ValidateContextRequest request,
+    ValidateContextCompletion completion) {
+    return impl_->validate_context(std::move(request), std::move(completion));
+}
+bool GrpcClient::get_status(GetStatusCompletion completion) { return impl_->get_status(std::move(completion)); }
+bool GrpcClient::submit(::vibris::control::v1::ClientMessage message, GrpcCompletion completion) {
+    return impl_->submit(std::move(message), std::move(completion));
+}
+void GrpcClient::shutdown() { impl_->shutdown(); }
+GrpcClientStats GrpcClient::stats() const { return impl_->stats(); }
+
+}
