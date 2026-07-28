@@ -9,6 +9,7 @@
                 "codegen"
             ]
         },
+        "libarchive",
         "nlohmann-json"
     ]
 }

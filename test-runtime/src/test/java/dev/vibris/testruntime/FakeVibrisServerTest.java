@@ -56,6 +56,26 @@ class FakeVibrisServerTest {
     }
 
     @Test
+    void advertisesExplicitSourceAndArtifactRoots() throws Exception {
+        Path pendingRoot = temp.resolve("explicit-pending");
+        Path artifactRoot = temp.resolve("explicit-artifacts");
+        try (FakeVibrisServer server = FakeVibrisServer.start(0, pendingRoot, artifactRoot)) {
+            ManagedChannel channel = NettyChannelBuilder.forAddress("127.0.0.1", server.port()).usePlaintext().build();
+            try {
+                GetServerInfoResponse response = VibrisControlGrpc.newBlockingStub(channel)
+                    .getServerInfo(GetServerInfoRequest.getDefaultInstance());
+                assertEquals(pendingRoot.toAbsolutePath().normalize().toString(),
+                    response.getServer().getPendingShadersRoot());
+                assertEquals(artifactRoot.toAbsolutePath().normalize().toString(),
+                    response.getServer().getArtifactRoot());
+            } finally {
+                channel.shutdownNow();
+                assertTrue(channel.awaitTermination(5, TimeUnit.SECONDS));
+            }
+        }
+    }
+
+    @Test
     void helloThenPingReturnsNegotiatedHelloAndCallerMessageId() throws Exception {
         try (RunningServer running = RunningServer.start(temp.resolve("hello"))) {
             Responses responses = new Responses();

@@ -46,6 +46,15 @@ void GrpcClient::Impl::finish_unary(Call& call, const bool ok) noexcept {
     }
 }
 
+bool GrpcClient::Impl::get_server_info(GetServerInfoCompletion completion) {
+    return start_unary<proto::GetServerInfoRequest, proto::GetServerInfoResponse>(
+        {}, std::move(completion),
+        [](proto::VibrisControl::Stub& stub, grpc::ClientContext& context,
+            const proto::GetServerInfoRequest& request, grpc::CompletionQueue& queue) {
+            return stub.AsyncGetServerInfo(&context, request, &queue);
+        });
+}
+
 bool GrpcClient::Impl::list_presets(ListPresetsCompletion completion) {
     return start_unary<proto::ListPresetsRequest, proto::ListPresetsResponse>(
         {}, std::move(completion),
@@ -72,6 +81,10 @@ bool GrpcClient::Impl::get_status(GetStatusCompletion completion) {
             const proto::GetStatusRequest& request, grpc::CompletionQueue& queue) {
             return stub.AsyncGetStatus(&context, request, &queue);
         });
+}
+
+bool GrpcClient::get_server_info(GetServerInfoCompletion completion) {
+    return impl_->get_server_info(std::move(completion));
 }
 
 }

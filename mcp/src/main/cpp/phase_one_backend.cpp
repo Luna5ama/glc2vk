@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "config_store.hpp"
+#include "phase_two_source_handler.hpp"
 #include "result_mapper.hpp"
 #include "state_error.hpp"
 #include "workspace_binding.hpp"
@@ -66,7 +67,8 @@ public:
           store_(binding_.config_path),
           server_address_(std::move(server_address)),
           process_id_(generate_uuid()),
-          config_(store_.load()) {}
+          config_(store_.load()),
+          source_handler_(binding_.root) {}
 
     ToolOutcome dispatch(std::string_view name, const Json& arguments) {
         try {
@@ -75,8 +77,7 @@ public:
             if (name == "vibris_configure") return configure(arguments);
             if (name == "vibris_get_status") return get_status();
             if (name == "vibris_run_recipe" || name == "vibris_run_actions") {
-                return ToolFailure{"NOT_IMPLEMENTED", "Execution tools are not available in Phase 1.", false,
-                                   {{"phase", 1}, {"source_prepared", false}}};
+                return prepare_sources(name, arguments);
             }
             return ToolFailure{"INTERNAL_ERROR", "The validated tool was not dispatched.", false};
         } catch (const StateError& error) {
@@ -88,6 +89,7 @@ public:
     }
 
     std::optional<GrpcClientStats> shutdown() {
+        source_handler_.clear();
         release_client();
         if (!used_client_) return std::nullopt;
         return aggregate_;
@@ -173,6 +175,17 @@ private:
             });
     }
 
+    ToolOutcome prepare_sources(std::string_view name, const Json& arguments) {
+        return unary<control::GetServerInfoResponse>(
+            [this](auto completion) { return client().get_server_info(std::move(completion)); },
+            [this, name, &arguments](const auto& response) -> ToolOutcome {
+                if (!response.has_server()) {
+                    throw StateError("SERVER_NOT_READY", "The local Vibris server did not provide server info.", true);
+                }
+                return source_handler_.prepare(name, arguments, response.server());
+            });
+    }
+
     GrpcClient& client() {
         if (!grpc_) {
             grpc_ = std::make_unique<GrpcClient>(GrpcClientOptions{
@@ -205,6 +218,7 @@ private:
     std::string server_address_;
     std::string process_id_;
     std::optional<SessionConfig> config_;
+    PhaseTwoSourceHandler source_handler_;
     std::unique_ptr<GrpcClient> grpc_;
     GrpcClientStats aggregate_{};
     bool used_client_ = false;

@@ -22,6 +22,7 @@ public:
     ~Impl();
 
     void start();
+    bool get_server_info(GetServerInfoCompletion completion);
     bool list_presets(ListPresetsCompletion completion);
     bool validate_context(proto::ValidateContextRequest request, ValidateContextCompletion completion);
     bool get_status(GetStatusCompletion completion);

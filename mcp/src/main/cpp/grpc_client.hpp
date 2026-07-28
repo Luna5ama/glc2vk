@@ -33,6 +33,9 @@ struct GrpcClientStats {
 using ListPresetsCompletion = std::function<void(
     const grpc::Status&,
     const ::vibris::control::v1::ListPresetsResponse&)>;
+using GetServerInfoCompletion = std::function<void(
+    const grpc::Status&,
+    const ::vibris::control::v1::GetServerInfoResponse&)>;
 using ValidateContextCompletion = std::function<void(
     const grpc::Status&,
     const ::vibris::control::v1::ValidateContextResponse&)>;
@@ -51,6 +54,7 @@ public:
     GrpcClient& operator=(GrpcClient&&) = delete;
 
     void start();
+    bool get_server_info(GetServerInfoCompletion completion);
     bool list_presets(ListPresetsCompletion completion);
     bool validate_context(
         ::vibris::control::v1::ValidateContextRequest request,

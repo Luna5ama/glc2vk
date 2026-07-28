@@ -8,7 +8,19 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Protobuf CONFIG REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
+find_package(LibArchive REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+
+if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
+    set(VIBRIS_LIBARCHIVE_ROOT "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+    set_target_properties(LibArchive::LibArchive PROPERTIES
+        IMPORTED_CONFIGURATIONS "DEBUG;RELEASE"
+        IMPORTED_LOCATION_DEBUG "${VIBRIS_LIBARCHIVE_ROOT}/debug/lib/archive.lib"
+        IMPORTED_LOCATION_RELEASE "${VIBRIS_LIBARCHIVE_ROOT}/lib/archive.lib"
+        MAP_IMPORTED_CONFIG_MINSIZEREL RELEASE
+        MAP_IMPORTED_CONFIG_RELWITHDEBINFO RELEASE)
+    unset(VIBRIS_LIBARCHIVE_ROOT)
+endif()
 
 set(PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../proto")
 set(PROTO_FILE "${PROTO_ROOT}/vibris_control.proto")
@@ -45,18 +57,28 @@ target_link_libraries(vibris-descriptor-dump PRIVATE vibris_control_protocol)
 add_library(vibris_mcp_core STATIC
     src/main/cpp/config_document.cpp
     src/main/cpp/config_store.cpp
+    src/main/cpp/commit_extractor.cpp
+    src/main/cpp/git_repository.cpp
     src/main/cpp/grpc_client.cpp
     src/main/cpp/grpc_control_stream.cpp
     src/main/cpp/grpc_unary_calls.cpp
     src/main/cpp/mcp_stdio_server.cpp
     src/main/cpp/pending_request_registry.cpp
     src/main/cpp/phase_one_backend.cpp
+    src/main/cpp/phase_two_source_handler.cpp
+    src/main/cpp/prepared_source.cpp
     src/main/cpp/result_mapper.cpp
+    src/main/cpp/source_path_policy.cpp
+    src/main/cpp/source_preparer.cpp
     src/main/cpp/tool_registry.cpp
+    src/main/cpp/workspace_copier.cpp
     src/main/cpp/workspace_binding.cpp
     src/main/cpp/worktree_lock.cpp)
 target_include_directories(vibris_mcp_core PUBLIC src/main/cpp)
-target_link_libraries(vibris_mcp_core PUBLIC vibris_control_protocol nlohmann_json::nlohmann_json)
+target_link_libraries(vibris_mcp_core PUBLIC
+    vibris_control_protocol
+    LibArchive::LibArchive
+    nlohmann_json::nlohmann_json)
 
 add_executable(vibris-mcp src/main/cpp/main.cpp)
 target_link_libraries(vibris-mcp PRIVATE vibris_mcp_core)
@@ -73,6 +95,19 @@ if(BUILD_TESTING)
     add_executable(vibris-state-tests src/test/cpp/state_tests.cpp)
     target_link_libraries(vibris-state-tests PRIVATE vibris_mcp_core)
 
+    add_executable(vibris-worktree-discovery-tests src/test/cpp/worktree_discovery_tests.cpp)
+    target_link_libraries(vibris-worktree-discovery-tests PRIVATE vibris_mcp_core)
+
+    add_executable(vibris-workspace-source-tests src/test/cpp/workspace_source_tests.cpp)
+    target_include_directories(vibris-workspace-source-tests PRIVATE src/test/cpp)
+    target_link_libraries(vibris-workspace-source-tests PRIVATE vibris_mcp_core)
+
+    add_executable(vibris-commit-source-tests src/test/cpp/commit_source_tests.cpp)
+    target_link_libraries(vibris-commit-source-tests PRIVATE vibris_mcp_core)
+
+    add_executable(vibris-git-repository-security-tests src/test/cpp/git_repository_security_tests.cpp)
+    target_link_libraries(vibris-git-repository-security-tests PRIVATE vibris_mcp_core)
+
     add_executable(vibris-stdio-fixture-test src/test/cpp/stdio_fixture_test.cpp)
     target_link_libraries(vibris-stdio-fixture-test PRIVATE nlohmann_json::nlohmann_json)
 
@@ -82,12 +117,18 @@ if(BUILD_TESTING)
 
     if(MSVC)
         target_compile_options(vibris-state-tests PRIVATE /W4 /permissive-)
+        target_compile_options(vibris-worktree-discovery-tests PRIVATE /W4 /permissive-)
+        target_compile_options(vibris-workspace-source-tests PRIVATE /W4 /permissive-)
+        target_compile_options(vibris-commit-source-tests PRIVATE /W4 /permissive-)
+        target_compile_options(vibris-git-repository-security-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-stdio-fixture-test PRIVATE /W4 /permissive-)
         target_compile_options(vibris-grpc-tests PRIVATE /W4 /permissive-)
     endif()
 
     add_custom_target(mcp-tests
-        DEPENDS vibris-state-tests vibris-stdio-fixture-test vibris-grpc-tests)
+        DEPENDS vibris-state-tests vibris-worktree-discovery-tests vibris-workspace-source-tests
+                vibris-commit-source-tests vibris-git-repository-security-tests
+                vibris-stdio-fixture-test vibris-grpc-tests)
 
     add_test(
         NAME descriptor-dump
@@ -108,6 +149,30 @@ if(BUILD_TESTING)
             OversizeJsonRejected)
         add_test(NAME ${scenario} COMMAND vibris-state-tests ${scenario})
     endforeach()
+
+    foreach(scenario
+            ValidRelativeArchiveEntry
+            RejectArchiveTraversal
+            RejectSymlinkOrReparse
+            RejectWin32ArchiveComponents
+            RejectWin32DeviceNameCommitEntry
+            CommitArchiveStreaming50MiB
+            DistinctUuidWithoutDedup)
+        add_test(NAME ${scenario} COMMAND vibris-commit-source-tests ${scenario})
+    endforeach()
+
+    add_test(NAME WorktreeDiscovery COMMAND vibris-worktree-discovery-tests)
+
+    foreach(scenario
+            WorkspaceSnapshotTrackedUntrackedIgnoredAndRetry
+            StagingPromotion
+            MutationTwiceFails
+            MissingPendingRootRejected
+            CheckedFileSwapDoesNotReadReparseTarget)
+        add_test(NAME ${scenario} COMMAND vibris-workspace-source-tests ${scenario})
+    endforeach()
+
+    add_test(NAME WorkspaceLocalGitExecutableIgnored COMMAND vibris-git-repository-security-tests)
 
     add_test(
         NAME AsyncGrpcReconnectAndBoundedRegistry

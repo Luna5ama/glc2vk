@@ -25,8 +25,13 @@ public final class FakeVibrisServer implements AutoCloseable {
     public static FakeVibrisServer start(int port, Path workRoot) throws IOException {
         if (port < 0 || port > 65535) throw new IllegalArgumentException("Port must be between 0 and 65535");
         Path root = workRoot.toAbsolutePath().normalize();
-        Path pendingShadersRoot = root.resolve("pending-shaders");
-        Path artifactRoot = root.resolve("artifacts");
+        return start(port, root.resolve("pending-shaders"), root.resolve("artifacts"));
+    }
+
+    public static FakeVibrisServer start(int port, Path pendingShadersRoot, Path artifactRoot) throws IOException {
+        if (port < 0 || port > 65535) throw new IllegalArgumentException("Port must be between 0 and 65535");
+        pendingShadersRoot = pendingShadersRoot.toAbsolutePath().normalize();
+        artifactRoot = artifactRoot.toAbsolutePath().normalize();
         Files.createDirectories(pendingShadersRoot);
         Files.createDirectories(artifactRoot);
         InetAddress loopback = InetAddress.getByName("127.0.0.1");

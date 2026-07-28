@@ -1,0 +1,1 @@
+The probe builds malicious Git objects only inside its owned temporary repository.
