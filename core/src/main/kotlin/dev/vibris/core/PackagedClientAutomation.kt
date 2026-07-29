@@ -15,7 +15,7 @@ import java.time.Instant
 import java.util.UUID
 import java.util.function.BiConsumer
 
-class PackagedClientProbe private constructor(
+class PackagedClientAutomation private constructor(
     private val configuration: Configuration,
     private val stopRuntime: Runnable,
     private val reportError: BiConsumer<String, Throwable>,
@@ -37,7 +37,7 @@ class PackagedClientProbe private constructor(
                     StandardOpenOption.APPEND,
                 )
             } catch (exception: IOException) {
-                reportError.accept("Failed to write a Phase 4 probe event.", exception)
+                reportError.accept("Failed to write a Vibris automation event.", exception)
             }
         }
     }
@@ -80,7 +80,7 @@ class PackagedClientProbe private constructor(
                 else -> return
             }
         } catch (exception: Exception) {
-            reportError.accept("Failed to process the Phase 4 probe command.", exception)
+            reportError.accept("Failed to process a Vibris automation command.", exception)
         }
     }
 
@@ -110,44 +110,27 @@ class PackagedClientProbe private constructor(
             actualGameDirectory: Path,
             stopRuntime: Runnable,
             reportError: BiConsumer<String, Throwable>,
-        ): PackagedClientProbe? {
-            val runId = System.getProperty("vibris.phase4.runId") ?: return null
+        ): PackagedClientAutomation? {
+            val runId = System.getProperty(RUN_ID_PROPERTY) ?: return null
             val parsed = UUID.fromString(runId)
             if (parsed.toString() != runId) {
-                throw IOException("Phase 4 run ID is not canonical")
+                throw IOException("Vibris automation run ID is not canonical")
             }
             val gameDirectory = actualGameDirectory.toAbsolutePath().normalize()
-            if (gameDirectory != propertyPath("vibris.phase4.gameDir")) {
-                throw IOException("Phase 4 game directory does not match")
-            }
-            val eventFile = ownedFile("vibris.phase4.eventFile", gameDirectory)
-            val receiptFile = ownedFile("vibris.phase4.receiptFile", gameDirectory)
-            val commandFile = ownedFile("vibris.phase4.commandFile", gameDirectory)
+            val eventFile = gameDirectory.resolve(EVENT_FILE_NAME)
+            val receiptFile = gameDirectory.resolve(RECEIPT_FILE_NAME)
+            val commandFile = gameDirectory.resolve(COMMAND_FILE_NAME)
             Files.createDirectories(gameDirectory)
-            Files.createDirectories(eventFile.parent)
-            return PackagedClientProbe(
+            return PackagedClientAutomation(
                 Configuration(runId, gameDirectory, eventFile, receiptFile, commandFile),
                 stopRuntime,
                 reportError,
-            ).also(PackagedClientProbe::writeReceipt)
+            ).also(PackagedClientAutomation::writeReceipt)
         }
 
-        @Throws(IOException::class)
-        private fun ownedFile(property: String, gameDirectory: Path): Path {
-            val path = propertyPath(property)
-            if (!path.startsWith(gameDirectory) || path == gameDirectory) {
-                throw IOException("$property must be a file below the Phase 4 game directory")
-            }
-            return path
-        }
-
-        @Throws(IOException::class)
-        private fun propertyPath(name: String): Path {
-            val value = System.getProperty(name)
-            if (value.isNullOrBlank()) {
-                throw IOException("Missing Phase 4 property: $name")
-            }
-            return Path.of(value).toAbsolutePath().normalize()
-        }
+        const val RUN_ID_PROPERTY = "vibris.automation.runId"
+        private const val EVENT_FILE_NAME = "vibris-automation-events.jsonl"
+        private const val RECEIPT_FILE_NAME = "vibris-automation-receipt.json"
+        private const val COMMAND_FILE_NAME = "vibris-automation-command.json"
     }
 }

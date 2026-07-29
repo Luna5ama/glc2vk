@@ -49,7 +49,7 @@ try
         $clientExe = Resolve-IrisArtifact -Path $Client -Label "native control client"
         $sourceRootA = Resolve-IrisDirectory -Path $SourceA -Label "source A"
         $sourceRootB = Resolve-IrisDirectory -Path $SourceB -Label "source B"
-        $clientEntry = Start-CoreClient -Exe $clientExe -Port $script:IrisPort -WorkspaceId "phase4-c003" `
+        $clientEntry = Start-CoreClient -Exe $clientExe -Port $script:IrisPort -WorkspaceId "automation-c003" `
             -InstanceId ([guid]::NewGuid().ToString()) -WorkingDirectory $scope.Root -Owned `
             ([System.Collections.Generic.List[object]]::new()) -TimeoutSeconds $TimeoutSeconds
         [void] (Get-IrisClientHello -Client $clientEntry -Scope $scope)

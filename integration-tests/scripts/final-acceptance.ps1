@@ -296,7 +296,7 @@ try
     } | ForEach-Object { $_ | ConvertFrom-Json })
     if (@($events | Where-Object { $_.run_id -cne $scope.RunId }).Count -ne 0)
     {
-        throw "Phase-4 event stream contains another run ID."
+        throw "Vibris automation event stream contains another run ID."
     }
     $contexts = @($events | Where-Object {
         $_.type -ceq "context_applied" -and -not [string]::IsNullOrWhiteSpace([string] $_.source_uuid)

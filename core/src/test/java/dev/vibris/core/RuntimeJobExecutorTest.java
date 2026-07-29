@@ -57,7 +57,7 @@ class RuntimeJobExecutorTest {
         fixture.activate(sourceA);
         Source sourceB = fixture.source("B");
         fixture.runtime.events.clear();
-        fixture.runtime.reloads.add(ReloadResult.failure(List.of(error("ULW_PHASE4_ROLLBACK"))));
+        fixture.runtime.reloads.add(ReloadResult.failure(List.of(error("VIBRIS_AUTOMATION_ROLLBACK"))));
         fixture.runtime.reloads.add(ReloadResult.success(List.of()));
 
         RuntimeJobExecutor.Failure failure = assertThrows(
@@ -65,7 +65,7 @@ class RuntimeJobExecutorTest {
         fixture.activator.release(List.of(sourceB.lease));
 
         assertEquals(ErrorCode.SHADER_COMPILE_FAILED, failure.code);
-        assertShaderLog(failure, "ULW_PHASE4_ROLLBACK");
+        assertShaderLog(failure, "VIBRIS_AUTOMATION_ROLLBACK");
         assertEquals(List.of("link:B", "reload", "link:A", "reload"), fixture.runtime.events);
         assertEquals(sourceA.uuid, fixture.registry.activeUuid());
         assertTrue(fixture.activator.ready());
@@ -81,14 +81,14 @@ class RuntimeJobExecutorTest {
         Source sourceB = fixture.source("B");
         fixture.runtime.events.clear();
         fixture.runtime.reloads.add(ReloadResult.failurePreservingActiveState(
-            List.of(error("ULW_PHASE4_ROLLBACK"))));
+            List.of(error("VIBRIS_AUTOMATION_ROLLBACK"))));
 
         RuntimeJobExecutor.Failure failure = assertThrows(
             RuntimeJobExecutor.Failure.class, () -> fixture.executor.execute(job(sourceB.lease), ignored -> {}));
         fixture.activator.release(List.of(sourceB.lease));
 
         assertEquals(ErrorCode.SHADER_COMPILE_FAILED, failure.code);
-        assertShaderLog(failure, "ULW_PHASE4_ROLLBACK");
+        assertShaderLog(failure, "VIBRIS_AUTOMATION_ROLLBACK");
         assertEquals(List.of("link:B", "reload", "link:A"), fixture.runtime.events);
         assertEquals(sourceA.uuid, fixture.registry.activeUuid());
         assertTrue(fixture.activator.ready());
@@ -103,14 +103,14 @@ class RuntimeJobExecutorTest {
         fixture.activate(sourceA);
         Source sourceB = fixture.source("B");
         fixture.runtime.events.clear();
-        fixture.runtime.reloads.add(ReloadResult.failure(List.of(error("ULW_PHASE4_ORIGINAL"))));
+        fixture.runtime.reloads.add(ReloadResult.failure(List.of(error("VIBRIS_AUTOMATION_ORIGINAL"))));
         fixture.runtime.reloads.add(ReloadResult.failure(List.of()));
 
         RuntimeJobExecutor.Failure failure = assertThrows(
             RuntimeJobExecutor.Failure.class, () -> fixture.executor.execute(job(sourceB.lease), ignored -> {}));
 
         assertEquals(ErrorCode.SHADER_COMPILE_FAILED, failure.code);
-        assertShaderLog(failure, "ULW_PHASE4_ORIGINAL");
+        assertShaderLog(failure, "VIBRIS_AUTOMATION_ORIGINAL");
         assertEquals(List.of("link:B", "reload", "link:A", "reload"), fixture.runtime.events);
         assertFalse(fixture.activator.ready());
         assertEquals(sourceA.uuid, fixture.registry.activeUuid());

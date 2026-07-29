@@ -120,9 +120,9 @@ function New-IrisProbeScope
         PendingRoot = Join-Path $game "vibris\pending"
         ArtifactRoot = Join-Path $game "vibris\artifacts"
         ShaderpackRoot = Join-Path $game "shaderpacks\vibris"
-        EventFile = Join-Path $game "phase4-events.jsonl"
-        ReceiptFile = Join-Path $game "phase4-receipt.json"
-        CommandFile = Join-Path $game "phase4-command.json"
+        EventFile = Join-Path $game "vibris-automation-events.jsonl"
+        ReceiptFile = Join-Path $game "vibris-automation-receipt.json"
+        CommandFile = Join-Path $game "vibris-automation-command.json"
         RunId = [guid]::NewGuid().ToString()
         Protected = @(Get-IrisProtectedProcesses)
         Wrapper = $null
@@ -190,7 +190,7 @@ function Wait-IrisEvent
                 $event = $line | ConvertFrom-Json
                 if ($event.run_id -cne $Scope.RunId)
                 {
-                    throw "Phase-4 event belongs to another runId."
+                    throw "Vibris automation event belongs to another runId."
                 }
                 if ($event.type -ceq $Type -and (& $Match $event)) { return $event }
             }
@@ -201,7 +201,7 @@ function Wait-IrisEvent
         }
         Start-Sleep -Milliseconds 50
     }
-    throw "Phase-4 event '$Type' was not observed within $TimeoutSeconds seconds."
+    throw "Vibris automation event '$Type' was not observed within $TimeoutSeconds seconds."
 }
 
 function Wait-IrisWorldReady

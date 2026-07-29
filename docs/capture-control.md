@@ -139,7 +139,7 @@ thread joins, prepared sources still owned by the MCP are removed, and the workt
   "schema_version": 1,
   "workspace_id": "c58a84bf-f6ee-4d53-9b31-7af03dfaf500",
   "shader_directory": "shaders",
-  "save_id": "vibris-phase4-world",
+  "save_id": "vibris-automation-world",
   "dimension_id": "minecraft:overworld",
   "time_preset_id": "sunset",
   "camera_preset_id": "rooftop",

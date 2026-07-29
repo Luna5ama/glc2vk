@@ -36,7 +36,7 @@ function New-ConfigureMessage
         params = [ordered] @{
             name = "vibris_configure"
             arguments = [ordered] @{
-                save_id = "vibris-phase4-world"
+                save_id = "vibris-automation-world"
                 dimension_id = "minecraft:overworld"
                 time_preset_id = "sunset"
                 camera_preset_id = "rooftop"

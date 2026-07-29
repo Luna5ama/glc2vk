@@ -6,13 +6,11 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import org.junit.jupiter.api.parallel.ResourceLock
 import org.junit.jupiter.api.parallel.Resources
-import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
@@ -20,7 +18,7 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 
 @ResourceLock(Resources.SYSTEM_PROPERTIES)
-class PackagedClientProbeTest {
+class PackagedClientAutomationTest {
     @TempDir
     lateinit var temporaryDirectory: Path
 
@@ -34,7 +32,7 @@ class PackagedClientProbeTest {
         val paths = configure()
         val errors = mutableListOf<String>()
 
-        val probe = requireNotNull(PackagedClientProbe.start(temporaryDirectory, {}, { message, _ ->
+        val probe = requireNotNull(PackagedClientAutomation.start(temporaryDirectory, {}, { message, _ ->
             errors += message
         }))
         probe.appendJsonLine("{\"run_id\":\"$RUN_ID\",\"type\":\"server_ready\"}")
@@ -56,7 +54,7 @@ class PackagedClientProbeTest {
         val paths = configure()
         val stopCount = AtomicInteger()
         val errors = mutableListOf<String>()
-        val probe = requireNotNull(PackagedClientProbe.start(temporaryDirectory, stopCount::incrementAndGet) {
+        val probe = requireNotNull(PackagedClientAutomation.start(temporaryDirectory, stopCount::incrementAndGet) {
                 message, _ -> errors += message
         })
         Files.writeString(
@@ -84,27 +82,13 @@ class PackagedClientProbeTest {
         assertTrue(errors.isEmpty())
     }
 
-    @Test
-    fun `start rejects event file outside the owned game directory`() {
-        configure()
-        System.setProperty("vibris.phase4.eventFile", temporaryDirectory.resolveSibling("outside.jsonl").toString())
-
-        assertThrows(IOException::class.java) {
-            PackagedClientProbe.start(temporaryDirectory, {}, { _, _ -> })
-        }
-    }
-
     private fun configure(): Paths {
         val paths = Paths(
-            temporaryDirectory.resolve("events.jsonl"),
-            temporaryDirectory.resolve("receipt.json"),
-            temporaryDirectory.resolve("command.json"),
+            temporaryDirectory.resolve("vibris-automation-events.jsonl"),
+            temporaryDirectory.resolve("vibris-automation-receipt.json"),
+            temporaryDirectory.resolve("vibris-automation-command.json"),
         )
-        System.setProperty("vibris.phase4.runId", RUN_ID)
-        System.setProperty("vibris.phase4.gameDir", temporaryDirectory.toString())
-        System.setProperty("vibris.phase4.eventFile", paths.events.toString())
-        System.setProperty("vibris.phase4.receiptFile", paths.receipt.toString())
-        System.setProperty("vibris.phase4.commandFile", paths.command.toString())
+        System.setProperty(PackagedClientAutomation.RUN_ID_PROPERTY, RUN_ID)
         return paths
     }
 
@@ -112,12 +96,6 @@ class PackagedClientProbeTest {
 
     private companion object {
         const val RUN_ID = "1d79203e-0610-4840-8f14-c1a7cf2776bc"
-        val PROPERTIES = listOf(
-            "vibris.phase4.runId",
-            "vibris.phase4.gameDir",
-            "vibris.phase4.eventFile",
-            "vibris.phase4.receiptFile",
-            "vibris.phase4.commandFile",
-        )
+        val PROPERTIES = listOf(PackagedClientAutomation.RUN_ID_PROPERTY)
     }
 }

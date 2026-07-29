@@ -26,15 +26,15 @@ try
     $contextPath = Resolve-IrisArtifact -Path $Context -Label "context fixture"
     $contextValue = Get-Content -Raw -LiteralPath $contextPath | ConvertFrom-Json
     $badComposite = Join-Path $badRoot "composite.fsh"
-    if ((Get-Content -Raw -LiteralPath $badComposite) -notmatch '(?m)^#error ULW_PHASE4_ROLLBACK\r?$')
+    if ((Get-Content -Raw -LiteralPath $badComposite) -notmatch '(?m)^#error VIBRIS_AUTOMATION_ROLLBACK\r?$')
     {
-        throw "C002 bad fixture lacks exact #error ULW_PHASE4_ROLLBACK."
+        throw "C002 bad fixture lacks exact #error VIBRIS_AUTOMATION_ROLLBACK."
     }
     $scope = New-IrisProbeScope -Criterion "c002" -GameDir $GameDir
     [void] (Write-IrisPresetCatalog -Scope $scope -Context $contextValue)
     Start-IrisPackagedClient -Scope $scope -PatchedJar $jar -Scenario "c002" `
         -TimeoutSeconds $TimeoutSeconds
-    $clientEntry = Start-CoreClient -Exe $clientExe -Port $script:IrisPort -WorkspaceId "phase4-c002" `
+    $clientEntry = Start-CoreClient -Exe $clientExe -Port $script:IrisPort -WorkspaceId "automation-c002" `
         -InstanceId ([guid]::NewGuid().ToString()) -WorkingDirectory $scope.Root -Owned `
         ([System.Collections.Generic.List[object]]::new()) -TimeoutSeconds $TimeoutSeconds
     [void] (Get-IrisClientHello -Client $clientEntry -Scope $scope)
@@ -91,7 +91,7 @@ try
     {
         "<missing>"
     }
-    if ($shaderLogText -notmatch 'ULW_PHASE4_ROLLBACK')
+    if ($shaderLogText -notmatch 'VIBRIS_AUTOMATION_ROLLBACK')
     {
         throw "C002 shader.log is absent or lacks the frozen compile marker.`nPATH=$shaderLog`nCONTENT:`n$shaderLogText"
     }

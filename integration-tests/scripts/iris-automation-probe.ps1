@@ -29,7 +29,7 @@ try
 
     Start-IrisPackagedClient -Scope $scope -PatchedJar $jar -Scenario "c001" `
         -TimeoutSeconds $TimeoutSeconds
-    $clientEntry = Start-CoreClient -Exe $clientExe -Port $script:IrisPort -WorkspaceId "phase4-c001" `
+    $clientEntry = Start-CoreClient -Exe $clientExe -Port $script:IrisPort -WorkspaceId "automation-c001" `
         -InstanceId ([guid]::NewGuid().ToString()) -WorkingDirectory $scope.Root -Owned `
         ([System.Collections.Generic.List[object]]::new()) -TimeoutSeconds $TimeoutSeconds
     [void] (Get-IrisClientHello -Client $clientEntry -Scope $scope)

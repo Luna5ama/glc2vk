@@ -1,6 +1,6 @@
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"vibris-g007-action-probe","version":"1.0"}}}
 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"vibris_configure","arguments":{"save_id":"vibris-phase4-world","dimension_id":"minecraft:overworld","time_preset_id":"sunset","camera_preset_id":"rooftop","fov":70.0,"default_warmup_frames":2}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"vibris_configure","arguments":{"save_id":"vibris-automation-world","dimension_id":"minecraft:overworld","time_preset_id":"sunset","camera_preset_id":"rooftop","fov":70.0,"default_warmup_frames":2}}}
 {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"vibris_run_actions","arguments":{"source":{"kind":"workspace"},"actions":[]}}}
 {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"vibris_run_actions","arguments":{"source":{"kind":"workspace"},"actions":[{"type":"reset_temporal_state"},{"type":"wait_frames","frames":2},{"type":"capture_screenshot","format":"png","artifact_name":"allowed-beauty"},{"type":"dump_texture","name":"colortex0","format":"raw","artifact_name":"allowed-colortex0"},{"type":"dump_buffer","name":"radiance_cache","format":"bin","artifact_name":"allowed-radiance-cache"}]}}}
 {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"vibris_run_actions","arguments":{"actions":[{"type":"run_shell","command":"cmd /c whoami"}]}}}

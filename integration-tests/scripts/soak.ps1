@@ -443,7 +443,7 @@ try
         native_handle_count = $nativeHandles
         native_private_bytes = $nativePrivate
         native_heap_allocated_bytes = $nativeHeap
-        java_metric_source = "phase4_runtime_metrics"
+        java_metric_source = "automation_runtime_metrics"
         java_live_heap_available = $true
         java_direct_buffer_available = $true
         java_final_window_samples = $javaWindow.Count

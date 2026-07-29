@@ -52,8 +52,8 @@ function Wait-IrisOwnedRuntimeProcess
     )
 
     $wrapperPid = $Scope.Wrapper.Process.Id
-    $runToken = "-Dvibris.phase4.runId=$($Scope.RunId)"
-    $gameToken = "-Dvibris.phase4.gameDir=$($Scope.GameDir)"
+    $runToken = "-Dvibris.automation.runId=$($Scope.RunId)"
+    $gameToken = $Scope.GameDir
     $deadline = [datetime]::UtcNow.AddSeconds($TimeoutSeconds)
     while ([datetime]::UtcNow -lt $deadline)
     {
@@ -117,11 +117,9 @@ function Start-IrisPackagedClient
     )
 
     $arguments = @(
-        "--no-daemon", ":fabric:runVibrisPhase4Client",
-        "-Pphase4PatchedJar=$PatchedJar", "-Pphase4GameDir=$($Scope.GameDir)",
-        "-Pphase4RunId=$($Scope.RunId)", "-Pphase4Scenario=$Scenario",
-        "-Pphase4EventFile=$($Scope.EventFile)", "-Pphase4ReceiptFile=$($Scope.ReceiptFile)",
-        "-Pphase4CommandFile=$($Scope.CommandFile)"
+        "--no-daemon", ":fabric:runVibrisAutomationClient",
+        "-PautomationPatchedJar=$PatchedJar", "-PautomationGameDir=$($Scope.GameDir)",
+        "-PautomationRunId=$($Scope.RunId)", "-PautomationScenario=$Scenario"
     )
     $command = (ConvertTo-CoreArgument (Join-Path $script:IrisRoot "gradlew.bat")) + " " +
         [string]::Join(" ", @($arguments | ForEach-Object { ConvertTo-CoreArgument $_ }))
@@ -223,7 +221,7 @@ function Assert-IrisOwnedRuntime
 			throw "Runtime PID/creation identity no longer matches its receipt."
 		}
 		$command = [string] $runtime.CommandLine
-		$hasRunId = $command -match [regex]::Escape("-Dvibris.phase4.runId=$($Scope.RunId)")
+		$hasRunId = $command -match [regex]::Escape("-Dvibris.automation.runId=$($Scope.RunId)")
 		$hasGameDir = $command -match [regex]::Escape($Scope.GameDir)
 		if ($hasRunId -and $hasGameDir) { return }
 		if ([datetime]::UtcNow -ge $deadline)

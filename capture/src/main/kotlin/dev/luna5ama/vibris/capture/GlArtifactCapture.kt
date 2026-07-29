@@ -85,6 +85,14 @@ object GlArtifactCapture {
     fun describeTexture(textureId: Int, mipLevel: Int): GlCaptureMetadata =
         textureLayout(textureId, mipLevel).metadata
 
+    @JvmStatic
+    fun describeTextureOrNull(textureId: Int, mipLevel: Int): GlCaptureMetadata? =
+        try {
+            describeTexture(textureId, mipLevel)
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+
     private fun writePng(
         output: OutputStream,
         data: ByteBuffer,
