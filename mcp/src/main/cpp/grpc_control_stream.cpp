@@ -9,16 +9,16 @@ namespace {
 constexpr std::uint32_t protocol_major = 1;
 constexpr std::uint32_t protocol_minor = 0;
 
-bool is_terminal(const proto::ServerMessage& message) {
+bool is_request_event(const proto::ServerMessage& message) {
     using PayloadCase = proto::ServerMessage::PayloadCase;
     switch (message.payload_case()) {
         case PayloadCase::kJobCompleted:
         case PayloadCase::kJobFailed:
         case PayloadCase::kResumeState:
         case PayloadCase::kPong:
+        case PayloadCase::kJobAccepted:
             return true;
         case PayloadCase::kServerHello:
-        case PayloadCase::kJobAccepted:
         case PayloadCase::kJobProgress:
         case PayloadCase::kServerShuttingDown:
         case PayloadCase::PAYLOAD_NOT_SET:
@@ -117,7 +117,7 @@ void GrpcClient::Impl::handle_control(const ControlKind kind, const bool ok) noe
                 fail_stream();
                 return;
             }
-            if (is_terminal(read_message_)) {
+            if (is_request_event(read_message_)) {
                 pending_.resolve(read_message_);
             }
             if (read_message_.has_server_shutting_down()) {

@@ -54,6 +54,9 @@ target_link_libraries(vibris-protocol-smoke PRIVATE vibris_control_protocol)
 add_executable(vibris-descriptor-dump src/main/cpp/descriptor_dump.cpp)
 target_link_libraries(vibris-descriptor-dump PRIVATE vibris_control_protocol)
 
+add_executable(vibris-control-client src/main/cpp/control_client.cpp)
+target_link_libraries(vibris-control-client PRIVATE vibris_control_protocol nlohmann_json::nlohmann_json)
+
 add_library(vibris_mcp_core STATIC
     src/main/cpp/config_document.cpp
     src/main/cpp/config_store.cpp
@@ -86,6 +89,7 @@ target_link_libraries(vibris-mcp PRIVATE vibris_mcp_core)
 if(MSVC)
     target_compile_options(vibris-protocol-smoke PRIVATE /W4 /permissive-)
     target_compile_options(vibris-descriptor-dump PRIVATE /W4 /permissive-)
+    target_compile_options(vibris-control-client PRIVATE /W4 /permissive-)
     target_compile_options(vibris_mcp_core PRIVATE /W4 /permissive-)
     target_compile_options(vibris-mcp PRIVATE /W4 /permissive-)
 endif()
@@ -115,6 +119,17 @@ if(BUILD_TESTING)
     target_include_directories(vibris-grpc-tests PRIVATE src/test/cpp)
     target_link_libraries(vibris-grpc-tests PRIVATE vibris_mcp_core)
 
+    add_executable(vibris-grpc-request-ownership-tests src/test/cpp/grpc_request_ownership_tests.cpp)
+    target_link_libraries(vibris-grpc-request-ownership-tests PRIVATE vibris_mcp_core)
+
+    add_executable(vibris-grpc-source-ownership-tests src/test/cpp/grpc_source_ownership_tests.cpp)
+    target_include_directories(vibris-grpc-source-ownership-tests PRIVATE src/test/cpp)
+    target_link_libraries(vibris-grpc-source-ownership-tests PRIVATE vibris_mcp_core)
+
+    add_executable(vibris-grpc-accepted-resume-tests src/test/cpp/grpc_accepted_resume_tests.cpp)
+    target_include_directories(vibris-grpc-accepted-resume-tests PRIVATE src/test/cpp)
+    target_link_libraries(vibris-grpc-accepted-resume-tests PRIVATE vibris_mcp_core)
+
     if(MSVC)
         target_compile_options(vibris-state-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-worktree-discovery-tests PRIVATE /W4 /permissive-)
@@ -123,12 +138,16 @@ if(BUILD_TESTING)
         target_compile_options(vibris-git-repository-security-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-stdio-fixture-test PRIVATE /W4 /permissive-)
         target_compile_options(vibris-grpc-tests PRIVATE /W4 /permissive-)
+        target_compile_options(vibris-grpc-request-ownership-tests PRIVATE /W4 /permissive-)
+        target_compile_options(vibris-grpc-source-ownership-tests PRIVATE /W4 /permissive-)
+        target_compile_options(vibris-grpc-accepted-resume-tests PRIVATE /W4 /permissive-)
     endif()
 
     add_custom_target(mcp-tests
         DEPENDS vibris-state-tests vibris-worktree-discovery-tests vibris-workspace-source-tests
                 vibris-commit-source-tests vibris-git-repository-security-tests
-                vibris-stdio-fixture-test vibris-grpc-tests)
+                vibris-stdio-fixture-test vibris-grpc-tests vibris-grpc-request-ownership-tests
+                vibris-grpc-source-ownership-tests vibris-grpc-accepted-resume-tests)
 
     add_test(
         NAME descriptor-dump
@@ -193,6 +212,21 @@ if(BUILD_TESTING)
     set_tests_properties(
         AsyncGrpcReconnectAndBoundedRegistry NoDetachedThreads
         PROPERTIES RUN_SERIAL TRUE TIMEOUT 30)
+
+    foreach(scenario
+            AcceptedRequestReconnectsWithResume
+            ResumeNotFoundFinishesWithoutResubmit)
+        add_test(NAME ${scenario} COMMAND vibris-grpc-request-ownership-tests ${scenario})
+    endforeach()
+
+    foreach(scenario
+            SingleJobAcceptedTransfersAbSourcesOnce
+            ResumeStateControlsSourceOwnership)
+        add_test(NAME ${scenario} COMMAND vibris-grpc-source-ownership-tests ${scenario})
+    endforeach()
+
+    add_test(NAME AcceptedRequestResumesAfterDisconnect COMMAND vibris-grpc-accepted-resume-tests)
+    set_tests_properties(AcceptedRequestResumesAfterDisconnect PROPERTIES RUN_SERIAL TRUE TIMEOUT 30)
 
     function(add_stdio_mcp_probe test_name)
         add_test(

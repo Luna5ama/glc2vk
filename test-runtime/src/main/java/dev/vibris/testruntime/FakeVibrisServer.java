@@ -1,5 +1,6 @@
 package dev.vibris.testruntime;
 
+import dev.vibris.core.VibrisControlService;
 import io.grpc.Server;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 
@@ -16,10 +17,14 @@ public final class FakeVibrisServer implements AutoCloseable {
     private static final Duration SHUTDOWN_TIMEOUT = Duration.ofSeconds(5);
 
     private final Server server;
+    private final VibrisControlService service;
+    private final FakeRuntimeProbe probe;
     private final AtomicBoolean closed = new AtomicBoolean();
 
-    private FakeVibrisServer(Server server) {
+    private FakeVibrisServer(Server server, VibrisControlService service, FakeRuntimeProbe probe) {
         this.server = server;
+        this.service = service;
+        this.probe = probe;
     }
 
     public static FakeVibrisServer start(int port, Path workRoot) throws IOException {
@@ -35,11 +40,18 @@ public final class FakeVibrisServer implements AutoCloseable {
         Files.createDirectories(pendingShadersRoot);
         Files.createDirectories(artifactRoot);
         InetAddress loopback = InetAddress.getByName("127.0.0.1");
-        Server server = NettyServerBuilder.forAddress(new InetSocketAddress(loopback, port))
-            .addService(new FakeVibrisControlService(pendingShadersRoot, artifactRoot))
-            .build()
-            .start();
-        return new FakeVibrisServer(server);
+        FakeRuntimeAdapter runtime = new FakeRuntimeAdapter();
+        VibrisControlService service = new VibrisControlService(pendingShadersRoot, artifactRoot, runtime);
+        try {
+            Server server = NettyServerBuilder.forAddress(new InetSocketAddress(loopback, port))
+                .addService(service)
+                .build()
+                .start();
+            return new FakeVibrisServer(server, service, new FakeRuntimeProbe(runtime, service.probe()));
+        } catch (IOException | RuntimeException exception) {
+            service.close();
+            throw exception;
+        }
     }
 
     public int port() {
@@ -54,6 +66,10 @@ public final class FakeVibrisServer implements AutoCloseable {
         return server.isTerminated();
     }
 
+    public FakeRuntimeProbe phaseThreeProbe() {
+        return probe;
+    }
+
     @Override
     public void close() throws InterruptedException {
         if (!closed.compareAndSet(false, true)) return;
@@ -62,5 +78,6 @@ public final class FakeVibrisServer implements AutoCloseable {
             server.shutdownNow();
             server.awaitTermination(SHUTDOWN_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
         }
+        service.close();
     }
 }

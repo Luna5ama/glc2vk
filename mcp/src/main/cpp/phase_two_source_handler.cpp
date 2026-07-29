@@ -2,9 +2,11 @@
 
 #include "state_error.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <list>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -54,6 +56,10 @@ void prepare_one(SourcePreparer& preparer, const Json* source, std::list<Prepare
 PhaseTwoSourceHandler::PhaseTwoSourceHandler(std::filesystem::path workspace_root)
     : workspace_root_(std::move(workspace_root)) {}
 
+PhaseTwoSourceHandler::~PhaseTwoSourceHandler() {
+    clear();
+}
+
 Json PhaseTwoSourceHandler::prepare(
     std::string_view tool_name, const Json& arguments, const control::ServerHello& server) {
     SourcePreparer preparer(
@@ -73,12 +79,74 @@ Json PhaseTwoSourceHandler::prepare(
                 {"execution_available", false},
                 {"source_prepared", true},
                 {"prepared_sources", std::move(summaries)}};
-    owned_sources_.splice(owned_sources_.end(), prepared);
+    source_batches_.emplace_back();
+    source_batches_.back().sources.splice(source_batches_.back().sources.end(), prepared);
     return result;
 }
 
+void PhaseTwoSourceHandler::bind_latest(std::string request_id) {
+    if (request_id.empty()) throw std::invalid_argument("source request ID must not be empty");
+    if (source_batches_.empty() || !source_batches_.back().request_id.empty()) {
+        throw std::logic_error("no unbound prepared source batch");
+    }
+    if (std::any_of(source_batches_.begin(), source_batches_.end(), [&](const SourceBatch& batch) {
+            return batch.request_id == request_id;
+        })) {
+        throw std::invalid_argument("source request ID is already bound");
+    }
+    source_batches_.back().request_id = std::move(request_id);
+}
+
+void PhaseTwoSourceHandler::observe(const control::ServerMessage& message) noexcept {
+    const auto transfer = [](SourceBatch& batch) {
+        if (!batch.released) {
+            for (auto& source : batch.sources) source.release();
+            batch.released = true;
+        }
+        batch.server_owned = true;
+    };
+    if (message.has_job_accepted()) {
+        const auto& id = message.request_id().empty() ? message.job_accepted().request_id() : message.request_id();
+        const auto batch = std::find_if(source_batches_.begin(), source_batches_.end(), [&](const SourceBatch& item) {
+            return item.request_id == id;
+        });
+        if (batch != source_batches_.end()) transfer(*batch);
+        return;
+    }
+    if (!message.has_resume_state()) return;
+
+    const auto update = [&](SourceBatch& batch) {
+        const auto job = std::find_if(
+            message.resume_state().jobs().begin(), message.resume_state().jobs().end(),
+            [&](const control::JobSummary& summary) { return summary.request_id() == batch.request_id; });
+        if (job == message.resume_state().jobs().end() || job->state() == control::JOB_STATE_UNSPECIFIED) {
+            batch.server_owned = false;
+        } else {
+            transfer(batch);
+        }
+    };
+    if (!message.request_id().empty()) {
+        const auto batch = std::find_if(source_batches_.begin(), source_batches_.end(), [&](const SourceBatch& item) {
+            return item.request_id == message.request_id();
+        });
+        if (batch != source_batches_.end()) update(*batch);
+        return;
+    }
+    for (auto& batch : source_batches_) {
+        if (!batch.request_id.empty()) update(batch);
+    }
+}
+
 void PhaseTwoSourceHandler::clear() noexcept {
-    owned_sources_.clear();
+    for (const auto& batch : source_batches_) {
+        if (!batch.server_owned && batch.released) {
+            for (const auto& source : batch.sources) {
+                std::error_code ignored;
+                std::filesystem::remove_all(source.directory(), ignored);
+            }
+        }
+    }
+    source_batches_.clear();
 }
 
 } // namespace vibris::mcp

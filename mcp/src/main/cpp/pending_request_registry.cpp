@@ -29,6 +29,40 @@ bool PendingRequestRegistry::add(proto::ClientMessage request, GrpcCompletion co
 }
 
 bool PendingRequestRegistry::resolve(const proto::ServerMessage& response) {
+    if (response.has_resume_state()) {
+        struct Event {
+            GrpcCompletion completion;
+            grpc::Status status;
+            proto::ServerMessage response;
+        };
+        std::vector<Event> events;
+        {
+            std::scoped_lock lock(mutex_);
+            for (auto entry = entries_.begin(); entry != entries_.end();) {
+                if (!entry->second.accepted) {
+                    ++entry;
+                    continue;
+                }
+                const auto job = std::find_if(
+                    response.resume_state().jobs().begin(), response.resume_state().jobs().end(),
+                    [&entry](const proto::JobSummary& summary) { return summary.request_id() == entry->first; });
+                auto event_response = response;
+                event_response.set_request_id(entry->first);
+                if (job == response.resume_state().jobs().end() || job->state() == proto::JOB_STATE_UNSPECIFIED) {
+                    events.push_back({std::move(entry->second.completion),
+                        {grpc::StatusCode::NOT_FOUND, "accepted request was not found after reconnect"},
+                        std::move(event_response)});
+                    entry = entries_.erase(entry);
+                } else {
+                    events.push_back({entry->second.completion, grpc::Status::OK, std::move(event_response)});
+                    ++entry;
+                }
+            }
+        }
+        for (auto& event : events) complete(event.completion, event.status, event.response);
+        return !events.empty();
+    }
+
     const std::string_view key = response_key(response);
     if (key.empty()) {
         return false;
@@ -41,8 +75,14 @@ bool PendingRequestRegistry::resolve(const proto::ServerMessage& response) {
         if (entry == entries_.end()) {
             return false;
         }
-        completion = std::move(entry->second.completion);
-        entries_.erase(entry);
+        if (response.has_job_accepted()) {
+            if (entry->second.accepted) return true;
+            entry->second.accepted = true;
+            completion = entry->second.completion;
+        } else {
+            completion = std::move(entry->second.completion);
+            entries_.erase(entry);
+        }
     }
     complete(completion, grpc::Status::OK, response);
     return true;
@@ -69,9 +109,20 @@ std::vector<proto::ClientMessage> PendingRequestRegistry::requests() const {
     std::scoped_lock lock(mutex_);
     std::vector<proto::ClientMessage> requests;
     requests.reserve(entries_.size());
+    proto::ClientMessage resume;
     for (const auto& [id, entry] : entries_) {
-        requests.push_back(entry.request);
+        if (!entry.accepted) {
+            requests.push_back(entry.request);
+            continue;
+        }
+        if (!resume.has_resume_request()) {
+            resume.mutable_protocol_version()->CopyFrom(entry.request.protocol_version());
+            resume.set_message_id("resume-" + id);
+            resume.set_workspace_id(entry.request.workspace_id());
+        }
+        resume.mutable_resume_request()->add_request_ids(id);
     }
+    if (resume.has_resume_request()) requests.push_back(std::move(resume));
     return requests;
 }
 
@@ -96,6 +147,9 @@ std::string_view PendingRequestRegistry::request_key(const proto::ClientMessage&
 std::string_view PendingRequestRegistry::response_key(const proto::ServerMessage& response) {
     if (!response.request_id().empty()) {
         return response.request_id();
+    }
+    if (response.has_job_accepted() && !response.job_accepted().request_id().empty()) {
+        return response.job_accepted().request_id();
     }
     if (response.has_job_completed() && !response.job_completed().request_id().empty()) {
         return response.job_completed().request_id();

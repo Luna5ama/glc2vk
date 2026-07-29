@@ -32,6 +32,18 @@ public:
         return connections_.load();
     }
 
+    [[nodiscard]] std::size_t submit_jobs() const noexcept {
+        return submit_jobs_.load();
+    }
+
+    [[nodiscard]] std::size_t resume_requests() const noexcept {
+        return resume_requests_.load();
+    }
+
+    [[nodiscard]] std::size_t duplicate_submits() const noexcept {
+        return duplicate_submits_.load();
+    }
+
 private:
     grpc::Status Control(
         grpc::ServerContext*,
@@ -63,6 +75,38 @@ private:
                 }
                 continue;
             }
+            if (request.has_submit_job()) {
+                ++submit_jobs_;
+                if (connection != 1) ++duplicate_submits_;
+                auto* accepted = response.mutable_job_accepted();
+                accepted->set_request_id(request.request_id());
+                if (!stream->Write(response)) {
+                    return {grpc::StatusCode::UNAVAILABLE, "JobAccepted write failed"};
+                }
+                return {grpc::StatusCode::UNAVAILABLE, "fixture disconnect after JobAccepted"};
+            }
+            if (request.has_resume_request()) {
+                ++resume_requests_;
+                for (const auto& id : request.resume_request().request_ids()) {
+                    auto* job = response.mutable_resume_state()->add_jobs();
+                    job->set_request_id(id);
+                    job->set_state(control::v1::JOB_STATE_RUNNING);
+                }
+                if (!stream->Write(response)) {
+                    return {grpc::StatusCode::UNAVAILABLE, "ResumeState write failed"};
+                }
+                for (const auto& id : request.resume_request().request_ids()) {
+                    control::v1::ServerMessage completed;
+                    completed.mutable_protocol_version()->set_major(1);
+                    completed.set_request_id(id);
+                    completed.set_workspace_id(request.workspace_id());
+                    completed.mutable_job_completed()->set_request_id(id);
+                    if (!stream->Write(completed)) {
+                        return {grpc::StatusCode::UNAVAILABLE, "JobCompleted write failed"};
+                    }
+                }
+                continue;
+            }
             if (!request.has_ping()) {
                 return {grpc::StatusCode::INVALID_ARGUMENT, "PING_REQUIRED"};
             }
@@ -89,6 +133,9 @@ private:
 
     const std::size_t drop_after_;
     std::atomic<std::size_t> connections_ = 0;
+    std::atomic<std::size_t> submit_jobs_ = 0;
+    std::atomic<std::size_t> resume_requests_ = 0;
+    std::atomic<std::size_t> duplicate_submits_ = 0;
     std::size_t first_connection_responses_ = 0;
     std::mutex gate_mutex_;
     std::condition_variable gate_;
@@ -122,6 +169,18 @@ public:
 
     [[nodiscard]] std::size_t connections() const noexcept {
         return service_.connections();
+    }
+
+    [[nodiscard]] std::size_t submit_jobs() const noexcept {
+        return service_.submit_jobs();
+    }
+
+    [[nodiscard]] std::size_t resume_requests() const noexcept {
+        return service_.resume_requests();
+    }
+
+    [[nodiscard]] std::size_t duplicate_submits() const noexcept {
+        return service_.duplicate_submits();
     }
 
     void shutdown() {

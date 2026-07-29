@@ -1,0 +1,159 @@
+package dev.vibris.integration;
+
+import dev.vibris.protocol.v1.ErrorCode;
+import dev.vibris.protocol.v1.JobCompleted;
+import dev.vibris.protocol.v1.JobStage;
+import dev.vibris.protocol.v1.JobState;
+import dev.vibris.protocol.v1.SceneContext;
+import dev.vibris.protocol.v1.SubmitJob;
+import dev.vibris.testruntime.FakeVibrisServer;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class CoreAdversarialTest {
+    @TempDir
+    Path temp;
+
+    @Test
+    void queueDuplicateCancelTimeoutResume() throws Exception {
+        Path pending = temp.resolve("pending");
+        Path artifacts = temp.resolve("artifacts");
+        try (FakeVibrisServer server = FakeVibrisServer.start(0, pending, artifacts);
+             PhaseThreeHarness.Client client = new PhaseThreeHarness.Client(server, "edge")) {
+            PhaseThreeHarness.Probe probe = new PhaseThreeHarness.Probe(server);
+            probe.pauseExecution();
+
+            SubmitJob blocker = newJob(pending, "blocker", 30_000, 1_000);
+            client.submit(blocker);
+            client.awaitAccepted("blocker");
+            client.awaitProgress("blocker", JobStage.JOB_STAGE_WARMING_UP);
+
+            List<SubmitJob> queued = new ArrayList<>();
+            for (int index = 1; index <= 32; index++) {
+                SubmitJob job = newJob(pending, "queued-" + index, 5_000, 1);
+                queued.add(job);
+                client.submit(job);
+                client.awaitAccepted(job.getRequestId());
+            }
+            SubmitJob overflow = newJob(pending, "queued-33", 5_000, 1);
+            client.submit(overflow);
+            client.awaitFailed("queued-33", ErrorCode.QUEUE_FULL);
+            assertTrue(Files.isDirectory(pending.resolve(overflow.getSources(0).getUuid())),
+                "Rejected source ownership must remain with the client");
+
+            SubmitJob cancelled = queued.get(31);
+            client.cancel(cancelled.getRequestId());
+            client.awaitFailed(cancelled.getRequestId(), ErrorCode.CANCELLED);
+            assertFalse(Files.exists(pending.resolve(cancelled.getSources(0).getUuid())));
+
+            assertEquals(JobState.JOB_STATE_QUEUED, client.resume("queued-1").getState());
+            probe.resumeExecution();
+            client.awaitCompleted("blocker");
+            JobCompleted first = null;
+            for (SubmitJob job : queued.subList(0, 31)) {
+                JobCompleted completed = client.awaitCompleted(job.getRequestId());
+                if (job.getRequestId().equals("queued-1")) first = completed;
+            }
+            client.submit(queued.get(0));
+            JobCompleted duplicate = client.awaitCompleted("queued-1");
+            assertEquals(first, duplicate);
+            assertEquals(1, probe.executionCount("queued-1"));
+
+            probe.pauseExecution();
+            SubmitJob timeout = newJob(pending, "timeout", 25, 1_000);
+            client.submit(timeout);
+            client.awaitAccepted("timeout");
+            client.awaitProgress("timeout", JobStage.JOB_STAGE_WARMING_UP);
+            client.awaitFailed("timeout", ErrorCode.EXECUTION_TIMEOUT);
+            assertTrue(probe.strings("executionEvents").contains("timeout:SAFE_POINT_TIMEOUT"));
+            probe.resumeExecution();
+
+            assertDisconnectResume(server, pending, probe);
+            Files.delete(pending.resolve(overflow.getSources(0).getUuid()).resolve("main.glsl"));
+            Files.delete(pending.resolve(overflow.getSources(0).getUuid()));
+            probe.assertRegistriesBounded();
+            PhaseThreeHarness.assertDirectoryEmpty(pending);
+            PhaseThreeHarness.assertDirectoryEmpty(artifacts);
+        }
+    }
+
+    @Test
+    void duplicateDuringSourceValidationSharesTheAcceptedRequest() throws Exception {
+        Path pending = temp.resolve("pending-validation-race");
+        try (FakeVibrisServer server = FakeVibrisServer.start(
+                 0, pending, temp.resolve("artifacts-validation-race"));
+             PhaseThreeHarness.Client first = new PhaseThreeHarness.Client(server, "race-workspace");
+             PhaseThreeHarness.Client duplicate = new PhaseThreeHarness.Client(server, "race-workspace")) {
+            PhaseThreeHarness.Probe probe = new PhaseThreeHarness.Probe(server);
+            probe.pauseExecution();
+            PhaseThreeHarness.Source source = PhaseThreeHarness.createSource(pending, "validation-race");
+            long extraBytes = 0;
+            int extraFiles = 4_096;
+            for (int index = 0; index < extraFiles; index++) {
+                Files.writeString(source.directory().resolve("slow-" + index + ".glsl"), "x");
+                extraBytes++;
+            }
+            var reference = source.reference().toBuilder()
+                .setFileCount(source.reference().getFileCount() + extraFiles)
+                .setTotalBytes(source.reference().getTotalBytes() + extraBytes)
+                .build();
+            SubmitJob job = PhaseThreeHarness.job(
+                "validation-race", "race-workspace", PhaseThreeHarness.context("validation-race"),
+                reference, 5_000, 1);
+
+            first.submit(job);
+            Thread.sleep(25);
+            duplicate.submit(job);
+
+            first.awaitAccepted("validation-race");
+            duplicate.awaitAccepted("validation-race");
+            probe.resumeExecution();
+            duplicate.awaitCompleted("validation-race");
+            assertEquals(1, probe.executionCount("validation-race"));
+        }
+    }
+
+    private static SubmitJob newJob(Path pending, String id, long timeoutMs, int frames) throws Exception {
+        return newJob(pending, id, "edge", timeoutMs, frames);
+    }
+
+    private static SubmitJob newJob(Path pending, String id, String workspaceId, long timeoutMs, int frames)
+        throws Exception {
+        PhaseThreeHarness.Source source = PhaseThreeHarness.createSource(pending, id);
+        SceneContext context = PhaseThreeHarness.context(id);
+        return PhaseThreeHarness.job(id, workspaceId, context, source.reference(), timeoutMs, frames);
+    }
+
+    private static void assertDisconnectResume(FakeVibrisServer server, Path pending,
+                                               PhaseThreeHarness.Probe probe) throws Exception {
+        probe.pauseExecution();
+        PhaseThreeHarness.Client first = new PhaseThreeHarness.Client(server, "resume-workspace");
+        SubmitJob job = newJob(pending, "resume-job", "resume-workspace", 5_000, 1_000);
+        first.submit(job);
+        first.awaitAccepted("resume-job");
+        first.awaitProgress("resume-job", JobStage.JOB_STAGE_WARMING_UP);
+        first.disconnect();
+
+        try (PhaseThreeHarness.Client resumed = new PhaseThreeHarness.Client(server, "resume-workspace")) {
+            assertEquals(JobState.JOB_STATE_RUNNING, resumed.resume("resume-job").getState());
+            probe.resumeExecution();
+            resumed.awaitCompleted("resume-job");
+            assertEquals(JobState.JOB_STATE_COMPLETED, resumed.resume("resume-job").getState());
+            assertEquals(1, probe.executionCount("resume-job"));
+            resumed.disconnect();
+        }
+        try (PhaseThreeHarness.Client replay = new PhaseThreeHarness.Client(server, "resume-workspace")) {
+            assertEquals(JobState.JOB_STATE_COMPLETED, replay.resume("resume-job").getState());
+            replay.awaitCompleted("resume-job");
+        }
+    }
+}

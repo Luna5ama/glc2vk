@@ -1,5 +1,6 @@
-package dev.vibris.testruntime;
+package dev.vibris.core;
 
+import dev.vibris.api.VibrisRuntimeAdapter;
 import dev.vibris.protocol.v1.ActionKind;
 import dev.vibris.protocol.v1.ArtifactFormat;
 import dev.vibris.protocol.v1.Capability;
@@ -11,7 +12,6 @@ import dev.vibris.protocol.v1.GetStatusResponse;
 import dev.vibris.protocol.v1.ListPresetsRequest;
 import dev.vibris.protocol.v1.ListPresetsResponse;
 import dev.vibris.protocol.v1.Pong;
-import dev.vibris.protocol.v1.ProtocolVersion;
 import dev.vibris.protocol.v1.RecipeKind;
 import dev.vibris.protocol.v1.RuntimeState;
 import dev.vibris.protocol.v1.SceneContext;
@@ -28,55 +28,62 @@ import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 
 import java.nio.file.Path;
+import java.util.List;
 
-final class FakeVibrisControlService extends VibrisControlGrpc.VibrisControlImplBase {
-    private static final ProtocolVersion V1 = ProtocolVersion.newBuilder().setMajor(1).setMinor(0).build();
-
+public final class VibrisControlService extends VibrisControlGrpc.VibrisControlImplBase implements AutoCloseable {
     private final ServerStatus status;
     private final ServerHello hello;
+    private final VibrisCoreEngine engine;
+    private final ArtifactManager artifacts;
 
-    FakeVibrisControlService(Path pendingShadersRoot, Path artifactRoot) {
+    public VibrisControlService(Path pendingRoot, Path artifactRoot, VibrisRuntimeAdapter runtime) {
+        Path pending = pendingRoot.toAbsolutePath().normalize();
+        artifacts = new ArtifactManager(artifactRoot);
         status = ServerStatus.newBuilder()
             .setState(ServerState.SERVER_STATE_READY)
             .setRuntimeReady(true)
             .setRuntimeState(RuntimeState.RUNTIME_STATE_READY)
             .setCurrentSaveId("test-save")
             .setCurrentDimensionId("minecraft:overworld")
-            .setPendingShadersRoot(pendingShadersRoot.toString())
-            .setArtifactRoot(artifactRoot.toString())
-            .setArtifactQuotaCapBytes(3L * 1024 * 1024 * 1024)
-            .addSupportedRecipes(RecipeKind.RECIPE_KIND_RELOAD_AND_CAPTURE)
-            .addSupportedRecipes(RecipeKind.RECIPE_KIND_CAPTURE_DEBUG_BUNDLE)
-            .addSupportedRecipes(RecipeKind.RECIPE_KIND_AB_COMPARE)
-            .addAllSupportedActions(java.util.List.of(
+            .setPendingShadersRoot(pending.toString())
+            .setArtifactRoot(artifacts.root().toString())
+            .setArtifactQuotaCapBytes(artifacts.quotaBytes())
+            .addAllSupportedRecipes(List.of(
+                RecipeKind.RECIPE_KIND_RELOAD_AND_CAPTURE,
+                RecipeKind.RECIPE_KIND_CAPTURE_DEBUG_BUNDLE,
+                RecipeKind.RECIPE_KIND_AB_COMPARE))
+            .addAllSupportedActions(List.of(
                 ActionKind.ACTION_KIND_RESET_TEMPORAL_STATE,
                 ActionKind.ACTION_KIND_WAIT_FRAMES,
                 ActionKind.ACTION_KIND_CAPTURE_SCREENSHOT,
                 ActionKind.ACTION_KIND_DUMP_TEXTURE,
-                ActionKind.ACTION_KIND_DUMP_BUFFER
-            ))
-            .addAllSupportedFormats(java.util.List.of(
+                ActionKind.ACTION_KIND_DUMP_BUFFER))
+            .addAllSupportedFormats(List.of(
                 ArtifactFormat.ARTIFACT_FORMAT_PNG,
                 ArtifactFormat.ARTIFACT_FORMAT_EXR,
                 ArtifactFormat.ARTIFACT_FORMAT_RAW,
-                ArtifactFormat.ARTIFACT_FORMAT_BIN
-            ))
+                ArtifactFormat.ARTIFACT_FORMAT_BIN))
             .build();
         hello = ServerHello.newBuilder()
-            .setProtocolVersion(V1)
-            .setServerVersion("vibris-test-runtime")
+            .setProtocolVersion(ProtocolMessages.V1)
+            .setServerVersion("vibris-core")
             .addCapabilities(Capability.CAPABILITY_CONTROL_STREAM)
             .addCapabilities(Capability.CAPABILITY_RESUME)
             .addCapabilities(Capability.CAPABILITY_PREPARED_SOURCES)
             .setReady(true)
             .setStatus(status)
-            .setLimits(ServerLimits.newBuilder().setMaxSourceBytes(256L * 1024 * 1024).setMaxSourceFiles(100_000))
+            .setLimits(ServerLimits.newBuilder().setMaxSourceBytes(512L * 1024 * 1024).setMaxSourceFiles(100_000))
             .addAllSupportedRecipes(status.getSupportedRecipesList())
             .addAllSupportedActions(status.getSupportedActionsList())
             .addAllSupportedFormats(status.getSupportedFormatsList())
-            .setPendingShadersRoot(pendingShadersRoot.toString())
-            .setArtifactRoot(artifactRoot.toString())
+            .setPendingShadersRoot(pending.toString())
+            .setArtifactRoot(artifacts.root().toString())
             .build();
+        engine = new VibrisCoreEngine(pending, runtime);
+    }
+
+    public CoreProbe probe() {
+        return engine.probe();
     }
 
     @Override
@@ -113,7 +120,8 @@ final class FakeVibrisControlService extends VibrisControlGrpc.VibrisControlImpl
     }
 
     @Override
-    public StreamObserver<ClientMessage> control(StreamObserver<ServerMessage> observer) {
+    public StreamObserver<ClientMessage> control(StreamObserver<ServerMessage> responses) {
+        ControlSession session = new ControlSession(responses);
         return new StreamObserver<>() {
             private boolean greeted;
             private boolean terminated;
@@ -122,7 +130,20 @@ final class FakeVibrisControlService extends VibrisControlGrpc.VibrisControlImpl
             public void onNext(ClientMessage message) {
                 if (terminated) return;
                 if (!greeted) {
-                    handleFirst(message);
+                    greet(message);
+                    return;
+                }
+                if (message.getProtocolVersion().getMajor() != 1) {
+                    fail(Status.FAILED_PRECONDITION.withDescription("PROTOCOL_MISMATCH"));
+                    return;
+                }
+                if (!message.getWorkspaceId().equals(session.workspaceId())) {
+                    fail(Status.PERMISSION_DENIED.withDescription("WORKSPACE_MISMATCH"));
+                    return;
+                }
+                if (message.hasCancelJob() &&
+                    !message.getRequestId().equals(message.getCancelJob().getRequestId())) {
+                    fail(Status.INVALID_ARGUMENT.withDescription("REQUEST_ID_MISMATCH"));
                     return;
                 }
                 if (message.hasPing()) {
@@ -131,46 +152,63 @@ final class FakeVibrisControlService extends VibrisControlGrpc.VibrisControlImpl
                         .setClientTimeUnixMs(message.getPing().getClientTimeUnixMs())
                         .setServerTimeUnixMs(message.getPing().getClientTimeUnixMs())
                         .build();
-                    observer.onNext(envelope(message).setPong(pong).build());
+                    session.send(ProtocolMessages.envelope(
+                        message.getMessageId(), message.getRequestId(), session.workspaceId()).setPong(pong).build());
+                } else if (message.hasSubmitJob()) {
+                    engine.submit(session, message);
+                } else if (message.hasCancelJob()) {
+                    engine.cancel(session, message.getCancelJob().getRequestId());
+                } else if (message.hasResumeRequest()) {
+                    engine.resume(session, message);
                 }
             }
 
-            private void handleFirst(ClientMessage message) {
+            private void greet(ClientMessage message) {
                 if (!message.hasClientHello()) {
-                    terminate(Status.INVALID_ARGUMENT.withDescription("CLIENT_HELLO_REQUIRED"));
+                    fail(Status.INVALID_ARGUMENT.withDescription("CLIENT_HELLO_REQUIRED"));
                     return;
                 }
                 if (message.getClientHello().getProtocolVersion().getMajor() != 1) {
-                    terminate(Status.FAILED_PRECONDITION.withDescription("PROTOCOL_MISMATCH"));
+                    fail(Status.FAILED_PRECONDITION.withDescription("PROTOCOL_MISMATCH"));
+                    return;
+                }
+                String workspace = message.getClientHello().getWorkspaceId();
+                if (workspace.isBlank()) {
+                    fail(Status.INVALID_ARGUMENT.withDescription("WORKSPACE_ID_REQUIRED"));
                     return;
                 }
                 greeted = true;
-                observer.onNext(envelope(message).setServerHello(hello).build());
+                session.identify(workspace, message.getClientHello().getProcessInstanceUuid());
+                session.send(ProtocolMessages.envelope(
+                    message.getMessageId(), message.getRequestId(), workspace).setServerHello(hello).build());
             }
 
-            private ServerMessage.Builder envelope(ClientMessage message) {
-                return ServerMessage.newBuilder()
-                    .setProtocolVersion(V1)
-                    .setMessageId(message.getMessageId())
-                    .setRequestId(message.getRequestId())
-                    .setWorkspaceId(message.getWorkspaceId());
-            }
-
-            private void terminate(Status status) {
+            private void fail(Status status) {
+                if (terminated) return;
                 terminated = true;
-                observer.onError(status.asRuntimeException());
+                engine.disconnected(session);
+                responses.onError(status.asRuntimeException());
             }
 
             @Override
             public void onError(Throwable throwable) {
+                if (terminated) return;
                 terminated = true;
+                engine.disconnected(session);
             }
 
             @Override
             public void onCompleted() {
-                if (!terminated) observer.onCompleted();
+                if (terminated) return;
                 terminated = true;
+                session.complete();
+                engine.disconnected(session);
             }
         };
+    }
+
+    @Override
+    public void close() {
+        engine.close();
     }
 }

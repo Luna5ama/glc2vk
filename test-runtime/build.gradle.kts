@@ -3,6 +3,7 @@ plugins {
 }
 
 dependencies {
+    implementation(project(":vibris-core"))
     implementation(project(":vibris-protocol-java"))
     implementation("io.grpc:grpc-netty-shaded:${libs.versions.grpcJava.get()}")
 

@@ -38,6 +38,7 @@ private:
     struct Entry {
         ::vibris::control::v1::ClientMessage request;
         GrpcCompletion completion;
+        bool accepted = false;
     };
 
     static std::string_view request_key(const ::vibris::control::v1::ClientMessage& request);
