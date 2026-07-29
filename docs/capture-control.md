@@ -185,10 +185,10 @@ Recipe and action jobs accept either source form:
 Git revision and extracts only its `shaders` tree. Source trees reject reparse points and non-ordinary entries and are
 bounded by the file/byte limits advertised by Iris.
 
-The MCP writes each immutable snapshot to `<gameDir>/vibris/pending/<UUID>`. gRPC carries only the prepared source UUID,
-origin, file count, and total byte count. Iris re-inspects and owns that directory before accepting the job; source file
-contents are never embedded in protobuf messages. The active source is retained until the next activation, while stale
-or rejected sources are removed.
+The MCP writes each immutable snapshot below configured `pending_shaders_root` as `<pending_shaders_root>/<UUID>`.
+gRPC carries only the prepared source UUID, origin, file count, and total byte count. Iris re-inspects and owns that
+directory before accepting the job; source file contents are never embedded in protobuf messages. The active source is
+retained until the next activation, while stale or rejected sources are removed.
 
 ## Recipes
 
@@ -262,9 +262,9 @@ A completed job reports `success`, kind, diagnostics, timings, frame IDs, artifa
 `manifest_path`. Each artifact records its absolute path, byte count, media type, format, kind, and resource metadata
 when applicable. Binary data stays on disk.
 
-Artifacts are written under `<gameDir>/vibris/artifacts/<workspace UUID>/<request UUID>`. A job writes to a sibling
-`.tmp` directory and becomes visible only after its manifest and files are atomically committed. Startup recovers valid
-committed jobs and removes abandoned temporary directories.
+Artifacts are written below configured `artifact_root` as `<artifact_root>/<workspace UUID>/<request UUID>`. A job
+writes to a sibling `.tmp` directory and becomes visible only after its manifest and files are atomically committed.
+Startup recovers valid committed jobs and removes abandoned temporary directories.
 
 The default artifact quota is 3 GiB. Before reserving a new job, the manager evicts the oldest reported jobs until the
 reservation fits. A single job larger than the quota fails; completed results remain protected until reported to the MCP
