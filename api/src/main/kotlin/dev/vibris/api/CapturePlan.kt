@@ -4,7 +4,7 @@ import java.util.Locale
 import java.util.regex.Pattern
 
 @JvmRecord
-data class CapturePlan(val targets: List<Target>) {
+data class CapturePlan(@field:DefensiveSnapshot val targets: List<Target>) {
 
     @JvmRecord
     data class Target(

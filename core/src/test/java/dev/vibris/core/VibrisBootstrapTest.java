@@ -47,6 +47,24 @@ class VibrisBootstrapTest {
     }
 
     @Test
+    void configCanonicalConstructorNormalizesPaths() {
+        Path relativePending = Path.of("build", ".", "pending-relative");
+        Path relativeArtifacts = Path.of("build", "intermediate", "..", "artifacts-relative");
+        Path absoluteShaderpack = temp.resolve("shaderpack-parent").resolve("..").resolve("shaderpack");
+
+        VibrisBootstrap.Config config = new VibrisBootstrap.Config(
+            50_051,
+            relativePending,
+            relativeArtifacts,
+            absoluteShaderpack
+        );
+
+        assertEquals(relativePending.toAbsolutePath().normalize(), config.pendingShadersRoot());
+        assertEquals(relativeArtifacts.toAbsolutePath().normalize(), config.artifactRoot());
+        assertEquals(absoluteShaderpack.toAbsolutePath().normalize(), config.shaderpackRoot());
+    }
+
+    @Test
     void missingServerConfigStartsListenerInNotReadyState() throws Exception {
         RuntimeTestAdapter runtime = new RuntimeTestAdapter();
         AtomicReference<BindableService> captured = new AtomicReference<>();

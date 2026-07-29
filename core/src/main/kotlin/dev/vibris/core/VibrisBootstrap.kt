@@ -13,6 +13,10 @@ import java.util.Objects
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
+@Target(AnnotationTarget.FIELD)
+@Retention(AnnotationRetention.BINARY)
+private annotation class NormalizePathAtRecordBoundary
+
 class VibrisBootstrap private constructor(
     private val service: AutoCloseable,
     private val pendingSources: PendingSourceRoot?,
@@ -64,9 +68,9 @@ class VibrisBootstrap private constructor(
     @JvmRecord
     data class Config(
         val port: Int,
-        val pendingShadersRoot: Path,
-        val artifactRoot: Path,
-        val shaderpackRoot: Path,
+        @field:NormalizePathAtRecordBoundary val pendingShadersRoot: Path,
+        @field:NormalizePathAtRecordBoundary val artifactRoot: Path,
+        @field:NormalizePathAtRecordBoundary val shaderpackRoot: Path,
     ) {
         init {
             if (port < 0 || port > 65_535) {

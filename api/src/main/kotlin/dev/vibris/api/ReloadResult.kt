@@ -4,7 +4,7 @@ package dev.vibris.api
 data class ReloadResult(
     val successful: Boolean,
     val activeStatePreserved: Boolean,
-    val diagnostics: List<Diagnostic>,
+    @field:DefensiveSnapshot val diagnostics: List<Diagnostic>,
 ) {
 
     @JvmRecord

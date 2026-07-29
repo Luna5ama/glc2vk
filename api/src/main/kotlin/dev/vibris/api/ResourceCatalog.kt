@@ -1,7 +1,7 @@
 package dev.vibris.api
 
 @JvmRecord
-data class ResourceCatalog(val resources: List<ResourceDescriptor>) {
+data class ResourceCatalog(@field:DefensiveSnapshot val resources: List<ResourceDescriptor>) {
 
     @JvmRecord
     data class ResourceDescriptor(

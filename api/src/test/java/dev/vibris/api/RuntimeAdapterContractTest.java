@@ -3,7 +3,9 @@ package dev.vibris.api;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -51,14 +53,55 @@ class RuntimeAdapterContractTest {
     }
 
     @Test
-    void publicCollectionsAreImmutableSnapshots() {
-        var resources = new java.util.ArrayList<ResourceCatalog.ResourceDescriptor>();
-        resources.add(new ResourceCatalog.ResourceDescriptor("colortex0", ResourceCatalog.ResourceKind.TEXTURE));
-        ResourceCatalog catalog = new ResourceCatalog(List.copyOf(resources));
-        resources.clear();
+    void canonicalConstructorsDefensivelySnapshotCollections() {
+        var target = new CapturePlan.Target(
+            ResourceCatalog.ResourceKind.TEXTURE,
+            "colortex0",
+            CapturePlan.ArtifactFormat.PNG,
+            "colortex0",
+            0,
+            0
+        );
+        var targets = new ArrayList<>(List.of(target));
+        CapturePlan plan = new CapturePlan(targets);
+        targets.clear();
+        assertEquals(List.of(target), plan.targets());
+        assertThrows(UnsupportedOperationException.class, () -> plan.targets().clear());
 
-        assertEquals(1, catalog.resources().size());
+        var descriptor = new ResourceCatalog.ResourceDescriptor(
+            "colortex0", ResourceCatalog.ResourceKind.TEXTURE
+        );
+        var artifacts = new LinkedHashMap<String, ResourceCatalog.ResourceDescriptor>();
+        artifacts.put("colortex0", descriptor);
+        CaptureResult result = new CaptureResult(1, artifacts);
+        artifacts.clear();
+        assertEquals(Map.of("colortex0", descriptor), result.artifacts());
+        assertThrows(UnsupportedOperationException.class, () -> result.artifacts().clear());
+
+        var errors = new ArrayList<>(List.of("invalid context"));
+        ContextValidationResult validation = new ContextValidationResult(false, errors);
+        errors.clear();
+        assertEquals(List.of("invalid context"), validation.errors());
+        assertThrows(UnsupportedOperationException.class, () -> validation.errors().clear());
+
+        var diagnostic = new ReloadResult.Diagnostic(
+            ReloadResult.Severity.ERROR, "program.glsl", 7, "compile failed"
+        );
+        var diagnostics = new ArrayList<>(List.of(diagnostic));
+        ReloadResult reload = new ReloadResult(false, true, diagnostics);
+        diagnostics.clear();
+        assertEquals(List.of(diagnostic), reload.diagnostics());
+        assertThrows(UnsupportedOperationException.class, () -> reload.diagnostics().clear());
+
+        var resources = new ArrayList<>(List.of(descriptor));
+        ResourceCatalog catalog = new ResourceCatalog(resources);
+        resources.clear();
+        assertEquals(List.of(descriptor), catalog.resources());
         assertThrows(UnsupportedOperationException.class, () -> catalog.resources().clear());
+    }
+
+    @Test
+    void publicValueValidationRemainsIntact() {
         assertThrows(IllegalArgumentException.class, () -> new SceneContext.Resolution(0, 1080));
         assertTrue(!SceneContext.Resolution.unspecified().isSpecified());
         assertThrows(IllegalArgumentException.class, () -> new SceneContext(

@@ -3,7 +3,7 @@ package dev.vibris.api
 @JvmRecord
 data class ContextValidationResult(
     val valid: Boolean,
-    val errors: List<String>,
+    @field:DefensiveSnapshot val errors: List<String>,
 ) {
     init {
         require(!valid || errors.isEmpty()) {

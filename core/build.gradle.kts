@@ -1,6 +1,10 @@
+import buildsrc.convention.transformMarkedRecordConstructors
+
 plugins {
     id("buildsrc.convention.kotlin-jvm")
 }
+
+transformMarkedRecordConstructors()
 
 dependencies {
     api(project(":vibris-api"))
