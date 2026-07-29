@@ -19,6 +19,7 @@ final class SourceRegistry {
     private final OwnedSourceTree trees;
     private final CoreProbe probe;
     private final Map<String, Lease> sources = new HashMap<>();
+    private Lease activeSource;
 
     SourceRegistry(Path pendingRoot, CoreProbe probe) {
         trees = new OwnedSourceTree(pendingRoot);
@@ -27,6 +28,9 @@ final class SourceRegistry {
 
     List<Candidate> validate(List<PreparedSourceRef> references) throws Failure {
         if (references.isEmpty()) throw new Failure(ErrorCode.SOURCE_DIRECTORY_MISSING, "A source is required.");
+        if (references.size() != 1) {
+            throw new Failure(ErrorCode.SOURCE_ACTIVATION_FAILED, "Exactly one prepared source is required.");
+        }
         Set<String> unique = new HashSet<>();
         List<Candidate> candidates = new ArrayList<>(references.size());
         for (PreparedSourceRef reference : references) {
@@ -76,22 +80,59 @@ final class SourceRegistry {
         for (Lease lease : reserved) sources.remove(lease.uuid, lease);
     }
 
-    synchronized void activate(List<Lease> leases) {
-        for (Lease lease : leases) {
-            transition(lease, SourceState.QUEUED, SourceState.ACTIVATING, lease.record::beginActivation);
-            transition(lease, SourceState.ACTIVATING, SourceState.ACTIVE, lease.record::activated);
+    synchronized Activation beginActivation(Lease lease) throws Failure {
+        requireOwned(lease);
+        transition(lease, SourceState.QUEUED, SourceState.ACTIVATING, lease.record::beginActivation);
+        return new Activation(lease, activeSource);
+    }
+
+    synchronized void commitActivation(Activation activation) {
+        if (activeSource != activation.previous) throw new IllegalStateException("active source changed");
+        Lease next = activation.next;
+        transition(next, SourceState.ACTIVATING, SourceState.ACTIVE, next.record::activated);
+        activeSource = next;
+        if (activation.previous != null) {
+            Lease previous = activation.previous;
+            SourceState before = previous.record.state();
+            previous.record.deactivate();
+            record(previous, before, previous.record.state());
+            deleteIfEligible(previous);
         }
     }
 
+    synchronized void failActivation(Activation activation) {
+        failActivation(activation.next);
+    }
+
+    synchronized void failActivation(Lease lease) {
+        SourceState before = lease.record.state();
+        lease.record.failed();
+        record(lease, before, lease.record.state());
+    }
+
+    synchronized void requireOwned(Lease lease) throws Failure {
+        if (!sources.containsKey(lease.uuid) || !trees.stillOwned(lease.directory, lease.ownership)) {
+            throw new Failure(ErrorCode.SOURCE_ACTIVATION_FAILED, "Prepared source identity changed.");
+        }
+    }
+
+    synchronized String activeUuid() {
+        return activeSource == null ? "" : activeSource.uuid;
+    }
+
     void cleanup(List<Lease> leases) {
-        for (Lease lease : leases) cleanup(lease);
+        release(leases, false);
+    }
+
+    void release(List<Lease> leases, boolean retainActive) {
+        for (Lease lease : leases) release(lease, retainActive);
     }
 
     synchronized int size() {
         return sources.size();
     }
 
-    private synchronized void cleanup(Lease lease) {
+    private synchronized void release(Lease lease, boolean retainActive) {
         if (!sources.containsKey(lease.uuid)) return;
         if (!trees.stillOwned(lease.directory, lease.ownership)) {
             abandonUnsafe(lease);
@@ -100,24 +141,13 @@ final class SourceRegistry {
         SourceState before = lease.record.state();
         lease.record.release();
         record(lease, before, lease.record.state());
-        if (lease.record.active()) {
+        if (lease.record.active() && !retainActive) {
             before = lease.record.state();
             lease.record.deactivate();
             record(lease, before, lease.record.state());
+            if (activeSource == lease) activeSource = null;
         }
-        if (lease.record.deletionEligible()) {
-            before = lease.record.state();
-            lease.record.beginDeleting();
-            record(lease, before, lease.record.state());
-            if (!OwnedSourceTree.delete(lease.directory)) {
-                sources.remove(lease.uuid, lease);
-                return;
-            }
-            before = lease.record.state();
-            lease.record.deleted();
-            record(lease, before, lease.record.state());
-            sources.remove(lease.uuid);
-        }
+        deleteIfEligible(lease);
     }
 
     private void abandonUnsafe(Lease lease) {
@@ -134,6 +164,31 @@ final class SourceRegistry {
             lease.record.deactivate();
             record(lease, before, lease.record.state());
         }
+        sources.remove(lease.uuid, lease);
+    }
+
+    synchronized void close() {
+        if (activeSource != null && activeSource.record.active()) {
+            SourceState before = activeSource.record.state();
+            activeSource.record.deactivate();
+            record(activeSource, before, activeSource.record.state());
+        }
+        activeSource = null;
+        new ArrayList<>(sources.values()).forEach(this::deleteIfEligible);
+    }
+
+    private void deleteIfEligible(Lease lease) {
+        if (!lease.record.deletionEligible()) return;
+        SourceState before = lease.record.state();
+        lease.record.beginDeleting();
+        record(lease, before, lease.record.state());
+        if (!OwnedSourceTree.delete(lease.directory)) {
+            sources.remove(lease.uuid, lease);
+            return;
+        }
+        before = lease.record.state();
+        lease.record.deleted();
+        record(lease, before, lease.record.state());
         sources.remove(lease.uuid, lease);
     }
 
@@ -170,6 +225,9 @@ final class SourceRegistry {
         OwnedSourceTree.Ownership ownership,
         SourceRecord record
     ) {
+    }
+
+    record Activation(Lease next, Lease previous) {
     }
 
     static final class Failure extends Exception {

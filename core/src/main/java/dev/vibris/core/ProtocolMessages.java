@@ -1,5 +1,6 @@
 package dev.vibris.core;
 
+import dev.vibris.protocol.v1.ArtifactMetadata;
 import dev.vibris.protocol.v1.ClientMessage;
 import dev.vibris.protocol.v1.ErrorCode;
 import dev.vibris.protocol.v1.JobAccepted;
@@ -34,15 +35,25 @@ final class ProtocolMessages {
     }
 
     static TerminalResult failure(String requestId, ErrorCode code, String message) {
-        ProtocolError error = ProtocolError.newBuilder()
+        return failure(requestId, code, message, java.util.List.of());
+    }
+
+    static TerminalResult failure(
+        String requestId,
+        ErrorCode code,
+        String message,
+        java.util.List<ArtifactMetadata> artifacts
+    ) {
+        ProtocolError.Builder error = ProtocolError.newBuilder()
             .setCode(code)
             .setMessage(message)
             .setRetryable(code == ErrorCode.QUEUE_FULL || code == ErrorCode.QUEUE_TIMEOUT ||
-                code == ErrorCode.EXECUTION_TIMEOUT)
-            .build();
+                code == ErrorCode.EXECUTION_TIMEOUT);
+        if (!artifacts.isEmpty()) error.setLogPath(artifacts.getFirst().getPath());
         return TerminalResult.failed(JobFailed.newBuilder()
             .setRequestId(requestId)
             .setError(error)
+            .addAllArtifacts(artifacts)
             .build());
     }
 

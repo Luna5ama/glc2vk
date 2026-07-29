@@ -126,8 +126,12 @@ final class PhaseThreeHarness {
         private boolean disconnected;
 
         Client(FakeVibrisServer server, String workspaceId) throws InterruptedException {
+            this(server.port(), workspaceId);
+        }
+
+        Client(int port, String workspaceId) throws InterruptedException {
             this.workspaceId = workspaceId;
-            channel = ManagedChannelBuilder.forAddress("127.0.0.1", server.port()).usePlaintext().build();
+            channel = ManagedChannelBuilder.forAddress("127.0.0.1", port).usePlaintext().build();
             requests = VibrisControlGrpc.newStub(channel).control(new StreamObserver<>() {
                 @Override
                 public void onNext(ServerMessage message) {

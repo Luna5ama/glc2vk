@@ -1,0 +1,25 @@
+{
+  "save_id": "vibris-phase4-world",
+  "dimension_id": "minecraft:overworld",
+  "time_preset_id": "sunset",
+  "weather_preset_id": "clear",
+  "camera_preset_id": "rooftop",
+  "fov": 70.0,
+  "resolution": {
+    "width": 640,
+    "height": 360
+  },
+  "settings_preset_id": "phase4-deterministic",
+  "expected": {
+    "day_time": 12000,
+    "rain_level": 0.0,
+    "thunder_level": 0.0,
+    "camera": {
+      "x": 0.5,
+      "y": 96.0,
+      "z": 0.5,
+      "yaw": 180.0,
+      "pitch": 15.0
+    }
+  }
+}

@@ -165,6 +165,16 @@ Json server_json(const proto::ServerMessage& message) {
         output["code"] = proto::ErrorCode_Name(error.code());
         output["message"] = error.message();
         output["retryable"] = error.retryable();
+        output["log_path"] = error.log_path();
+        output["artifacts"] = Json::array();
+        for (const auto& artifact : message.job_failed().artifacts()) {
+            output["artifacts"].push_back({{"path", artifact.path()},
+                {"file_name", artifact.file_name()},
+                {"kind", proto::ArtifactKind_Name(artifact.kind())},
+                {"format", proto::ArtifactFormat_Name(artifact.format())},
+                {"media_type", artifact.media_type()},
+                {"byte_size", artifact.byte_size()}});
+        }
         return output;
     }
     if (message.has_resume_state()) {

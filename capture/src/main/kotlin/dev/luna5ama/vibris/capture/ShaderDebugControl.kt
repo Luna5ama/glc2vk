@@ -77,6 +77,8 @@ class ShaderDebugControl @JvmOverloads constructor(
 
     fun errorsJson(): JsonObject = buildJsonObject { put("errors", errorJson()) }
 
+    fun errorList(): List<ShaderDebugError> = errorSnapshot()
+
     fun scheduleScreenshot(frames: Int) {
         require(frames > 0) { "frames must be positive" }
         synchronized(screenshotLock) { screenshotFrames = frames }

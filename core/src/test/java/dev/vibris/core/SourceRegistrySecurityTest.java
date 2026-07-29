@@ -20,6 +20,19 @@ class SourceRegistrySecurityTest {
     Path temp;
 
     @Test
+    void multipleSourcesAreRejectedAtValidationBoundary() throws Exception {
+        Path pending = Files.createDirectory(temp.resolve("pending-multiple"));
+        PreparedSourceRef first = source(pending);
+        PreparedSourceRef second = source(pending);
+        SourceRegistry registry = new SourceRegistry(pending, new CoreProbe());
+
+        SourceRegistry.Failure failure = assertThrows(
+            SourceRegistry.Failure.class, () -> registry.validate(List.of(first, second)));
+
+        assertEquals(ErrorCode.SOURCE_ACTIVATION_FAILED, failure.code);
+    }
+
+    @Test
     void reparsePendingRootIsRejectedBeforeTraversal() throws Exception {
         Path outside = Files.createDirectory(temp.resolve("outside"));
         String uuid = UUID.randomUUID().toString();
@@ -88,5 +101,16 @@ class SourceRegistrySecurityTest {
 
         assertTrue(Files.exists(sentinel), "cleanup followed a replaced pending-root ancestor");
         assertEquals(0, registry.size(), "unsafe cleanup must not wedge source capacity");
+    }
+
+    private static PreparedSourceRef source(Path pending) throws Exception {
+        String uuid = UUID.randomUUID().toString();
+        Path source = Files.createDirectory(pending.resolve(uuid));
+        Path file = Files.writeString(source.resolve("main.glsl"), uuid);
+        return PreparedSourceRef.newBuilder()
+            .setUuid(uuid)
+            .setFileCount(1)
+            .setTotalBytes(Files.size(file))
+            .build();
     }
 }

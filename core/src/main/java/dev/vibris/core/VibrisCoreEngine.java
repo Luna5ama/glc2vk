@@ -25,13 +25,13 @@ public final class VibrisCoreEngine implements AutoCloseable {
     private static final int TERMINAL_REQUEST_CAPACITY = 128;
     private static final Duration TERMINAL_TTL = Duration.ofMinutes(10);
     private static final Duration DISCONNECT_GRACE = Duration.ofSeconds(2);
-
     private final RequestRegistry<TerminalResult> requests = new RequestRegistry<>(
         LIVE_REQUEST_CAPACITY, TERMINAL_REQUEST_CAPACITY, TERMINAL_TTL, Clock.systemUTC());
     private final Map<String, CoreJob> liveJobs = new HashMap<>();
     private final FairJobScheduler scheduler = new FairJobScheduler();
     private final CoreProbe probe = new CoreProbe();
     private final SourceRegistry sources;
+    private final SourceActivator activator;
     private final RuntimeJobExecutor executor;
     private final VibrisRuntimeAdapter runtime;
     private final ScheduledExecutorService disconnectTimer = Executors.newSingleThreadScheduledExecutor(runnable -> {
@@ -41,14 +41,20 @@ public final class VibrisCoreEngine implements AutoCloseable {
     });
     private boolean closed;
     public VibrisCoreEngine(Path pendingRoot, VibrisRuntimeAdapter runtime) {
+        this(pendingRoot, runtime, ShaderLink.transientLink(), ShaderLogSink.none());
+    }
+    VibrisCoreEngine(Path pendingRoot, VibrisRuntimeAdapter runtime, ShaderLink shaderLink,
+        ShaderLogSink shaderLogs) {
         this.runtime = runtime;
         sources = new SourceRegistry(pendingRoot, probe);
-        executor = new RuntimeJobExecutor(runtime, probe);
+        activator = new SourceActivator(sources, shaderLink);
+        executor = new RuntimeJobExecutor(runtime, probe, activator, shaderLogs);
         updateMetrics();
     }
-    public CoreProbe probe() {
-        return probe;
-    }
+    public CoreProbe probe() { return probe; }
+    synchronized boolean ready() { return !closed && activator.ready(); }
+    synchronized String activeSourceUuid() { return sources.activeUuid(); }
+    synchronized int queueLength() { return scheduler.size(); }
     void submit(ControlSession session, ClientMessage message) {
         SubmitJob submission = message.getSubmitJob();
         String requestId = submission.getRequestId();
@@ -58,7 +64,6 @@ public final class VibrisCoreEngine implements AutoCloseable {
                 message, session.workspaceId(), ErrorCode.INTERNAL_ERROR, "Job envelope is inconsistent."));
             return;
         }
-
         List<SourceRegistry.Candidate> candidates;
         SourceRegistry.Failure validationFailure;
         try {
@@ -70,9 +75,9 @@ public final class VibrisCoreEngine implements AutoCloseable {
         }
         CoreJob job = new CoreJob(submission, message.getMessageId(), session);
         synchronized (this) {
-            if (closed) {
+            if (closed || !activator.ready()) {
                 session.send(ProtocolMessages.immediateFailure(
-                    message, session.workspaceId(), ErrorCode.SERVER_NOT_READY, "Vibris is shutting down."));
+                    message, session.workspaceId(), ErrorCode.SERVER_NOT_READY, "Vibris is not ready."));
                 return;
             }
             RequestRegistry.AcceptResult<TerminalResult> accepted = requests.accept(
@@ -171,7 +176,6 @@ public final class VibrisCoreEngine implements AutoCloseable {
             started = true;
             probe.jobStarted(job.requestId);
             probe.event(job.requestId, "ACQUIRED_LEASE");
-            sources.activate(job.sources);
             TerminalResult terminal = executor.execute(job, stage -> sendProgress(job, stage));
             finish(job, terminal, RequestState.COMPLETED, true);
         } catch (InterruptedException exception) {
@@ -180,7 +184,8 @@ public final class VibrisCoreEngine implements AutoCloseable {
                 "Job execution was interrupted."), RequestState.CANCELLED, false);
         } catch (RuntimeJobExecutor.Failure failure) {
             RequestState state = failure.code == ErrorCode.CANCELLED ? RequestState.CANCELLED : RequestState.FAILED;
-            finish(job, ProtocolMessages.failure(job.requestId, failure.code, failure.getMessage()), state, false);
+            finish(job, ProtocolMessages.failure(
+                job.requestId, failure.code, failure.getMessage(), failure.artifacts), state, false);
         } finally {
             if (started) probe.jobStopped();
             updateMetrics();
@@ -190,7 +195,7 @@ public final class VibrisCoreEngine implements AutoCloseable {
         ControlSession session;
         synchronized (this) {
             if (liveJobs.remove(job.requestId) == null) return;
-            sources.cleanup(job.sources);
+            activator.release(job.sources);
             requests.finish(job.requestId, state, terminal);
             session = job.session;
             updateMetrics();
@@ -219,20 +224,16 @@ public final class VibrisCoreEngine implements AutoCloseable {
             session.send(ProtocolMessages.progress(job, dev.vibris.protocol.v1.JobStage.JOB_STAGE_WARMING_UP));
         }
     }
-
     private void sendProgress(CoreJob job, dev.vibris.protocol.v1.JobStage stage) {
         job.session.send(ProtocolMessages.progress(job, stage));
     }
-
     private boolean queueTimedOut(CoreJob job) {
         long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - job.acceptedNanos);
         long queue = job.submission.getTimeouts().getQueueTimeoutMs();
         long total = job.submission.getTimeouts().getTotalTimeoutMs();
         return queue > 0 && elapsed >= queue || total > 0 && elapsed >= total;
     }
-
     private synchronized void updateMetrics() { probe.registries(requests.size(), sources.size(), scheduler.size()); }
-
     @Override
     public void close() {
         List<CoreJob> jobs;
@@ -242,9 +243,7 @@ public final class VibrisCoreEngine implements AutoCloseable {
             jobs = new ArrayList<>(liveJobs.values());
         }
         for (CoreJob job : jobs) cancel(job.session, job.requestId);
-        disconnectTimer.shutdownNow();
-        scheduler.close();
-        runtime.close();
+        EngineShutdown.close(runtime, disconnectTimer, scheduler, activator);
         updateMetrics();
     }
 }

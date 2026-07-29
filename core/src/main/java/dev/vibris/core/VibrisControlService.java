@@ -1,9 +1,6 @@
 package dev.vibris.core;
 
 import dev.vibris.api.VibrisRuntimeAdapter;
-import dev.vibris.protocol.v1.ActionKind;
-import dev.vibris.protocol.v1.ArtifactFormat;
-import dev.vibris.protocol.v1.Capability;
 import dev.vibris.protocol.v1.ClientMessage;
 import dev.vibris.protocol.v1.GetServerInfoRequest;
 import dev.vibris.protocol.v1.GetServerInfoResponse;
@@ -12,15 +9,10 @@ import dev.vibris.protocol.v1.GetStatusResponse;
 import dev.vibris.protocol.v1.ListPresetsRequest;
 import dev.vibris.protocol.v1.ListPresetsResponse;
 import dev.vibris.protocol.v1.Pong;
-import dev.vibris.protocol.v1.RecipeKind;
-import dev.vibris.protocol.v1.RuntimeState;
 import dev.vibris.protocol.v1.SceneContext;
 import dev.vibris.protocol.v1.ScenePreset;
 import dev.vibris.protocol.v1.ServerHello;
-import dev.vibris.protocol.v1.ServerLimits;
 import dev.vibris.protocol.v1.ServerMessage;
-import dev.vibris.protocol.v1.ServerState;
-import dev.vibris.protocol.v1.ServerStatus;
 import dev.vibris.protocol.v1.ValidateContextRequest;
 import dev.vibris.protocol.v1.ValidateContextResponse;
 import dev.vibris.protocol.v1.VibrisControlGrpc;
@@ -28,58 +20,26 @@ import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 
 import java.nio.file.Path;
-import java.util.List;
 
 public final class VibrisControlService extends VibrisControlGrpc.VibrisControlImplBase implements AutoCloseable {
-    private final ServerStatus status;
-    private final ServerHello hello;
+    private final ServerDescriptor descriptor;
     private final VibrisCoreEngine engine;
     private final ArtifactManager artifacts;
 
     public VibrisControlService(Path pendingRoot, Path artifactRoot, VibrisRuntimeAdapter runtime) {
+        this(pendingRoot, artifactRoot, runtime, ShaderLink.transientLink());
+    }
+
+    VibrisControlService(
+        Path pendingRoot,
+        Path artifactRoot,
+        VibrisRuntimeAdapter runtime,
+        ShaderLink shaderLink
+    ) {
         Path pending = pendingRoot.toAbsolutePath().normalize();
         artifacts = new ArtifactManager(artifactRoot);
-        status = ServerStatus.newBuilder()
-            .setState(ServerState.SERVER_STATE_READY)
-            .setRuntimeReady(true)
-            .setRuntimeState(RuntimeState.RUNTIME_STATE_READY)
-            .setCurrentSaveId("test-save")
-            .setCurrentDimensionId("minecraft:overworld")
-            .setPendingShadersRoot(pending.toString())
-            .setArtifactRoot(artifacts.root().toString())
-            .setArtifactQuotaCapBytes(artifacts.quotaBytes())
-            .addAllSupportedRecipes(List.of(
-                RecipeKind.RECIPE_KIND_RELOAD_AND_CAPTURE,
-                RecipeKind.RECIPE_KIND_CAPTURE_DEBUG_BUNDLE,
-                RecipeKind.RECIPE_KIND_AB_COMPARE))
-            .addAllSupportedActions(List.of(
-                ActionKind.ACTION_KIND_RESET_TEMPORAL_STATE,
-                ActionKind.ACTION_KIND_WAIT_FRAMES,
-                ActionKind.ACTION_KIND_CAPTURE_SCREENSHOT,
-                ActionKind.ACTION_KIND_DUMP_TEXTURE,
-                ActionKind.ACTION_KIND_DUMP_BUFFER))
-            .addAllSupportedFormats(List.of(
-                ArtifactFormat.ARTIFACT_FORMAT_PNG,
-                ArtifactFormat.ARTIFACT_FORMAT_EXR,
-                ArtifactFormat.ARTIFACT_FORMAT_RAW,
-                ArtifactFormat.ARTIFACT_FORMAT_BIN))
-            .build();
-        hello = ServerHello.newBuilder()
-            .setProtocolVersion(ProtocolMessages.V1)
-            .setServerVersion("vibris-core")
-            .addCapabilities(Capability.CAPABILITY_CONTROL_STREAM)
-            .addCapabilities(Capability.CAPABILITY_RESUME)
-            .addCapabilities(Capability.CAPABILITY_PREPARED_SOURCES)
-            .setReady(true)
-            .setStatus(status)
-            .setLimits(ServerLimits.newBuilder().setMaxSourceBytes(512L * 1024 * 1024).setMaxSourceFiles(100_000))
-            .addAllSupportedRecipes(status.getSupportedRecipesList())
-            .addAllSupportedActions(status.getSupportedActionsList())
-            .addAllSupportedFormats(status.getSupportedFormatsList())
-            .setPendingShadersRoot(pending.toString())
-            .setArtifactRoot(artifacts.root().toString())
-            .build();
-        engine = new VibrisCoreEngine(pending, runtime);
+        engine = new VibrisCoreEngine(pending, runtime, shaderLink, artifacts);
+        descriptor = new ServerDescriptor(pending, artifacts, runtime);
     }
 
     public CoreProbe probe() {
@@ -88,7 +48,7 @@ public final class VibrisControlService extends VibrisControlGrpc.VibrisControlI
 
     @Override
     public void getServerInfo(GetServerInfoRequest request, StreamObserver<GetServerInfoResponse> observer) {
-        observer.onNext(GetServerInfoResponse.newBuilder().setServer(hello).build());
+        observer.onNext(GetServerInfoResponse.newBuilder().setServer(descriptor.hello(engine)).build());
         observer.onCompleted();
     }
 
@@ -115,7 +75,8 @@ public final class VibrisControlService extends VibrisControlGrpc.VibrisControlI
 
     @Override
     public void getStatus(GetStatusRequest request, StreamObserver<GetStatusResponse> observer) {
-        observer.onNext(GetStatusResponse.newBuilder().setReady(true).setStatus(status).build());
+        var status = descriptor.status(engine);
+        observer.onNext(GetStatusResponse.newBuilder().setReady(status.getRuntimeReady()).setStatus(status).build());
         observer.onCompleted();
     }
 
@@ -180,7 +141,8 @@ public final class VibrisControlService extends VibrisControlGrpc.VibrisControlI
                 greeted = true;
                 session.identify(workspace, message.getClientHello().getProcessInstanceUuid());
                 session.send(ProtocolMessages.envelope(
-                    message.getMessageId(), message.getRequestId(), workspace).setServerHello(hello).build());
+                    message.getMessageId(), message.getRequestId(), workspace)
+                    .setServerHello(descriptor.hello(engine)).build());
             }
 
             private void fail(Status status) {
