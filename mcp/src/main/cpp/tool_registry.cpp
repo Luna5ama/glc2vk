@@ -106,8 +106,11 @@ Json action_schema() {
     });
 }
 
-Json definition(const char* name, const char* description, Json input_schema) {
-    return Json{{"name", name}, {"description", description}, {"inputSchema", std::move(input_schema)}};
+Json definition(const char* name, const char* description, Json input_schema, bool read_only) {
+    return Json{{"name", name},
+                {"description", description},
+                {"inputSchema", std::move(input_schema)},
+                {"annotations", {{"readOnlyHint", read_only}, {"destructiveHint", false}, {"openWorldHint", false}}}};
 }
 
 Json build_definitions() {
@@ -121,23 +124,25 @@ Json build_definitions() {
          {"default_warmup_frames", bounded_integer(0, std::numeric_limits<std::uint32_t>::max())}},
         {"save_id", "dimension_id", "time_preset_id", "camera_preset_id", "fov", "default_warmup_frames"});
     return Json::array({
-        definition("vibris_get_config", "Read this worktree's persisted Vibris configuration.", empty),
+        definition("vibris_get_config", "Read this worktree's persisted Vibris configuration.", empty, true),
         definition("vibris_list_presets", "List valid Minecraft scene presets, optionally filtered by text.",
-                   closed_object({{"filter", {{"type", "string"}, {"minLength", 1}}}})),
-        definition("vibris_configure", "Validate and persist this worktree's Vibris scene configuration.", configure),
-        definition("vibris_get_status", "Read MCP, server, runtime, queue, resource, and artifact status.", empty),
+                   closed_object({{"filter", {{"type", "string"}, {"minLength", 1}}}}), true),
+        definition("vibris_configure", "Validate and persist this worktree's Vibris scene configuration.", configure,
+                   false),
+        definition("vibris_get_status", "Read MCP, server, runtime, queue, resource, and artifact status.", empty,
+                   true),
         definition("vibris_run_recipe",
                    "Prefer this tool for standard shader tests. The MCP prepares immutable source data, submits one "
                    "non-interruptible job, and waits synchronously for the final result. Use vibris_run_actions only "
                    "when no existing recipe can express the request.",
-                   recipe_schema()),
+                   recipe_schema(), false),
         definition("vibris_run_actions",
                    "Advanced escape hatch for custom wait, capture, and dump sequences that recipes cannot express. "
                    "Source and context activation remain system-managed, and all actions run as one non-interruptible "
                    "job.",
                    closed_object({{"source", source_schema()},
                                   {"actions", {{"type", "array"}, {"items", action_schema()}, {"maxItems", 64}}}},
-                                 {"actions"})),
+                                 {"actions"}), false),
     });
 }
 

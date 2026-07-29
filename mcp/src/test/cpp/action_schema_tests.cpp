@@ -75,12 +75,25 @@ void registry_has_exactly_six_unique_tools() {
     }
 }
 
+void registry_declares_accurate_tool_annotations() {
+    ToolRegistry registry;
+    const std::set<std::string> read_only{"vibris_get_config", "vibris_list_presets", "vibris_get_status"};
+    for (const auto& definition : registry.definitions()) {
+        const auto& annotations = definition.at("annotations");
+        const auto name = definition.at("name").get<std::string>();
+        require(annotations.at("readOnlyHint") == read_only.contains(name), "Tool has the wrong read-only annotation.");
+        require(annotations.at("destructiveHint") == false, "Vibris tools must not claim destructive behavior.");
+        require(annotations.at("openWorldHint") == false, "Vibris tools must not claim open-world behavior.");
+    }
+}
+
 }
 
 int main() {
     try {
         schema_rejects_before_dispatch();
         registry_has_exactly_six_unique_tools();
+        registry_declares_accurate_tool_annotations();
         std::cout << "PASS ActionSchemaRejectsForbiddenAndDuplicateTools\n";
         return 0;
     } catch (const std::exception& error) {
