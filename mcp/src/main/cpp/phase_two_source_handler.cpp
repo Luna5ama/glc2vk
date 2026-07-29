@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace vibris::mcp {
 namespace {
@@ -84,7 +85,7 @@ Json PhaseTwoSourceHandler::prepare(
     return result;
 }
 
-void PhaseTwoSourceHandler::bind_latest(std::string request_id) {
+std::vector<control::PreparedSourceRef> PhaseTwoSourceHandler::bind_latest(std::string request_id) {
     if (request_id.empty()) throw std::invalid_argument("source request ID must not be empty");
     if (source_batches_.empty() || !source_batches_.back().request_id.empty()) {
         throw std::logic_error("no unbound prepared source batch");
@@ -94,7 +95,16 @@ void PhaseTwoSourceHandler::bind_latest(std::string request_id) {
         })) {
         throw std::invalid_argument("source request ID is already bound");
     }
+    std::vector<control::PreparedSourceRef> references;
+    try {
+        references.reserve(source_batches_.back().sources.size());
+        for (const auto& source : source_batches_.back().sources) references.push_back(source.reference());
+    } catch (...) {
+        source_batches_.pop_back();
+        throw;
+    }
     source_batches_.back().request_id = std::move(request_id);
+    return references;
 }
 
 void PhaseTwoSourceHandler::observe(const control::ServerMessage& message) noexcept {
@@ -135,6 +145,20 @@ void PhaseTwoSourceHandler::observe(const control::ServerMessage& message) noexc
     for (auto& batch : source_batches_) {
         if (!batch.request_id.empty()) update(batch);
     }
+}
+
+void PhaseTwoSourceHandler::retire(std::string_view request_id) noexcept {
+    const auto batch = std::find_if(source_batches_.begin(), source_batches_.end(), [&](const SourceBatch& item) {
+        return item.request_id == request_id;
+    });
+    if (batch == source_batches_.end()) return;
+    if (!batch->server_owned && batch->released) {
+        for (const auto& source : batch->sources) {
+            std::error_code ignored;
+            std::filesystem::remove_all(source.directory(), ignored);
+        }
+    }
+    source_batches_.erase(batch);
 }
 
 void PhaseTwoSourceHandler::clear() noexcept {

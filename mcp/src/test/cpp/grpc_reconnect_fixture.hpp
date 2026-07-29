@@ -100,7 +100,10 @@ private:
                     completed.mutable_protocol_version()->set_major(1);
                     completed.set_request_id(id);
                     completed.set_workspace_id(request.workspace_id());
-                    completed.mutable_job_completed()->set_request_id(id);
+                    auto* terminal = completed.mutable_job_completed();
+                    terminal->set_request_id(id);
+                    terminal->mutable_result()->set_kind(control::v1::JOB_RESULT_KIND_RELOAD_AND_CAPTURE);
+                    terminal->mutable_result()->set_manifest_path("C:\\vibris-test\\manifest.json");
                     if (!stream->Write(completed)) {
                         return {grpc::StatusCode::UNAVAILABLE, "JobCompleted write failed"};
                     }

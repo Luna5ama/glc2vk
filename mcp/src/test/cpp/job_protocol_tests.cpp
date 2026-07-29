@@ -1,0 +1,606 @@
+#include "job_protocol.hpp"
+#include "pending_request_registry.hpp"
+#include "grpc_reconnect_fixture.hpp"
+#include "scene_context_resolver.hpp"
+#include "state_error.hpp"
+#include "synchronous_job_fixture.hpp"
+#include "synchronous_job_runner.hpp"
+#include "workspace_source_fixture.hpp"
+
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <filesystem>
+#include <future>
+#include <iostream>
+#include <mutex>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <vector>
+
+namespace {
+
+namespace proto = ::vibris::control::v1;
+using vibris::mcp::JobProtocol;
+using vibris::mcp::Json;
+using vibris::mcp::PendingRequestRegistry;
+using vibris::mcp::SceneContextResolver;
+using vibris::mcp::SessionConfig;
+using vibris::mcp::StateError;
+using vibris::mcp::SynchronousJobRunner;
+using vibris::mcp::ToolFailure;
+using vibris::mcp::test::TerminalJobServer;
+using vibris::mcp::test::TempDirectory;
+using vibris::mcp::test::WorkspaceFixture;
+using vibris::mcp::test::ReconnectServer;
+using namespace std::chrono_literals;
+
+void require(bool condition, std::string_view message) {
+    if (!condition) throw std::runtime_error(std::string(message));
+}
+
+SessionConfig config() {
+    return {.workspace_id = "workspace-id",
+            .save_id = "shader-test-world",
+            .dimension_id = "minecraft:the_nether",
+            .time_preset_id = "sunset",
+            .camera_preset_id = "village-rooftop",
+            .fov = 72.5,
+            .default_warmup_frames = 19};
+}
+
+proto::PreparedSourceRef source(std::string uuid) {
+    proto::PreparedSourceRef result;
+    result.set_uuid(std::move(uuid));
+    result.mutable_origin()->mutable_workspace()->set_display_name("workspace");
+    result.set_file_count(3);
+    result.set_total_bytes(41);
+    return result;
+}
+
+proto::ListPresetsResponse presets() {
+    proto::ListPresetsResponse result;
+    auto* context = result.add_presets()->mutable_context();
+    context->set_save_id("shader-test-world");
+    context->set_dimension_id("minecraft:the_nether");
+    context->set_time_preset_id("sunset");
+    context->set_weather_preset_id("clear");
+    context->set_camera_preset_id("village-rooftop");
+    context->set_fov(60.0);
+    context->mutable_resolution()->set_width(1920);
+    context->mutable_resolution()->set_height(1080);
+    context->set_settings_preset_id("quality");
+    return result;
+}
+
+class DeadlineJobService final : public proto::VibrisControl::Service {
+public:
+    explicit DeadlineJobService(std::filesystem::path pending) : pending_(std::move(pending)) {}
+
+private:
+    grpc::Status Control(grpc::ServerContext*,
+        grpc::ServerReaderWriter<proto::ServerMessage, proto::ClientMessage>* stream) override {
+        proto::ClientMessage request;
+        std::filesystem::path source;
+        while (stream->Read(&request)) {
+            if (request.has_client_hello()) {
+                proto::ServerMessage hello;
+                hello.mutable_protocol_version()->set_major(1);
+                hello.set_workspace_id(request.workspace_id());
+                auto* server = hello.mutable_server_hello();
+                server->set_ready(true);
+                server->set_pending_shaders_root(std::filesystem::absolute(pending_).string());
+                server->mutable_limits()->set_max_source_bytes(1024 * 1024);
+                server->mutable_limits()->set_max_source_files(128);
+                if (!stream->Write(hello)) break;
+            } else if (request.has_submit_job()) {
+                source = pending_ / request.submit_job().sources(0).uuid();
+                proto::ServerMessage accepted;
+                accepted.set_request_id(request.request_id());
+                accepted.mutable_job_accepted()->set_request_id(request.request_id());
+                if (!stream->Write(accepted)) break;
+            } else if (request.has_cancel_job()) {
+                break;
+            }
+        }
+        if (!source.empty()) std::filesystem::remove_all(source);
+        return grpc::Status::OK;
+    }
+
+    std::filesystem::path pending_;
+};
+
+class DeadlineJobServer final {
+public:
+    explicit DeadlineJobServer(const std::filesystem::path& pending) : service_(pending) {
+        grpc::ServerBuilder builder;
+        builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials(), &port_);
+        builder.RegisterService(&service_);
+        server_ = builder.BuildAndStart();
+        if (!server_ || port_ == 0) throw std::runtime_error("failed to bind deadline fixture server");
+    }
+
+    ~DeadlineJobServer() { shutdown(); }
+    [[nodiscard]] int port() const noexcept { return port_; }
+
+    void shutdown() {
+        if (!server_) return;
+        server_->Shutdown();
+        server_->Wait();
+        server_.reset();
+    }
+
+private:
+    int port_ = 0;
+    DeadlineJobService service_;
+    std::unique_ptr<grpc::Server> server_;
+};
+
+void request_mapping() {
+    const std::vector sources{source("11111111-1111-4111-8111-111111111111")};
+    const Json arguments{{"recipe", "reload_and_capture"}, {"screenshot_format", "png"}};
+    const auto context = SceneContextResolver::resolve(config(), presets());
+
+    const auto message = JobProtocol::request(
+        "vibris_run_recipe", arguments, config(), context, sources, "request-1");
+
+    require(message.message_id() == "job-request-1" && message.request_id() == "request-1",
+        "SubmitJob envelope IDs were not exact.");
+    require(message.workspace_id() == "workspace-id" && message.submit_job().workspace_id() == "workspace-id",
+        "SubmitJob workspace ownership was not copied from scene config.");
+    const auto& job = message.submit_job();
+    require(job.request_id() == "request-1" && job.sources_size() == 1 &&
+            job.sources(0).uuid() == sources.front().uuid(),
+        "PreparedSourceRef was not copied into SubmitJob.");
+    require(job.context().save_id() == "shader-test-world" &&
+            job.context().dimension_id() == "minecraft:the_nether" &&
+            job.context().time_preset_id() == "sunset" &&
+            job.context().weather_preset_id() == "clear" &&
+            job.context().camera_preset_id() == "village-rooftop" &&
+            job.context().settings_preset_id() == "quality" &&
+            job.context().resolution().width() == 1920 && job.context().resolution().height() == 1080 &&
+            job.context().fov() == 72.5,
+        "Full matched preset context was not copied with the configured FOV override.");
+    require(job.recipe().reload_and_capture().source_uuid() == sources.front().uuid() &&
+            job.recipe().reload_and_capture().warmup_frames() == 19 &&
+            job.recipe().reload_and_capture().screenshot_format() == proto::ARTIFACT_FORMAT_PNG,
+        "reload_and_capture defaults were not mapped exactly.");
+    require(job.timeouts().queue_timeout_ms() == 60'000 && job.timeouts().execution_timeout_ms() == 120'000 &&
+            job.timeouts().total_timeout_ms() == 180'000,
+        "SubmitJob timeout defaults were not mapped exactly.");
+}
+
+void remaining_execution_mappings() {
+    const auto context = SceneContextResolver::resolve(config(), presets());
+    const std::vector one_source{source("33333333-3333-4333-8333-333333333333")};
+    const auto debug = JobProtocol::request("vibris_run_recipe",
+        {{"recipe", "capture_debug_bundle"}, {"warmup_frames", 5}, {"screenshot", true},
+         {"textures", Json::array({"colortex5"})}, {"buffers", Json::array({"debugSsbo"})}},
+        config(), context, one_source, "request-debug");
+    const auto& debug_recipe = debug.submit_job().recipe().capture_debug_bundle();
+    require(debug_recipe.source_uuid() == one_source.front().uuid() && debug_recipe.warmup_frames() == 5 &&
+            debug_recipe.screenshot() && debug_recipe.textures(0) == "colortex5" &&
+            debug_recipe.buffers(0) == "debugSsbo",
+        "capture_debug_bundle was not mapped exactly.");
+
+    const std::vector two_sources{source("44444444-4444-4444-8444-444444444444"),
+                                  source("55555555-5555-4555-8555-555555555555")};
+    const auto ab = JobProtocol::request("vibris_run_recipe",
+        {{"recipe", "ab_compare"},
+         {"a", {{"label", "baseline"}, {"source", {{"kind", "workspace"}}}}},
+         {"b", {{"label", "candidate"}, {"source", {{"kind", "workspace"}}}}},
+         {"captures", Json::array({{{"type", "screenshot"}},
+                                    {{"type", "texture"}, {"name", "colortex5"}},
+                                    {{"type", "buffer"}, {"name", "debugSsbo"}}})}},
+        config(), context, two_sources, "request-ab");
+    const auto& ab_recipe = ab.submit_job().recipe().ab_compare();
+    require(ab_recipe.baseline().label() == "baseline" &&
+            ab_recipe.baseline().source_uuid() == two_sources[0].uuid() &&
+            ab_recipe.candidate().label() == "candidate" &&
+            ab_recipe.candidate().source_uuid() == two_sources[1].uuid() && ab_recipe.captures_size() == 3 &&
+            ab_recipe.captures(0).format() == proto::ARTIFACT_FORMAT_PNG &&
+            ab_recipe.captures(1).format() == proto::ARTIFACT_FORMAT_PNG &&
+            ab_recipe.captures(2).format() == proto::ARTIFACT_FORMAT_BIN,
+        "ab_compare sources, labels, or capture defaults were not mapped exactly.");
+
+    const Json action_arguments{{"actions", Json::array({
+        {{"type", "reset_temporal_state"}},
+        {{"type", "wait_frames"}, {"frames", 3}},
+        {{"type", "capture_screenshot"}, {"artifact_name", "beauty"}},
+        {{"type", "dump_texture"}, {"name", "colortex5"}, {"format", "raw"},
+         {"artifact_name", "texture"}},
+        {{"type", "dump_buffer"}, {"name", "debugSsbo"}, {"format", "bin"},
+         {"artifact_name", "buffer"}},
+    })}};
+    const auto actions = JobProtocol::request(
+        "vibris_run_actions", action_arguments, config(), context, one_source, "request-actions");
+    const auto& sequence = actions.submit_job().actions();
+    require(sequence.actions_size() == 5 && sequence.actions(0).has_reset_temporal_state() &&
+            sequence.actions(1).wait_frames().frame_count() == 3 &&
+            sequence.actions(2).capture_screenshot().format() == proto::ARTIFACT_FORMAT_PNG &&
+            sequence.actions(3).dump_texture().logical_name() == "colortex5" &&
+            sequence.actions(4).dump_buffer().artifact_name() == "buffer",
+        "Allowed action sequence was not mapped exactly.");
+}
+
+void incomplete_preset_rejected() {
+    auto response = presets();
+    response.mutable_presets(0)->mutable_context()->clear_weather_preset_id();
+    try {
+        (void)SceneContextResolver::resolve(config(), response);
+        throw std::runtime_error("Incomplete preset reached SubmitJob mapping.");
+    } catch (const StateError& error) {
+        require(error.code() == "INVALID_PRESET", "Incomplete preset returned the wrong error code.");
+    }
+}
+
+void default_settings_disambiguates_scene_presets() {
+    auto response = presets();
+    response.mutable_presets(0)->mutable_context()->set_settings_preset_id("cinematic");
+    auto* fallback = response.add_presets();
+    fallback->mutable_context()->CopyFrom(response.presets(0).context());
+    fallback->mutable_context()->set_settings_preset_id("default");
+    const auto resolved = SceneContextResolver::resolve(config(), response);
+    require(resolved.settings_preset_id() == "default",
+        "The implicit default settings preset did not disambiguate the frozen configure schema.");
+}
+
+void empty_actions_mapping() {
+    const std::vector sources{source("22222222-2222-4222-8222-222222222222")};
+    const auto context = SceneContextResolver::resolve(config(), presets());
+    const auto message = JobProtocol::request(
+        "vibris_run_actions", {{"actions", Json::array()}}, config(), context, sources, "request-empty");
+    require(message.submit_job().has_actions() && message.submit_job().actions().actions().empty(),
+        "Empty actions did not select the ActionSequence execution branch.");
+}
+
+void progress_does_not_consume_terminal() {
+    PendingRequestRegistry registry(1);
+    proto::ClientMessage request;
+    request.set_request_id("request-progress");
+    std::size_t callbacks = 0;
+    std::size_t terminals = 0;
+    require(registry.add(std::move(request), [&](const grpc::Status& status, const proto::ServerMessage& message) {
+        require(status.ok(), "Progress registry callback unexpectedly failed.");
+        ++callbacks;
+        if (JobProtocol::is_terminal(message)) ++terminals;
+    }), "Job request was not registered.");
+
+    proto::ServerMessage accepted;
+    accepted.set_request_id("request-progress");
+    accepted.mutable_job_accepted()->set_request_id("request-progress");
+    require(registry.resolve(accepted), "JobAccepted was not observed.");
+    proto::ServerMessage progress;
+    progress.set_request_id("request-progress");
+    progress.mutable_job_progress()->set_request_id("request-progress");
+    require(registry.resolve(progress) && registry.size() == 1,
+        "JobProgress consumed the pending request before its terminal result.");
+    proto::ServerMessage completed;
+    completed.set_request_id("request-progress");
+    completed.mutable_job_completed()->set_request_id("request-progress");
+    require(registry.resolve(completed) && registry.size() == 0 && callbacks == 3 && terminals == 1,
+        "The registry did not deliver exactly one terminal after progress.");
+    require(!registry.resolve(completed) && callbacks == 3,
+        "A duplicate terminal was delivered after the request retired.");
+}
+
+void synchronous_submit_case(std::string_view tool_name, const Json& arguments, bool actions) {
+    WorkspaceFixture fixture;
+    const auto artifact_root = fixture.pending().parent_path() / "artifacts";
+    std::filesystem::create_directories(artifact_root);
+    TerminalJobServer server(fixture.pending(), artifact_root, actions);
+    vibris::mcp::PhaseTwoSourceHandler sources(fixture.worktree());
+    vibris::mcp::GrpcClient client({
+        .target = "127.0.0.1:" + std::to_string(server.port()),
+        .workspace_id = "workspace-id",
+        .mcp_version = "g007-test",
+        .process_instance_uuid = "g007-test",
+        .pending_request_limit = 1,
+        .reconnect_delay = 1ms,
+        .unary_deadline = 5s,
+    });
+    client.start();
+    const auto context = SceneContextResolver::resolve(config(), presets());
+    const auto outcome = SynchronousJobRunner(client, sources, config()).run(
+        tool_name, arguments, server.server_hello(), context);
+    const auto stats = client.stats();
+    client.shutdown();
+    server.shutdown();
+
+    const auto& result = std::get<Json>(outcome);
+    require(result.at("success") == true && result.at("frame_ids").at(0) == 901 &&
+            result.at("timings").at("total_ms") == 17 &&
+            result.at("kind") == (actions ? "action_sequence" : "reload_and_capture"),
+        "Synchronous runner returned before or lost the terminal result.");
+    require(server.valid_submit() && server.submit_jobs() == 1 && server.terminal_writes() == 1,
+        "Synchronous runner did not submit one complete job and consume exactly one terminal.");
+    require(stats.pending_requests == 0 && vibris::mcp::test::pending_has_no_sources(fixture.pending()),
+        "Terminal completion left pending registry or source ownership behind.");
+}
+
+void synchronous_submit_waits_for_terminal() {
+    synchronous_submit_case("vibris_run_recipe", {{"recipe", "reload_and_capture"}}, false);
+    synchronous_submit_case("vibris_run_actions", {{"actions", Json::array()}}, true);
+}
+
+void synchronous_submit_resumes_after_acceptance() {
+    WorkspaceFixture fixture;
+    ReconnectServer server(55066, 0);
+    proto::ServerHello hello;
+    hello.set_ready(true);
+    hello.set_pending_shaders_root(std::filesystem::absolute(fixture.pending()).string());
+    hello.mutable_limits()->set_max_source_bytes(1024 * 1024);
+    hello.mutable_limits()->set_max_source_files(128);
+    vibris::mcp::PhaseTwoSourceHandler sources(fixture.worktree());
+    vibris::mcp::GrpcClient client({
+        .target = "127.0.0.1:55066",
+        .workspace_id = "workspace-id",
+        .mcp_version = "g007-resume-test",
+        .process_instance_uuid = "g007-resume-test",
+        .pending_request_limit = 1,
+        .reconnect_delay = 1ms,
+        .unary_deadline = 5s,
+    });
+    client.start();
+    const auto context = SceneContextResolver::resolve(config(), presets());
+    const auto outcome = SynchronousJobRunner(client, sources, config()).run(
+        "vibris_run_recipe", {{"recipe", "reload_and_capture"}}, hello, context);
+    const auto stats = client.stats();
+    client.shutdown();
+    server.shutdown();
+
+    require(std::get<Json>(outcome).at("success") == true && stats.pending_requests == 0,
+        "Resumed synchronous request did not return its terminal result.");
+    require(server.submit_jobs() == 1 && server.resume_requests() == 1 && server.duplicate_submits() == 0,
+        "Synchronous reconnect duplicated SubmitJob instead of resuming the accepted request.");
+}
+
+void synchronous_submit_has_local_total_deadline() {
+    WorkspaceFixture fixture;
+    DeadlineJobServer server(fixture.pending());
+    proto::ServerHello hello;
+    hello.set_ready(true);
+    hello.set_pending_shaders_root(std::filesystem::absolute(fixture.pending()).string());
+    hello.mutable_limits()->set_max_source_bytes(1024 * 1024);
+    hello.mutable_limits()->set_max_source_files(128);
+    vibris::mcp::PhaseTwoSourceHandler sources(fixture.worktree());
+    vibris::mcp::GrpcClient client({
+        .target = "127.0.0.1:" + std::to_string(server.port()),
+        .workspace_id = "workspace-id",
+        .mcp_version = "g007-deadline-test",
+        .process_instance_uuid = "g007-deadline-test",
+        .pending_request_limit = 1,
+        .reconnect_delay = 1ms,
+        .unary_deadline = 5s,
+    });
+    client.start();
+    const auto context = SceneContextResolver::resolve(config(), presets());
+    const auto outcome = SynchronousJobRunner(client, sources, config(), 75ms).run(
+        "vibris_run_recipe", {{"recipe", "reload_and_capture"}}, hello, context);
+    const auto stats = client.stats();
+    client.shutdown();
+    server.shutdown();
+
+    const auto& failure = std::get<ToolFailure>(outcome);
+    require(failure.code == "EXECUTION_TIMEOUT" && stats.pending_requests == 0,
+        "Local synchronous deadline did not retire its pending request.");
+    require(vibris::mcp::test::pending_has_no_sources(fixture.pending()),
+        "Local synchronous deadline stranded source ownership.");
+}
+
+void cancel_waits_for_dispatched_acceptance() {
+    PendingRequestRegistry pending(1);
+    proto::ClientMessage request;
+    request.set_request_id("accept-cancel-race");
+    request.mutable_submit_job()->set_request_id(request.request_id());
+    std::mutex gate_mutex;
+    std::condition_variable gate;
+    bool acceptance_started = false;
+    bool release_acceptance = false;
+    std::atomic_int stage = 0;
+    std::atomic_bool callbacks_overlapped = false;
+    require(pending.add(std::move(request), [&](const grpc::Status& status, const proto::ServerMessage& message) {
+        if (message.has_job_accepted()) {
+            {
+                std::unique_lock lock(gate_mutex);
+                acceptance_started = true;
+                gate.notify_one();
+                gate.wait(lock, [&] { return release_acceptance; });
+            }
+            stage.store(2);
+            return;
+        }
+        callbacks_overlapped.store(stage.load() != 2);
+        require(status.error_code() == grpc::StatusCode::DEADLINE_EXCEEDED,
+            "Cancel did not deliver the local deadline status.");
+        stage.store(3);
+    }), "Acceptance/cancel race request was not registered.");
+
+    proto::ServerMessage accepted;
+    accepted.set_request_id("accept-cancel-race");
+    accepted.mutable_job_accepted()->set_request_id(accepted.request_id());
+    std::jthread resolver([&] {
+        stage.store(1);
+        pending.resolve(accepted);
+    });
+    {
+        std::unique_lock lock(gate_mutex);
+        require(gate.wait_for(lock, 2s, [&] { return acceptance_started; }),
+            "Acceptance callback did not reach its dispatch gate.");
+    }
+
+    std::promise<bool> cancel_result;
+    auto cancel_finished = cancel_result.get_future();
+    std::jthread canceller([&] {
+        cancel_result.set_value(pending.cancel("accept-cancel-race",
+            {grpc::StatusCode::DEADLINE_EXCEEDED, "deadline"}));
+    });
+    const bool cancel_bypassed_acceptance = cancel_finished.wait_for(50ms) == std::future_status::ready;
+    {
+        std::scoped_lock lock(gate_mutex);
+        release_acceptance = true;
+    }
+    gate.notify_one();
+    resolver.join();
+    canceller.join();
+
+    require(!cancel_bypassed_acceptance && cancel_finished.get(),
+        "Cancel completed before an already-dispatched acceptance callback.");
+    require(!callbacks_overlapped.load() && stage.load() == 3 && pending.size() == 0,
+        "Acceptance and deadline callbacks were not serialized in ownership order.");
+}
+
+void grpc_shutdown_does_not_start_operations_after_cq_shutdown() {
+    TempDirectory temp("grpc-shutdown");
+    const auto pending = temp.path() / "pending";
+    const auto artifacts = temp.path() / "artifacts";
+    std::filesystem::create_directories(pending);
+    std::filesystem::create_directories(artifacts);
+    TerminalJobServer server(pending, artifacts, false);
+    for (std::size_t index = 0; index < 128; ++index) {
+        std::mutex mutex;
+        std::condition_variable completed;
+        bool terminal = false;
+        bool failed = false;
+        vibris::mcp::GrpcClient client({
+            .target = "127.0.0.1:" + std::to_string(server.port()),
+            .workspace_id = "shutdown-race",
+            .mcp_version = "g007-shutdown-test",
+            .process_instance_uuid = "g007-shutdown-" + std::to_string(index),
+            .pending_request_limit = 1,
+            .reconnect_delay = 1ms,
+            .unary_deadline = 5s,
+        });
+        client.start();
+        proto::ClientMessage request;
+        request.set_request_id("shutdown-" + std::to_string(index));
+        request.set_workspace_id("shutdown-race");
+        auto* job = request.mutable_submit_job();
+        job->set_request_id(request.request_id());
+        job->add_sources()->set_uuid("missing-source");
+        job->mutable_recipe()->mutable_reload_and_capture()->set_source_uuid("missing-source");
+        require(client.submit(std::move(request), [&](const grpc::Status& status,
+            const proto::ServerMessage& message) {
+            {
+                std::scoped_lock lock(mutex);
+                failed = failed || !status.ok();
+                terminal = terminal || JobProtocol::is_terminal(message);
+            }
+            completed.notify_one();
+        }), "Rapid-shutdown request was not registered.");
+        std::unique_lock lock(mutex);
+        const bool finished = completed.wait_for(lock, 2s, [&] { return terminal || failed; });
+        lock.unlock();
+        client.shutdown();
+        require(finished && !failed, "Rapid-shutdown fixture did not reach a terminal response.");
+    }
+    server.shutdown();
+}
+
+void completed_mapping() {
+    const auto artifact_path = (std::filesystem::path("C:\\vibris-artifacts") / "beauty.png").string();
+    const auto manifest_path = (std::filesystem::path("C:\\vibris-artifacts") / "manifest.json").string();
+    proto::ServerMessage message;
+    message.set_request_id("request-1");
+    auto* result = message.mutable_job_completed()->mutable_result();
+    result->set_kind(proto::JOB_RESULT_KIND_AB_COMPARE);
+    result->set_manifest_path(manifest_path);
+    result->add_frame_ids(73);
+    result->add_frame_ids(74);
+    auto* timing = result->mutable_timings();
+    timing->set_queue_ms(2);
+    timing->set_execution_ms(11);
+    timing->set_total_ms(13);
+    auto* comparison = result->mutable_comparison();
+    comparison->set_baseline_label("baseline");
+    comparison->set_candidate_label("candidate");
+    comparison->set_mean_absolute_error(0.25);
+    comparison->set_root_mean_square_error(0.5);
+    comparison->set_max_absolute_error(1.0);
+    auto* diagnostic = result->add_shader_diagnostics();
+    diagnostic->set_severity(proto::DIAGNOSTIC_SEVERITY_WARNING);
+    diagnostic->set_file_name("composite.fsh");
+    diagnostic->set_line(7);
+    diagnostic->set_message("warning-marker");
+    auto* artifact = result->add_artifacts();
+    artifact->set_artifact_id("artifact-1");
+    artifact->set_file_name("beauty.png");
+    artifact->set_kind(proto::ARTIFACT_KIND_SCREENSHOT);
+    artifact->set_format(proto::ARTIFACT_FORMAT_PNG);
+    artifact->set_media_type("image/png");
+    artifact->set_byte_size(128);
+    artifact->set_path(artifact_path);
+
+    const auto outcome = JobProtocol::terminal(message);
+    const auto& mapped = std::get<Json>(outcome);
+
+    require(mapped.at("success") == true && mapped.at("kind") == "ab_compare",
+        "JobCompleted did not map to a successful recipe result.");
+    require(mapped.at("diagnostics").at(0).at("message") == "warning-marker" &&
+            mapped.at("timings").at("total_ms") == 13 && mapped.at("frame_ids").size() == 2,
+        "Diagnostics, timings, or frame IDs were lost.");
+    require(mapped.at("comparison").at("baseline_label") == "baseline" &&
+            mapped.at("comparison").at("root_mean_square_error") == 0.5,
+        "A/B comparison metrics were lost.");
+    require(mapped.at("artifacts").at(0).at("path") == artifact_path &&
+            mapped.at("manifest_path") == manifest_path,
+        "Absolute artifact or manifest paths were not preserved.");
+}
+
+void artifact_free_completed_mapping() {
+    proto::ServerMessage message;
+    message.mutable_job_completed()->mutable_result()->set_kind(proto::JOB_RESULT_KIND_ACTION_SEQUENCE);
+
+    const auto outcome = JobProtocol::terminal(message);
+    const auto& mapped = std::get<Json>(outcome);
+
+    require(mapped.at("success") == true && mapped.at("kind") == "action_sequence" &&
+            mapped.at("artifacts").empty() && mapped.at("manifest_path") == "",
+        "Artifact-free action completion was not mapped as a successful terminal result.");
+}
+
+void failed_mapping() {
+    proto::ServerMessage message;
+    auto* failure = message.mutable_job_failed();
+    failure->set_request_id("request-2");
+    failure->mutable_error()->set_code(proto::SHADER_COMPILE_FAILED);
+    failure->mutable_error()->set_message("compile marker");
+    failure->mutable_error()->set_field("recipe");
+    failure->mutable_error()->set_log_path("C:\\vibris-artifacts\\shader.log");
+
+    const auto outcome = JobProtocol::terminal(message);
+    const auto& mapped = std::get<ToolFailure>(outcome);
+
+    require(mapped.code == "SHADER_COMPILE_FAILED" && mapped.message == "compile marker" &&
+            mapped.details.at("field") == "recipe" &&
+            mapped.details.at("log_path") == "C:\\vibris-artifacts\\shader.log",
+        "JobFailed did not preserve structured compile failure details.");
+}
+
+}
+
+int main() {
+    try {
+        request_mapping();
+        remaining_execution_mappings();
+        incomplete_preset_rejected();
+        default_settings_disambiguates_scene_presets();
+        empty_actions_mapping();
+        progress_does_not_consume_terminal();
+        synchronous_submit_waits_for_terminal();
+        synchronous_submit_resumes_after_acceptance();
+        synchronous_submit_has_local_total_deadline();
+        cancel_waits_for_dispatched_acceptance();
+        grpc_shutdown_does_not_start_operations_after_cq_shutdown();
+        completed_mapping();
+        artifact_free_completed_mapping();
+        failed_mapping();
+        std::cout << "PASS SynchronousRecipeResultMapping\n";
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "FAIL SynchronousRecipeResultMapping: " << error.what() << '\n';
+        return 1;
+    }
+}

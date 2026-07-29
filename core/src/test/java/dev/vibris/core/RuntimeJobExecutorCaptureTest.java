@@ -55,7 +55,7 @@ class RuntimeJobExecutorCaptureTest {
         TerminalResult terminal = fixture.executor.execute(fixture.job(bundleActions()), ignored -> {});
 
         var result = terminal.completed().getResult();
-        assertEquals(List.of("link:A", "reload", "context", "reset", "frames", "capture"),
+        assertEquals(List.of("link:A", "reload", "context", "frames", "capture"),
             fixture.runtime.events);
         assertEquals(List.of(77L), result.getFrameIdsList());
         assertEquals(5, result.getArtifactsCount());

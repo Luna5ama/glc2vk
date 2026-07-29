@@ -2,57 +2,101 @@ package dev.vibris.core;
 
 import dev.vibris.api.CapturePlan;
 import dev.vibris.api.CaptureResult;
+import dev.vibris.api.ReloadResult;
 import dev.vibris.api.ResourceCatalog;
+import dev.vibris.protocol.v1.AbComparisonResult;
 import dev.vibris.protocol.v1.ArtifactKind;
 import dev.vibris.protocol.v1.ArtifactMetadata;
+import dev.vibris.protocol.v1.DiagnosticSeverity;
 import dev.vibris.protocol.v1.ErrorCode;
 import dev.vibris.protocol.v1.JobResult;
 import dev.vibris.protocol.v1.JobResultKind;
+import dev.vibris.protocol.v1.ShaderDiagnostic;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
 final class CaptureProtocolArtifacts {
-    JobResult commit(CoreJob job, CapturePlan plan, CaptureResult captured,
-        ArtifactManager.JobTransaction transaction) throws Exception {
-        validateResult(plan, captured);
-        ArtifactManager.CommittedJob committed = transaction.commit(expectedArtifacts(plan));
+    JobResult commit(CoreJob job, List<CapturePlan> plans, List<CaptureResult> captured,
+        ArtifactManager.JobTransaction transaction, List<ReloadResult.Diagnostic> diagnostics,
+        AbComparisonResult comparison) throws Exception {
+        if (plans.size() != captured.size()) throw new RuntimeJobExecutor.Failure(
+            ErrorCode.CAPTURE_FAILED, "Runtime capture count did not match its plan.");
+        for (int index = 0; index < plans.size(); index++) validateResult(plans.get(index), captured.get(index));
+        ArtifactManager.CommittedJob committed = transaction.commit(expectedArtifacts(plans, comparison != null));
         JobResult.Builder result = JobResult.newBuilder()
             .setKind(resultKind(job))
-            .addFrameIds(captured.frameId())
             .setManifestPath(committed.manifest().toString());
-        for (CapturePlan.Target target : plan.targets()) {
-            ResourceCatalog.ResourceDescriptor resource = captured.artifacts().get(target.artifactName());
-            CommittedFile file = requireArtifact(committed, target.fileName());
-            if (target.format() == CapturePlan.ArtifactFormat.RAW ||
-                target.format() == CapturePlan.ArtifactFormat.BIN) {
-                requireArtifact(committed, target.metadataFileName());
+        for (int index = 0; index < plans.size(); index++) {
+            CapturePlan plan = plans.get(index);
+            CaptureResult capture = captured.get(index);
+            result.addFrameIds(capture.frameId());
+            for (CapturePlan.Target target : plan.targets()) {
+                ResourceCatalog.ResourceDescriptor resource = capture.artifacts().get(target.artifactName());
+                CommittedFile file = requireArtifact(committed, target.fileName());
+                if (target.format() == CapturePlan.ArtifactFormat.RAW ||
+                    target.format() == CapturePlan.ArtifactFormat.BIN) {
+                    requireArtifact(committed, target.metadataFileName());
+                }
+                result.addArtifacts(captureArtifact(job, target, resource, file));
             }
-            result.addArtifacts(captureArtifact(job, target, resource, file));
         }
+        if (comparison != null) addComparison(job, committed, result, comparison);
         result.addArtifacts(fileArtifact(job, "shader.log", ArtifactKind.ARTIFACT_KIND_SHADER_COMPILE_LOG,
             dev.vibris.protocol.v1.ArtifactFormat.ARTIFACT_FORMAT_TEXT,
             "text/plain; charset=utf-8", requireArtifact(committed, "shader.log")));
         result.addArtifacts(fileArtifact(job, "manifest.json", ArtifactKind.ARTIFACT_KIND_MANIFEST,
             dev.vibris.protocol.v1.ArtifactFormat.ARTIFACT_FORMAT_JSON,
             "application/json", requireManifest(committed)));
+        addDiagnostics(result, diagnostics, requireArtifact(committed, "shader.log").path.toString());
         return result.build();
     }
 
-    private static Set<String> expectedArtifacts(CapturePlan plan) {
+    static void addDiagnostics(JobResult.Builder result, List<ReloadResult.Diagnostic> diagnostics, String logPath) {
+        for (ReloadResult.Diagnostic diagnostic : diagnostics) {
+            result.addShaderDiagnostics(ShaderDiagnostic.newBuilder()
+                .setSeverity(DiagnosticSeverity.valueOf("DIAGNOSTIC_SEVERITY_" + diagnostic.severity().name()))
+                .setFileName(diagnostic.source())
+                .setLine(diagnostic.line())
+                .setMessage(diagnostic.message())
+                .setLogPath(logPath));
+        }
+    }
+
+    private static Set<String> expectedArtifacts(List<CapturePlan> plans, boolean comparison) {
         Set<String> expected = new LinkedHashSet<>();
         expected.add("shader.log");
-        for (CapturePlan.Target target : plan.targets()) {
-            expected.add(target.fileName());
-            if (target.format() == CapturePlan.ArtifactFormat.RAW ||
-                target.format() == CapturePlan.ArtifactFormat.BIN) {
-                expected.add(target.metadataFileName());
+        for (CapturePlan plan : plans) {
+            for (CapturePlan.Target target : plan.targets()) {
+                expected.add(target.fileName());
+                if (target.format() == CapturePlan.ArtifactFormat.RAW ||
+                    target.format() == CapturePlan.ArtifactFormat.BIN) {
+                    expected.add(target.metadataFileName());
+                }
             }
         }
+        if (comparison) {
+            expected.add(AbArtifactComparator.METRICS_FILE);
+            expected.add(AbArtifactComparator.HEATMAP_FILE);
+        }
         return expected;
+    }
+
+    private static void addComparison(CoreJob job, ArtifactManager.CommittedJob committed,
+        JobResult.Builder result, AbComparisonResult comparison) throws java.io.IOException {
+        result.setComparison(comparison);
+        result.addArtifacts(fileArtifact(job, AbArtifactComparator.METRICS_FILE,
+            ArtifactKind.ARTIFACT_KIND_AB_METRICS,
+            dev.vibris.protocol.v1.ArtifactFormat.ARTIFACT_FORMAT_JSON,
+            "application/json", requireArtifact(committed, AbArtifactComparator.METRICS_FILE)));
+        result.addArtifacts(fileArtifact(job, AbArtifactComparator.HEATMAP_FILE,
+            ArtifactKind.ARTIFACT_KIND_HEATMAP,
+            dev.vibris.protocol.v1.ArtifactFormat.ARTIFACT_FORMAT_PNG,
+            "image/png", requireArtifact(committed, AbArtifactComparator.HEATMAP_FILE)));
     }
 
     private static void validateResult(CapturePlan plan, CaptureResult result)
@@ -150,6 +194,9 @@ final class CaptureProtocolArtifacts {
         }
         if (job.submission.hasRecipe() && job.submission.getRecipe().hasCaptureDebugBundle()) {
             return JobResultKind.JOB_RESULT_KIND_CAPTURE_DEBUG_BUNDLE;
+        }
+        if (job.submission.hasRecipe() && job.submission.getRecipe().hasAbCompare()) {
+            return JobResultKind.JOB_RESULT_KIND_AB_COMPARE;
         }
         return JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE;
     }

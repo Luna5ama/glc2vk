@@ -78,7 +78,7 @@ function New-IrisProbeScope
     param(
         [Parameter(Mandatory)] [ValidateSet("c001", "c002", "c003")] [string] $Criterion,
         [Parameter(Mandatory)] [string] $GameDir,
-        [ValidateSet("G005", "G006")] [string] $Gate = "G005"
+		[ValidateSet("G005", "G006", "G007")] [string] $Gate = "G005"
     )
 
     $gateName = $Gate.ToLowerInvariant()

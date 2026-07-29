@@ -42,8 +42,7 @@ final class CapturePlanBuilder {
             if (targets.size() > MAX_ACTIONS) {
                 throw new RuntimeJobExecutor.Failure(ErrorCode.CAPTURE_FAILED, "Capture target limit exceeded.");
             }
-            CapturePlan plan = new CapturePlan(targets);
-            return new Plan(plan, validateAndEstimate(plan, catalog));
+            return plan(targets, catalog);
         } catch (IllegalArgumentException exception) {
             throw new RuntimeJobExecutor.Failure(ErrorCode.CAPTURE_FAILED, "Capture plan is invalid.");
         }
@@ -58,7 +57,7 @@ final class CapturePlanBuilder {
             ResourceCatalog.ResourceKind.BUFFER, name, CapturePlan.ArtifactFormat.BIN, name, 0, 0)));
     }
 
-    private static void addAction(List<CapturePlan.Target> targets, Action action, ResourceCatalog catalog) {
+    static void addAction(List<CapturePlan.Target> targets, Action action, ResourceCatalog catalog) {
         if (action.hasCaptureScreenshot()) {
             var capture = action.getCaptureScreenshot();
             targets.add(screenshot(catalog, format(capture.getFormat(), CapturePlan.ArtifactFormat.PNG),
@@ -75,7 +74,13 @@ final class CapturePlanBuilder {
         }
     }
 
-    private static CapturePlan.Target screenshot(ResourceCatalog catalog, CapturePlan.ArtifactFormat format,
+    static Plan plan(List<CapturePlan.Target> targets, ResourceCatalog catalog)
+        throws RuntimeJobExecutor.Failure {
+        CapturePlan plan = new CapturePlan(targets);
+        return new Plan(plan, validateAndEstimate(plan, catalog));
+    }
+
+    static CapturePlan.Target screenshot(ResourceCatalog catalog, CapturePlan.ArtifactFormat format,
         String artifactName) {
         String name = catalog.resources().stream()
             .filter(resource -> resource.kind() == ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER)
@@ -83,7 +88,7 @@ final class CapturePlanBuilder {
         return target(ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, name, format, artifactName, 0, 0);
     }
 
-    private static CapturePlan.Target target(ResourceCatalog.ResourceKind kind, String name,
+    static CapturePlan.Target target(ResourceCatalog.ResourceKind kind, String name,
         CapturePlan.ArtifactFormat format, String artifactName, int mip, int layer) {
         return new CapturePlan.Target(kind, name, format, artifactName, mip, layer);
     }
@@ -163,7 +168,7 @@ final class CapturePlanBuilder {
         return 0;
     }
 
-    private static CapturePlan.ArtifactFormat format(dev.vibris.protocol.v1.ArtifactFormat format,
+    static CapturePlan.ArtifactFormat format(dev.vibris.protocol.v1.ArtifactFormat format,
         CapturePlan.ArtifactFormat fallback) {
         return switch (format) {
             case ARTIFACT_FORMAT_PNG -> CapturePlan.ArtifactFormat.PNG;

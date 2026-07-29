@@ -1,19 +1,19 @@
 #include "phase_one_backend.hpp"
 
 #include <algorithm>
-#include <array>
 #include <chrono>
-#include <cstdint>
 #include <future>
 #include <iostream>
-#include <random>
 #include <string>
 #include <utility>
 
+#include "config_document.hpp"
 #include "config_store.hpp"
 #include "phase_two_source_handler.hpp"
 #include "result_mapper.hpp"
+#include "scene_context_resolver.hpp"
 #include "state_error.hpp"
+#include "synchronous_job_runner.hpp"
 #include "workspace_binding.hpp"
 #include "worktree_lock.hpp"
 
@@ -22,22 +22,6 @@ namespace {
 
 namespace control = vibris::control::v1;
 constexpr std::size_t pending_limit = 256;
-
-std::string generate_uuid() {
-    std::array<std::uint8_t, 16> bytes{};
-    std::random_device random;
-    for (auto& byte : bytes) byte = static_cast<std::uint8_t>(random());
-    bytes[6] = static_cast<std::uint8_t>((bytes[6] & 0x0fU) | 0x40U);
-    bytes[8] = static_cast<std::uint8_t>((bytes[8] & 0x3fU) | 0x80U);
-    constexpr char hex[] = "0123456789abcdef";
-    std::string uuid(36, '-');
-    for (std::size_t input = 0, output = 0; input < bytes.size(); ++input) {
-        if (output == 8 || output == 13 || output == 18 || output == 23) ++output;
-        uuid[output++] = hex[bytes[input] >> 4U];
-        uuid[output++] = hex[bytes[input] & 0x0fU];
-    }
-    return uuid;
-}
 
 Json config_json(const SessionConfig& config) {
     return {{"schema_version", config.schema_version},
@@ -66,7 +50,7 @@ public:
           lock_(WorktreeLock::acquire(binding_.root)),
           store_(binding_.config_path),
           server_address_(std::move(server_address)),
-          process_id_(generate_uuid()),
+          process_id_(detail::generate_uuid()),
           config_(store_.load()),
           source_handler_(binding_.root) {}
 
@@ -77,7 +61,7 @@ public:
             if (name == "vibris_configure") return configure(arguments);
             if (name == "vibris_get_status") return get_status();
             if (name == "vibris_run_recipe" || name == "vibris_run_actions") {
-                return prepare_sources(name, arguments);
+                return run_job(name, arguments);
             }
             return ToolFailure{"INTERNAL_ERROR", "The validated tool was not dispatched.", false};
         } catch (const StateError& error) {
@@ -175,14 +159,22 @@ private:
             });
     }
 
-    ToolOutcome prepare_sources(std::string_view name, const Json& arguments) {
-        return unary<control::GetServerInfoResponse>(
-            [this](auto completion) { return client().get_server_info(std::move(completion)); },
-            [this, name, &arguments](const auto& response) -> ToolOutcome {
-                if (!response.has_server()) {
-                    throw StateError("SERVER_NOT_READY", "The local Vibris server did not provide server info.", true);
-                }
-                return source_handler_.prepare(name, arguments, response.server());
+    ToolOutcome run_job(std::string_view name, const Json& arguments) {
+        if (!config_) return ToolFailure{"NOT_CONFIGURED", "Configure this worktree before running jobs.", false};
+        return unary<control::ListPresetsResponse>(
+            [this](auto completion) { return client().list_presets(std::move(completion)); },
+            [this, name, &arguments](const auto& presets) -> ToolOutcome {
+                const auto context = SceneContextResolver::resolve(*config_, presets);
+                return unary<control::GetServerInfoResponse>(
+                    [this](auto completion) { return client().get_server_info(std::move(completion)); },
+                    [this, name, &arguments, &context](const auto& response) -> ToolOutcome {
+                        if (!response.has_server()) {
+                            throw StateError(
+                                "SERVER_NOT_READY", "The local Vibris server did not provide server info.", true);
+                        }
+                        return SynchronousJobRunner(client(), source_handler_, *config_).run(
+                            name, arguments, response.server(), context);
+                    });
             });
     }
 

@@ -23,7 +23,8 @@ bool PendingRequestRegistry::add(proto::ClientMessage request, GrpcCompletion co
     if (entries_.size() >= capacity_ || entries_.contains(std::string(key))) {
         return false;
     }
-    entries_.emplace(std::string(key), Entry{std::move(request), std::move(completion)});
+    entries_.emplace(std::string(key),
+        Entry{std::move(request), std::make_shared<CallbackSlot>(std::move(completion))});
     peak_size_ = std::max(peak_size_, entries_.size());
     return true;
 }
@@ -31,9 +32,11 @@ bool PendingRequestRegistry::add(proto::ClientMessage request, GrpcCompletion co
 bool PendingRequestRegistry::resolve(const proto::ServerMessage& response) {
     if (response.has_resume_state()) {
         struct Event {
-            GrpcCompletion completion;
+            std::shared_ptr<CallbackSlot> callback;
+            std::unique_lock<std::mutex> claim;
             grpc::Status status;
             proto::ServerMessage response;
+            bool terminal;
         };
         std::vector<Event> events;
         {
@@ -49,17 +52,23 @@ bool PendingRequestRegistry::resolve(const proto::ServerMessage& response) {
                 auto event_response = response;
                 event_response.set_request_id(entry->first);
                 if (job == response.resume_state().jobs().end() || job->state() == proto::JOB_STATE_UNSPECIFIED) {
-                    events.push_back({std::move(entry->second.completion),
+                    auto callback = entry->second.callback;
+                    events.push_back({callback, std::unique_lock(callback->mutex),
                         {grpc::StatusCode::NOT_FOUND, "accepted request was not found after reconnect"},
-                        std::move(event_response)});
+                        std::move(event_response), true});
                     entry = entries_.erase(entry);
                 } else {
-                    events.push_back({entry->second.completion, grpc::Status::OK, std::move(event_response)});
+                    auto callback = entry->second.callback;
+                    events.push_back({callback, std::unique_lock(callback->mutex), grpc::Status::OK,
+                        std::move(event_response), false});
                     ++entry;
                 }
             }
         }
-        for (auto& event : events) complete(event.completion, event.status, event.response);
+        for (auto& event : events) {
+            complete_claimed(*event.callback, event.status, event.response, event.terminal);
+            event.claim.unlock();
+        }
         return !events.empty();
     }
 
@@ -68,7 +77,9 @@ bool PendingRequestRegistry::resolve(const proto::ServerMessage& response) {
         return false;
     }
 
-    GrpcCompletion completion;
+    std::shared_ptr<CallbackSlot> callback;
+    std::unique_lock<std::mutex> claim;
+    bool terminal = false;
     {
         std::scoped_lock lock(mutex_);
         const auto entry = entries_.find(std::string(key));
@@ -77,31 +88,50 @@ bool PendingRequestRegistry::resolve(const proto::ServerMessage& response) {
         }
         if (response.has_job_accepted()) {
             if (entry->second.accepted) return true;
+            callback = entry->second.callback;
+            claim = std::unique_lock(callback->mutex);
             entry->second.accepted = true;
-            completion = entry->second.completion;
+        } else if (response.has_job_progress()) {
+            callback = entry->second.callback;
+            claim = std::unique_lock(callback->mutex);
         } else {
-            completion = std::move(entry->second.completion);
+            callback = entry->second.callback;
+            claim = std::unique_lock(callback->mutex);
+            terminal = true;
             entries_.erase(entry);
         }
     }
-    complete(completion, grpc::Status::OK, response);
+    complete_claimed(*callback, grpc::Status::OK, response, terminal);
     return true;
 }
 
-void PendingRequestRegistry::fail_all(const grpc::Status& status) {
-    std::vector<GrpcCompletion> completions;
+bool PendingRequestRegistry::cancel(const std::string_view request_id, const grpc::Status& status) {
+    std::shared_ptr<CallbackSlot> callback;
     {
         std::scoped_lock lock(mutex_);
-        completions.reserve(entries_.size());
+        const auto entry = entries_.find(std::string(request_id));
+        if (entry == entries_.end()) return false;
+        callback = entry->second.callback;
+        entries_.erase(entry);
+    }
+    const proto::ServerMessage response;
+    return complete(callback, status, response, true);
+}
+
+void PendingRequestRegistry::fail_all(const grpc::Status& status) {
+    std::vector<std::shared_ptr<CallbackSlot>> callbacks;
+    {
+        std::scoped_lock lock(mutex_);
+        callbacks.reserve(entries_.size());
         for (auto& [id, entry] : entries_) {
-            completions.push_back(std::move(entry.completion));
+            callbacks.push_back(entry.callback);
         }
         entries_.clear();
     }
 
     const proto::ServerMessage response;
-    for (auto& completion : completions) {
-        complete(completion, status, response);
+    for (const auto& callback : callbacks) {
+        complete(callback, status, response, true);
     }
 }
 
@@ -160,13 +190,22 @@ std::string_view PendingRequestRegistry::response_key(const proto::ServerMessage
     return response.message_id();
 }
 
-void PendingRequestRegistry::complete(GrpcCompletion& completion, const grpc::Status& status,
-    const proto::ServerMessage& response) noexcept {
+bool PendingRequestRegistry::complete_claimed(CallbackSlot& callback, const grpc::Status& status,
+    const proto::ServerMessage& response, const bool terminal) noexcept {
+    if (callback.terminal) return false;
+    callback.terminal = terminal;
     try {
-        completion(status, response);
+        callback.completion(status, response);
     } catch (...) {
         // User callbacks must not terminate the completion-queue worker.
     }
+    return true;
+}
+
+bool PendingRequestRegistry::complete(const std::shared_ptr<CallbackSlot>& callback, const grpc::Status& status,
+    const proto::ServerMessage& response, const bool terminal) noexcept {
+    std::scoped_lock lock(callback->mutex);
+    return complete_claimed(*callback, status, response, terminal);
 }
 
 }

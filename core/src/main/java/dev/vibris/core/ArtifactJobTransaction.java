@@ -128,6 +128,14 @@ class ArtifactJobTransaction implements ArtifactSink, AutoCloseable {
         }
     }
 
+    synchronized Path readableArtifact(String artifactName) throws IOException {
+        requireActive();
+        ArtifactRecord artifact = artifacts.get(artifactName);
+        if (artifact == null) throw new IOException("Artifact is not available for comparison.");
+        ArtifactFiles.verifiedSize(artifact.path, artifact.identity, artifact.bytes);
+        return artifact.path;
+    }
+
     @Override
     public synchronized void close() throws IOException {
         if (state == State.COMMITTED || state == State.ABORTED) return;

@@ -64,7 +64,8 @@ public final class VibrisCoreEngine implements AutoCloseable {
         List<SourceRegistry.Candidate> candidates;
         SourceRegistry.Failure validationFailure;
         try {
-            candidates = sources.validate(submission.getSourcesList());
+            int sourceCount = submission.hasRecipe() && submission.getRecipe().hasAbCompare() ? 2 : 1;
+            candidates = sources.validate(submission.getSourcesList(), sourceCount);
             validationFailure = null;
         } catch (SourceRegistry.Failure failure) {
             candidates = List.of();

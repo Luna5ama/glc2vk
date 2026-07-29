@@ -7,6 +7,8 @@ import dev.vibris.protocol.v1.ActionSequence;
 import dev.vibris.protocol.v1.ErrorCode;
 import dev.vibris.protocol.v1.JobStage;
 import dev.vibris.protocol.v1.PreparedSourceRef;
+import dev.vibris.protocol.v1.RecipeSpec;
+import dev.vibris.protocol.v1.ReloadAndCaptureRecipe;
 import dev.vibris.protocol.v1.SceneContext;
 import dev.vibris.protocol.v1.SubmitJob;
 import dev.vibris.protocol.v1.WaitFrames;
@@ -29,7 +31,7 @@ class RuntimeJobExecutorTest {
     Path pending;
 
     @Test
-    void activatesAndReloadsBeforeContextResetAndFrames() throws Exception {
+    void activatesAndReloadsBeforeContextAndExplicitFrames() throws Exception {
         Fixture fixture = new Fixture();
         Source source = fixture.source("A");
         List<JobStage> progress = new ArrayList<>();
@@ -37,13 +39,12 @@ class RuntimeJobExecutorTest {
         fixture.executor.execute(job(source.lease), progress::add);
         fixture.activator.release(List.of(source.lease));
 
-        assertEquals(List.of("link:A", "reload", "context", "reset", "frames"), fixture.runtime.events);
+        assertEquals(List.of("link:A", "reload", "context", "frames"), fixture.runtime.events);
         assertEquals(List.of(
             JobStage.JOB_STAGE_ACTIVATING_SOURCE,
             JobStage.JOB_STAGE_RELOADING_SHADERS,
             JobStage.JOB_STAGE_LOADING_WORLD,
             JobStage.JOB_STAGE_APPLYING_CONTEXT,
-            JobStage.JOB_STAGE_RESETTING_TEMPORAL_STATE,
             JobStage.JOB_STAGE_WARMING_UP), progress);
         assertEquals(source.uuid, fixture.registry.activeUuid());
         assertTrue(Files.isDirectory(source.path));
@@ -122,10 +123,29 @@ class RuntimeJobExecutorTest {
         fixture.runtime.reset = new TemporalResetResult(false);
 
         RuntimeJobExecutor.Failure failure = assertThrows(
-            RuntimeJobExecutor.Failure.class, () -> fixture.executor.execute(job(source.lease), ignored -> {}));
+            RuntimeJobExecutor.Failure.class,
+            () -> fixture.executor.execute(jobWithReset(source.lease), ignored -> {}));
 
         assertEquals(ErrorCode.INTERNAL_ERROR, failure.code);
         assertEquals(List.of("link:A", "reload", "context", "reset"), fixture.runtime.events);
+    }
+
+    @Test
+    void recipeRejectsMismatchedPreparedSourceUuidBeforeActivation() throws Exception {
+        Fixture fixture = new Fixture();
+        Source source = fixture.source("A");
+        SubmitJob submission = job(source.lease).submission.toBuilder().clearActions()
+            .setRecipe(RecipeSpec.newBuilder().setReloadAndCapture(ReloadAndCaptureRecipe.newBuilder()
+                .setSourceUuid(UUID.randomUUID().toString())))
+            .build();
+        CoreJob job = new CoreJob(submission, "message", null);
+        job.initialize(List.of(source.lease));
+
+        RuntimeJobExecutor.Failure failure = assertThrows(
+            RuntimeJobExecutor.Failure.class, () -> fixture.executor.execute(job, ignored -> {}));
+
+        assertEquals(ErrorCode.INVALID_SOURCE_UUID, failure.code);
+        assertTrue(fixture.runtime.events.isEmpty());
     }
 
     @Test
@@ -163,6 +183,16 @@ class RuntimeJobExecutorTest {
             .setActions(ActionSequence.newBuilder().addActions(Action.newBuilder()
                 .setWaitFrames(WaitFrames.newBuilder().setFrameCount(3))))
             .build();
+        CoreJob job = new CoreJob(submission, "message", null);
+        job.initialize(List.of(source));
+        return job;
+    }
+
+    private static CoreJob jobWithReset(SourceRegistry.Lease source) {
+        SubmitJob submission = job(source).submission.toBuilder().setActions(ActionSequence.newBuilder()
+            .addActions(Action.newBuilder().setResetTemporalState(
+                dev.vibris.protocol.v1.ResetTemporalState.getDefaultInstance()))
+            .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(3)))).build();
         CoreJob job = new CoreJob(submission, "message", null);
         job.initialize(List.of(source));
         return job;

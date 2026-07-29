@@ -27,9 +27,13 @@ final class SourceRegistry {
     }
 
     List<Candidate> validate(List<PreparedSourceRef> references) throws Failure {
+        return validate(references, 1);
+    }
+
+    List<Candidate> validate(List<PreparedSourceRef> references, int expectedCount) throws Failure {
         if (references.isEmpty()) throw new Failure(ErrorCode.SOURCE_DIRECTORY_MISSING, "A source is required.");
-        if (references.size() != 1) {
-            throw new Failure(ErrorCode.SOURCE_ACTIVATION_FAILED, "Exactly one prepared source is required.");
+        if (references.size() != expectedCount) {
+            throw new Failure(ErrorCode.SOURCE_ACTIVATION_FAILED, "Prepared source count does not match the job.");
         }
         Set<String> unique = new HashSet<>();
         List<Candidate> candidates = new ArrayList<>(references.size());

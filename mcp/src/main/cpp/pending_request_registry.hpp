@@ -6,10 +6,12 @@
 
 #include <cstddef>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace vibris::mcp {
@@ -27,6 +29,7 @@ public:
 
     bool add(::vibris::control::v1::ClientMessage request, GrpcCompletion completion);
     bool resolve(const ::vibris::control::v1::ServerMessage& response);
+    bool cancel(std::string_view request_id, const grpc::Status& status);
     void fail_all(const grpc::Status& status);
 
     [[nodiscard]] std::vector<::vibris::control::v1::ClientMessage> requests() const;
@@ -35,16 +38,26 @@ public:
     [[nodiscard]] std::size_t peak_size() const;
 
 private:
+    struct CallbackSlot {
+        explicit CallbackSlot(GrpcCompletion value) : completion(std::move(value)) {}
+
+        std::mutex mutex;
+        GrpcCompletion completion;
+        bool terminal = false;
+    };
+
     struct Entry {
         ::vibris::control::v1::ClientMessage request;
-        GrpcCompletion completion;
+        std::shared_ptr<CallbackSlot> callback;
         bool accepted = false;
     };
 
     static std::string_view request_key(const ::vibris::control::v1::ClientMessage& request);
     static std::string_view response_key(const ::vibris::control::v1::ServerMessage& response);
-    static void complete(GrpcCompletion& completion, const grpc::Status& status,
-        const ::vibris::control::v1::ServerMessage& response) noexcept;
+    static bool complete_claimed(CallbackSlot& callback, const grpc::Status& status,
+        const ::vibris::control::v1::ServerMessage& response, bool terminal) noexcept;
+    static bool complete(const std::shared_ptr<CallbackSlot>& callback, const grpc::Status& status,
+        const ::vibris::control::v1::ServerMessage& response, bool terminal) noexcept;
 
     const std::size_t capacity_;
     mutable std::mutex mutex_;

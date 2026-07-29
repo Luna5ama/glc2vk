@@ -8,7 +8,8 @@
 #include <string>
 #include <utility>
 
-#include "config_store.hpp"
+#include "tool_argument_policy.hpp"
+
 namespace vibris::mcp {
 namespace {
 
@@ -223,10 +224,7 @@ InvocationResult ToolRegistry::invoke(std::string_view name, const Json& argumen
     if (definition_it == definitions_.end()) {
         return InvocationError{InvocationErrorCode::UnknownTool, "Unknown tool: " + std::string(name)};
     }
-    if (name == "vibris_configure" && arguments.dump().size() > kMaxConfigJsonBytes) {
-        return InvocationError{InvocationErrorCode::InvalidArguments, "Config JSON exceeds the 64 KiB limit.",
-                               {{"code", "REQUEST_TOO_LARGE"}, {"retryable", false}}};
-    }
+    if (const auto error = validate_argument_policy(name, arguments)) return *error;
     if (const auto error = validate(arguments, (*definition_it)["inputSchema"], "arguments")) {
         return InvocationError{InvocationErrorCode::InvalidArguments, *error};
     }

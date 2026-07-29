@@ -65,14 +65,18 @@ add_library(vibris_mcp_core STATIC
     src/main/cpp/grpc_client.cpp
     src/main/cpp/grpc_control_stream.cpp
     src/main/cpp/grpc_unary_calls.cpp
+    src/main/cpp/job_protocol.cpp
     src/main/cpp/mcp_stdio_server.cpp
     src/main/cpp/pending_request_registry.cpp
     src/main/cpp/phase_one_backend.cpp
     src/main/cpp/phase_two_source_handler.cpp
     src/main/cpp/prepared_source.cpp
     src/main/cpp/result_mapper.cpp
+    src/main/cpp/scene_context_resolver.cpp
     src/main/cpp/source_path_policy.cpp
     src/main/cpp/source_preparer.cpp
+    src/main/cpp/synchronous_job_runner.cpp
+    src/main/cpp/tool_argument_policy.cpp
     src/main/cpp/tool_registry.cpp
     src/main/cpp/workspace_copier.cpp
     src/main/cpp/workspace_binding.cpp
@@ -130,6 +134,12 @@ if(BUILD_TESTING)
     target_include_directories(vibris-grpc-accepted-resume-tests PRIVATE src/test/cpp)
     target_link_libraries(vibris-grpc-accepted-resume-tests PRIVATE vibris_mcp_core)
 
+    add_executable(vibris-job-protocol-tests src/test/cpp/job_protocol_tests.cpp)
+    target_link_libraries(vibris-job-protocol-tests PRIVATE vibris_mcp_core)
+
+    add_executable(vibris-action-schema-tests src/test/cpp/action_schema_tests.cpp)
+    target_link_libraries(vibris-action-schema-tests PRIVATE vibris_mcp_core)
+
     if(MSVC)
         target_compile_options(vibris-state-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-worktree-discovery-tests PRIVATE /W4 /permissive-)
@@ -141,6 +151,8 @@ if(BUILD_TESTING)
         target_compile_options(vibris-grpc-request-ownership-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-grpc-source-ownership-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-grpc-accepted-resume-tests PRIVATE /W4 /permissive-)
+        target_compile_options(vibris-job-protocol-tests PRIVATE /W4 /permissive-)
+        target_compile_options(vibris-action-schema-tests PRIVATE /W4 /permissive-)
     endif()
 
     add_custom_target(mcp-tests
@@ -148,6 +160,7 @@ if(BUILD_TESTING)
                 vibris-commit-source-tests vibris-git-repository-security-tests
                 vibris-stdio-fixture-test vibris-grpc-tests vibris-grpc-request-ownership-tests
                 vibris-grpc-source-ownership-tests vibris-grpc-accepted-resume-tests)
+    add_dependencies(mcp-tests vibris-job-protocol-tests vibris-action-schema-tests)
 
     add_test(
         NAME descriptor-dump
@@ -227,6 +240,10 @@ if(BUILD_TESTING)
 
     add_test(NAME AcceptedRequestResumesAfterDisconnect COMMAND vibris-grpc-accepted-resume-tests)
     set_tests_properties(AcceptedRequestResumesAfterDisconnect PROPERTIES RUN_SERIAL TRUE TIMEOUT 30)
+
+    add_test(NAME SynchronousRecipeResultMapping COMMAND vibris-job-protocol-tests)
+    set_tests_properties(SynchronousRecipeResultMapping PROPERTIES RUN_SERIAL TRUE TIMEOUT 30)
+    add_test(NAME ActionSchemaRejectsForbiddenAndDuplicateTools COMMAND vibris-action-schema-tests)
 
     function(add_stdio_mcp_probe test_name)
         add_test(

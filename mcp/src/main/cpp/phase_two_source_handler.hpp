@@ -8,6 +8,7 @@
 #include <list>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace vibris::mcp {
 
@@ -20,8 +21,9 @@ public:
         std::string_view tool_name,
         const Json& arguments,
         const ::vibris::control::v1::ServerHello& server);
-    void bind_latest(std::string request_id);
+    std::vector<::vibris::control::v1::PreparedSourceRef> bind_latest(std::string request_id);
     void observe(const ::vibris::control::v1::ServerMessage& message) noexcept;
+    void retire(std::string_view request_id) noexcept;
     void clear() noexcept;
 
 private:

@@ -39,6 +39,25 @@ bool GrpcClient::Impl::submit(proto::ClientMessage message, GrpcCompletion compl
     return true;
 }
 
+bool GrpcClient::Impl::cancel(const std::string_view request_id, std::string reason) {
+    if (request_id.empty()) return false;
+    const grpc::Status deadline(grpc::StatusCode::DEADLINE_EXCEEDED, reason);
+    if (!pending_.cancel(request_id, deadline)) return false;
+    std::scoped_lock lock(mutex_);
+    if (!started_ || stopping_ || !stream_) return true;
+    proto::ClientMessage request;
+    request.mutable_protocol_version()->set_major(protocol_major);
+    request.mutable_protocol_version()->set_minor(protocol_minor);
+    request.set_message_id("cancel-" + std::string(request_id));
+    request.set_request_id(std::string(request_id));
+    request.set_workspace_id(options_.workspace_id);
+    request.mutable_cancel_job()->set_request_id(std::string(request_id));
+    request.mutable_cancel_job()->set_reason(std::move(reason));
+    submitted_.push_back(std::move(request));
+    schedule_alarm_locked(AlarmKind::wake, std::chrono::milliseconds::zero());
+    return true;
+}
+
 GrpcClient::Impl::Impl(GrpcClientOptions options)
     : options_(std::move(options)), pending_(options_.pending_request_limit) {
     if (!is_loopback_target(options_.target) || options_.workspace_id.empty() || options_.mcp_version.empty() ||
@@ -136,6 +155,9 @@ bool GrpcClient::validate_context(::vibris::control::v1::ValidateContextRequest 
 bool GrpcClient::get_status(GetStatusCompletion completion) { return impl_->get_status(std::move(completion)); }
 bool GrpcClient::submit(::vibris::control::v1::ClientMessage message, GrpcCompletion completion) {
     return impl_->submit(std::move(message), std::move(completion));
+}
+bool GrpcClient::cancel(std::string_view request_id, std::string reason) {
+    return impl_->cancel(request_id, std::move(reason));
 }
 void GrpcClient::shutdown() { impl_->shutdown(); }
 GrpcClientStats GrpcClient::stats() const { return impl_->stats(); }

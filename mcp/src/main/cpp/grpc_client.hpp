@@ -61,6 +61,7 @@ public:
         ValidateContextCompletion completion);
     bool get_status(GetStatusCompletion completion);
     bool submit(::vibris::control::v1::ClientMessage message, GrpcCompletion completion);
+    bool cancel(std::string_view request_id, std::string reason);
     void shutdown();
 
     [[nodiscard]] GrpcClientStats stats() const;

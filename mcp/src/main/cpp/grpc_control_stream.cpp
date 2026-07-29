@@ -77,20 +77,22 @@ void GrpcClient::Impl::start_control() {
 }
 
 void GrpcClient::Impl::handle_alarm(const AlarmKind kind, const bool ok) noexcept {
-    if (!ok || is_stopping()) {
-        return;
-    }
-    if (kind == AlarmKind::reconnect || !stream_) {
-        start_control();
-        return;
-    }
+    if (!ok) return;
+    bool start_stream;
     std::deque<proto::ClientMessage> submitted;
     {
         std::scoped_lock lock(mutex_);
-        submitted.swap(submitted_);
+        if (stopping_) return;
+        start_stream = kind == AlarmKind::reconnect || !stream_;
+        if (!start_stream) submitted.swap(submitted_);
     }
-    for (auto& request : submitted) {
-        writes_.push_back(std::move(request));
+    if (start_stream) {
+        start_control();
+        return;
+    }
+    {
+        std::scoped_lock lock(mutex_);
+        for (auto& request : submitted) writes_.push_back(std::move(request));
     }
     begin_write();
 }
@@ -145,7 +147,8 @@ void GrpcClient::Impl::handle_control(const ControlKind kind, const bool ok) noe
 }
 
 void GrpcClient::Impl::begin_read() {
-    if (!stream_started_ || stream_failed_ || read_in_flight_) {
+    std::scoped_lock lock(mutex_);
+    if (stopping_ || !stream_started_ || stream_failed_ || read_in_flight_) {
         return;
     }
     read_message_.Clear();
@@ -154,7 +157,8 @@ void GrpcClient::Impl::begin_read() {
 }
 
 void GrpcClient::Impl::begin_write() {
-    if (!stream_started_ || stream_failed_ || write_in_flight_ || writes_.empty()) {
+    std::scoped_lock lock(mutex_);
+    if (stopping_ || !stream_started_ || stream_failed_ || write_in_flight_ || writes_.empty()) {
         return;
     }
     write_message_ = std::move(writes_.front());
@@ -176,7 +180,8 @@ void GrpcClient::Impl::fail_stream() {
 }
 
 void GrpcClient::Impl::maybe_finish() {
-    if (!stream_ || finish_in_flight_ || read_in_flight_ || write_in_flight_) {
+    std::scoped_lock lock(mutex_);
+    if (stopping_ || !stream_ || finish_in_flight_ || read_in_flight_ || write_in_flight_) {
         return;
     }
     finish_in_flight_ = true;
@@ -185,14 +190,14 @@ void GrpcClient::Impl::maybe_finish() {
 
 void GrpcClient::Impl::finish_stream() {
     const grpc::Status status = finish_status_;
-    stream_.reset();
     {
         std::scoped_lock lock(mutex_);
+        stream_.reset();
         control_context_.reset();
+        writes_.clear();
+        stream_started_ = false;
+        stream_failed_ = false;
     }
-    writes_.clear();
-    stream_started_ = false;
-    stream_failed_ = false;
     if (reconnectable(status)) {
         if (pending_.size() != 0) {
             std::scoped_lock lock(mutex_);

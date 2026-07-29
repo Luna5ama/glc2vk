@@ -1,6 +1,7 @@
 package dev.vibris.core;
 
 import dev.vibris.api.VibrisRuntimeAdapter;
+import dev.vibris.protocol.v1.ErrorCode;
 import dev.vibris.protocol.v1.ClientMessage;
 import dev.vibris.protocol.v1.GetServerInfoRequest;
 import dev.vibris.protocol.v1.GetServerInfoResponse;
@@ -9,7 +10,6 @@ import dev.vibris.protocol.v1.GetStatusResponse;
 import dev.vibris.protocol.v1.ListPresetsRequest;
 import dev.vibris.protocol.v1.ListPresetsResponse;
 import dev.vibris.protocol.v1.Pong;
-import dev.vibris.protocol.v1.SceneContext;
 import dev.vibris.protocol.v1.ScenePreset;
 import dev.vibris.protocol.v1.ServerHello;
 import dev.vibris.protocol.v1.ServerMessage;
@@ -25,6 +25,7 @@ public final class VibrisControlService extends VibrisControlGrpc.VibrisControlI
     private final ServerDescriptor descriptor;
     private final VibrisCoreEngine engine;
     private final ArtifactManager artifacts;
+    private final VibrisRuntimeAdapter runtime;
 
     public VibrisControlService(Path pendingRoot, Path artifactRoot, VibrisRuntimeAdapter runtime) {
         this(pendingRoot, artifactRoot, runtime, ShaderLink.transientLink());
@@ -37,6 +38,7 @@ public final class VibrisControlService extends VibrisControlGrpc.VibrisControlI
         ShaderLink shaderLink
     ) {
         Path pending = pendingRoot.toAbsolutePath().normalize();
+        this.runtime = runtime;
         artifacts = new ArtifactManager(artifactRoot);
         engine = new VibrisCoreEngine(pending, runtime, shaderLink, artifacts);
         descriptor = new ServerDescriptor(pending, artifacts, runtime);
@@ -54,23 +56,39 @@ public final class VibrisControlService extends VibrisControlGrpc.VibrisControlI
 
     @Override
     public void listPresets(ListPresetsRequest request, StreamObserver<ListPresetsResponse> observer) {
-        SceneContext context = SceneContext.newBuilder()
-            .setSaveId("test-save")
-            .setDimensionId("minecraft:overworld")
-            .setTimePresetId("noon")
-            .setCameraPresetId("origin")
-            .setFov(70.0)
-            .build();
-        observer.onNext(ListPresetsResponse.newBuilder()
-            .addPresets(ScenePreset.newBuilder().setPresetId("default").setDisplayName("Default").setContext(context))
-            .build());
-        observer.onCompleted();
+        runtime.listPresets().whenComplete((presets, failure) -> {
+            if (failure != null) {
+                observer.onError(Status.INTERNAL.withDescription("PRESET_LIST_FAILED").asRuntimeException());
+                return;
+            }
+            ListPresetsResponse.Builder response = ListPresetsResponse.newBuilder();
+            presets.forEach(preset -> response.addPresets(ScenePreset.newBuilder()
+                .setPresetId(preset.presetId()).setDisplayName(preset.displayName())
+                .setContext(RuntimeJobContext.toProtocol(preset.context()))));
+            observer.onNext(response.build());
+            observer.onCompleted();
+        });
     }
 
     @Override
     public void validateContext(ValidateContextRequest request, StreamObserver<ValidateContextResponse> observer) {
-        observer.onNext(ValidateContextResponse.newBuilder().setValid(request.hasContext()).build());
-        observer.onCompleted();
+        if (!request.hasContext()) {
+            observer.onNext(ValidateContextResponse.newBuilder().setValid(false).build());
+            observer.onCompleted();
+            return;
+        }
+        runtime.validateContext(RuntimeJobContext.toApi(request.getContext())).whenComplete((validation, failure) -> {
+            if (failure != null) {
+                observer.onError(Status.INTERNAL.withDescription("PRESET_VALIDATION_FAILED").asRuntimeException());
+                return;
+            }
+            ValidateContextResponse.Builder response = ValidateContextResponse.newBuilder()
+                .setValid(validation.valid());
+            validation.errors().forEach(error -> response.addErrors(dev.vibris.protocol.v1.ProtocolError.newBuilder()
+                .setCode(ErrorCode.INVALID_PRESET).setMessage(error).setRetryable(false)));
+            observer.onNext(response.build());
+            observer.onCompleted();
+        });
     }
 
     @Override
