@@ -3,6 +3,7 @@ package dev.vibris.api;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -53,7 +54,7 @@ class RuntimeAdapterContractTest {
     void publicCollectionsAreImmutableSnapshots() {
         var resources = new java.util.ArrayList<ResourceCatalog.ResourceDescriptor>();
         resources.add(new ResourceCatalog.ResourceDescriptor("colortex0", ResourceCatalog.ResourceKind.TEXTURE));
-        ResourceCatalog catalog = new ResourceCatalog(resources);
+        ResourceCatalog catalog = new ResourceCatalog(List.copyOf(resources));
         resources.clear();
 
         assertEquals(1, catalog.resources().size());
@@ -64,6 +65,23 @@ class RuntimeAdapterContractTest {
             "save", "dimension", "time", "weather", "camera", Double.NaN,
             new SceneContext.Resolution(1, 1), "settings"
         ));
+    }
+
+    @Test
+    void kotlinDataCarriersPreserveJavaRecordAbi() {
+        assertRecord(CapturePlan.class, "targets");
+        assertRecord(CaptureResult.class, "frameId", "artifacts");
+        assertRecord(ContextValidationResult.class, "valid", "errors");
+        assertRecord(ReloadResult.class, "successful", "activeStatePreserved", "diagnostics");
+        assertRecord(ResourceCatalog.class, "resources");
+    }
+
+    private static void assertRecord(Class<?> type, String... components) {
+        assertTrue(type.isRecord(), type.getName() + " must remain a Java record");
+        assertEquals(java.lang.Record.class, type.getSuperclass());
+        assertEquals(List.of(components), Arrays.stream(type.getRecordComponents())
+            .map(java.lang.reflect.RecordComponent::getName)
+            .toList());
     }
 
     private static final class TestAdapter implements VibrisRuntimeAdapter {

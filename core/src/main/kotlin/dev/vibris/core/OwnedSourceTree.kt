@@ -9,9 +9,18 @@ import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.attribute.BasicFileAttributes
 
-internal class OwnedSourceTree(pendingRoot: Path) {
+internal class OwnedSourceTree(
+    pendingRoot: Path,
+    private val maxBytes: Long = DEFAULT_MAX_BYTES,
+    private val maxFiles: Int = DEFAULT_MAX_FILES,
+) {
     private val pendingRoot = pendingRoot.toAbsolutePath().normalize()
     private var pendingRootIdentity: OwnedPathIdentity? = null
+
+    init {
+        require(maxBytes > 0) { "maxBytes must be positive" }
+        require(maxFiles > 0) { "maxFiles must be positive" }
+    }
 
     @Throws(SourceRegistry.Failure::class)
     fun inspect(uuid: String): Inspection {
@@ -61,7 +70,7 @@ internal class OwnedSourceTree(pendingRoot: Path) {
                 "Prepared source directory is missing.",
             )
         }
-        val stats = FileStats()
+        val stats = FileStats(maxBytes, maxFiles)
         try {
             Files.walkFileTree(
                 directory,
@@ -146,14 +155,14 @@ internal class OwnedSourceTree(pendingRoot: Path) {
         fun directoryIdentity(): OwnedPathIdentity = directoryIdentity
     }
 
-    private class FileStats {
+    private class FileStats(private val maxBytes: Long, private val maxFiles: Int) {
         var bytes = 0L
         var files = 0
 
         @Throws(IOException::class)
         fun add(size: Long) {
             files++
-            if (files > MAX_FILES || size > MAX_BYTES - bytes) {
+            if (files > maxFiles || size > maxBytes - bytes) {
                 throw IOException("source limit exceeded")
             }
             bytes += size
@@ -161,8 +170,8 @@ internal class OwnedSourceTree(pendingRoot: Path) {
     }
 
     companion object {
-        private const val MAX_BYTES = 512L * 1024 * 1024
-        private const val MAX_FILES = 100_000
+        private const val DEFAULT_MAX_BYTES = 512L * 1024 * 1024
+        private const val DEFAULT_MAX_FILES = 100_000
 
         @JvmStatic
         fun delete(root: Path): Boolean {

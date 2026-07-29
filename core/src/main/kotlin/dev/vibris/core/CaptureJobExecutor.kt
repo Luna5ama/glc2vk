@@ -11,9 +11,12 @@ import dev.vibris.protocol.v1.JobResult
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 
-internal class CaptureJobExecutor(private val artifacts: ArtifactManager?) {
-    private val plans = CapturePlanBuilder()
-    private val programs = CaptureProgramBuilder()
+internal class CaptureJobExecutor(
+    private val artifacts: ArtifactManager?,
+    maxActions: Int = ServerConfiguration.DEFAULT_MAX_ACTIONS_PER_JOB,
+) {
+    private val plans = CapturePlanBuilder(maxActions)
+    private val programs = CaptureProgramBuilder(maxActions)
     private val protocol = CaptureProtocolArtifacts()
     private val comparisons = AbArtifactComparator()
 
@@ -27,7 +30,7 @@ internal class CaptureJobExecutor(private val artifacts: ArtifactManager?) {
         diagnostics: List<ReloadResult.Diagnostic>,
     ): Prepared? {
         val planned = plans.build(job, catalog)
-        if (planned.capture.targets().isEmpty()) {
+        if (planned.capture.targets.isEmpty()) {
             return null
         }
         return prepare(job, listOf(planned.capture), planned.estimatedBytes, diagnostics)

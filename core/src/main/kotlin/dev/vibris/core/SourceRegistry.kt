@@ -10,8 +10,13 @@ import java.util.HashMap
 import java.util.HashSet
 import java.util.UUID
 
-internal class SourceRegistry(pendingRoot: Path, private val probe: CoreProbe) {
-    private val trees = OwnedSourceTree(pendingRoot)
+internal class SourceRegistry @JvmOverloads constructor(
+    pendingRoot: Path,
+    private val probe: CoreProbe,
+    maxSourceBytes: Long = ServerConfiguration.DEFAULT_MAX_SOURCE_BYTES,
+    maxSourceFiles: Int = ServerConfiguration.DEFAULT_MAX_SOURCE_FILES,
+) {
+    private val trees = OwnedSourceTree(pendingRoot, maxSourceBytes, maxSourceFiles)
     private val sources = HashMap<String, Lease>()
     private var activeSource: Lease? = null
 

@@ -61,7 +61,7 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
         onClient(
             Supplier {
                 val result = host.reload(cancellation)
-                if (result.successful()) {
+                if (result.successful) {
                     catalog = host.resourceCatalog(frames.currentFrame())
                 }
                 result

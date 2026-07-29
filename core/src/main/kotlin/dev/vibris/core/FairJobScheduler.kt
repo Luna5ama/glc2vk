@@ -3,7 +3,7 @@ package dev.vibris.core
 import java.util.ArrayDeque
 import java.util.LinkedHashMap
 
-internal class FairJobScheduler : AutoCloseable {
+internal class FairJobScheduler(private val capacity: Int = CAPACITY) : AutoCloseable {
     private val queues = LinkedHashMap<String, ArrayDeque<Entry>>()
     private val workspaceRing = ArrayDeque<String>()
     private val worker = Thread(::workLoop, "Vibris Core Scheduler").apply {
@@ -15,12 +15,16 @@ internal class FairJobScheduler : AutoCloseable {
     private var peakSize = 0
     private var closed = false
 
+    init {
+        require(capacity > 0) { "capacity must be positive" }
+    }
+
     @Synchronized
     fun submit(requestId: String?, workspaceId: String?, task: Runnable?): Boolean {
         val request = requireId(requestId, "request ID")
         val workspace = requireId(workspaceId, "workspace ID")
         val requiredTask = requireNotNull(task) { "task" }
-        if (closed || queued == CAPACITY) {
+        if (closed || queued >= capacity) {
             return false
         }
 

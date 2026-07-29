@@ -10,8 +10,9 @@ object FakeVibrisServerMain {
     @Throws(Exception::class)
     fun main(arguments: Array<String>) {
         val options = Options.parse(arguments)
-        if (options.shaderpackRoot != null) {
-            runBootstrap(options)
+        val shaderpackRoot = options.shaderpackRoot
+        if (shaderpackRoot != null) {
+            runBootstrap(options, shaderpackRoot)
             return
         }
         val server = FakeVibrisServer.start(options.port, options.pendingRoot, options.artifactRoot)
@@ -42,7 +43,7 @@ object FakeVibrisServerMain {
     }
 
     @Throws(Exception::class)
-    private fun runBootstrap(options: Options) {
+    private fun runBootstrap(options: Options, shaderpackRoot: Path) {
         val runtime = FakeRuntimeAdapter()
         try {
             VibrisBootstrap.start(
@@ -50,7 +51,7 @@ object FakeVibrisServerMain {
                     options.port,
                     options.pendingRoot,
                     options.artifactRoot,
-                    options.shaderpackRoot,
+                    shaderpackRoot,
                 ),
                 runtime,
             ).use {

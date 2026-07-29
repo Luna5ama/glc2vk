@@ -28,13 +28,13 @@ internal class AbJobExecutor(
         owner.reset(job, progress, deadline)
         owner.waitFrames(job, progress, deadline, recipe.warmupFrames)
 
-        val ab = captures.prepareAb(job, owner.runtime().getResourceCatalog(), baselineReload.diagnostics())
+        val ab = captures.prepareAb(job, owner.runtime().getResourceCatalog(), baselineReload.diagnostics)
         val prepared = ab.prepared
         try {
             prepared.use {
                 val a: CaptureResult = owner.capture(job, progress, deadline, prepared, ab.program.baseline)
                 val candidateReload = owner.activateSource(job, candidate, progress, deadline)
-                prepared.addDiagnostics(candidateReload.diagnostics())
+                prepared.addDiagnostics(candidateReload.diagnostics)
                 activator.release(listOf(baseline))
                 owner.applyContext(job, progress, deadline)
                 owner.reset(job, progress, deadline)

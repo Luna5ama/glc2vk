@@ -3,17 +3,8 @@ package dev.vibris.api
 import java.util.Locale
 import java.util.regex.Pattern
 
-class CapturePlan(targets: List<Target>) {
-    private val targetsValue = java.util.List.copyOf(targets)
-
-    fun targets(): List<Target> = targetsValue
-
-    override fun equals(other: Any?): Boolean =
-        this === other || other is CapturePlan && targetsValue == other.targetsValue
-
-    override fun hashCode(): Int = targetsValue.hashCode()
-
-    override fun toString(): String = "CapturePlan[targets=$targetsValue]"
+@JvmRecord
+data class CapturePlan(val targets: List<Target>) {
 
     @JvmRecord
     data class Target(
@@ -58,6 +49,6 @@ class CapturePlan(targets: List<Target>) {
 
     companion object {
         @JvmStatic
-        fun empty(): CapturePlan = CapturePlan(emptyList())
+        fun empty(): CapturePlan = CapturePlan(java.util.List.of())
     }
 }

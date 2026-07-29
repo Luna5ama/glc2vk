@@ -18,7 +18,7 @@ internal class AbArtifactComparator {
         baselineLabel: String,
         candidateLabel: String,
     ): AbComparisonResult {
-        val pair = comparisonPair(baseline.targets(), candidate.targets())
+        val pair = comparisonPair(baseline.targets, candidate.targets)
         val sample = if (pair.baseline.format == CapturePlan.ArtifactFormat.PNG) {
             imageSample(transaction, pair)
         } else {

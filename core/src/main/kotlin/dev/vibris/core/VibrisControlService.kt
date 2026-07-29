@@ -20,14 +20,39 @@ import io.grpc.stub.StreamObserver
 import java.nio.file.Path
 
 class VibrisControlService internal constructor(
-    pendingRoot: Path,
-    artifactRoot: Path,
+    configuration: ServerConfiguration,
     private val runtime: VibrisRuntimeAdapter,
     shaderLink: ShaderLink,
 ) : VibrisControlGrpc.VibrisControlImplBase(), AutoCloseable {
-    private val artifacts = ArtifactManager(artifactRoot)
-    private val engine = VibrisCoreEngine(pendingRoot.toAbsolutePath().normalize(), runtime, shaderLink, artifacts)
-    private val descriptor = ServerDescriptor(pendingRoot.toAbsolutePath().normalize(), artifacts, runtime)
+    private val artifacts = ArtifactManager(configuration.paths.artifactRoot, configuration.artifactQuotaBytes)
+    private val engine = VibrisCoreEngine(
+        configuration.paths.pendingShadersRoot,
+        runtime,
+        shaderLink,
+        artifacts,
+        configuration.maxSourceBytes,
+        configuration.maxSourceFiles,
+        configuration.maxGlobalQueue,
+        configuration.maxActionsPerJob,
+    )
+    private val descriptor = ServerDescriptor(
+        configuration.paths.pendingShadersRoot,
+        artifacts,
+        runtime,
+        configuration.maxSourceBytes,
+        configuration.maxSourceFiles,
+    )
+
+    internal constructor(
+        pendingRoot: Path,
+        artifactRoot: Path,
+        runtime: VibrisRuntimeAdapter,
+        shaderLink: ShaderLink,
+    ) : this(
+        ServerConfiguration.defaults(pendingRoot, artifactRoot),
+        runtime,
+        shaderLink,
+    )
 
     constructor(pendingRoot: Path, artifactRoot: Path, runtime: VibrisRuntimeAdapter) :
         this(pendingRoot, artifactRoot, runtime, ShaderLink.transientLink())
@@ -79,8 +104,8 @@ class VibrisControlService internal constructor(
                 observer.onError(Status.INTERNAL.withDescription("PRESET_VALIDATION_FAILED").asRuntimeException())
                 return@whenComplete
             }
-            val response = ValidateContextResponse.newBuilder().setValid(validation.valid())
-            validation.errors().forEach { error ->
+            val response = ValidateContextResponse.newBuilder().setValid(validation.valid)
+            validation.errors.forEach { error ->
                 response.addErrors(
                     dev.vibris.protocol.v1.ProtocolError.newBuilder()
                         .setCode(ErrorCode.INVALID_PRESET)
@@ -204,4 +229,5 @@ class VibrisControlService internal constructor(
     override fun close() {
         engine.close()
     }
+
 }

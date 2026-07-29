@@ -25,7 +25,7 @@ internal class ActionJobExecutor(
         deadline: Long,
         reload: ReloadResult,
     ): JobResult {
-        val action = captures.prepareActions(job, runtime.getResourceCatalog(), reload.diagnostics())
+        val action = captures.prepareActions(job, runtime.getResourceCatalog(), reload.diagnostics)
         val prepared = action.prepared
         if (prepared == null) {
             for (step in action.program.steps) {
@@ -39,7 +39,7 @@ internal class ActionJobExecutor(
                 }
             }
             val result = JobResult.newBuilder().setKind(JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE)
-            CaptureProtocolArtifacts.addDiagnostics(result, reload.diagnostics(), "")
+            CaptureProtocolArtifacts.addDiagnostics(result, reload.diagnostics, "")
             return result.build()
         }
         try {

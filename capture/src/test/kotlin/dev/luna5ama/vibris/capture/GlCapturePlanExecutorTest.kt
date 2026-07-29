@@ -46,7 +46,7 @@ class GlCapturePlanExecutorTest {
 
         assertEquals(targets.map(CapturePlan.Target::logicalName), resolved)
         assertEquals(resolved, captured)
-        assertEquals(targets.map(CapturePlan.Target::artifactName).toSet(), result.artifacts().keys)
+        assertEquals(targets.map(CapturePlan.Target::artifactName).toSet(), result.artifacts.keys)
         assertTrue("beauty.json" !in sink.artifacts)
         assertContentEquals(byteArrayOf(1), sink.artifacts.getValue("beauty.png"))
         assertContentEquals(byteArrayOf(2), sink.artifacts.getValue("colortex0.raw"))
@@ -57,8 +57,8 @@ class GlCapturePlanExecutorTest {
                 "\"byte_size\":2,\"frame_id\":42}",
             sink.artifacts.getValue("colortex0.json").decodeToString(),
         )
-        assertEquals(42, result.frameId())
-        assertEquals(42, result.artifacts().getValue("radiance_cache").frameId)
+        assertEquals(42, result.frameId)
+        assertEquals(42, result.artifacts.getValue("radiance_cache").frameId)
     }
 
     @Test

@@ -17,10 +17,12 @@ import dev.vibris.protocol.v1.ServerStatus
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
-internal class ServerDescriptor(
+internal class ServerDescriptor @JvmOverloads constructor(
     pending: Path,
     private val artifacts: ArtifactManager,
     private val runtime: VibrisRuntimeAdapter,
+    maxSourceBytes: Long = ServerConfiguration.DEFAULT_MAX_SOURCE_BYTES,
+    maxSourceFiles: Int = ServerConfiguration.DEFAULT_MAX_SOURCE_FILES,
 ) {
     private val baseStatus = ServerStatus.newBuilder()
         .setPendingShadersRoot(pending.toString())
@@ -59,8 +61,8 @@ internal class ServerDescriptor(
         .addCapabilities(Capability.CAPABILITY_PREPARED_SOURCES)
         .setLimits(
             ServerLimits.newBuilder()
-                .setMaxSourceBytes(512L * 1024 * 1024)
-                .setMaxSourceFiles(100_000),
+                .setMaxSourceBytes(maxSourceBytes)
+                .setMaxSourceFiles(maxSourceFiles),
         )
         .addAllSupportedRecipes(baseStatus.supportedRecipesList)
         .addAllSupportedActions(baseStatus.supportedActionsList)
@@ -118,7 +120,7 @@ internal class ServerDescriptor(
 
     private fun resourceCatalog(): ResourceCatalog {
         val catalog = ResourceCatalog.newBuilder()
-        for (resource in runtime.getResourceCatalog().resources()) {
+        for (resource in runtime.getResourceCatalog().resources) {
             val entry = ResourceCatalogEntry.newBuilder()
                 .setLogicalName(resource.logicalName)
                 .setKind(

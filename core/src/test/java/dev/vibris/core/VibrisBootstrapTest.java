@@ -1,6 +1,13 @@
 package dev.vibris.core;
 
 import dev.vibris.protocol.v1.ErrorCode;
+import dev.vibris.protocol.v1.GetStatusRequest;
+import dev.vibris.protocol.v1.GetStatusResponse;
+import dev.vibris.protocol.v1.VibrisControlGrpc;
+import io.grpc.BindableService;
+import io.grpc.ManagedChannel;
+import io.grpc.ManagedChannelBuilder;
+import io.grpc.stub.StreamObserver;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
@@ -8,10 +15,13 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.TimeUnit;
 
 import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -23,6 +33,108 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class VibrisBootstrapTest {
     @TempDir
     Path temp;
+
+    @Test
+    void configPreservesJavaRecordAbi() {
+        assertTrue(VibrisBootstrap.Config.class.isRecord());
+        assertEquals(java.lang.Record.class, VibrisBootstrap.Config.class.getSuperclass());
+        assertEquals(
+            List.of("port", "pendingShadersRoot", "artifactRoot", "shaderpackRoot"),
+            java.util.Arrays.stream(VibrisBootstrap.Config.class.getRecordComponents())
+                .map(java.lang.reflect.RecordComponent::getName)
+                .toList()
+        );
+    }
+
+    @Test
+    void missingServerConfigStartsListenerInNotReadyState() throws Exception {
+        RuntimeTestAdapter runtime = new RuntimeTestAdapter();
+        AtomicReference<BindableService> captured = new AtomicReference<>();
+
+        VibrisBootstrap bootstrap = VibrisBootstrap.start(temp, runtime, (address, service) -> {
+            assertEquals(new InetSocketAddress("127.0.0.1", 50051), address);
+            captured.set(service);
+            return new TestListener();
+        });
+
+        assertFalse(bootstrap.ready());
+        GetStatusResponse status = status(captured.get());
+        assertFalse(status.getReady());
+        assertEquals(ErrorCode.SERVER_NOT_READY, status.getErrors(0).getCode());
+        assertTrue(status.getErrors(0).getMessage().contains("server.json"));
+        bootstrap.close();
+        assertEquals(1, runtime.closeCount);
+    }
+
+    @Test
+    void missingConfiguredRootUsesConfiguredAddressAndReportsReason() throws Exception {
+        Path pending = temp.resolve("missing-pending");
+        Path artifacts = Files.createDirectory(temp.resolve("configured-artifacts"));
+        Path shaderpack = Files.createDirectory(temp.resolve("configured-shaderpack"));
+        writeServerConfig(temp, pending, artifacts, shaderpack, 50123);
+        RuntimeTestAdapter runtime = new RuntimeTestAdapter();
+        AtomicReference<BindableService> captured = new AtomicReference<>();
+
+        VibrisBootstrap bootstrap = VibrisBootstrap.start(temp, runtime, (address, service) -> {
+            assertEquals(new InetSocketAddress("127.0.0.1", 50123), address);
+            captured.set(service);
+            return new TestListener();
+        });
+
+        assertFalse(bootstrap.ready());
+        GetStatusResponse status = status(captured.get());
+        assertEquals(ErrorCode.SERVER_NOT_READY, status.getErrors(0).getCode());
+        assertTrue(status.getErrors(0).getMessage().contains("pending_shaders_root"));
+        bootstrap.close();
+    }
+
+    @Test
+    void notReadyStatusIsQueryableOverLoopbackGrpc() throws Exception {
+        int port;
+        try (ServerSocket reservation = new ServerSocket(0)) {
+            port = reservation.getLocalPort();
+        }
+        Path pending = temp.resolve("offline-ram-root");
+        Path artifacts = Files.createDirectory(temp.resolve("grpc-artifacts"));
+        Path shaderpack = Files.createDirectory(temp.resolve("grpc-shaderpack"));
+        writeServerConfig(temp, pending, artifacts, shaderpack, port);
+        RuntimeTestAdapter runtime = new RuntimeTestAdapter();
+
+        VibrisBootstrap bootstrap = VibrisBootstrap.start(temp, runtime);
+        ManagedChannel channel = ManagedChannelBuilder.forAddress("127.0.0.1", bootstrap.port())
+            .usePlaintext()
+            .build();
+        try {
+            GetStatusResponse response = VibrisControlGrpc.newBlockingStub(channel)
+                .withDeadlineAfter(5, TimeUnit.SECONDS)
+                .getStatus(GetStatusRequest.getDefaultInstance());
+            assertFalse(response.getReady());
+            assertEquals(ErrorCode.SERVER_NOT_READY, response.getErrors(0).getCode());
+            assertTrue(response.getErrors(0).getMessage().contains("pending_shaders_root"));
+        } finally {
+            channel.shutdownNow().awaitTermination(5, TimeUnit.SECONDS);
+            bootstrap.close();
+        }
+    }
+
+    @Test
+    void serverConfigStartsConfiguredService() throws Exception {
+        Path pending = Files.createDirectory(temp.resolve("configured-pending"));
+        Path artifacts = Files.createDirectory(temp.resolve("ready-artifacts"));
+        Path shaderpack = Files.createDirectory(temp.resolve("ready-shaderpack"));
+        writeServerConfig(temp, pending, artifacts, shaderpack, 50124);
+        RuntimeTestAdapter runtime = new RuntimeTestAdapter();
+
+        VibrisBootstrap bootstrap = VibrisBootstrap.start(temp, runtime, (address, service) -> {
+            assertEquals(new InetSocketAddress("127.0.0.1", 50124), address);
+            assertTrue(service instanceof VibrisControlService);
+            return new TestListener();
+        });
+
+        assertTrue(bootstrap.ready());
+        assertEquals(pending.toAbsolutePath().normalize(), bootstrap.pendingShadersRoot());
+        bootstrap.close();
+    }
 
     @Test
     void startupCleansLinkAndPendingRootBeforeListenerStarts() throws Exception {
@@ -146,6 +258,60 @@ class VibrisBootstrapTest {
         try (var children = Files.list(directory)) {
             assertTrue(children.findAny().isEmpty());
         }
+    }
+
+    private static GetStatusResponse status(BindableService service) {
+        AtomicReference<GetStatusResponse> response = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        ((VibrisControlGrpc.VibrisControlImplBase) service).getStatus(
+            GetStatusRequest.getDefaultInstance(),
+            new StreamObserver<>() {
+                @Override
+                public void onNext(GetStatusResponse value) {
+                    response.set(value);
+                }
+
+                @Override
+                public void onError(Throwable throwable) {
+                    failure.set(throwable);
+                }
+
+                @Override
+                public void onCompleted() {
+                }
+            }
+        );
+        assertTrue(failure.get() == null, () -> "GetStatus failed: " + failure.get());
+        return response.get();
+    }
+
+    private static void writeServerConfig(
+        Path game,
+        Path pending,
+        Path artifacts,
+        Path shaderpack,
+        int port
+    ) throws IOException {
+        Path config = game.resolve("config/vibris/server.json");
+        Files.createDirectories(config.getParent());
+        Files.writeString(config, """
+            {
+              "schema_version": 1,
+              "listen_address": "127.0.0.1:%d",
+              "pending_shaders_root": "%s",
+              "artifact_root": "%s",
+              "artifact_quota_bytes": 3221225472,
+              "shaderpack_root": "%s",
+              "max_source_bytes": 536870912,
+              "max_source_files": 100000,
+              "max_global_queue": 32,
+              "max_actions_per_job": 64
+            }
+            """.formatted(port, jsonPath(pending), jsonPath(artifacts), jsonPath(shaderpack)));
+    }
+
+    private static String jsonPath(Path path) {
+        return path.toAbsolutePath().normalize().toString().replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     private static final class TestListener implements VibrisBootstrap.Listener {

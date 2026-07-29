@@ -80,27 +80,30 @@ PipePair make_pipe() {
 }
 } // namespace
 struct GitArchivePipe::StderrDrain final {
-    explicit StderrDrain(Handle handle) : handle(handle), worker([this] { drain(); }) {}
+    explicit StderrDrain(Handle handle) : handle(handle), worker([this](std::stop_token stop) { drain(stop); }) {}
     ~StderrDrain() {
         if (worker.joinable()) {
+            worker.request_stop();
             worker.join();
         }
         if (handle != nullptr)
             CloseHandle(handle);
     }
-    void drain() noexcept {
+    void drain(std::stop_token stop) noexcept {
         std::array<char, 4096> buffer{};
         DWORD read = 0;
-        while (ReadFile(handle, buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr) && read != 0) {
+        while (!stop.stop_requested() &&
+               ReadFile(handle, buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr) && read != 0) {
         }
     }
     void join() noexcept {
         if (worker.joinable()) {
+            worker.request_stop();
             worker.join();
         }
     }
     Handle handle;
-    std::thread worker;
+    std::jthread worker;
 };
 GitArchivePipe GitRepository::launch_git(const std::vector<std::wstring> &arguments) {
     auto stdout_pipe = make_pipe();

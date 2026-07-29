@@ -22,6 +22,10 @@ class VibrisCoreEngine internal constructor(
     private val runtime: VibrisRuntimeAdapter,
     shaderLink: ShaderLink,
     shaderLogs: ShaderLogSink,
+    maxSourceBytes: Long = ServerConfiguration.DEFAULT_MAX_SOURCE_BYTES,
+    maxSourceFiles: Int = ServerConfiguration.DEFAULT_MAX_SOURCE_FILES,
+    maxGlobalQueue: Int = ServerConfiguration.DEFAULT_MAX_GLOBAL_QUEUE,
+    maxActionsPerJob: Int = ServerConfiguration.DEFAULT_MAX_ACTIONS_PER_JOB,
 ) : AutoCloseable {
     private val requests = RequestRegistry<TerminalResult>(
         LIVE_REQUEST_CAPACITY,
@@ -30,11 +34,11 @@ class VibrisCoreEngine internal constructor(
         Clock.systemUTC(),
     )
     private val liveJobs = HashMap<String, CoreJob>()
-    private val scheduler = FairJobScheduler()
+    private val scheduler = FairJobScheduler(maxGlobalQueue)
     private val probe = CoreProbe()
-    private val sources = SourceRegistry(pendingRoot, probe)
+    private val sources = SourceRegistry(pendingRoot, probe, maxSourceBytes, maxSourceFiles)
     private val activator = SourceActivator(sources, shaderLink)
-    private val executor = RuntimeJobExecutor(runtime, probe, activator, shaderLogs)
+    private val executor = RuntimeJobExecutor(runtime, probe, activator, shaderLogs, maxActionsPerJob)
     private val delivery = TerminalDelivery(shaderLogs)
     private val disconnectTimer: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "Vibris Disconnect Grace").apply { isDaemon = true }

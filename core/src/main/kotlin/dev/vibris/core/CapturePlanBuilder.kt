@@ -6,7 +6,10 @@ import dev.vibris.protocol.v1.Action
 import dev.vibris.protocol.v1.ErrorCode
 import java.util.Locale
 
-internal class CapturePlanBuilder {
+internal class CapturePlanBuilder(private val maxActions: Int = DEFAULT_MAX_ACTIONS) {
+    init {
+        require(maxActions > 0) { "maxActions must be positive" }
+    }
     @Throws(RuntimeJobExecutor.Failure::class)
     fun waitFrames(job: CoreJob): Int {
         try {
@@ -44,7 +47,7 @@ internal class CapturePlanBuilder {
             } else if (job.submission.recipe.hasCaptureDebugBundle()) {
                 addDebugBundle(targets, job, catalog)
             }
-            if (targets.size > MAX_ACTIONS) {
+            if (targets.size > maxActions) {
                 throw RuntimeJobExecutor.Failure(
                     ErrorCode.CAPTURE_FAILED,
                     "Capture target limit exceeded.",
@@ -59,8 +62,15 @@ internal class CapturePlanBuilder {
     @JvmRecord
     data class Plan(val capture: CapturePlan, val estimatedBytes: Long)
 
+    @Throws(RuntimeJobExecutor.Failure::class)
+    private fun requireActionLimit(job: CoreJob) {
+        if (job.submission.hasActions() && job.submission.actions.actionsCount > maxActions) {
+            throw RuntimeJobExecutor.Failure(ErrorCode.CAPTURE_FAILED, "Action limit exceeded.")
+        }
+    }
+
     companion object {
-        private const val MAX_ACTIONS = 64
+        private const val DEFAULT_MAX_ACTIONS = 64
 
         private fun addDebugBundle(
             targets: MutableList<CapturePlan.Target>,
@@ -156,7 +166,7 @@ internal class CapturePlanBuilder {
             format: CapturePlan.ArtifactFormat,
             artifactName: String,
         ): CapturePlan.Target {
-            val name = catalog.resources()
+            val name = catalog.resources
                 .firstOrNull { it.kind == ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER }
                 ?.logicalName
                 ?: "final_framebuffer"
@@ -185,7 +195,7 @@ internal class CapturePlanBuilder {
             var bytes = 0L
             val names = HashSet<String>()
             try {
-                for (target in plan.targets()) {
+                for (target in plan.targets) {
                     if (!supported(target)) {
                         throw RuntimeJobExecutor.Failure(
                             ErrorCode.CAPTURE_FAILED,
@@ -224,7 +234,7 @@ internal class CapturePlanBuilder {
             catalog: ResourceCatalog,
             target: CapturePlan.Target,
         ): ResourceCatalog.ResourceDescriptor =
-            catalog.resources()
+            catalog.resources
                 .firstOrNull { it.kind == target.kind && it.logicalName == target.logicalName }
                 ?: throw missing(target.logicalName)
 
@@ -242,13 +252,6 @@ internal class CapturePlanBuilder {
                 }
             }
             return frames
-        }
-
-        @Throws(RuntimeJobExecutor.Failure::class)
-        private fun requireActionLimit(job: CoreJob) {
-            if (job.submission.hasActions() && job.submission.actions.actionsCount > MAX_ACTIONS) {
-                throw RuntimeJobExecutor.Failure(ErrorCode.CAPTURE_FAILED, "Action limit exceeded.")
-            }
         }
 
         private fun canonical(name: String): String = name.lowercase(Locale.ROOT)

@@ -7,10 +7,13 @@ import dev.vibris.protocol.v1.CaptureTargetKind
 import dev.vibris.protocol.v1.ErrorCode
 import java.util.Locale
 
-internal class CaptureProgramBuilder {
+internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_ACTIONS) {
+    init {
+        require(maxActions > 0) { "maxActions must be positive" }
+    }
     @Throws(RuntimeJobExecutor.Failure::class)
     fun actions(job: CoreJob, catalog: ResourceCatalog): ActionProgram {
-        if (job.submission.actions.actionsCount > MAX_ACTIONS) {
+        if (job.submission.actions.actionsCount > maxActions) {
             throw invalid("Action limit exceeded.")
         }
         val steps = ArrayList<ActionStep>()
@@ -40,7 +43,7 @@ internal class CaptureProgramBuilder {
     @Throws(RuntimeJobExecutor.Failure::class)
     fun ab(job: CoreJob, catalog: ResourceCatalog): AbProgram {
         val recipe = job.submission.recipe.abCompare
-        if (recipe.capturesCount == 0 || recipe.capturesCount > MAX_ACTIONS) {
+        if (recipe.capturesCount == 0 || recipe.capturesCount > maxActions) {
             throw invalid("A/B capture count is invalid.")
         }
         val baseline = ArrayList<CapturePlan.Target>()
@@ -98,7 +101,7 @@ internal class CaptureProgramBuilder {
     )
 
     companion object {
-        private const val MAX_ACTIONS = 64
+        private const val DEFAULT_MAX_ACTIONS = 64
 
         @Throws(RuntimeJobExecutor.Failure::class)
         private fun flush(

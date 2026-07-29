@@ -74,12 +74,48 @@ A delivery contains exactly two top-level files:
 The Iris JAR embeds exactly one Vibris API, core, and protocol JAR plus the required gRPC runtime JARs. Do not ship a
 second Vibris mod JAR. `source-package-audit.ps1` verifies this layout and the corresponding source boundaries.
 
+Before starting Iris, create `<gameDir>/config/vibris/server.json` and every configured directory. V1 never falls back
+from a missing or read-only RAM-disk root to an SSD path.
+
+```json
+{
+  "schema_version": 1,
+  "listen_address": "127.0.0.1:50051",
+  "pending_shaders_root": "R:\\shaders",
+  "artifact_root": "R:\\vibris\\artifacts",
+  "artifact_quota_bytes": 3221225472,
+  "shaderpack_root": ".minecraft\\shaderpacks\\vibris",
+  "max_source_bytes": 536870912,
+  "max_source_files": 100000,
+  "max_global_queue": 32,
+  "max_actions_per_job": 64
+}
+```
+
+Only `127.0.0.1` listen addresses are accepted. Relative paths are resolved from the game directory; the documented
+`.minecraft` prefix is removed when the game directory itself is named `.minecraft`. If the file is missing or invalid,
+or any configured directory is missing or not writable, the loopback listener still starts in `NOT_READY` state.
+`vibris_get_status` then returns `SERVER_NOT_READY` with the explicit startup reason.
+
 Start the packaged Iris client first, then configure the MCP client with:
 
 ```text
 I:\code\vibris\mcp\out\build\Release\vibris-mcp.exe
     --workspace-root I:\code\shaderpack-worktree
     --server-address 127.0.0.1:50051
+```
+
+For Codex, add the native executable to `config.toml`; TOML literal strings keep Windows paths readable:
+
+```toml
+[mcp_servers.vibris]
+command = 'I:\code\vibris\build\delivery\vibris-mcp.exe'
+args = [
+  '--workspace-root',
+  'I:\code\shaderpack-worktree',
+  '--server-address',
+  '127.0.0.1:50051',
+]
 ```
 
 `--workspace-root` must be a real Git worktree containing a `shaders` directory. If it is omitted, the MCP searches

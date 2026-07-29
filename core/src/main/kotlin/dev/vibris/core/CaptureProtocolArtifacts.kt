@@ -44,9 +44,9 @@ internal class CaptureProtocolArtifacts {
         for (index in plans.indices) {
             val plan = plans[index]
             val capture = captured[index]
-            result.addFrameIds(capture.frameId())
-            for (target in plan.targets()) {
-                val resource = capture.artifacts()[target.artifactName]
+            result.addFrameIds(capture.frameId)
+            for (target in plan.targets) {
+                val resource = capture.artifacts[target.artifactName]
                 val file = requireArtifact(committed, target.fileName())
                 if (
                     target.format == CapturePlan.ArtifactFormat.RAW ||
@@ -116,7 +116,7 @@ internal class CaptureProtocolArtifacts {
             val expected = LinkedHashSet<String>()
             expected.add("shader.log")
             for (plan in plans) {
-                for (target in plan.targets()) {
+                for (target in plan.targets) {
                     expected.add(target.fileName())
                     if (
                         target.format == CapturePlan.ArtifactFormat.RAW ||
@@ -163,13 +163,13 @@ internal class CaptureProtocolArtifacts {
         }
 
         private fun validateResult(plan: CapturePlan, result: CaptureResult) {
-            for (target in plan.targets()) {
-                val resource = result.artifacts()[target.artifactName]
+            for (target in plan.targets) {
+                val resource = result.artifacts[target.artifactName]
                 if (
                     resource == null ||
                     resource.kind != target.kind ||
                     resource.logicalName != target.logicalName ||
-                    resource.frameId != result.frameId()
+                    resource.frameId != result.frameId
                 ) {
                     throw RuntimeJobExecutor.Failure(
                         ErrorCode.CAPTURE_FAILED,

@@ -11,12 +11,12 @@ internal object ShaderReloadFailure {
         job: CoreJob,
         reload: ReloadResult,
     ): RuntimeJobExecutor.Failure {
-        val message = reload.diagnostics()
+        val message = reload.diagnostics
             .firstOrNull { it.severity == ReloadResult.Severity.ERROR }
             ?.message
             ?: "Shader reload failed."
         return try {
-            val artifact = logs.writeShaderLog(job.workspaceId, job.requestId, reload.diagnostics())
+            val artifact = logs.writeShaderLog(job.workspaceId, job.requestId, reload.diagnostics)
             RuntimeJobExecutor.Failure(ErrorCode.SHADER_COMPILE_FAILED, message, artifact)
         } catch (_: IOException) {
             RuntimeJobExecutor.Failure(ErrorCode.SHADER_COMPILE_FAILED, message)

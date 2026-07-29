@@ -17,14 +17,15 @@ import java.util.concurrent.CompletionStage
 import java.util.concurrent.TimeUnit
 import java.util.function.Consumer
 
-internal class RuntimeJobExecutor(
+internal class RuntimeJobExecutor @JvmOverloads constructor(
     runtime: VibrisRuntimeAdapter?,
     private val probe: CoreProbe,
     private val activator: SourceActivator,
     private val shaderLogs: ShaderLogSink,
+    maxActions: Int = ServerConfiguration.DEFAULT_MAX_ACTIONS_PER_JOB,
 ) {
     private val runtime: VibrisRuntimeAdapter = requireNotNull(runtime) { "runtime" }
-    private val captures = CaptureJobExecutor(shaderLogs as? ArtifactManager)
+    private val captures = CaptureJobExecutor(shaderLogs as? ArtifactManager, maxActions)
     private val awaiter = RuntimeAwaiter(probe)
     private val actions = ActionJobExecutor(this.runtime, probe, captures, this)
     private val ab = AbJobExecutor(this, captures, activator)
@@ -141,8 +142,8 @@ internal class RuntimeJobExecutor(
             progress.accept(JobStage.JOB_STAGE_RELOADING_SHADERS)
             probe.event(job.requestId, "RELOADING_SHADERS")
             val reload: ReloadResult = await(runtime.reloadVibrisShaderpack(job.cancellation.token()), job, deadline)
-            if (!reload.successful()) {
-                activeStatePreserved = reload.activeStatePreserved()
+            if (!reload.successful) {
+                activeStatePreserved = reload.activeStatePreserved
                 throw ShaderReloadFailure.create(shaderLogs, job, reload)
             }
             successful = reload
@@ -172,7 +173,7 @@ internal class RuntimeJobExecutor(
         deadline: Long,
         reload: ReloadResult,
     ): JobResult {
-        val prepared = captures.prepare(job, runtime.getResourceCatalog(), reload.diagnostics())
+        val prepared = captures.prepare(job, runtime.getResourceCatalog(), reload.diagnostics)
             ?: return JobResult.newBuilder().setKind(JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE).build()
         try {
             prepared.use {
@@ -210,7 +211,7 @@ internal class RuntimeJobExecutor(
             val result = runtime.reloadVibrisShaderpack(CancellationToken.none())
                 .toCompletableFuture()
                 .get(5, TimeUnit.SECONDS)
-            return result.successful()
+            return result.successful
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
             return false

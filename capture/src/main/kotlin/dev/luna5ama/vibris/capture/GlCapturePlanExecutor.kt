@@ -38,7 +38,7 @@ object GlCapturePlanExecutor {
         resolveResource: Function<CapturePlan.Target, Int?>,
         captureArtifact: (CapturePlan.Target, Int, OutputStream) -> GlCaptureMetadata,
     ): CaptureResult {
-        val targets = plan.targets().map { target ->
+        val targets = plan.targets.map { target ->
             ResolvedTarget(
                 target,
                 resolveResource.apply(target) ?: throw CaptureResourceNotFoundException(target.logicalName),

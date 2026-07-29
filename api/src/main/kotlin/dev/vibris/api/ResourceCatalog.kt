@@ -1,16 +1,7 @@
 package dev.vibris.api
 
-class ResourceCatalog(resources: List<ResourceDescriptor>) {
-    private val resourcesValue = java.util.List.copyOf(resources)
-
-    fun resources(): List<ResourceDescriptor> = resourcesValue
-
-    override fun equals(other: Any?): Boolean =
-        this === other || other is ResourceCatalog && resourcesValue == other.resourcesValue
-
-    override fun hashCode(): Int = resourcesValue.hashCode()
-
-    override fun toString(): String = "ResourceCatalog[resources=$resourcesValue]"
+@JvmRecord
+data class ResourceCatalog(val resources: List<ResourceDescriptor>) {
 
     @JvmRecord
     data class ResourceDescriptor(
@@ -80,6 +71,6 @@ class ResourceCatalog(resources: List<ResourceDescriptor>) {
 
     companion object {
         @JvmStatic
-        fun empty(): ResourceCatalog = ResourceCatalog(emptyList())
+        fun empty(): ResourceCatalog = ResourceCatalog(java.util.List.of())
     }
 }
