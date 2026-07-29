@@ -124,7 +124,7 @@ class ShaderDebugRuntimeTest {
             GL.createCapabilities()
             action()
         } finally {
-            GL.destroy()
+            GL.setCapabilities(null)
             glfwFreeCallbacks(window)
             glfwDestroyWindow(window)
             glfwTerminate()

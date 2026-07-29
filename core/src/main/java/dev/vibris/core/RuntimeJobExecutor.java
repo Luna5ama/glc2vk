@@ -1,9 +1,9 @@
 package dev.vibris.core;
 
 import dev.vibris.api.CancellationToken;
+import dev.vibris.api.CaptureResult;
 import dev.vibris.api.ContextApplyResult;
 import dev.vibris.api.ReloadResult;
-import dev.vibris.api.SceneContext;
 import dev.vibris.api.TemporalResetResult;
 import dev.vibris.api.VibrisRuntimeAdapter;
 import dev.vibris.protocol.v1.ArtifactMetadata;
@@ -13,7 +13,6 @@ import dev.vibris.protocol.v1.JobResult;
 import dev.vibris.protocol.v1.JobResultKind;
 import dev.vibris.protocol.v1.JobStage;
 
-import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CancellationException;
@@ -30,6 +29,7 @@ final class RuntimeJobExecutor {
     private final CoreProbe probe;
     private final SourceActivator activator;
     private final ShaderLogSink shaderLogs;
+    private final CaptureJobExecutor captures;
 
     RuntimeJobExecutor(
         VibrisRuntimeAdapter runtime,
@@ -41,19 +41,21 @@ final class RuntimeJobExecutor {
         this.probe = probe;
         this.activator = activator;
         this.shaderLogs = shaderLogs;
+        captures = new CaptureJobExecutor(shaderLogs instanceof ArtifactManager manager ? manager : null);
     }
 
     TerminalResult execute(CoreJob job, Consumer<JobStage> progress) throws Failure {
-        long deadline = deadline(job);
+        long deadline = RuntimeJobContext.deadline(job);
         CancellationToken cancellation = job.cancellation.token();
-        activateSource(job, progress, deadline);
+        ReloadResult reload = activateSource(job, progress, deadline);
         progress.accept(JobStage.JOB_STAGE_LOADING_WORLD);
         probe.event(job.requestId, "ENSURING_WORLD");
         progress.accept(JobStage.JOB_STAGE_APPLYING_CONTEXT);
         ContextApplyResult context = await(
-            runtime.ensureWorldAndContext(toApi(job.submission.getContext()), cancellation), job, deadline);
+            runtime.ensureWorldAndContext(RuntimeJobContext.toApi(job.submission.getContext()), cancellation),
+            job, deadline);
         if (!context.successful()) throw new Failure(ErrorCode.WORLD_LOAD_FAILED, context.message());
-        probe.contextApplied(job.requestId, job.workspaceId, toProtocol(context.context()));
+        probe.contextApplied(job.requestId, job.workspaceId, RuntimeJobContext.toProtocol(context.context()));
 
         progress.accept(JobStage.JOB_STAGE_RESETTING_TEMPORAL_STATE);
         probe.event(job.requestId, "RESETTING_TEMPORAL_STATE");
@@ -62,21 +64,19 @@ final class RuntimeJobExecutor {
             throw new Failure(ErrorCode.INTERNAL_ERROR, "Runtime temporal state reset failed.");
         }
 
-        int frames = waitFrames(job);
+        int frames = captures.waitFrames(job);
         progress.accept(JobStage.JOB_STAGE_WARMING_UP);
         probe.event(job.requestId, "WARMING_UP");
         await(runtime.waitRenderedFrames(frames, cancellation), job, deadline);
 
-        JobResult result = JobResult.newBuilder()
-            .setKind(JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE)
-            .build();
+        JobResult result = capture(job, progress, deadline, reload);
         return TerminalResult.completed(JobCompleted.newBuilder()
             .setRequestId(job.requestId)
             .setResult(result)
             .build());
     }
 
-    private void activateSource(CoreJob job, Consumer<JobStage> progress, long deadline) throws Failure {
+    private ReloadResult activateSource(CoreJob job, Consumer<JobStage> progress, long deadline) throws Failure {
         if (job.sources.size() != 1) {
             throw new Failure(ErrorCode.SOURCE_ACTIVATION_FAILED, "Exactly one prepared source is required.");
         }
@@ -89,6 +89,7 @@ final class RuntimeJobExecutor {
             throw new Failure(failure.code, failure.getMessage());
         }
         Failure original = null;
+        ReloadResult successful = null;
         boolean activeStatePreserved = false;
         try {
             progress.accept(JobStage.JOB_STAGE_RELOADING_SHADERS);
@@ -98,6 +99,7 @@ final class RuntimeJobExecutor {
                 activeStatePreserved = reload.activeStatePreserved();
                 throw ShaderReloadFailure.create(shaderLogs, job, reload);
             }
+            successful = reload;
             try {
                 activator.commit(activation);
             } catch (SourceActivator.Failure failure) {
@@ -106,13 +108,41 @@ final class RuntimeJobExecutor {
         } catch (Failure failure) {
             original = failure;
         }
-        if (original == null) return;
+        if (original == null) return successful;
         boolean restored = activator.rollback(activation);
         if (restored && activation.previous() != null && !activeStatePreserved && !reloadPreviousSource()) {
             activator.markNotReady();
         }
         activator.fail(activation);
         throw original;
+    }
+
+    private JobResult capture(CoreJob job, Consumer<JobStage> progress, long deadline, ReloadResult reload)
+        throws Failure {
+        CaptureJobExecutor.Prepared prepared = captures.prepare(
+            job, runtime.getResourceCatalog(), reload.diagnostics());
+        if (prepared == null) {
+            return JobResult.newBuilder().setKind(JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE).build();
+        }
+        try (prepared) {
+            progress.accept(JobStage.JOB_STAGE_CAPTURING);
+            probe.event(job.requestId, "CAPTURING");
+            CaptureResult result = awaitCapture(
+                runtime.capture(prepared.plan(), prepared.sink(), job.cancellation.token()),
+                job, deadline);
+            progress.accept(JobStage.JOB_STAGE_WRITING_ARTIFACTS);
+            probe.event(job.requestId, "WRITING_ARTIFACTS");
+            progress.accept(JobStage.JOB_STAGE_FINALIZING);
+            probe.event(job.requestId, "FINALIZING");
+            return captures.commit(job, prepared, result);
+        } catch (java.io.IOException exception) {
+            throw CaptureJobExecutor.failure(exception);
+        }
+    }
+
+    private CaptureResult awaitCapture(CompletionStage<CaptureResult> stage, CoreJob job, long deadline)
+        throws Failure {
+        return await(stage, job, deadline, ErrorCode.CAPTURE_FAILED);
     }
 
     private boolean reloadPreviousSource() {
@@ -129,6 +159,11 @@ final class RuntimeJobExecutor {
     }
 
     private <T> T await(CompletionStage<T> stage, CoreJob job, long deadline) throws Failure {
+        return await(stage, job, deadline, ErrorCode.INTERNAL_ERROR);
+    }
+
+    private <T> T await(CompletionStage<T> stage, CoreJob job, long deadline, ErrorCode operationFailure)
+        throws Failure {
         CompletableFuture<T> future = stage.toCompletableFuture();
         try {
             if (job.cancellation.token().isCancellationRequested()) throw new CancellationException();
@@ -153,7 +188,9 @@ final class RuntimeJobExecutor {
             if (cause instanceof CancellationException || job.cancellation.token().isCancellationRequested()) {
                 throw new Failure(ErrorCode.CANCELLED, "Job execution was cancelled.");
             }
-            throw new Failure(ErrorCode.INTERNAL_ERROR, "Runtime adapter operation failed.");
+            if (operationFailure == ErrorCode.CAPTURE_FAILED) throw CaptureJobExecutor.failure(cause);
+            throw new Failure(operationFailure, operationFailure == ErrorCode.CAPTURE_FAILED
+                ? "Runtime capture failed." : "Runtime adapter operation failed.");
         }
     }
 
@@ -167,67 +204,6 @@ final class RuntimeJobExecutor {
         } catch (TimeoutException exception) {
             throw new Failure(ErrorCode.INTERNAL_ERROR, "Runtime did not stop at a cancellation safe point.");
         }
-    }
-
-    private static long deadline(CoreJob job) {
-        long executionMillis = job.submission.getTimeouts().getExecutionTimeoutMs();
-        long totalMillis = job.submission.getTimeouts().getTotalTimeoutMs();
-        long now = System.nanoTime();
-        long execution = addDuration(now, executionMillis);
-        long total = addDuration(job.acceptedNanos, totalMillis);
-        return Math.min(execution, total);
-    }
-
-    private static long addDuration(long start, long milliseconds) {
-        if (milliseconds == 0) return Long.MAX_VALUE;
-        long nanos;
-        try {
-            nanos = Duration.ofMillis(milliseconds).toNanos();
-            return Math.addExact(start, nanos);
-        } catch (ArithmeticException exception) {
-            return Long.MAX_VALUE;
-        }
-    }
-
-    private static int waitFrames(CoreJob job) throws Failure {
-        long frames = 0;
-        for (var action : job.submission.getActions().getActionsList()) {
-            if (action.hasWaitFrames()) frames += action.getWaitFrames().getFrameCount();
-            if (frames > Integer.MAX_VALUE) {
-                throw new Failure(ErrorCode.INTERNAL_ERROR, "Requested frame count is too large.");
-            }
-        }
-        return (int) frames;
-    }
-
-    private static SceneContext toApi(dev.vibris.protocol.v1.SceneContext source) {
-        dev.vibris.protocol.v1.Resolution resolution = source.getResolution();
-        return new SceneContext(
-            source.getSaveId(),
-            source.getDimensionId(),
-            source.getTimePresetId(),
-            source.getWeatherPresetId(),
-            source.getCameraPresetId(),
-            source.getFov(),
-            resolution.getWidth() == 0
-                ? SceneContext.Resolution.unspecified()
-                : new SceneContext.Resolution(resolution.getWidth(), resolution.getHeight()),
-            source.getSettingsPresetId());
-    }
-
-    private static dev.vibris.protocol.v1.SceneContext toProtocol(SceneContext source) {
-        return dev.vibris.protocol.v1.SceneContext.newBuilder()
-            .setSaveId(source.saveId())
-            .setDimensionId(source.dimensionId())
-            .setTimePresetId(source.timePresetId())
-            .setWeatherPresetId(source.weatherPresetId())
-            .setCameraPresetId(source.cameraPresetId())
-            .setFov(source.fov())
-            .setSettingsPresetId(source.settingsPresetId())
-            .setResolution(dev.vibris.protocol.v1.Resolution.newBuilder()
-                .setWidth(source.resolution().width())
-                .setHeight(source.resolution().height()))
-            .build();
     }
 
     static final class Failure extends Exception {

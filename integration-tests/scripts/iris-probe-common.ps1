@@ -77,15 +77,17 @@ function New-IrisProbeScope
 {
     param(
         [Parameter(Mandatory)] [ValidateSet("c001", "c002", "c003")] [string] $Criterion,
-        [Parameter(Mandatory)] [string] $GameDir
+        [Parameter(Mandatory)] [string] $GameDir,
+        [ValidateSet("G005", "G006")] [string] $Gate = "G005"
     )
 
-    $root = [System.IO.Path]::GetFullPath((Join-Path $script:VibrisRoot ".omo\tmp\ulw-v1-g005-$Criterion"))
+    $gateName = $Gate.ToLowerInvariant()
+    $root = [System.IO.Path]::GetFullPath((Join-Path $script:VibrisRoot ".omo\tmp\ulw-v1-$gateName-$Criterion"))
     $game = [System.IO.Path]::GetFullPath($GameDir)
     $expectedGame = Join-Path $root "game"
     if (-not [string]::Equals($game, $expectedGame, [System.StringComparison]::OrdinalIgnoreCase))
     {
-        throw "G005-$($Criterion.ToUpperInvariant()) requires GameDir $expectedGame."
+        throw "$Gate-$($Criterion.ToUpperInvariant()) requires GameDir $expectedGame."
     }
     if (Test-Path -LiteralPath $root)
     {
@@ -99,6 +101,7 @@ function New-IrisProbeScope
     [System.IO.File]::WriteAllText((Join-Path $game "options.txt"), "onboardAccessibility:false`n")
     return [pscustomobject] @{
         Criterion = $Criterion.ToUpperInvariant()
+        Gate = $Gate
         Root = $root
         GameDir = $game
         PendingRoot = Join-Path $game "vibris\pending"
@@ -238,7 +241,7 @@ function Remove-IrisProbeScope
     {
         throw "Cleanup left listener 127.0.0.1:$script:IrisPort open."
     }
-    $child = ".omo\tmp\ulw-v1-g005-$($Scope.Criterion.ToLowerInvariant())"
+    $child = ".omo\tmp\ulw-v1-$($Scope.Gate.ToLowerInvariant())-$($Scope.Criterion.ToLowerInvariant())"
     $expected = [System.IO.Path]::GetFullPath((Join-Path $script:VibrisRoot $child))
     if (-not [string]::Equals($Scope.Root, $expected, [System.StringComparison]::OrdinalIgnoreCase))
     {

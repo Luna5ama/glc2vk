@@ -12,6 +12,7 @@ import org.lwjgl.opengl.GL43C
 import org.lwjgl.opengl.GL45C
 import org.lwjgl.system.MemoryUtil
 import java.awt.image.BufferedImage
+import java.nio.Buffer
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Files
@@ -29,7 +30,7 @@ object GlShaderDebugResourceDumper : ShaderDebugResourceDumper {
             GL45C.glGetNamedBufferSubData(buffer.glId, 0, data)
             writeBytes(output, data)
         } finally {
-            MemoryUtil.memFree(data)
+            MemoryUtil.memFree(data as Buffer)
         }
         put("success", true)
         put("path", output.toAbsolutePath().toString())
@@ -60,7 +61,7 @@ object GlShaderDebugResourceDumper : ShaderDebugResourceDumper {
             GL45C.glGetTextureImage(textureId, 0, pixelKind.format(components), pixelKind.type, data)
             if (raw) writeBytes(output, data) else writePng(output, data, width, height, depth, components, pixelKind)
         } finally {
-            MemoryUtil.memFree(data)
+            MemoryUtil.memFree(data as Buffer)
         }
         buildJsonObject {
             put("textureId", textureId)

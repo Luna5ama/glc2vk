@@ -76,6 +76,40 @@ void set_context(const Json& value, proto::SceneContext* context) {
     context->mutable_resolution()->set_width(resolution.at("width").get<std::uint32_t>());
     context->mutable_resolution()->set_height(resolution.at("height").get<std::uint32_t>());
 }
+proto::ArtifactFormat artifact_format(const std::string& value) {
+    if (value == "png") return proto::ARTIFACT_FORMAT_PNG;
+    if (value == "exr") return proto::ARTIFACT_FORMAT_EXR;
+    if (value == "raw") return proto::ARTIFACT_FORMAT_RAW;
+    if (value == "bin") return proto::ARTIFACT_FORMAT_BIN;
+    throw std::invalid_argument("unsupported artifact format: " + value);
+}
+void add_action(const Json& value, proto::ActionSequence* sequence) {
+    auto* action = sequence->add_actions();
+    const auto type = value.at("type").get<std::string>();
+    if (type == "reset_temporal_state") {
+        action->mutable_reset_temporal_state();
+    } else if (type == "wait_frames") {
+        action->mutable_wait_frames()->set_frame_count(value.at("frames").get<std::uint32_t>());
+    } else if (type == "capture_screenshot") {
+        auto* capture = action->mutable_capture_screenshot();
+        capture->set_artifact_name(value.value("artifact_name", std::string{"beauty"}));
+        capture->set_format(artifact_format(value.value("format", std::string{"png"})));
+    } else if (type == "dump_texture") {
+        auto* capture = action->mutable_dump_texture();
+        capture->set_logical_name(value.at("name").get<std::string>());
+        capture->set_mip_level(value.value("mip_level", std::uint32_t{}));
+        capture->set_layer(value.value("layer", std::uint32_t{}));
+        capture->set_artifact_name(value.value("artifact_name", capture->logical_name()));
+        capture->set_format(artifact_format(value.value("format", std::string{"raw"})));
+    } else if (type == "dump_buffer") {
+        auto* capture = action->mutable_dump_buffer();
+        capture->set_logical_name(value.at("name").get<std::string>());
+        capture->set_artifact_name(value.value("artifact_name", capture->logical_name()));
+        capture->set_format(artifact_format(value.value("format", std::string{"bin"})));
+    } else {
+        throw std::invalid_argument("unsupported action: " + type);
+    }
+}
 proto::ClientMessage make_submit(const Json& command, const Options& options) {
     auto message = envelope(command, options);
     auto* job = message.mutable_submit_job();
@@ -89,7 +123,9 @@ proto::ClientMessage make_submit(const Json& command, const Options& options) {
         source->set_total_bytes(value.at("total_bytes").get<std::uint64_t>());
         source->mutable_origin()->mutable_workspace()->set_display_name(options.workspace_id);
     }
-    if (command.contains("wait_frames")) {
+    if (command.contains("actions")) {
+        for (const auto& action : command.at("actions")) add_action(action, job->mutable_actions());
+    } else if (command.contains("wait_frames")) {
         job->mutable_actions()->add_actions()->mutable_wait_frames()->set_frame_count(
             command.at("wait_frames").get<std::uint32_t>());
     } else {
@@ -153,9 +189,30 @@ Json server_json(const proto::ServerMessage& message) {
         auto output = common_json(message, "JobCompleted");
         output["result"] = {{"kind", proto::JobResultKind_Name(value.kind())},
             {"manifest_path", value.manifest_path()}, {"frame_ids", value.frame_ids()}};
+        output["result"]["artifacts"] = Json::array();
         for (const auto& artifact : value.artifacts()) {
-            output["result"]["artifacts"].push_back({{"path", artifact.path()},
-                {"file_name", artifact.file_name()}, {"byte_size", artifact.byte_size()}});
+            const auto& resource = artifact.resource();
+            output["result"]["artifacts"].push_back({
+                {"path", artifact.path()},
+                {"file_name", artifact.file_name()},
+                {"kind", proto::ArtifactKind_Name(artifact.kind())},
+                {"format", proto::ArtifactFormat_Name(artifact.format())},
+                {"media_type", artifact.media_type()},
+                {"byte_size", artifact.byte_size()},
+                {"resource", {
+                    {"logical_name", resource.logical_name()},
+                    {"kind", proto::ResourceKind_Name(resource.kind())},
+                    {"width", resource.width()},
+                    {"height", resource.height()},
+                    {"depth", resource.depth()},
+                    {"mip_level", resource.mip_level()},
+                    {"layer", resource.layer()},
+                    {"internal_format", resource.internal_format()},
+                    {"channel_count", resource.channel_count()},
+                    {"scalar_type", proto::ScalarType_Name(resource.scalar_type())},
+                    {"byte_size", resource.byte_size()},
+                    {"frame_id", resource.frame_id()},
+                    {"semantic_label", resource.semantic_label()}}}});
         }
         return output;
     }

@@ -4,6 +4,7 @@ plugins {
 }
 
 dependencies {
+    implementation(project(":vibris-api"))
     implementation(project(":vibris-common"))
     implementation(platform("org.lwjgl:lwjgl-bom:${libs.versions.lwjgl.get()}"))
     implementation("org.lwjgl", "lwjgl")

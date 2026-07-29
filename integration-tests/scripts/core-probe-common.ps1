@@ -540,19 +540,28 @@ function New-CoreSubmitCommand
         [Parameter(Mandatory)] [string] $RequestId,
         [Parameter(Mandatory)] [object[]] $Sources,
         [Parameter(Mandatory)] [object] $Context,
-        [Parameter(Mandatory)] [uint32] $WaitFrames,
+        [uint32] $WaitFrames = 0,
+        [object[]] $Actions,
         [Parameter(Mandatory)] [object] $Timeouts
     )
 
-    return [ordered] @{
+    $command = [ordered] @{
         op = "submit"
         message_id = $MessageId
         request_id = $RequestId
         sources = $Sources
         context = $Context
-        wait_frames = $WaitFrames
         timeouts = $Timeouts
     }
+    if ($PSBoundParameters.ContainsKey("Actions"))
+    {
+        $command.actions = $Actions
+    }
+    else
+    {
+        $command.wait_frames = $WaitFrames
+    }
+    return $command
 }
 
 function Get-CoreFailureCode

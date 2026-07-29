@@ -85,9 +85,11 @@ function Start-IrisPackagedClient
     if ($null -eq $runtime) { throw "Runtime PID from the ownership receipt does not exist." }
     $runtimeStart = $runtime.CreationDate.ToUniversalTime()
     $receiptStart = [datetimeoffset]::Parse([string] $receipt.started_at_utc).UtcDateTime
-    if ([math]::Abs(($runtimeStart - $receiptStart).TotalSeconds) -gt 1)
+    $receiptDelay = ($receiptStart - $runtimeStart).TotalSeconds
+    if ($receiptDelay -lt -1 -or $receiptDelay -gt 60)
     {
-        throw "Runtime creation time does not match its ownership receipt."
+        throw "Runtime ownership receipt timestamp is outside its process startup window: " +
+            "runtime=$($runtimeStart.ToString('O')) receipt=$($receiptStart.ToString('O')) delay_seconds=$receiptDelay."
     }
     $Scope.RuntimeCreated = $runtimeStart.ToString("O")
     Assert-IrisOwnedRuntime -Scope $Scope

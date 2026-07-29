@@ -14,6 +14,7 @@ import dev.vibris.api.VibrisRuntimeAdapter;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -24,6 +25,9 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     final ArrayDeque<ReloadResult> reloads = new ArrayDeque<>();
     RuntimeStatus status = new RuntimeStatus(true, "save", "minecraft:overworld", "");
     TemporalResetResult reset = new TemporalResetResult(true);
+    ResourceCatalog catalog = ResourceCatalog.empty();
+    CaptureResult captureResult = new CaptureResult(0, Map.of());
+    final Map<String, byte[]> captureFiles = new LinkedHashMap<>();
     Runnable beforeReloadResult = () -> {};
     RuntimeException closeFailure;
     int closeCount;
@@ -64,7 +68,7 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
 
     @Override
     public ResourceCatalog getResourceCatalog() {
-        return ResourceCatalog.empty();
+        return catalog;
     }
 
     @Override
@@ -74,7 +78,17 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
         CancellationToken cancellation
     ) {
         events.add("capture");
-        return completed(cancellation, new CaptureResult(0, Map.of()));
+        try {
+            cancellation.throwIfCancellationRequested();
+            for (Map.Entry<String, byte[]> file : captureFiles.entrySet()) {
+                try (var output = sink.open(file.getKey())) {
+                    output.write(file.getValue());
+                }
+            }
+            return CompletableFuture.completedFuture(captureResult);
+        } catch (java.io.IOException | RuntimeException exception) {
+            return CompletableFuture.failedFuture(exception);
+        }
     }
 
     @Override

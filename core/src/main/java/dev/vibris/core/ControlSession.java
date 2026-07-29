@@ -30,12 +30,14 @@ final class ControlSession {
         return connected;
     }
 
-    synchronized void send(ServerMessage message) {
-        if (!connected) return;
+    synchronized boolean send(ServerMessage message) {
+        if (!connected) return false;
         try {
             responses.onNext(message);
+            return true;
         } catch (RuntimeException exception) {
             connected = false;
+            return false;
         }
     }
 

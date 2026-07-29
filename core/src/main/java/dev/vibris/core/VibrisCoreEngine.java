@@ -1,5 +1,4 @@
 package dev.vibris.core;
-
 import dev.vibris.api.VibrisRuntimeAdapter;
 import dev.vibris.core.request.RequestRegistry;
 import dev.vibris.core.request.RequestState;
@@ -7,7 +6,6 @@ import dev.vibris.protocol.v1.ClientMessage;
 import dev.vibris.protocol.v1.ErrorCode;
 import dev.vibris.protocol.v1.ServerMessage;
 import dev.vibris.protocol.v1.SubmitJob;
-
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
@@ -18,7 +16,6 @@ import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-
 public final class VibrisCoreEngine implements AutoCloseable {
     static final int REQUEST_REGISTRY_CAPACITY = 192;
     private static final int LIVE_REQUEST_CAPACITY = 64;
@@ -34,6 +31,7 @@ public final class VibrisCoreEngine implements AutoCloseable {
     private final SourceActivator activator;
     private final RuntimeJobExecutor executor;
     private final VibrisRuntimeAdapter runtime;
+    private final TerminalDelivery delivery;
     private final ScheduledExecutorService disconnectTimer = Executors.newSingleThreadScheduledExecutor(runnable -> {
         Thread thread = new Thread(runnable, "Vibris Disconnect Grace");
         thread.setDaemon(true);
@@ -43,9 +41,9 @@ public final class VibrisCoreEngine implements AutoCloseable {
     public VibrisCoreEngine(Path pendingRoot, VibrisRuntimeAdapter runtime) {
         this(pendingRoot, runtime, ShaderLink.transientLink(), ShaderLogSink.none());
     }
-    VibrisCoreEngine(Path pendingRoot, VibrisRuntimeAdapter runtime, ShaderLink shaderLink,
-        ShaderLogSink shaderLogs) {
+    VibrisCoreEngine(Path pendingRoot, VibrisRuntimeAdapter runtime, ShaderLink shaderLink, ShaderLogSink shaderLogs) {
         this.runtime = runtime;
+        delivery = new TerminalDelivery(shaderLogs);
         sources = new SourceRegistry(pendingRoot, probe);
         activator = new SourceActivator(sources, shaderLink);
         executor = new RuntimeJobExecutor(runtime, probe, activator, shaderLogs);
@@ -60,8 +58,7 @@ public final class VibrisCoreEngine implements AutoCloseable {
         String requestId = submission.getRequestId();
         if (requestId.isBlank() || !requestId.equals(message.getRequestId()) ||
             !submission.getWorkspaceId().equals(session.workspaceId())) {
-            session.send(ProtocolMessages.immediateFailure(
-                message, session.workspaceId(), ErrorCode.INTERNAL_ERROR, "Job envelope is inconsistent."));
+            failImmediate(session, message, ErrorCode.INTERNAL_ERROR, "Job envelope is inconsistent.");
             return;
         }
         List<SourceRegistry.Candidate> candidates;
@@ -76,20 +73,18 @@ public final class VibrisCoreEngine implements AutoCloseable {
         CoreJob job = new CoreJob(submission, message.getMessageId(), session);
         synchronized (this) {
             if (closed || !activator.ready()) {
-                session.send(ProtocolMessages.immediateFailure(
-                    message, session.workspaceId(), ErrorCode.SERVER_NOT_READY, "Vibris is not ready."));
+                failImmediate(session, message, ErrorCode.SERVER_NOT_READY, "Vibris is not ready.");
                 return;
             }
             RequestRegistry.AcceptResult<TerminalResult> accepted = requests.accept(
                 requestId, session.workspaceId());
             if (accepted.kind() == RequestRegistry.AcceptKind.OWNER_MISMATCH) {
-                session.send(ProtocolMessages.immediateFailure(
-                    message, session.workspaceId(), ErrorCode.INTERNAL_ERROR, "Request belongs to another workspace."));
+                failImmediate(session, message, ErrorCode.INTERNAL_ERROR, "Request belongs to another workspace.");
                 return;
             }
             if (accepted.kind() == RequestRegistry.AcceptKind.CACHED_FINAL) {
-                session.send(accepted.snapshot().result().message(
-                    message.getMessageId(), requestId, session.workspaceId()));
+                delivery.send(session, accepted.snapshot().result().message(
+                    message.getMessageId(), requestId, session.workspaceId()), session.workspaceId(), requestId);
                 return;
             }
             if (accepted.kind() == RequestRegistry.AcceptKind.CURRENT) {
@@ -97,8 +92,7 @@ public final class VibrisCoreEngine implements AutoCloseable {
                 return;
             }
             if (accepted.kind() == RequestRegistry.AcceptKind.FULL) {
-                session.send(ProtocolMessages.immediateFailure(
-                    message, session.workspaceId(), ErrorCode.QUEUE_FULL, "The request registry is full."));
+                failImmediate(session, message, ErrorCode.QUEUE_FULL, "The request registry is full.");
                 return;
             }
             if (validationFailure != null) {
@@ -142,7 +136,9 @@ public final class VibrisCoreEngine implements AutoCloseable {
         synchronized (this) {
             responses = ResumeResponses.create(session, message, requests, liveJobs);
         }
-        responses.forEach(session::send);
+        for (ServerMessage response : responses) {
+            delivery.send(session, response, session.workspaceId(), response.getRequestId());
+        }
     }
     void disconnected(ControlSession session) {
         session.disconnect();
@@ -201,7 +197,8 @@ public final class VibrisCoreEngine implements AutoCloseable {
             updateMetrics();
         }
         probe.event(job.requestId, successful ? "SUCCEEDED" : state == RequestState.CANCELLED ? "CANCELLED" : "FAILED");
-        session.send(terminal.message(job.messageId, job.requestId, job.workspaceId));
+        delivery.send(session, terminal.message(job.messageId, job.requestId, job.workspaceId),
+            job.workspaceId, job.requestId);
     }
     private void finishRejected(ControlSession session, ClientMessage message, ErrorCode code, String detail) {
         TerminalResult terminal = ProtocolMessages.failure(message.getRequestId(), code, detail);
@@ -214,8 +211,7 @@ public final class VibrisCoreEngine implements AutoCloseable {
     private void sendCurrent(ControlSession session, ClientMessage message, RequestState state) {
         CoreJob job = liveJobs.get(message.getRequestId());
         if (job == null) {
-            session.send(ProtocolMessages.immediateFailure(
-                message, session.workspaceId(), ErrorCode.INTERNAL_ERROR, "Request validation is still in progress."));
+            failImmediate(session, message, ErrorCode.INTERNAL_ERROR, "Request validation is still in progress.");
             return;
         }
         job.bind(session);
@@ -226,6 +222,9 @@ public final class VibrisCoreEngine implements AutoCloseable {
     }
     private void sendProgress(CoreJob job, dev.vibris.protocol.v1.JobStage stage) {
         job.session.send(ProtocolMessages.progress(job, stage));
+    }
+    private static void failImmediate(ControlSession session, ClientMessage message, ErrorCode code, String detail) {
+        session.send(ProtocolMessages.immediateFailure(message, session.workspaceId(), code, detail));
     }
     private boolean queueTimedOut(CoreJob job) {
         long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - job.acceptedNanos);

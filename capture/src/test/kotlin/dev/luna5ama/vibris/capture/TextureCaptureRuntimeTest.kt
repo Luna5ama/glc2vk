@@ -50,7 +50,7 @@ class TextureCaptureRuntimeTest {
                 glDeleteTextures(texture)
             }
         } finally {
-            GL.destroy()
+            GL.setCapabilities(null)
             glfwFreeCallbacks(window)
             glfwDestroyWindow(window)
             glfwTerminate()

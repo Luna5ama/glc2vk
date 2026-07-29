@@ -7,6 +7,9 @@ import dev.vibris.protocol.v1.ArtifactFormat;
 import dev.vibris.protocol.v1.Capability;
 import dev.vibris.protocol.v1.RecipeKind;
 import dev.vibris.protocol.v1.RuntimeState;
+import dev.vibris.protocol.v1.ResourceCatalog;
+import dev.vibris.protocol.v1.ResourceCatalogEntry;
+import dev.vibris.protocol.v1.ResourceKind;
 import dev.vibris.protocol.v1.ServerHello;
 import dev.vibris.protocol.v1.ServerLimits;
 import dev.vibris.protocol.v1.ServerState;
@@ -18,11 +21,13 @@ import java.util.concurrent.TimeUnit;
 
 final class ServerDescriptor {
     private final VibrisRuntimeAdapter runtime;
+    private final ArtifactManager artifacts;
     private final ServerStatus baseStatus;
     private final ServerHello baseHello;
 
     ServerDescriptor(Path pending, ArtifactManager artifacts, VibrisRuntimeAdapter runtime) {
         this.runtime = runtime;
+        this.artifacts = artifacts;
         baseStatus = ServerStatus.newBuilder()
             .setPendingShadersRoot(pending.toString())
             .setArtifactRoot(artifacts.root().toString())
@@ -39,7 +44,6 @@ final class ServerDescriptor {
                 ActionKind.ACTION_KIND_DUMP_BUFFER))
             .addAllSupportedFormats(List.of(
                 ArtifactFormat.ARTIFACT_FORMAT_PNG,
-                ArtifactFormat.ARTIFACT_FORMAT_EXR,
                 ArtifactFormat.ARTIFACT_FORMAT_RAW,
                 ArtifactFormat.ARTIFACT_FORMAT_BIN))
             .build();
@@ -72,6 +76,8 @@ final class ServerDescriptor {
             .setCurrentDimensionId(current.currentDimensionId())
             .setActiveSourceUuid(activeSource.isBlank() ? current.activeSourceUuid() : activeSource)
             .setQueueLength(engine.queueLength())
+            .setResourceCatalog(resourceCatalog())
+            .setArtifactQuotaUsedBytes(artifacts.usedBytes())
             .build();
     }
 
@@ -89,6 +95,28 @@ final class ServerDescriptor {
         } catch (Exception exception) {
             return unavailable();
         }
+    }
+
+    private ResourceCatalog resourceCatalog() {
+        ResourceCatalog.Builder catalog = ResourceCatalog.newBuilder();
+        for (dev.vibris.api.ResourceCatalog.ResourceDescriptor resource :
+            runtime.getResourceCatalog().resources()) {
+            ResourceCatalogEntry entry = ResourceCatalogEntry.newBuilder()
+                .setLogicalName(resource.logicalName())
+                .setKind(switch (resource.kind()) {
+                    case FINAL_FRAMEBUFFER -> ResourceKind.RESOURCE_KIND_FINAL_FRAMEBUFFER;
+                    case TEXTURE -> ResourceKind.RESOURCE_KIND_TEXTURE;
+                    case BUFFER -> ResourceKind.RESOURCE_KIND_BUFFER;
+                })
+                .setInternalFormat(resource.internalFormat())
+                .build();
+            if (resource.kind() == dev.vibris.api.ResourceCatalog.ResourceKind.BUFFER) {
+                catalog.addBuffers(entry);
+            } else {
+                catalog.addTextures(entry);
+            }
+        }
+        return catalog.build();
     }
 
     private static RuntimeStatus unavailable() {
