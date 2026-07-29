@@ -149,6 +149,7 @@ class ArtifactQuotaTest {
 
         assertThrows(ArtifactManager.QuotaExceededException.class,
             () -> manager.beginJob("workspace", "blocked", 500));
+        assertFalse(hasTemporaryDirectory(manager.root()));
     }
 
     private static ArtifactManager.CommittedJob commit(ArtifactManager manager, String requestId, int bytes)

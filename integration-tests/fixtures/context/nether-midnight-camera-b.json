@@ -1,0 +1,25 @@
+{
+  "save_id": "vibris-phase4-world",
+  "dimension_id": "minecraft:the_nether",
+  "time_preset_id": "midnight",
+  "weather_preset_id": "clear",
+  "camera_preset_id": "camera-b",
+  "fov": 72.0,
+  "resolution": {
+    "width": 640,
+    "height": 360
+  },
+  "settings_preset_id": "phase4-deterministic",
+  "expected": {
+    "day_time": 18000,
+    "rain_level": 0.0,
+    "thunder_level": 0.0,
+    "camera": {
+      "x": 0.5,
+      "y": 80.0,
+      "z": 0.5,
+      "yaw": 90.0,
+      "pitch": 5.0
+    }
+  }
+}

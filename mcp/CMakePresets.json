@@ -16,6 +16,19 @@
                 "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
                 "VCPKG_TARGET_TRIPLET": "x64-windows-static-md"
             }
+        },
+        {
+            "name": "windows-clang-sanitizers",
+            "displayName": "Windows x64 (Clang ASan/UBSan)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/out/asan",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+                "VCPKG_TARGET_TRIPLET": "x64-windows-static-md",
+                "VIBRIS_ENABLE_SANITIZERS": "ON"
+            }
         }
     ],
     "buildPresets": [
@@ -23,6 +36,10 @@
             "name": "release",
             "configurePreset": "windows-vs2022",
             "configuration": "Release"
+        },
+        {
+            "name": "sanitizers",
+            "configurePreset": "windows-clang-sanitizers"
         }
     ],
     "testPresets": [
@@ -30,6 +47,18 @@
             "name": "release",
             "configurePreset": "windows-vs2022",
             "configuration": "Release",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "sanitizers",
+            "configurePreset": "windows-clang-sanitizers",
+            "filter": {
+                "include": {
+                    "name": "StdioLifecycle|GrpcReconnect|SourceSoak"
+                }
+            },
             "output": {
                 "outputOnFailure": true
             }

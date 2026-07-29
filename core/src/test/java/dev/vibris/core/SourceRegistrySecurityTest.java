@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -101,6 +102,30 @@ class SourceRegistrySecurityTest {
 
         assertTrue(Files.exists(sentinel), "cleanup followed a replaced pending-root ancestor");
         assertEquals(0, registry.size(), "unsafe cleanup must not wedge source capacity");
+    }
+
+    @Test
+    void deletingActiveSourceDoesNotPoisonNextActivation() throws Exception {
+        Path pending = Files.createDirectory(temp.resolve("pending-active-delete"));
+        SourceRegistry registry = new SourceRegistry(pending, new CoreProbe());
+        SourceRegistry.Lease first = registry.reserve(registry.validate(List.of(source(pending)))).getFirst();
+        registry.accept(List.of(first));
+        registry.commitActivation(registry.beginActivation(first));
+
+        Files.delete(first.directory().resolve("main.glsl"));
+        Files.delete(first.directory());
+        registry.release(List.of(first), true);
+
+        assertEquals("", registry.activeUuid());
+        assertEquals(0, registry.size());
+
+        SourceRegistry.Lease second = registry.reserve(registry.validate(List.of(source(pending)))).getFirst();
+        registry.accept(List.of(second));
+        registry.commitActivation(registry.beginActivation(second));
+
+        assertEquals(second.uuid(), registry.activeUuid());
+        registry.release(List.of(second), false);
+        assertFalse(Files.exists(second.directory()));
     }
 
     private static PreparedSourceRef source(Path pending) throws Exception {

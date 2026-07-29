@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "expected_execution_order": ["A1", "B1", "C1", "A2", "B2", "C2"],
+  "preset_catalog": {
+    "schema_version": 1,
+    "time_presets": [
+      {"id": "sunset", "tick": 12000, "weather": "clear"},
+      {"id": "midnight", "tick": 18000, "weather": "clear"},
+      {"id": "sunrise", "tick": 23000, "weather": "clear"}
+    ],
+    "settings_presets": [
+      {"id": "phase4-deterministic"}
+    ],
+    "worlds": [
+      {
+        "id": "vibris-phase4-world",
+        "save_name": "vibris-phase4-world",
+        "dimensions": ["minecraft:overworld", "minecraft:the_nether", "minecraft:the_end"],
+        "cameras": [
+          {
+            "id": "camera-a",
+            "dimension_id": "minecraft:overworld",
+            "position": [0.5, 96.0, 0.5],
+            "yaw": 180.0,
+            "pitch": 15.0,
+            "default_fov": 61.0
+          },
+          {
+            "id": "camera-b",
+            "dimension_id": "minecraft:the_nether",
+            "position": [0.5, 80.0, 0.5],
+            "yaw": 90.0,
+            "pitch": 5.0,
+            "default_fov": 72.0
+          },
+          {
+            "id": "camera-c",
+            "dimension_id": "minecraft:the_end",
+            "position": [0.5, 96.0, 0.5],
+            "yaw": -90.0,
+            "pitch": -10.0,
+            "default_fov": 83.0
+          }
+        ]
+      }
+    ]
+  },
+  "clients": [
+    {
+      "label": "A",
+      "configure": {
+        "save_id": "vibris-phase4-world",
+        "dimension_id": "minecraft:overworld",
+        "time_preset_id": "sunset",
+        "camera_preset_id": "camera-a",
+        "fov": 61.0,
+        "default_warmup_frames": 2
+      },
+      "expected": {
+        "weather_preset_id": "clear",
+        "settings_preset_id": "phase4-deterministic",
+        "day_time": 12000,
+        "rain_level": 0.0,
+        "thunder_level": 0.0,
+        "camera": {"x": 0.5, "y": 96.0, "z": 0.5, "yaw": 180.0, "pitch": 15.0}
+      },
+      "jobs": [
+        {"id": "A1", "message_id": 101, "warmup_frames": 600},
+        {"id": "A2", "message_id": 102, "warmup_frames": 120}
+      ]
+    },
+    {
+      "label": "B",
+      "configure": {
+        "save_id": "vibris-phase4-world",
+        "dimension_id": "minecraft:the_nether",
+        "time_preset_id": "midnight",
+        "camera_preset_id": "camera-b",
+        "fov": 72.0,
+        "default_warmup_frames": 2
+      },
+      "expected": {
+        "weather_preset_id": "clear",
+        "settings_preset_id": "phase4-deterministic",
+        "day_time": 18000,
+        "rain_level": 0.0,
+        "thunder_level": 0.0,
+        "camera": {"x": 0.5, "y": 80.0, "z": 0.5, "yaw": 90.0, "pitch": 5.0}
+      },
+      "jobs": [
+        {"id": "B1", "message_id": 201, "warmup_frames": 120},
+        {"id": "B2", "message_id": 202, "warmup_frames": 2}
+      ]
+    },
+    {
+      "label": "C",
+      "configure": {
+        "save_id": "vibris-phase4-world",
+        "dimension_id": "minecraft:the_end",
+        "time_preset_id": "sunrise",
+        "camera_preset_id": "camera-c",
+        "fov": 83.0,
+        "default_warmup_frames": 2
+      },
+      "expected": {
+        "weather_preset_id": "clear",
+        "settings_preset_id": "phase4-deterministic",
+        "day_time": 23000,
+        "rain_level": 0.0,
+        "thunder_level": 0.0,
+        "camera": {"x": 0.5, "y": 96.0, "z": 0.5, "yaw": -90.0, "pitch": -10.0}
+      },
+      "jobs": [
+        {"id": "C1", "message_id": 301, "warmup_frames": 120},
+        {"id": "C2", "message_id": 302, "warmup_frames": 2}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+package dev.vibris.core
+
+import dev.vibris.api.ReloadResult
+import dev.vibris.protocol.v1.ErrorCode
+import java.io.IOException
+
+internal object ShaderReloadFailure {
+    @JvmStatic
+    fun create(
+        logs: ShaderLogSink,
+        job: CoreJob,
+        reload: ReloadResult,
+    ): RuntimeJobExecutor.Failure {
+        val message = reload.diagnostics()
+            .firstOrNull { it.severity == ReloadResult.Severity.ERROR }
+            ?.message
+            ?: "Shader reload failed."
+        return try {
+            val artifact = logs.writeShaderLog(job.workspaceId, job.requestId, reload.diagnostics())
+            RuntimeJobExecutor.Failure(ErrorCode.SHADER_COMPILE_FAILED, message, artifact)
+        } catch (_: IOException) {
+            RuntimeJobExecutor.Failure(ErrorCode.SHADER_COMPILE_FAILED, message)
+        }
+    }
+}

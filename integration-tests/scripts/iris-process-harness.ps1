@@ -44,6 +44,69 @@ function Assert-IrisProtectedProcesses
     }
 }
 
+function Wait-IrisOwnedRuntimeProcess
+{
+    param(
+        [Parameter(Mandatory)] [object] $Scope,
+        [ValidateRange(1, 600)] [int] $TimeoutSeconds
+    )
+
+    $wrapperPid = $Scope.Wrapper.Process.Id
+    $runToken = "-Dvibris.phase4.runId=$($Scope.RunId)"
+    $gameToken = "-Dvibris.phase4.gameDir=$($Scope.GameDir)"
+    $deadline = [datetime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([datetime]::UtcNow -lt $deadline)
+    {
+        if ($Scope.Wrapper.Process.HasExited)
+        {
+            $stdout = $Scope.Wrapper.Stdout.Result
+            $stderr = $Scope.Wrapper.Stderr.Result
+            throw "Packaged client wrapper exited $($Scope.Wrapper.Process.ExitCode) before starting its owned " +
+                "runtime.`nSTDOUT:`n$stdout`nSTDERR:`n$stderr"
+        }
+
+        $processes = @(Get-CimInstance Win32_Process)
+        $byId = @{}
+        foreach ($process in $processes) { $byId[[int] $process.ProcessId] = $process }
+        $candidates = @($processes | Where-Object {
+            $command = [string] $_.CommandLine
+            if ($command.IndexOf($runToken, [System.StringComparison]::Ordinal) -lt 0 -or
+                $command.IndexOf($gameToken, [System.StringComparison]::OrdinalIgnoreCase) -lt 0)
+            {
+                return $false
+            }
+
+            $parentId = [int] $_.ParentProcessId
+            $seen = [System.Collections.Generic.HashSet[int]]::new()
+            while ($parentId -gt 0 -and $seen.Add($parentId))
+            {
+                if ($parentId -eq $wrapperPid) { return $true }
+                if (-not $byId.ContainsKey($parentId)) { break }
+                $parentId = [int] $byId[$parentId].ParentProcessId
+            }
+            return $false
+        })
+        if ($candidates.Count -gt 1)
+        {
+            throw "Multiple wrapper descendants claim this probe's runtime ownership tokens."
+        }
+        if ($candidates.Count -eq 1)
+        {
+            $candidate = $candidates[0]
+            if ($Scope.Protected | Where-Object { $_.Pid -eq [int] $candidate.ProcessId })
+            {
+                throw "The discovered runtime PID belongs to the protected MultiMC process tree."
+            }
+            $Scope.RuntimePid = [int] $candidate.ProcessId
+            $Scope.RuntimeCreated = $candidate.CreationDate.ToUniversalTime().ToString("O")
+            Assert-IrisOwnedRuntime -Scope $Scope
+            return
+        }
+        Start-Sleep -Milliseconds 50
+    }
+    throw "Packaged client did not start its owned runtime within $TimeoutSeconds seconds."
+}
+
 function Start-IrisPackagedClient
 {
     param(
@@ -79,19 +142,32 @@ function Start-IrisPackagedClient
         Stdout = $wrapper.StandardOutput.ReadToEndAsync()
         Stderr = $wrapper.StandardError.ReadToEndAsync()
     }
+    Wait-IrisOwnedRuntimeProcess -Scope $Scope -TimeoutSeconds $TimeoutSeconds
+    Start-IrisWindowGuard -Scope $Scope
     $receipt = Wait-IrisReceipt -Scope $Scope -TimeoutSeconds $TimeoutSeconds
-    $Scope.RuntimePid = [int] $receipt.pid
+    if ([int] $receipt.pid -ne $Scope.RuntimePid)
+    {
+        throw "Runtime PID from the ownership receipt does not match the wrapper-owned process."
+    }
     $runtime = Get-CimInstance Win32_Process -Filter "ProcessId = $($Scope.RuntimePid)"
     if ($null -eq $runtime) { throw "Runtime PID from the ownership receipt does not exist." }
     $runtimeStart = $runtime.CreationDate.ToUniversalTime()
-    $receiptStart = [datetimeoffset]::Parse([string] $receipt.started_at_utc).UtcDateTime
+    $receiptStart = if ($receipt.started_at_utc -is [datetime]) {
+        ([datetime] $receipt.started_at_utc).ToUniversalTime()
+    } elseif ($receipt.started_at_utc -is [datetimeoffset]) {
+        ([datetimeoffset] $receipt.started_at_utc).UtcDateTime
+    } else {
+        [datetimeoffset]::Parse(
+            [string] $receipt.started_at_utc,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind).UtcDateTime
+    }
     $receiptDelay = ($receiptStart - $runtimeStart).TotalSeconds
     if ($receiptDelay -lt -1 -or $receiptDelay -gt 60)
     {
         throw "Runtime ownership receipt timestamp is outside its process startup window: " +
             "runtime=$($runtimeStart.ToString('O')) receipt=$($receiptStart.ToString('O')) delay_seconds=$receiptDelay."
     }
-    $Scope.RuntimeCreated = $runtimeStart.ToString("O")
     Assert-IrisOwnedRuntime -Scope $Scope
     Wait-CorePort -Port $script:IrisPort -Open $true -Process $wrapper -TimeoutSeconds $TimeoutSeconds
 }
@@ -183,9 +259,9 @@ function Stop-IrisOwnedWrapper
     }
 }
 
-function Stop-IrisPackagedClient
+function Stop-IrisPackagedClientCore
 {
-    param([Parameter(Mandatory)] [object] $Scope, [ValidateRange(1, 300)] [int] $TimeoutSeconds = 90)
+    param([Parameter(Mandatory)] [object] $Scope, [ValidateRange(1, 600)] [int] $TimeoutSeconds = 90)
 
     if ($null -eq $Scope.Wrapper) { return }
     if ($Scope.RuntimePid -eq 0)
@@ -231,5 +307,19 @@ function Stop-IrisPackagedClient
     if ($exitCode -ne 0)
     {
         throw "Packaged client wrapper exited $exitCode.`nSTDOUT:`n$stdout`nSTDERR:`n$stderr"
+    }
+}
+
+function Stop-IrisPackagedClient
+{
+    param([Parameter(Mandatory)] [object] $Scope, [ValidateRange(1, 600)] [int] $TimeoutSeconds = 90)
+
+    try
+    {
+        Stop-IrisPackagedClientCore -Scope $Scope -TimeoutSeconds $TimeoutSeconds
+    }
+    finally
+    {
+        Stop-IrisWindowGuard -Scope $Scope
     }
 }

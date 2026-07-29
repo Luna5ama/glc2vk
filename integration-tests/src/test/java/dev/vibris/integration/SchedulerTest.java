@@ -63,6 +63,47 @@ class SchedulerTest {
         }
     }
 
+    @Test
+    void threeClientsTwoJobsEachRoundRobinWithoutInterleave() throws Exception {
+        Path pending = temp.resolve("pending-six");
+        Path artifacts = temp.resolve("artifacts-six");
+        try (FakeVibrisServer server = FakeVibrisServer.start(0, pending, artifacts);
+             PhaseThreeHarness.Client a = new PhaseThreeHarness.Client(server, "A");
+             PhaseThreeHarness.Client b = new PhaseThreeHarness.Client(server, "B");
+             PhaseThreeHarness.Client c = new PhaseThreeHarness.Client(server, "C")) {
+            PhaseThreeHarness.Probe probe = new PhaseThreeHarness.Probe(server);
+            probe.pauseExecution();
+            Map<String, SceneContext> contexts = new LinkedHashMap<>();
+            Map<String, SubmitJob> jobs = new LinkedHashMap<>();
+            for (String id : List.of("A1", "A2", "B1", "B2", "C1", "C2")) {
+                String workspace = id.substring(0, 1);
+                SceneContext context = PhaseThreeHarness.context(id);
+                PhaseThreeHarness.Source source = PhaseThreeHarness.createSource(pending, id);
+                contexts.put(id, context);
+                jobs.put(id, PhaseThreeHarness.job(id, workspace, context, source.reference(), 5_000, 1));
+            }
+
+            a.submit(jobs.get("A1"));
+            a.awaitAccepted("A1");
+            a.awaitProgress("A1", JobStage.JOB_STAGE_WARMING_UP);
+            for (String id : List.of("B1", "C1", "A2", "B2", "C2")) {
+                PhaseThreeHarness.Client owner = client(id, a, b, c);
+                owner.submit(jobs.get(id));
+                owner.awaitAccepted(id);
+            }
+            probe.resumeExecution();
+            for (String id : jobs.keySet()) client(id, a, b, c).awaitCompleted(id);
+
+            List<String> expected = List.of("A1", "B1", "C1", "A2", "B2", "C2");
+            assertEquals(expected, probe.strings("executionOrder"));
+            assertEquals(expected.stream().map(contexts::get).toList(), probe.contexts());
+            assertEquals(1, probe.integer("maxConcurrentJobs"));
+            assertNoExecutionEventInterleaves(probe.strings("executionEvents"));
+            PhaseThreeHarness.assertDirectoryEmpty(pending);
+            PhaseThreeHarness.assertDirectoryEmpty(artifacts);
+        }
+    }
+
     private static PhaseThreeHarness.Client client(String requestId, PhaseThreeHarness.Client a,
                                                     PhaseThreeHarness.Client b, PhaseThreeHarness.Client c) {
         return switch (requestId.charAt(0)) {

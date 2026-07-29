@@ -64,6 +64,7 @@ object GlArtifactCapture {
         val totalBytes = metadata.byteSize.toInt()
         val data = MemoryUtil.memAlloc(totalBytes).order(ByteOrder.nativeOrder())
         try {
+            GL42C.glMemoryBarrier(GL42C.GL_TEXTURE_UPDATE_BARRIER_BIT)
             GL45C.glGetTextureImage(textureId, mipLevel, layout.pixelFormat, layout.pixelKind.type, data)
             if (format == CapturePlan.ArtifactFormat.RAW) writeDirect(output, data)
             else writePng(

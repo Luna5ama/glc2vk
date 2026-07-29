@@ -3,6 +3,7 @@ $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 . (Join-Path $PSScriptRoot "core-probe-common.ps1")
+. (Join-Path $PSScriptRoot "iris-window-guard.ps1")
 . (Join-Path $PSScriptRoot "iris-process-harness.ps1")
 . (Join-Path $PSScriptRoot "iris-preset-harness.ps1")
 
@@ -54,16 +55,26 @@ function Resolve-IrisPatchedJar
     try
     {
         $names = @($archive.Entries | ForEach-Object { $_.FullName })
-        $hasApi = @($names | Where-Object {
-            $_ -match '^META-INF/jars/vibris-api.*[.]jar$' -or
-                $_ -eq 'dev/vibris/api/VibrisRuntimeAdapter.class'
-        }).Count -gt 0
-        $hasCore = @($names | Where-Object {
-            $_ -match '^META-INF/jars/vibris-core.*[.]jar$' -or $_ -eq 'dev/vibris/core/VibrisBootstrap.class'
-        }).Count -gt 0
-        if (-not $hasApi -or -not $hasCore -or $names -notcontains "fabric.mod.json")
+        $required = [ordered] @{
+            "Vibris API" = '^META-INF/jars/vibris-api.*[.]jar$'
+            "Vibris core" = '^META-INF/jars/vibris-core.*[.]jar$'
+            "Vibris protocol" = '^META-INF/jars/vibris-protocol-java[.]jar$'
+            "gRPC API" = '^META-INF/jars/grpc-api-.*[.]jar$'
+            "gRPC core" = '^META-INF/jars/grpc-core-.*[.]jar$'
+            "gRPC transport" = '^META-INF/jars/grpc-netty-shaded-.*[.]jar$'
+            "gRPC protobuf" = '^META-INF/jars/grpc-protobuf-[0-9].*[.]jar$'
+            "gRPC stub" = '^META-INF/jars/grpc-stub-.*[.]jar$'
+        }
+        foreach ($entry in $required.GetEnumerator())
         {
-            throw "PatchedJar does not embed Vibris API/core with Iris fabric.mod.json: $jar"
+            if (@($names | Where-Object { $_ -match $entry.Value }).Count -ne 1)
+            {
+                throw "PatchedJar must embed exactly one $($entry.Key) JAR: $jar"
+            }
+        }
+        if ($names -notcontains "fabric.mod.json")
+        {
+            throw "PatchedJar does not contain Iris fabric.mod.json: $jar"
         }
     }
     finally
@@ -78,7 +89,7 @@ function New-IrisProbeScope
     param(
         [Parameter(Mandatory)] [ValidateSet("c001", "c002", "c003")] [string] $Criterion,
         [Parameter(Mandatory)] [string] $GameDir,
-		[ValidateSet("G005", "G006", "G007")] [string] $Gate = "G005"
+		[ValidateSet("G005", "G006", "G007", "G008")] [string] $Gate = "G005"
     )
 
     $gateName = $Gate.ToLowerInvariant()
@@ -98,7 +109,9 @@ function New-IrisProbeScope
         throw "Criterion port 127.0.0.1:$script:IrisPort is already in use; refusing to stop its owner."
     }
     [void] (New-Item -ItemType Directory -Path $game)
-    [System.IO.File]::WriteAllText((Join-Path $game "options.txt"), "onboardAccessibility:false`n")
+    [System.IO.File]::WriteAllText(
+        (Join-Path $game "options.txt"),
+        "fullscreen:false`npauseOnLostFocus:false`nonboardAccessibility:false`n")
     return [pscustomobject] @{
         Criterion = $Criterion.ToUpperInvariant()
         Gate = $Gate
@@ -115,6 +128,8 @@ function New-IrisProbeScope
         Wrapper = $null
         RuntimePid = 0
         RuntimeCreated = ""
+        WindowGuard = $null
+        WindowGuardEvidence = $null
     }
 }
 
@@ -160,7 +175,16 @@ function Wait-IrisEvent
     {
         if (Test-Path -LiteralPath $Scope.EventFile -PathType Leaf)
         {
-            foreach ($line in [System.IO.File]::ReadAllLines($Scope.EventFile))
+            try
+            {
+                $lines = [System.IO.File]::ReadAllLines($Scope.EventFile)
+            }
+            catch [System.IO.IOException]
+            {
+                Start-Sleep -Milliseconds 10
+                continue
+            }
+            foreach ($line in $lines)
             {
                 if ([string]::IsNullOrWhiteSpace($line)) { continue }
                 $event = $line | ConvertFrom-Json
@@ -189,6 +213,7 @@ function Wait-IrisWorldReady
 
     [void] (Wait-IrisEvent -Scope $Scope -Type "frame_tail" -TimeoutSeconds $TimeoutSeconds `
         -Match { param($event) $event.world_ready -eq $true })
+    Assert-IrisWindowGuardActive -Scope $Scope
 }
 
 function Get-IrisLinkTarget
@@ -236,6 +261,7 @@ function Remove-IrisProbeScope
 {
     param([Parameter(Mandatory)] [object] $Scope)
 
+    if ($null -ne $Scope.WindowGuard) { throw "Cleanup attempted while the Iris window guard is still running." }
     Assert-IrisProtectedProcesses -Snapshot $Scope.Protected
     if (Test-CorePort -Port $script:IrisPort)
     {

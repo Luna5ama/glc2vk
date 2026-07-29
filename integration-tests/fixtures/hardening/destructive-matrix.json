@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "criterion": "G008-C002",
+  "recovery_boundary": {
+    "kill-during-copy": "next-vibris-startup",
+    "kill-before-submit": "next-vibris-startup"
+  },
+  "cases": [
+    {
+      "id": "kill-during-copy",
+      "port": 55081,
+      "runner": "mcp-copy-kill",
+      "owner_at_fault": "mcp",
+      "expected_outcome": "PROCESS_KILLED",
+      "expected_cleanup": "STARTUP_RECOVERY"
+    },
+    {
+      "id": "kill-before-submit",
+      "port": 55082,
+      "runner": "mcp-pre-submit-kill",
+      "owner_at_fault": "mcp",
+      "expected_outcome": "PROCESS_KILLED",
+      "expected_cleanup": "STARTUP_RECOVERY"
+    },
+    {
+      "id": "kill-after-accept",
+      "port": 55083,
+      "runner": "accepted-client-kill",
+      "owner_at_fault": "vibris",
+      "expected_outcome": "TRANSPORT_LOST_AFTER_ACCEPT",
+      "expected_cleanup": "SERVER_CLOSE"
+    },
+    {
+      "id": "grpc-drop",
+      "port": 55065,
+      "runner": "grpc-reconnect",
+      "owner_at_fault": "vibris",
+      "expected_outcome": "JOB_COMPLETED",
+      "expected_cleanup": "TERMINAL_RESULT"
+    },
+    {
+      "id": "minecraft-close-queued",
+      "port": 55084,
+      "runner": "server-close-queued",
+      "owner_at_fault": "vibris",
+      "expected_outcome": "CANCELLED",
+      "expected_cleanup": "SERVER_CLOSE"
+    },
+    {
+      "id": "minecraft-close-active",
+      "port": 55085,
+      "runner": "server-close-active",
+      "owner_at_fault": "vibris",
+      "expected_outcome": "CANCELLED",
+      "expected_cleanup": "SERVER_CLOSE"
+    },
+    {
+      "id": "ram-disk-full",
+      "port": 55086,
+      "runner": "focused-test",
+      "test": "dev.vibris.integration.ArtifactQuotaTest.protectedJobPressureUsesTypedQuotaFailure",
+      "owner_at_fault": "vibris",
+      "expected_outcome": "ARTIFACT_QUOTA_EXCEEDED",
+      "expected_cleanup": "NO_PARTIAL_TRANSACTION"
+    },
+    {
+      "id": "external-source-delete",
+      "port": 55087,
+      "runner": "focused-test",
+      "test": "dev.vibris.core.SourceRegistrySecurityTest.deletingActiveSourceDoesNotPoisonNextActivation",
+      "owner_at_fault": "vibris",
+      "expected_outcome": "NEXT_ACTIVATION_COMPLETED",
+      "expected_cleanup": "IDENTITY_ABANDON"
+    },
+    {
+      "id": "active-symlink-tamper",
+      "port": 55088,
+      "runner": "focused-test",
+      "tests": [
+        "dev.vibris.core.FixedShaderLinkTest.replacedActiveSymlinkFailsSwitchWithoutTouchingReplacementTarget",
+        "dev.vibris.core.RuntimeJobExecutorTest.activeLinkTamperFailsAtFinalBoundaryAndMarksServerNotReady"
+      ],
+      "owner_at_fault": "vibris",
+      "expected_outcome": "SYMLINK_SWITCH_FAILED",
+      "expected_cleanup": "NO_FOLLOW_DETACH"
+    },
+    {
+      "id": "artifact-root-unwritable",
+      "port": 55089,
+      "runner": "focused-test",
+      "test": "dev.vibris.core.ArtifactHardeningTest.constructorRejectsRootThatCannotCreateArtifacts",
+      "owner_at_fault": "vibris",
+      "expected_outcome": "SERVER_NOT_READY",
+      "expected_cleanup": "STARTUP_REFUSAL"
+    }
+  ],
+  "clean_control": {
+    "test": "dev.vibris.integration.IrisSourceLifecycleTest.startSwitchClose",
+    "expected_outcome": "JOB_COMPLETED",
+    "expected_cleanup": "FULL"
+  }
+}

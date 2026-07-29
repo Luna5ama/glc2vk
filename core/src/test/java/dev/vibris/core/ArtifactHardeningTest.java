@@ -7,10 +7,17 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.AclEntry;
+import java.nio.file.attribute.AclEntryFlag;
+import java.nio.file.attribute.AclEntryPermission;
+import java.nio.file.attribute.AclEntryType;
+import java.nio.file.attribute.AclFileAttributeView;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.EnumSet;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -94,6 +101,26 @@ class ArtifactHardeningTest {
         clock.advance(ArtifactManager.UNREPORTED_TTL);
         try (ArtifactManager.JobTransaction ignored = manager.beginJob("workspace", "eligible", 400)) {
             assertFalse(Files.exists(protectedJob.directory()));
+        }
+    }
+
+    @Test
+    void constructorRejectsRootThatCannotCreateArtifacts() throws Exception {
+        Path root = Files.createDirectory(temp.resolve("unwritable"));
+        AclFileAttributeView view = Files.getFileAttributeView(root, AclFileAttributeView.class);
+        List<AclEntry> original = view.getAcl();
+        AclEntry denyCreate = AclEntry.newBuilder()
+            .setType(AclEntryType.DENY)
+            .setPrincipal(view.getOwner())
+            .setPermissions(EnumSet.of(AclEntryPermission.ADD_FILE, AclEntryPermission.ADD_SUBDIRECTORY))
+            .setFlags(EnumSet.noneOf(AclEntryFlag.class))
+            .build();
+        try {
+            view.setAcl(java.util.stream.Stream.concat(
+                java.util.stream.Stream.of(denyCreate), original.stream()).toList());
+            assertThrows(IllegalStateException.class, () -> new ArtifactManager(root, 4_096));
+        } finally {
+            view.setAcl(original);
         }
     }
 

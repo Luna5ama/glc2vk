@@ -172,6 +172,19 @@ class RuntimeJobExecutorTest {
         assertTrue(fixture.activator.ready());
     }
 
+    @Test
+    void activeLinkTamperFailsAtFinalBoundaryAndMarksServerNotReady() throws Exception {
+        Fixture fixture = new Fixture();
+        Source source = fixture.source("A");
+        fixture.link.tampered = true;
+
+        RuntimeJobExecutor.Failure failure = assertThrows(
+            RuntimeJobExecutor.Failure.class, () -> fixture.executor.execute(job(source.lease), ignored -> { }));
+
+        assertEquals(ErrorCode.SYMLINK_SWITCH_FAILED, failure.code);
+        assertFalse(fixture.activator.ready());
+    }
+
     private static CoreJob job(SourceRegistry.Lease source) {
         SubmitJob submission = SubmitJob.newBuilder()
             .setRequestId("request")
@@ -246,6 +259,7 @@ class RuntimeJobExecutorTest {
 
     private static final class RecordingLink implements ShaderLink {
         private final List<String> events;
+        private boolean tampered;
 
         RecordingLink(List<String> events) {
             this.events = events;
@@ -267,7 +281,8 @@ class RuntimeJobExecutorTest {
         }
 
         @Override
-        public boolean retainsActiveSource() {
+        public boolean retainsActiveSource() throws Failure {
+            if (tampered) throw new Failure("active shader link changed", false);
             return true;
         }
     }

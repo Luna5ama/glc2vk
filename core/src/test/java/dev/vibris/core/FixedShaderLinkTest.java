@@ -103,6 +103,59 @@ class FixedShaderLinkTest {
         assertTrue(Files.isRegularFile(sentinel));
     }
 
+    @Test
+    void replacedActiveSymlinkFailsSwitchWithoutTouchingReplacementTarget() throws Exception {
+        Path pending = Files.createDirectory(temp.resolve("pending-replaced-link"));
+        Path shaderpack = Files.createDirectory(temp.resolve("shaderpack-replaced-link"));
+        Path outside = Files.createDirectory(temp.resolve("outside-replaced-link"));
+        Path sentinel = Files.writeString(outside.resolve("sentinel.txt"), "outside");
+        SourceRegistry registry = new SourceRegistry(pending, new CoreProbe());
+        SourceRegistry.Lease sourceA = source(registry, pending, "A");
+        SourceRegistry.Lease sourceB = source(registry, pending, "B");
+        FixedShaderLink link = new FixedShaderLink(pending, shaderpack);
+        link.prepare();
+        link.switchTo(sourceA, () -> { });
+        Path active = shaderpack.resolve("shaders");
+        Files.delete(active);
+        Files.createSymbolicLink(active, outside);
+
+        ShaderLink.Failure failure = assertThrows(
+            ShaderLink.Failure.class, () -> link.switchTo(sourceB, () -> { }));
+
+        assertFalse(failure.stable());
+        assertEquals(outside, Files.readSymbolicLink(active));
+        assertTrue(Files.isRegularFile(sentinel));
+        assertFalse(Files.exists(shaderpack.resolve("shaders.next." + sourceB.uuid()),
+            java.nio.file.LinkOption.NOFOLLOW_LINKS));
+
+        ShaderLink.Failure detachFailure = assertThrows(ShaderLink.Failure.class, link::detach);
+        assertFalse(detachFailure.stable());
+        assertFalse(Files.exists(active, java.nio.file.LinkOption.NOFOLLOW_LINKS));
+        assertTrue(Files.isRegularFile(sentinel));
+    }
+
+    @Test
+    void ordinaryReplacementFailsRetentionAndDetachWithoutDeletingIt() throws Exception {
+        Path pending = Files.createDirectory(temp.resolve("pending-replaced-directory"));
+        Path shaderpack = Files.createDirectory(temp.resolve("shaderpack-replaced-directory"));
+        SourceRegistry registry = new SourceRegistry(pending, new CoreProbe());
+        SourceRegistry.Lease source = source(registry, pending, "A");
+        FixedShaderLink link = new FixedShaderLink(pending, shaderpack);
+        link.prepare();
+        link.switchTo(source, () -> { });
+        Path active = shaderpack.resolve("shaders");
+        Files.delete(active);
+        Files.createDirectory(active);
+        Path sentinel = Files.writeString(active.resolve("sentinel.txt"), "user");
+
+        ShaderLink.Failure retainFailure = assertThrows(ShaderLink.Failure.class, link::retainsActiveSource);
+        ShaderLink.Failure detachFailure = assertThrows(ShaderLink.Failure.class, link::detach);
+
+        assertFalse(retainFailure.stable());
+        assertFalse(detachFailure.stable());
+        assertTrue(Files.isRegularFile(sentinel));
+    }
+
     private static SourceRegistry.Lease source(SourceRegistry registry, Path pending, String marker) throws Exception {
         String uuid = UUID.randomUUID().toString();
         byte[] content = marker.getBytes(java.nio.charset.StandardCharsets.UTF_8);

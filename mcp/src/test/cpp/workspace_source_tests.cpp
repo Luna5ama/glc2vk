@@ -144,13 +144,27 @@ void checked_file_swap_does_not_read_reparse_target() {
     require(!fs::exists(destination / "checked.glsl"), "The copier read a target through the swapped path.");
 }
 
+void source_soak() {
+    WorkspaceFixture fixture;
+    constexpr std::size_t iterations = 1'000;
+    for (std::size_t index = 0; index < iterations; ++index) {
+        {
+            SourcePreparer preparer(fixture.worktree(), fixture.pending(), generous_limits());
+            const auto prepared = preparer.prepare_workspace();
+            require(fs::is_directory(prepared.directory()), "Soak iteration did not prepare a source.");
+        }
+        require(pending_has_no_sources(fixture.pending()), "Soak iteration retained an owned source.");
+    }
+}
+
 using TestCase = std::pair<std::string_view, void (*)()>;
-constexpr std::array<TestCase, 5> test_cases {{
+constexpr std::array<TestCase, 6> test_cases {{
     {"WorkspaceSnapshotTrackedUntrackedIgnoredAndRetry", workspace_snapshot_tracked_untracked_ignored_and_retry},
     {"StagingPromotion", staging_promotion},
     {"MutationTwiceFails", mutation_twice_fails},
     {"MissingPendingRootRejected", missing_pending_root_is_rejected},
     {"CheckedFileSwapDoesNotReadReparseTarget", checked_file_swap_does_not_read_reparse_target},
+    {"SourceSoak", source_soak},
 }};
 
 } // namespace

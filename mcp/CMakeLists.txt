@@ -6,10 +6,54 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(VIBRIS_ENABLE_SANITIZERS "Enable native address and undefined-behavior sanitizers" OFF)
+if(VIBRIS_ENABLE_SANITIZERS)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+        add_link_options(-fsanitize=address,undefined)
+        if(WIN32)
+            add_compile_definitions(
+                VIBRIS_SANITIZER_BUILD
+                _DISABLE_STRING_ANNOTATION
+                _DISABLE_VECTOR_ANNOTATION)
+            execute_process(
+                COMMAND "${CMAKE_CXX_COMPILER}" -print-resource-dir
+                OUTPUT_VARIABLE VIBRIS_CLANG_RESOURCE_DIR
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                COMMAND_ERROR_IS_FATAL ANY)
+            set(VIBRIS_SANITIZER_RUNTIME_DIR "${VIBRIS_CLANG_RESOURCE_DIR}/lib/windows")
+        endif()
+    elseif(MSVC)
+        add_compile_options(/fsanitize=address /Oy-)
+        add_link_options(/INCREMENTAL:NO)
+    else()
+        message(FATAL_ERROR "VIBRIS_ENABLE_SANITIZERS requires Clang, GCC, or MSVC")
+    endif()
+endif()
+
 find_package(Protobuf CONFIG REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+
+if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND NOT MSVC)
+    get_property(VIBRIS_IMPORTED_TARGETS DIRECTORY PROPERTY IMPORTED_TARGETS)
+    foreach(VIBRIS_IMPORTED_TARGET IN LISTS VIBRIS_IMPORTED_TARGETS)
+        if(VIBRIS_IMPORTED_TARGET MATCHES "^absl::")
+            get_target_property(VIBRIS_IMPORTED_LINK_LIBRARIES
+                "${VIBRIS_IMPORTED_TARGET}" INTERFACE_LINK_LIBRARIES)
+            if(VIBRIS_IMPORTED_LINK_LIBRARIES)
+                list(FILTER VIBRIS_IMPORTED_LINK_LIBRARIES EXCLUDE REGEX
+                    "^(\\$<LINK_ONLY:)?-ignore:4221>?$")
+                set_target_properties("${VIBRIS_IMPORTED_TARGET}" PROPERTIES
+                    INTERFACE_LINK_LIBRARIES "${VIBRIS_IMPORTED_LINK_LIBRARIES}")
+            endif()
+        endif()
+    endforeach()
+    unset(VIBRIS_IMPORTED_TARGETS)
+    unset(VIBRIS_IMPORTED_TARGET)
+    unset(VIBRIS_IMPORTED_LINK_LIBRARIES)
+endif()
 
 if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
     set(VIBRIS_LIBARCHIVE_ROOT "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
@@ -67,6 +111,7 @@ add_library(vibris_mcp_core STATIC
     src/main/cpp/grpc_unary_calls.cpp
     src/main/cpp/job_protocol.cpp
     src/main/cpp/mcp_stdio_server.cpp
+    src/main/cpp/native_metrics.cpp
     src/main/cpp/pending_request_registry.cpp
     src/main/cpp/phase_one_backend.cpp
     src/main/cpp/phase_two_source_handler.cpp
@@ -200,7 +245,8 @@ if(BUILD_TESTING)
             StagingPromotion
             MutationTwiceFails
             MissingPendingRootRejected
-            CheckedFileSwapDoesNotReadReparseTarget)
+            CheckedFileSwapDoesNotReadReparseTarget
+            SourceSoak)
         add_test(NAME ${scenario} COMMAND vibris-workspace-source-tests ${scenario})
     endforeach()
 
@@ -222,8 +268,16 @@ if(BUILD_TESTING)
             --request-count 1
             --drop-after 0
             --registry-limit 1)
+    add_test(
+        NAME GrpcReconnect
+        COMMAND vibris-grpc-tests
+            --scenario async-reconnect-registry
+            --port 55074
+            --request-count 256
+            --drop-after 64
+            --registry-limit 256)
     set_tests_properties(
-        AsyncGrpcReconnectAndBoundedRegistry NoDetachedThreads
+        AsyncGrpcReconnectAndBoundedRegistry NoDetachedThreads GrpcReconnect
         PROPERTIES RUN_SERIAL TRUE TIMEOUT 30)
 
     foreach(scenario
@@ -263,4 +317,13 @@ if(BUILD_TESTING)
     add_stdio_mcp_probe(StdioMcpSixToolHappyPath)
     add_stdio_mcp_probe(ConfigPersistence)
     add_stdio_mcp_probe(FakeServerStatus)
+    add_stdio_mcp_probe(StdioLifecycle)
+
+    if(VIBRIS_ENABLE_SANITIZERS AND VIBRIS_SANITIZER_RUNTIME_DIR)
+        get_property(VIBRIS_TESTS DIRECTORY PROPERTY TESTS)
+        set_tests_properties(${VIBRIS_TESTS} PROPERTIES
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:${VIBRIS_SANITIZER_RUNTIME_DIR};ASAN_OPTIONS=set:detect_container_overflow=0")
+        unset(VIBRIS_TESTS)
+    endif()
 endif()

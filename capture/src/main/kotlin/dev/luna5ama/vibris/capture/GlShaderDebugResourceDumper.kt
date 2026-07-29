@@ -8,7 +8,6 @@ import org.lwjgl.opengl.GL15C
 import org.lwjgl.opengl.GL21C
 import org.lwjgl.opengl.GL30C
 import org.lwjgl.opengl.GL42C
-import org.lwjgl.opengl.GL43C
 import org.lwjgl.opengl.GL45C
 import org.lwjgl.system.MemoryUtil
 import java.awt.image.BufferedImage
@@ -22,7 +21,7 @@ import kotlin.math.roundToInt
 
 object GlShaderDebugResourceDumper : ShaderDebugResourceDumper {
     override fun dumpStorageBuffer(buffer: StorageBufferInfo, output: Path) = buildJsonObject {
-        GL42C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT)
+        GL42C.glMemoryBarrier(GL42C.GL_BUFFER_UPDATE_BARRIER_BIT)
         val size = GL45C.glGetNamedBufferParameteri64(buffer.glId, GL15C.GL_BUFFER_SIZE)
         requireAllocation(size, "SSBO")
         val data = MemoryUtil.memAlloc(size.toInt())
@@ -58,6 +57,7 @@ object GlShaderDebugResourceDumper : ShaderDebugResourceDumper {
         val totalBytes = allocationSize(width, height, depth, components)
         val data = MemoryUtil.memAlloc(totalBytes).order(ByteOrder.nativeOrder())
         try {
+            GL42C.glMemoryBarrier(GL42C.GL_TEXTURE_UPDATE_BARRIER_BIT)
             GL45C.glGetTextureImage(textureId, 0, pixelKind.format(components), pixelKind.type, data)
             if (raw) writeBytes(output, data) else writePng(output, data, width, height, depth, components, pixelKind)
         } finally {

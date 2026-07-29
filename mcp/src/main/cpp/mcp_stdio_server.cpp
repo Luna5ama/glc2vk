@@ -1,4 +1,5 @@
 #include "mcp_stdio_server.hpp"
+#include "native_metrics.hpp"
 
 #include <string>
 #include <utility>
@@ -88,6 +89,7 @@ int McpStdioServer::run() {
             if (!line.empty() && line.back() == '\r') line.pop_back();
             handle_line(line);
         }
+        record_native_metrics();
         line.clear();
         oversized = false;
     }
@@ -98,6 +100,7 @@ int McpStdioServer::run() {
     } else if (!line.empty()) {
         if (line.back() == '\r') line.pop_back();
         handle_line(line);
+        record_native_metrics();
     }
     return 0;
 }
