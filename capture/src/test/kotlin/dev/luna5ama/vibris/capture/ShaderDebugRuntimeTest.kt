@@ -98,7 +98,7 @@ class ShaderDebugRuntimeTest {
                 glFinish()
                 metrics.begin("drain")
                 metrics.end()
-                assertTrue(metrics.snapshot().getValue("test_draw").samples.single() >= 0)
+                assertTrue(metrics.snapshot().getValue("test_draw").p50 >= 0)
             } finally {
                 glPixelStorei(GL_PACK_SKIP_PIXELS, 0)
                 glPixelStorei(GL_PACK_SWAP_BYTES, 0)

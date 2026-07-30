@@ -29,15 +29,14 @@ class ShaderDebugStateTest {
     }
 
     @Test
-    fun timingHistoryRetainsTheNewestSamples() {
+    fun timingHistoryReturnsPercentilesForTheNewestSamples() {
         val history = TimingHistory(3)
         listOf(10L, 20L, 30L, 40L).forEach(history::add)
         val stats = history.stats()
         assertEquals(30, stats.average)
-        assertEquals(20, stats.minimum)
-        assertEquals(40, stats.maximum)
-        assertEquals(40, stats.latest)
-        assertEquals(listOf(20L, 30L, 40L), stats.samples)
+        assertEquals(21, stats.p5)
+        assertEquals(39, stats.p95)
+        assertEquals(30, stats.p50)
     }
 
     private class EmptyHost(private val root: Path) : ShaderDebugHost {

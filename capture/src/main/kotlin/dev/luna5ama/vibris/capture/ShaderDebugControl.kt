@@ -102,10 +102,9 @@ class ShaderDebugControl @JvmOverloads constructor(
             metrics.snapshot().forEach { (name, stats) ->
                 put(name, buildJsonObject {
                     put("avg", stats.average)
-                    put("min", stats.minimum)
-                    put("max", stats.maximum)
-                    put("latest", stats.latest)
-                    put("samples", JsonArray(stats.samples.map(::JsonPrimitive)))
+                    put("p5", stats.p5)
+                    put("p95", stats.p95)
+                    put("p50", stats.p50)
                 })
             }
         })

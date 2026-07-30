@@ -3,6 +3,8 @@ package dev.luna5ama.vibris.capture
 import org.lwjgl.opengl.GL15C
 import org.lwjgl.opengl.GL33C
 import java.util.ArrayDeque
+import kotlin.math.ceil
+import kotlin.math.roundToLong
 
 internal class GpuTimingMetrics {
     private val active = ArrayDeque<ActiveTiming>()
@@ -60,13 +62,19 @@ internal class TimingHistory(private val capacity: Int = 50) {
     }
 
     fun stats(): GpuTimingStats {
-        val snapshot = samples.toList()
+        val sorted = samples.sorted()
         return GpuTimingStats(
-            snapshot.sum() / snapshot.size,
-            snapshot.min(),
-            snapshot.max(),
-            snapshot.last(),
-            snapshot
+            samples.sum() / samples.size,
+            percentile(sorted, 0.05),
+            percentile(sorted, 0.95),
+            percentile(sorted, 0.50),
         )
+    }
+
+    private fun percentile(sorted: List<Long>, percentile: Double): Long {
+        val index = sorted.lastIndex * percentile
+        val lower = index.toInt()
+        val upper = ceil(index).toInt()
+        return (sorted[lower] + (sorted[upper] - sorted[lower]) * (index - lower)).roundToLong()
     }
 }

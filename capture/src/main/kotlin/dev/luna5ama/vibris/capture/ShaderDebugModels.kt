@@ -20,10 +20,9 @@ data class ShaderDebugError(
 
 data class GpuTimingStats(
     val average: Long,
-    val minimum: Long,
-    val maximum: Long,
-    val latest: Long,
-    val samples: List<Long>
+    val p5: Long,
+    val p95: Long,
+    val p50: Long,
 )
 
 interface ShaderDebugHost {
