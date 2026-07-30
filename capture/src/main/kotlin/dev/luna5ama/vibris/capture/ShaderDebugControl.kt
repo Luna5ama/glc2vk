@@ -168,11 +168,17 @@ class ShaderDebugControl @JvmOverloads constructor(
         }
     }
 
-    fun pushPass(name: String) = passStack.get().addLast(name)
+    fun pushPass(name: String) {
+        passStack.get().addLast(name)
+        metrics.begin("${name}_total")
+    }
 
     fun popPass() {
         val stack = passStack.get()
-        if (stack.isNotEmpty()) stack.removeLast()
+        if (stack.isNotEmpty()) {
+            metrics.end()
+            stack.removeLast()
+        }
         if (stack.isEmpty()) passStack.remove()
     }
 
