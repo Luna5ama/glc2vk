@@ -6,6 +6,7 @@ import dev.vibris.api.CapturePlan
 import dev.vibris.api.CaptureResult
 import dev.vibris.api.ContextApplyResult
 import dev.vibris.api.ContextValidationResult
+import dev.vibris.api.DebugControlCommand
 import dev.vibris.api.ReloadResult
 import dev.vibris.api.ResourceCatalog
 import dev.vibris.api.RuntimeStatus
@@ -20,6 +21,9 @@ interface VibrisRuntimeHost : AutoCloseable {
     fun executeOnClient(task: Runnable)
 
     fun status(): RuntimeStatus
+
+    fun debugControl(command: DebugControlCommand): String =
+        throw UnsupportedOperationException("Debug control is unavailable")
 
     fun presets(): List<ScenePreset> = java.util.List.of()
 

@@ -6,6 +6,7 @@ import dev.vibris.api.CapturePlan
 import dev.vibris.api.CaptureResult
 import dev.vibris.api.ContextApplyResult
 import dev.vibris.api.ContextValidationResult
+import dev.vibris.api.DebugControlCommand
 import dev.vibris.api.ReloadResult
 import dev.vibris.api.ResourceCatalog
 import dev.vibris.api.RuntimeStatus
@@ -44,6 +45,9 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
         },
         CancellationToken.none(),
     )
+
+    override fun debugControl(command: DebugControlCommand): CompletionStage<String> =
+        onClient(Supplier { host.debugControl(command) }, CancellationToken.none())
 
     override fun listPresets(): CompletionStage<List<ScenePreset>> =
         onClient(Supplier(host::presets), CancellationToken.none())

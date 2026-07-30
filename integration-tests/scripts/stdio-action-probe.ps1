@@ -46,12 +46,19 @@ try
         -Messages $allowedMessages -TimeoutSeconds $TimeoutSeconds
     $tools = @((Get-G007Response -Responses $allowedResponses -Id 2).result.tools |
         ForEach-Object { $_.name })
-    $expectedTools = @("vibris_get_config", "vibris_list_presets", "vibris_configure",
-        "vibris_get_status", "vibris_run_recipe", "vibris_run_actions")
+    $expectedTools = @(
+        "vibris_get_config", "vibris_list_presets", "vibris_configure",
+        "vibris_get_status", "vibris_run_recipe", "vibris_run_actions",
+        "vibris_get_capture_status", "vibris_reload_shader", "vibris_capture_pass",
+        "vibris_capture_multi", "vibris_get_shader_status", "vibris_get_shader_errors",
+        "vibris_schedule_screenshot", "vibris_get_screenshot_result", "vibris_get_gpu_metrics",
+        "vibris_list_ssbos", "vibris_dump_ssbo", "vibris_list_textures",
+        "vibris_dump_texture", "vibris_list_patched_shaders"
+    )
     if ([string]::Join("`n", $tools) -cne [string]::Join("`n", $expectedTools) -or
         @($tools | Where-Object { $_ -match '(?i)atomic|submit|poll|wait' }).Count -ne 0)
     {
-        throw "tools/list did not remain the exact frozen six-tool surface."
+        throw "tools/list did not remain the expected 20-tool surface."
     }
     $empty = Get-G007ToolPayload (Get-G007Response -Responses $allowedResponses -Id 4)
     $allowed = Get-G007ToolPayload (Get-G007Response -Responses $allowedResponses -Id 5)

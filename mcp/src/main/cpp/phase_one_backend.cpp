@@ -9,6 +9,8 @@
 
 #include "config_document.hpp"
 #include "config_store.hpp"
+#include "debug_protocol.hpp"
+#include "debug_tools.hpp"
 #include "phase_two_source_handler.hpp"
 #include "result_mapper.hpp"
 #include "scene_context_resolver.hpp"
@@ -60,6 +62,7 @@ public:
             if (name == "vibris_list_presets") return list_presets(arguments);
             if (name == "vibris_configure") return configure(arguments);
             if (name == "vibris_get_status") return get_status();
+            if (is_debug_tool(name)) return debug_control(name, arguments);
             if (name == "vibris_run_recipe" || name == "vibris_run_actions") {
                 return run_job(name, arguments);
             }
@@ -157,6 +160,15 @@ private:
                 result["worktree_root"] = binding_.root.string();
                 return result;
             });
+    }
+
+    ToolOutcome debug_control(std::string_view name, const Json& arguments) {
+        auto request = DebugProtocol::request(name, arguments);
+        return unary<control::DebugControlResponse>(
+            [this, request = std::move(request)](auto completion) mutable {
+                return client().debug_control(std::move(request), std::move(completion));
+            },
+            [](const auto& response) -> ToolOutcome { return DebugProtocol::response(response); });
     }
 
     ToolOutcome run_job(std::string_view name, const Json& arguments) {

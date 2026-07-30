@@ -178,7 +178,7 @@ world, time, and camera catalogs:
 
 The configure request uses that same preset ID for `time_preset_id` and `camera_preset_id`.
 
-## Six MCP tools
+## MCP tools
 
 The server negotiates MCP protocol `2024-11-05` and advertises tools only. Every tool result contains one JSON text
 content item and matching structured content.
@@ -191,6 +191,21 @@ content item and matching structured content.
 | `vibris_get_status` | empty object | server/runtime state, queue, resources, pending/artifact roots and quota |
 | `vibris_run_recipe` | one recipe form below | synchronous terminal job result and artifact metadata |
 | `vibris_run_actions` | optional source plus up to 64 actions | synchronous terminal job result and artifact metadata |
+
+The legacy capture/debug controls are exposed through the same MCP and gRPC connection:
+
+| Tools | Purpose |
+|-------|---------|
+| `vibris_get_capture_status`, `vibris_capture_pass`, `vibris_capture_multi` | inspect or queue compute captures |
+| `vibris_reload_shader`, `vibris_get_shader_status`, `vibris_get_shader_errors` | reload and inspect the active shader pack |
+| `vibris_schedule_screenshot`, `vibris_get_screenshot_result` | schedule and locate an asynchronous host screenshot |
+| `vibris_get_gpu_metrics` | read recent GPU pass timings |
+| `vibris_list_ssbos`, `vibris_dump_ssbo` | inspect or dump SSBOs by binding index |
+| `vibris_list_textures`, `vibris_dump_texture` | inspect or dump textures by logical name or OpenGL ID |
+| `vibris_list_patched_shaders` | inspect patched shader debug files |
+
+Debug dumps use the running Minecraft instance and execute on its client thread. Optional compute-capture paths are
+resolved inside the game directory; paths escaping it are rejected.
 
 There are no MCP resources and no aliases for these tool names. Unknown methods use JSON-RPC `-32601`; invalid tool
 arguments use a structured tool error rather than expanding the tool surface.
@@ -275,8 +290,8 @@ Use `vibris_run_actions` only when a recipe cannot express the sequence. Support
 - `dump_texture` with logical resource name, raw/PNG format, and artifact name
 - `dump_buffer` with logical resource name, BIN format, and artifact name
 
-The source and configured scene are activated by the system, not by user actions. Shell execution, arbitrary path loads,
-manual shader reload actions, and external capture hooks are not part of the schema. Artifact names are safe file-name
+The source and configured scene are activated by the system, not by user actions. Job actions do not include shell
+execution, arbitrary path loads, manual shader reloads, or external capture hooks. Artifact names are safe file-name
 segments, not paths.
 
 ## Results and artifacts

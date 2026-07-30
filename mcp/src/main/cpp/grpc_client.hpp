@@ -42,6 +42,9 @@ using ValidateContextCompletion = std::function<void(
 using GetStatusCompletion = std::function<void(
     const grpc::Status&,
     const ::vibris::control::v1::GetStatusResponse&)>;
+using DebugControlCompletion = std::function<void(
+    const grpc::Status&,
+    const ::vibris::control::v1::DebugControlResponse&)>;
 
 class GrpcClient final {
 public:
@@ -60,6 +63,9 @@ public:
         ::vibris::control::v1::ValidateContextRequest request,
         ValidateContextCompletion completion);
     bool get_status(GetStatusCompletion completion);
+    bool debug_control(
+        ::vibris::control::v1::DebugControlRequest request,
+        DebugControlCompletion completion);
     bool submit(::vibris::control::v1::ClientMessage message, GrpcCompletion completion);
     bool cancel(std::string_view request_id, std::string reason);
     void shutdown();

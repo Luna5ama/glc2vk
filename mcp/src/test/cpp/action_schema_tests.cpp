@@ -54,7 +54,7 @@ void schema_rejects_before_dispatch() {
     require(dispatches == 2, "Allowed action sequences were not dispatched exactly once each.");
 }
 
-void registry_has_exactly_six_unique_tools() {
+void registry_has_exactly_the_supported_tools() {
     ToolRegistry registry;
     std::set<std::string> names;
     for (const auto& definition : registry.definitions()) {
@@ -62,7 +62,12 @@ void registry_has_exactly_six_unique_tools() {
     }
     const std::set<std::string> expected{
         "vibris_get_config", "vibris_list_presets", "vibris_configure",
-        "vibris_get_status", "vibris_run_recipe", "vibris_run_actions"};
+        "vibris_get_status", "vibris_run_recipe", "vibris_run_actions",
+        "vibris_get_capture_status", "vibris_reload_shader", "vibris_capture_pass",
+        "vibris_capture_multi", "vibris_get_shader_status", "vibris_get_shader_errors",
+        "vibris_schedule_screenshot", "vibris_get_screenshot_result", "vibris_get_gpu_metrics",
+        "vibris_list_ssbos", "vibris_dump_ssbo", "vibris_list_textures",
+        "vibris_dump_texture", "vibris_list_patched_shaders"};
     require(registry.definitions().size() == expected.size() && names == expected,
         "Tool registry added a duplicate, atomic, submit, poll, or wait tool.");
     const std::array forbidden_tools{
@@ -75,9 +80,41 @@ void registry_has_exactly_six_unique_tools() {
     }
 }
 
+void debug_tool_schemas_reject_invalid_arguments() {
+    std::size_t dispatches = 0;
+    ToolRegistry registry([&](std::string_view, const Json&) {
+        ++dispatches;
+        return Json{{"accepted", true}};
+    });
+
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_capture_pass", Json::object())),
+        "Capture pass accepted a missing pass name.");
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_schedule_screenshot", {{"frames", 0}})),
+        "Screenshot scheduling accepted zero frames.");
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_dump_texture", Json::object())),
+        "Texture dump accepted no texture selector.");
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_dump_ssbo", Json::object())),
+        "SSBO dump accepted a missing binding index.");
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_dump_texture", {{"name", "colortex0"}, {"id", 1}})),
+        "Texture dump accepted two texture selectors.");
+    require(std::holds_alternative<Json>(
+                registry.invoke("vibris_dump_texture", {{"name", "colortex0"}, {"raw", true}})),
+        "Texture dump rejected a valid logical name.");
+    require(dispatches == 1, "Invalid debug arguments reached dispatch.");
+}
+
 void registry_declares_accurate_tool_annotations() {
     ToolRegistry registry;
-    const std::set<std::string> read_only{"vibris_get_config", "vibris_list_presets", "vibris_get_status"};
+    const std::set<std::string> read_only{
+        "vibris_get_config", "vibris_list_presets", "vibris_get_status",
+        "vibris_get_capture_status", "vibris_get_shader_status", "vibris_get_shader_errors",
+        "vibris_get_screenshot_result", "vibris_get_gpu_metrics", "vibris_list_ssbos",
+        "vibris_list_textures", "vibris_list_patched_shaders"};
     for (const auto& definition : registry.definitions()) {
         const auto& annotations = definition.at("annotations");
         const auto name = definition.at("name").get<std::string>();
@@ -92,7 +129,8 @@ void registry_declares_accurate_tool_annotations() {
 int main() {
     try {
         schema_rejects_before_dispatch();
-        registry_has_exactly_six_unique_tools();
+        registry_has_exactly_the_supported_tools();
+        debug_tool_schemas_reject_invalid_arguments();
         registry_declares_accurate_tool_annotations();
         std::cout << "PASS ActionSchemaRejectsForbiddenAndDuplicateTools\n";
         return 0;

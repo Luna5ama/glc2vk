@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "tool_argument_policy.hpp"
+#include "debug_tools.hpp"
 
 namespace vibris::mcp {
 namespace {
@@ -123,7 +124,7 @@ Json build_definitions() {
          {"fov", {{"type", "number"}, {"minimum", 1}, {"maximum", 180}}},
          {"default_warmup_frames", bounded_integer(0, std::numeric_limits<std::uint32_t>::max())}},
         {"save_id", "dimension_id", "time_preset_id", "camera_preset_id", "fov", "default_warmup_frames"});
-    return Json::array({
+    Json definitions = Json::array({
         definition("vibris_get_config", "Read this worktree's persisted Vibris configuration.", empty, true),
         definition("vibris_list_presets", "List valid Minecraft scene presets, optionally filtered by text.",
                    closed_object({{"filter", {{"type", "string"}, {"minLength", 1}}}}), true),
@@ -144,6 +145,8 @@ Json build_definitions() {
                                   {"actions", {{"type", "array"}, {"items", action_schema()}, {"maxItems", 64}}}},
                                  {"actions"}), false),
     });
+    append_debug_tool_definitions(definitions);
+    return definitions;
 }
 
 bool has_type(const Json& value, std::string_view type) {

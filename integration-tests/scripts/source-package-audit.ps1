@@ -94,7 +94,12 @@ foreach ($requiredField in @("string uuid", "uint64 file_count", "uint64 total_b
     }
 }
 
-$toolSource = Get-Content -Raw -LiteralPath (Join-Path $script:VibrisRoot "mcp\src\main\cpp\tool_registry.cpp")
+$toolSource = (@(
+    "mcp\src\main\cpp\tool_registry.cpp",
+    "mcp\src\main\cpp\debug_tools.cpp"
+) | ForEach-Object {
+    Get-Content -Raw -LiteralPath (Join-Path $script:VibrisRoot $_)
+}) -join "`n"
 $tools = @([regex]::Matches($toolSource, 'definition\("(vibris_[^"]+)"') | ForEach-Object {
     $_.Groups[1].Value
 })
@@ -104,12 +109,26 @@ $expectedTools = @(
     "vibris_configure",
     "vibris_get_status",
     "vibris_run_recipe",
-    "vibris_run_actions"
+    "vibris_run_actions",
+    "vibris_get_capture_status",
+    "vibris_reload_shader",
+    "vibris_capture_pass",
+    "vibris_capture_multi",
+    "vibris_get_shader_status",
+    "vibris_get_shader_errors",
+    "vibris_schedule_screenshot",
+    "vibris_get_screenshot_result",
+    "vibris_get_gpu_metrics",
+    "vibris_list_ssbos",
+    "vibris_dump_ssbo",
+    "vibris_list_textures",
+    "vibris_dump_texture",
+    "vibris_list_patched_shaders"
 )
 if ([string]::Join("`n", $tools) -cne [string]::Join("`n", $expectedTools) -or
     @($tools | Select-Object -Unique).Count -ne $expectedTools.Count)
 {
-    throw "Native MCP tool registry does not expose exactly the frozen six-tool surface."
+    throw "Native MCP tool registry does not expose exactly the expected 20-tool surface."
 }
 
 $mixinRoots = @("common", "fabric", "neoforge") | ForEach-Object {
@@ -137,6 +156,6 @@ if ($extraModJars.Count -ne 0)
     throw "Packaging must not emit a separate Vibris mod JAR: $($extraModJars[0].FullName)"
 }
 
-Write-Output ("PASS source_audit=true transport=grpc source_payload=reference tools=6 " +
+Write-Output ("PASS source_audit=true transport=grpc source_payload=reference tools=20 " +
     "jvm_language=kotlin native_mcp=cpp core_iris_jgit_imports=0 vibris_mixins=0 " +
     "renderdoc_dependencies=0 package_exe=1 package_iris_jar=1 extra_mod_jars=0")

@@ -104,6 +104,8 @@ target_link_libraries(vibris-control-client PRIVATE vibris_control_protocol nloh
 add_library(vibris_mcp_core STATIC
     src/main/cpp/config_document.cpp
     src/main/cpp/config_store.cpp
+    src/main/cpp/debug_tools.cpp
+    src/main/cpp/debug_protocol.cpp
     src/main/cpp/commit_extractor.cpp
     src/main/cpp/git_repository.cpp
     src/main/cpp/grpc_client.cpp
@@ -217,7 +219,7 @@ if(BUILD_TESTING)
     add_test(
         NAME stdio-fixture-contract
         COMMAND vibris-stdio-fixture-test
-            "${CMAKE_CURRENT_SOURCE_DIR}/../integration-tests/fixtures/mcp/happy-six-tools.jsonl")
+            "${CMAKE_CURRENT_SOURCE_DIR}/../integration-tests/fixtures/mcp/happy-core-tools.jsonl")
 
     foreach(scenario
             ConfigValidAtomicRoundTrip
@@ -310,11 +312,11 @@ if(BUILD_TESTING)
                 -FakeServerJar
                     "${CMAKE_CURRENT_SOURCE_DIR}/../test-runtime/build/libs/vibris-test-runtime.jar"
                 -Requests
-                    "${CMAKE_CURRENT_SOURCE_DIR}/../integration-tests/fixtures/mcp/happy-six-tools.jsonl")
+                    "${CMAKE_CURRENT_SOURCE_DIR}/../integration-tests/fixtures/mcp/happy-core-tools.jsonl")
         set_tests_properties(${test_name} PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
     endfunction()
 
-    add_stdio_mcp_probe(StdioMcpSixToolHappyPath)
+    add_stdio_mcp_probe(StdioMcpToolHappyPath)
     add_stdio_mcp_probe(ConfigPersistence)
     add_stdio_mcp_probe(FakeServerStatus)
     add_stdio_mcp_probe(StdioLifecycle)
