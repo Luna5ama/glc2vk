@@ -21,6 +21,14 @@ class SourceRegistrySecurityTest {
     Path temp;
 
     @Test
+    void sourceFreeJobsAcceptAnEmptySourceSet() throws Exception {
+        Path pending = Files.createDirectory(temp.resolve("pending-source-free"));
+        SourceRegistry registry = new SourceRegistry(pending, new CoreProbe());
+
+        assertTrue(registry.validate(List.of(), 0).isEmpty());
+    }
+
+    @Test
     void multipleSourcesAreRejectedAtValidationBoundary() throws Exception {
         Path pending = Files.createDirectory(temp.resolve("pending-multiple"));
         PreparedSourceRef first = source(pending);

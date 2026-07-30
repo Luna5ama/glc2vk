@@ -26,6 +26,7 @@ internal class SourceRegistry @JvmOverloads constructor(
     @Throws(Failure::class)
     fun validate(references: List<PreparedSourceRef>, expectedCount: Int): List<Candidate> {
         if (references.isEmpty()) {
+            if (expectedCount == 0) return emptyList()
             throw Failure(ErrorCode.SOURCE_DIRECTORY_MISSING, "A source is required.")
         }
         if (references.size != expectedCount) {
