@@ -193,7 +193,9 @@ final class IrisCaptureTest {
         }
 
         @Override
-        public CompletionStage<ReloadResult> reloadVibrisShaderpack(CancellationToken cancellation) {
+        public CompletionStage<ReloadResult> reloadVibrisShaderpack(
+            Map<String, String> config, CancellationToken cancellation
+        ) {
             return CompletableFuture.completedFuture(ReloadResult.success(List.of()));
         }
 

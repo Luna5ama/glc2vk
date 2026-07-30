@@ -9,12 +9,28 @@
 
 namespace vibris::mcp {
 namespace control = ::vibris::control::v1;
+namespace {
+
+std::string config_value(const nlohmann::json& value) {
+    return value.is_string() ? value.get<std::string>() : value.dump();
+}
+
+void copy_config(const nlohmann::json& arguments, control::ShaderConfig& output) {
+    for (const auto& [key, value] : arguments.at("config").items()) {
+        (*output.mutable_values())[key] = config_value(value);
+    }
+}
+
+}
 
 std::optional<control::DebugControlRequest> DebugProtocol::request(
     const std::string_view tool_name, const nlohmann::json& arguments) {
     control::DebugControlRequest request;
     if (tool_name == "vibris_get_capture_status") request.mutable_capture_status();
-    else if (tool_name == "vibris_reload_shader") request.mutable_reload_shader();
+    else if (tool_name == "vibris_reload_shader") {
+        auto& command = *request.mutable_reload_shader();
+        if (arguments.contains("config")) copy_config(arguments, *command.mutable_config());
+    }
     else if (tool_name == "vibris_capture_pass") {
         auto& command = *request.mutable_capture_pass();
         command.set_pass(arguments.at("pass").get<std::string>());

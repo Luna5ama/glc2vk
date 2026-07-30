@@ -31,7 +31,10 @@ interface VibrisRuntimeAdapter : AutoCloseable {
         cancellation: CancellationToken,
     ): CompletionStage<ContextApplyResult>
 
-    fun reloadVibrisShaderpack(cancellation: CancellationToken): CompletionStage<ReloadResult>
+    fun reloadVibrisShaderpack(
+        config: Map<String, String>?,
+        cancellation: CancellationToken,
+    ): CompletionStage<ReloadResult>
 
     fun resetTemporalState(cancellation: CancellationToken): CompletionStage<TemporalResetResult>
 

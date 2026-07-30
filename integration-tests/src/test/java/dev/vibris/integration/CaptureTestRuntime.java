@@ -62,7 +62,9 @@ final class CaptureTestRuntime implements VibrisRuntimeAdapter {
     }
 
     @Override
-    public CompletionStage<ReloadResult> reloadVibrisShaderpack(CancellationToken cancellation) {
+    public CompletionStage<ReloadResult> reloadVibrisShaderpack(
+        Map<String, String> config, CancellationToken cancellation
+    ) {
         try {
             String source = Files.readString(shaderLink.resolve("main.glsl"), StandardCharsets.UTF_8).trim();
             active = source.startsWith("// ") ? source.substring(3) : source;

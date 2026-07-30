@@ -31,7 +31,7 @@ interface VibrisRuntimeHost : AutoCloseable {
 
     fun applyContext(context: SceneContext, cancellation: CancellationToken): CompletionStage<ContextApplyResult>
 
-    fun reload(cancellation: CancellationToken): ReloadResult
+    fun reload(config: Map<String, String>?, cancellation: CancellationToken): ReloadResult
 
     fun resetTemporal(cancellation: CancellationToken): TemporalResetResult
 

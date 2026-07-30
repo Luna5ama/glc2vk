@@ -10,6 +10,7 @@ import dev.vibris.protocol.v1.PreparedSourceRef;
 import dev.vibris.protocol.v1.RecipeSpec;
 import dev.vibris.protocol.v1.ReloadAndCaptureRecipe;
 import dev.vibris.protocol.v1.SceneContext;
+import dev.vibris.protocol.v1.ShaderConfig;
 import dev.vibris.protocol.v1.SubmitJob;
 import dev.vibris.protocol.v1.WaitFrames;
 import org.junit.jupiter.api.Test;
@@ -19,6 +20,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -47,6 +49,7 @@ class RuntimeJobExecutorTest {
             JobStage.JOB_STAGE_APPLYING_CONTEXT,
             JobStage.JOB_STAGE_WARMING_UP), progress);
         assertEquals(source.uuid, fixture.registry.activeUuid());
+        assertEquals(Map.of("SETTING_SAMPLE_COUNT", "32"), fixture.runtime.lastShaderConfig);
         assertTrue(Files.isDirectory(source.path));
     }
 
@@ -193,6 +196,7 @@ class RuntimeJobExecutorTest {
                 .setSaveId("save")
                 .setDimensionId("minecraft:overworld")
                 .setFov(70.0))
+            .setShaderConfig(ShaderConfig.newBuilder().putValues("SETTING_SAMPLE_COUNT", "32"))
             .setActions(ActionSequence.newBuilder().addActions(Action.newBuilder()
                 .setWaitFrames(WaitFrames.newBuilder().setFrameCount(3))))
             .build();

@@ -141,7 +141,12 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         try {
             progress.accept(JobStage.JOB_STAGE_RELOADING_SHADERS)
             probe.event(job.requestId, "RELOADING_SHADERS")
-            val reload: ReloadResult = await(runtime.reloadVibrisShaderpack(job.cancellation.token()), job, deadline)
+            val config = if (job.submission.hasShaderConfig()) job.submission.shaderConfig.valuesMap else null
+            val reload: ReloadResult = await(
+                runtime.reloadVibrisShaderpack(config, job.cancellation.token()),
+                job,
+                deadline,
+            )
             if (!reload.successful) {
                 activeStatePreserved = reload.activeStatePreserved
                 throw ShaderReloadFailure.create(shaderLogs, job, reload)
@@ -208,7 +213,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
 
     private fun reloadPreviousSource(): Boolean {
         try {
-            val result = runtime.reloadVibrisShaderpack(CancellationToken.none())
+            val result = runtime.reloadVibrisShaderpack(null, CancellationToken.none())
                 .toCompletableFuture()
                 .get(5, TimeUnit.SECONDS)
             return result.successful

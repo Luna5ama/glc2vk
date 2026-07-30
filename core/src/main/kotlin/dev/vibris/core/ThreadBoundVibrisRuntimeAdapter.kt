@@ -61,10 +61,13 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
     ): CompletionStage<ContextApplyResult> =
         onClientStage(Supplier { host.applyContext(context, cancellation) }, cancellation)
 
-    override fun reloadVibrisShaderpack(cancellation: CancellationToken): CompletionStage<ReloadResult> =
+    override fun reloadVibrisShaderpack(
+        config: Map<String, String>?,
+        cancellation: CancellationToken,
+    ): CompletionStage<ReloadResult> =
         onClient(
             Supplier {
-                val result = host.reload(cancellation)
+                val result = host.reload(config, cancellation)
                 if (result.successful) {
                     catalog = host.resourceCatalog(frames.currentFrame())
                 }

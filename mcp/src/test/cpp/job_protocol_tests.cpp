@@ -140,7 +140,11 @@ private:
 
 void request_mapping() {
     const std::vector sources{source("11111111-1111-4111-8111-111111111111")};
-    const Json arguments{{"recipe", "reload_and_capture"}, {"screenshot_format", "png"}};
+    const Json arguments{
+        {"recipe", "reload_and_capture"},
+        {"screenshot_format", "png"},
+        {"config", {{"SETTING_SAMPLE_COUNT", 32}, {"SETTING_CLOUDS", false}}},
+    };
     const auto context = SceneContextResolver::resolve(config(), presets());
 
     const auto message = JobProtocol::request(
@@ -170,6 +174,10 @@ void request_mapping() {
     require(job.timeouts().queue_timeout_ms() == 60'000 && job.timeouts().execution_timeout_ms() == 120'000 &&
             job.timeouts().total_timeout_ms() == 180'000,
         "SubmitJob timeout defaults were not mapped exactly.");
+    require(job.has_shader_config() &&
+                job.shader_config().values().at("SETTING_SAMPLE_COUNT") == "32" &&
+                job.shader_config().values().at("SETTING_CLOUDS") == "false",
+        "Shader config was not copied into SubmitJob.");
 }
 
 void remaining_execution_mappings() {

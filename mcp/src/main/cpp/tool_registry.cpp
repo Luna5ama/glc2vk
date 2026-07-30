@@ -60,14 +60,17 @@ Json source_variant_schema() {
 
 Json recipe_schema() {
     const auto frames = bounded_integer(0, std::numeric_limits<std::uint32_t>::max());
+    const Json config{{"type", "object"}};
     return one_of({
         closed_object({{"recipe", enum_string({"reload_and_capture"})},
                        {"source", source_schema()},
+                       {"config", config},
                        {"warmup_frames", frames},
                        {"screenshot_format", enum_string({"png"})}},
                       {"recipe"}),
         closed_object({{"recipe", enum_string({"capture_debug_bundle"})},
                        {"source", source_schema()},
+                       {"config", config},
                        {"warmup_frames", frames},
                        {"screenshot", {{"type", "boolean"}}},
                        {"textures", string_array(64)},
@@ -76,6 +79,7 @@ Json recipe_schema() {
         closed_object({{"recipe", enum_string({"ab_compare"})},
                        {"a", source_variant_schema()},
                        {"b", source_variant_schema()},
+                       {"config", config},
                        {"warmup_frames", frames},
                        {"captures", {{"type", "array"}, {"items", capture_schema()}, {"maxItems", 64}}}},
                       {"recipe", "a", "b", "captures"}),
@@ -142,6 +146,7 @@ Json build_definitions() {
                    "Source and context activation remain system-managed, and all actions run as one non-interruptible "
                    "job.",
                    closed_object({{"source", source_schema()},
+                                  {"config", {{"type", "object"}}},
                                   {"actions", {{"type", "array"}, {"items", action_schema()}, {"maxItems", 64}}}},
                                  {"actions"}), false),
     });

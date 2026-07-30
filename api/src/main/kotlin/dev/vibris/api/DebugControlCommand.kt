@@ -2,7 +2,7 @@ package dev.vibris.api
 
 sealed interface DebugControlCommand {
     data object CaptureStatus : DebugControlCommand
-    data object ReloadShader : DebugControlCommand
+    data class ReloadShader(val config: Map<String, String>?) : DebugControlCommand
     data class CapturePass(val pass: String, val path: String?) : DebugControlCommand
     data class CaptureMulti(val type: String, val path: String?) : DebugControlCommand
     data object ShaderStatus : DebugControlCommand

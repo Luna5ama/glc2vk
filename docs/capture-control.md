@@ -211,6 +211,29 @@ actions inside `vibris_run_actions`.
 Debug dumps use the running Minecraft instance and execute on its client thread. Optional compute-capture paths are
 resolved inside the game directory; paths escaping it are rejected.
 
+### Shader config
+
+`vibris_reload_shader`, `vibris_run_recipe`, and `vibris_run_actions` accept an optional `config` JSON object. Boolean,
+number, and printable ASCII string values are converted to Iris `KEY=VALUE` properties before the shader reload:
+
+```json
+{
+  "config": {
+    "SETTING_CLOUDS_CU_WIND": false,
+    "SETTING_GI_SPATIAL_REUSE_COUNT": 14,
+    "TITLE_VERSION": 5
+  }
+}
+```
+
+Omitting `config` preserves the current Iris options file. Passing an empty object writes an empty options file, so Iris
+uses the shader pack defaults. Option names and values are validated, and the encoded config is limited to 64 KiB.
+
+The runtime writes the properties file beside `pending_shaders_root`, at `../config/vibris.txt`, then links
+`.minecraft/shaderpacks/vibris.txt` to it. This keeps the frequently rewritten file on the same RAM disk as pending
+sources when `pending_shaders_root` is configured there. If the platform cannot create the link, the runtime writes
+`.minecraft/shaderpacks/vibris.txt` directly. Iris loads that exact file for the fixed `vibris` shader pack.
+
 There are no MCP resources and no aliases for these tool names. Unknown methods use JSON-RPC `-32601`; invalid tool
 arguments use a structured tool error rather than expanding the tool surface.
 

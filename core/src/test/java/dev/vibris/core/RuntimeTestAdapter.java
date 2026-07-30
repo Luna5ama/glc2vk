@@ -28,6 +28,7 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     ResourceCatalog catalog = ResourceCatalog.empty();
     CaptureResult captureResult = new CaptureResult(0, Map.of());
     final Map<String, byte[]> captureFiles = new LinkedHashMap<>();
+    Map<String, String> lastShaderConfig;
     Runnable beforeReloadResult = () -> {};
     RuntimeException closeFailure;
     int closeCount;
@@ -47,8 +48,11 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     }
 
     @Override
-    public CompletionStage<ReloadResult> reloadVibrisShaderpack(CancellationToken cancellation) {
+    public CompletionStage<ReloadResult> reloadVibrisShaderpack(
+        Map<String, String> config, CancellationToken cancellation
+    ) {
         events.add("reload");
+        lastShaderConfig = config;
         beforeReloadResult.run();
         ReloadResult result = reloads.isEmpty() ? ReloadResult.success(List.of()) : reloads.removeFirst();
         return completed(cancellation, result);

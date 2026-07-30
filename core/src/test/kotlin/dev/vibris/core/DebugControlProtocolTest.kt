@@ -5,7 +5,9 @@ import dev.vibris.protocol.v1.DebugCaptureMulti
 import dev.vibris.protocol.v1.DebugCapturePass
 import dev.vibris.protocol.v1.DebugControlRequest
 import dev.vibris.protocol.v1.DebugDumpTexture
+import dev.vibris.protocol.v1.DebugReloadShader
 import dev.vibris.protocol.v1.DebugScheduleScreenshot
+import dev.vibris.protocol.v1.ShaderConfig
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
@@ -30,6 +32,22 @@ class DebugControlProtocolTest {
                 .build(),
         )
         assertEquals(DebugControlCommand.DumpTexture("colortex0", null, true), texture)
+
+        val reload = DebugControlProtocol.toApi(
+            DebugControlRequest.newBuilder()
+                .setReloadShader(
+                    DebugReloadShader.newBuilder().setConfig(
+                        ShaderConfig.newBuilder().putValues("SETTING_SAMPLE_COUNT", "32"),
+                    ),
+                )
+                .build(),
+        )
+        assertEquals(DebugControlCommand.ReloadShader(mapOf("SETTING_SAMPLE_COUNT" to "32")), reload)
+
+        val reloadWithoutConfig = DebugControlProtocol.toApi(
+            DebugControlRequest.newBuilder().setReloadShader(DebugReloadShader.getDefaultInstance()).build(),
+        )
+        assertEquals(DebugControlCommand.ReloadShader(null), reloadWithoutConfig)
     }
 
     @Test

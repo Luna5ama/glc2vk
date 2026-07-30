@@ -108,7 +108,17 @@ void debug_tool_schemas_reject_invalid_arguments() {
     require(std::holds_alternative<Json>(
                 registry.invoke("vibris_dump_texture", {{"name", "colortex0"}, {"raw", true}})),
         "Texture dump rejected a valid logical name.");
-    require(dispatches == 1, "Invalid debug arguments reached dispatch.");
+    require(std::holds_alternative<Json>(
+                registry.invoke("vibris_reload_shader", {
+                    {"config", {{"SETTING_SAMPLE_COUNT", 32}, {"SETTING_CLOUDS", false}}},
+                })),
+        "Shader reload rejected scalar config values.");
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_reload_shader", {
+                    {"config", {{"SETTING_SAMPLE_COUNT", "32\nINJECTED=true"}}},
+                })),
+        "Shader reload accepted a line-breaking config value.");
+    require(dispatches == 2, "Invalid debug arguments reached dispatch.");
 }
 
 void debug_tools_map_to_distinct_typed_commands() {
@@ -147,6 +157,13 @@ void debug_tools_map_to_distinct_typed_commands() {
     require(texture->dump_texture().selector_case() == vibris::control::v1::DebugDumpTexture::kName &&
                 texture->dump_texture().name() == "colortex0" && texture->dump_texture().raw(),
             "Texture arguments were not isolated in its command.");
+    const auto reload = DebugProtocol::request("vibris_reload_shader", {
+        {"config", {{"SETTING_SAMPLE_COUNT", 32}, {"SETTING_CLOUDS", false}}},
+    });
+    require(reload->reload_shader().has_config() &&
+                reload->reload_shader().config().values().at("SETTING_SAMPLE_COUNT") == "32" &&
+                reload->reload_shader().config().values().at("SETTING_CLOUDS") == "false",
+        "Shader config was not mapped to the reload command.");
 }
 
 void registry_declares_accurate_tool_annotations() {

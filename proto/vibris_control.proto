@@ -276,6 +276,11 @@ message SubmitJob {
         ActionSequence actions = 6;
     }
     JobTimeouts timeouts = 7;
+    ShaderConfig shader_config = 8;
+}
+
+message ShaderConfig {
+    map<string, string> values = 1;
 }
 
 enum RecipeKind {
@@ -583,7 +588,7 @@ enum ScalarType {
 message DebugControlRequest {
     oneof command {
         DebugEmpty capture_status = 1;
-        DebugEmpty reload_shader = 2;
+        DebugReloadShader reload_shader = 2;
         DebugCapturePass capture_pass = 3;
         DebugCaptureMulti capture_multi = 4;
         DebugEmpty shader_status = 5;
@@ -597,6 +602,10 @@ message DebugControlRequest {
         DebugDumpTexture dump_texture = 13;
         DebugEmpty list_patched_shaders = 14;
     }
+}
+
+message DebugReloadShader {
+    ShaderConfig config = 1;
 }
 
 enum DebugControlKind {

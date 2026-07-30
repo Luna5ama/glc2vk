@@ -34,7 +34,7 @@ class RuntimeAdapterContractTest {
         assertTrue(adapter.getStatus().toCompletableFuture().join().ready());
         assertEquals(context, adapter.ensureWorldAndContext(context, cancellation.token())
             .toCompletableFuture().join().context());
-        assertTrue(adapter.reloadVibrisShaderpack(cancellation.token()).toCompletableFuture().join().successful());
+        assertTrue(adapter.reloadVibrisShaderpack(null, cancellation.token()).toCompletableFuture().join().successful());
         assertEquals(7, adapter.waitRenderedFrames(7, cancellation.token()).toCompletableFuture().join());
         assertEquals(9, adapter.capture(
             CapturePlan.empty(), name -> new ByteArrayOutputStream(), cancellation.token()
@@ -142,7 +142,9 @@ class RuntimeAdapterContractTest {
         }
 
         @Override
-        public CompletionStage<ReloadResult> reloadVibrisShaderpack(CancellationToken cancellation) {
+        public CompletionStage<ReloadResult> reloadVibrisShaderpack(
+            Map<String, String> config, CancellationToken cancellation
+        ) {
             return CompletableFuture.completedFuture(ReloadResult.success(List.of()));
         }
 

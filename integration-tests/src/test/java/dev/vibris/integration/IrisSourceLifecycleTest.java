@@ -96,7 +96,9 @@ final class IrisSourceLifecycleTest {
         }
 
         @Override
-        public CompletionStage<ReloadResult> reloadVibrisShaderpack(CancellationToken cancellation) {
+        public CompletionStage<ReloadResult> reloadVibrisShaderpack(
+            Map<String, String> config, CancellationToken cancellation
+        ) {
             return completed(cancellation, ReloadResult.success(List.of()));
         }
 

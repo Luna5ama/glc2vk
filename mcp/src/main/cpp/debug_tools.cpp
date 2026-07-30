@@ -36,13 +36,15 @@ void append_debug_tool_definitions(Json& definitions) {
     const Json text{{"type", "string"}, {"minLength", 1}};
     const Json path{{"type", "string"}, {"minLength", 1}};
     const Json raw{{"type", "boolean"}, {"default", false}};
+    const Json config{{"type", "object"}};
     const Json texture = {{"type", "object"},
                           {"oneOf",
                            {closed_object({{"name", text}, {"raw", raw}}, {"name"}),
                             closed_object({{"id", integer()}, {"raw", raw}}, {"id"})}}};
 
     definitions.push_back(definition("vibris_get_capture_status", "Read compute capture state.", empty, true));
-    definitions.push_back(definition("vibris_reload_shader", "Reload the active shader and return shader errors.", empty, false));
+    definitions.push_back(definition("vibris_reload_shader", "Reload the active shader and return shader errors.",
+                                     closed_object({{"config", config}}), false));
     definitions.push_back(definition("vibris_capture_pass", "Queue one compute pass capture for the next frame.",
                                      closed_object({{"pass", text}, {"path", path}}, {"pass"}), false));
     definitions.push_back(definition("vibris_capture_multi", "Queue a prepare, begin, deferred, or composite capture.",

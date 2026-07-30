@@ -9,7 +9,9 @@ import dev.vibris.protocol.v1.DebugDumpTexture
 internal object DebugControlProtocol {
     fun toApi(request: DebugControlRequest): DebugControlCommand = when (request.commandCase) {
         DebugControlRequest.CommandCase.CAPTURE_STATUS -> DebugControlCommand.CaptureStatus
-        DebugControlRequest.CommandCase.RELOAD_SHADER -> DebugControlCommand.ReloadShader
+        DebugControlRequest.CommandCase.RELOAD_SHADER -> DebugControlCommand.ReloadShader(
+            if (request.reloadShader.hasConfig()) request.reloadShader.config.valuesMap else null,
+        )
         DebugControlRequest.CommandCase.CAPTURE_PASS -> request.capturePass.let { command ->
             DebugControlCommand.CapturePass(
                 command.pass.requireText("pass"),

@@ -23,6 +23,10 @@ proto::ArtifactFormat format(std::string_view value) {
     throw std::invalid_argument("unsupported artifact format");
 }
 
+std::string config_value(const Json& value) {
+    return value.is_string() ? value.get<std::string>() : value.dump();
+}
+
 std::string short_name(std::string value, std::string_view prefix) {
     if (value.starts_with(prefix)) value.erase(0, prefix.size());
     std::ranges::transform(value, value.begin(), [](unsigned char character) {
@@ -43,6 +47,13 @@ void scene(const SessionConfig& config, const proto::SceneContext& scene_context
     timeouts->set_queue_timeout_ms(queue_timeout_ms);
     timeouts->set_execution_timeout_ms(execution_timeout_ms);
     timeouts->set_total_timeout_ms(total_timeout_ms);
+}
+
+void shader_config(const Json& arguments, proto::SubmitJob& job) {
+    if (!arguments.contains("config")) return;
+    for (const auto& [key, value] : arguments.at("config").items()) {
+        (*job.mutable_shader_config()->mutable_values())[key] = config_value(value);
+    }
 }
 
 void reload_recipe(const Json& arguments, const SessionConfig& config,
@@ -224,6 +235,7 @@ proto::ClientMessage JobProtocol::request(std::string_view tool_name, const Json
     auto* job = message.mutable_submit_job();
     job->set_request_id(std::move(request_id));
     scene(config, context, *job);
+    shader_config(arguments, *job);
     for (const auto& source : sources) job->add_sources()->CopyFrom(source);
     if (tool_name == "vibris_run_recipe") recipe(arguments, config, sources, *job);
     else if (tool_name == "vibris_run_actions") actions(arguments, sources, *job);

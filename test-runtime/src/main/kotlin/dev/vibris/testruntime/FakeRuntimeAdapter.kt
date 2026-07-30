@@ -51,6 +51,7 @@ class FakeRuntimeAdapter : VibrisRuntimeAdapter {
         }
 
     override fun reloadVibrisShaderpack(
+        config: Map<String, String>?,
         cancellation: CancellationToken,
     ): CompletionStage<ReloadResult> =
         immediate(cancellation) { ReloadResult.success(emptyList()) }

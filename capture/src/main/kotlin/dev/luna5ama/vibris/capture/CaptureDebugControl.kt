@@ -16,7 +16,7 @@ class CaptureDebugControl(
 
     fun execute(command: DebugControlCommand): String = when (command) {
         DebugControlCommand.CaptureStatus -> captureStatus()
-        DebugControlCommand.ReloadShader -> shader.reload()
+        is DebugControlCommand.ReloadShader -> shader.reload()
         is DebugControlCommand.CapturePass -> queuePass(command)
         is DebugControlCommand.CaptureMulti -> queueMulti(command)
         DebugControlCommand.ShaderStatus -> shader.status()
