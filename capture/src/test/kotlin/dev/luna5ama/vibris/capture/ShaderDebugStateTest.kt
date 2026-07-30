@@ -9,6 +9,8 @@ import java.util.function.Consumer
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class ShaderDebugStateTest {
     @Test
@@ -29,14 +31,27 @@ class ShaderDebugStateTest {
     }
 
     @Test
-    fun timingHistoryReturnsPercentilesForTheNewestSamples() {
-        val history = TimingHistory(3)
-        listOf(10L, 20L, 30L, 40L).forEach(history::add)
+    fun timingHistoryReturnsPercentilesForEveryCapturedSample() {
+        val history = TimingHistory()
+        (1L..100L).forEach(history::add)
         val stats = history.stats()
-        assertEquals(30, stats.average)
-        assertEquals(21, stats.p5)
-        assertEquals(39, stats.p95)
-        assertEquals(30, stats.p50)
+        assertEquals(50, stats.average)
+        assertEquals(6, stats.p5)
+        assertEquals(95, stats.p95)
+        assertEquals(51, stats.p50)
+    }
+
+    @Test
+    fun gpuMetricsCaptureWaitsForTheRequestedFutureFrames() {
+        val control = ShaderDebugControl(EmptyHost(Path.of(".")), EmptyDumper)
+
+        val result = control.captureMetrics(2).toCompletableFuture()
+        control.tickFrame()
+        assertFalse(result.isDone)
+        control.tickFrame()
+
+        assertTrue(result.isDone)
+        assertEquals(emptySet(), result.join()["gpuTimings"]!!.jsonObject.keys)
     }
 
     private class EmptyHost(private val root: Path) : ShaderDebugHost {

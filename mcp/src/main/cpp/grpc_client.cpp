@@ -154,8 +154,8 @@ bool GrpcClient::validate_context(::vibris::control::v1::ValidateContextRequest 
 }
 bool GrpcClient::get_status(GetStatusCompletion completion) { return impl_->get_status(std::move(completion)); }
 bool GrpcClient::debug_control(::vibris::control::v1::DebugControlRequest request,
-    DebugControlCompletion completion) {
-    return impl_->debug_control(std::move(request), std::move(completion));
+    DebugControlCompletion completion, const std::chrono::milliseconds deadline) {
+    return impl_->debug_control(std::move(request), std::move(completion), deadline);
 }
 bool GrpcClient::submit(::vibris::control::v1::ClientMessage message, GrpcCompletion completion) {
     return impl_->submit(std::move(message), std::move(completion));

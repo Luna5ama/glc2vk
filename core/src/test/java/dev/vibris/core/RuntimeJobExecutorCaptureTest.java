@@ -4,6 +4,7 @@ import dev.vibris.api.CaptureResult;
 import dev.vibris.api.ResourceCatalog;
 import dev.vibris.protocol.v1.Action;
 import dev.vibris.protocol.v1.ActionSequence;
+import dev.vibris.protocol.v1.ActivateSource;
 import dev.vibris.protocol.v1.ArtifactFormat;
 import dev.vibris.protocol.v1.ArtifactKind;
 import dev.vibris.protocol.v1.CaptureScreenshot;
@@ -139,10 +140,10 @@ class RuntimeJobExecutorCaptureTest {
     }
 
     @Test
-    void rejectsMoreThanSixtyFourActions() throws Exception {
+    void rejectsMoreThanExpandedOverlayLimit() throws Exception {
         Fixture fixture = new Fixture();
         ActionSequence.Builder actions = ActionSequence.newBuilder();
-        for (int index = 0; index < 65; index++) {
+        for (int index = 0; index < 137; index++) {
             actions.addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(0)));
         }
 
@@ -191,10 +192,15 @@ class RuntimeJobExecutorCaptureTest {
         }
 
         CoreJob job(ActionSequence actions) {
+            ActionSequence sequence = ActionSequence.newBuilder()
+                .addActions(Action.newBuilder().setActivateSource(
+                    ActivateSource.newBuilder().setSourceUuid(source.uuid())))
+                .addAllActions(actions.getActionsList())
+                .build();
             SubmitJob submission = SubmitJob.newBuilder().setRequestId("request").setWorkspaceId("workspace")
                 .setContext(SceneContext.newBuilder().setSaveId("save")
                     .setDimensionId("minecraft:overworld").setFov(70.0))
-                .setActions(actions).build();
+                .setActions(sequence).build();
             CoreJob job = new CoreJob(submission, "message", null);
             job.initialize(List.of(source));
             return job;

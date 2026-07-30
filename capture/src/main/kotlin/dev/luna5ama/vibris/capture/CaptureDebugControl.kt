@@ -6,6 +6,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.nio.file.Path
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionStage
 
 class CaptureDebugControl(
     gameDirectory: Path,
@@ -14,7 +16,12 @@ class CaptureDebugControl(
 ) {
     private val gameDirectory = gameDirectory.toAbsolutePath().normalize()
 
-    fun execute(command: DebugControlCommand): String = when (command) {
+    fun execute(command: DebugControlCommand): CompletionStage<String> = when (command) {
+        is DebugControlCommand.GpuMetrics -> shader.captureMetrics(command.frames).thenApply { it.toString() }
+        else -> CompletableFuture.completedFuture(executeImmediately(command).toString())
+    }
+
+    private fun executeImmediately(command: DebugControlCommand) = when (command) {
         DebugControlCommand.CaptureStatus -> captureStatus()
         is DebugControlCommand.ReloadShader -> shader.reload()
         is DebugControlCommand.CapturePass -> queuePass(command)
@@ -27,13 +34,13 @@ class CaptureDebugControl(
             put("frames", command.frames)
         }
         DebugControlCommand.ScreenshotResult -> shader.screenshotResult()
-        DebugControlCommand.GpuMetrics -> shader.metricsJson()
+        is DebugControlCommand.GpuMetrics -> error("GPU metrics are asynchronous")
         DebugControlCommand.ListSsbos -> shader.storageBuffersJson()
         is DebugControlCommand.DumpSsbo -> shader.dumpStorageBuffer(command.index)
         DebugControlCommand.ListTextures -> shader.texturesJson()
         is DebugControlCommand.DumpTexture -> shader.dumpTexture(command.name, command.id, command.raw)
         DebugControlCommand.ListPatchedShaders -> shader.patchedShadersJson()
-    }.toString()
+    }
 
     private fun captureStatus() = captureManager.status().let { status ->
         buildJsonObject {

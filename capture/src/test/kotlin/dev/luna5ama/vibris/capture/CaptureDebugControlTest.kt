@@ -22,13 +22,15 @@ class CaptureDebugControlTest {
             val control = CaptureDebugControl(root, manager, ShaderDebugControl(EmptyHost(root), EmptyDumper))
 
             val result = Json.parseToJsonElement(
-                control.execute(DebugControlCommand.CapturePass("composite", "vibris/test-capture")),
+                control.execute(DebugControlCommand.CapturePass("composite", "vibris/test-capture"))
+                    .toCompletableFuture().join(),
             ).jsonObject
 
             assertTrue(manager.status().pending)
             assertEquals(root.resolve("vibris/test-capture").toString(), result["path"]!!.jsonPrimitive.content)
             assertFailsWith<IllegalArgumentException> {
                 control.execute(DebugControlCommand.CapturePass("composite", "../outside"))
+                    .toCompletableFuture().join()
             }
         } finally {
             root.toFile().deleteRecursively()

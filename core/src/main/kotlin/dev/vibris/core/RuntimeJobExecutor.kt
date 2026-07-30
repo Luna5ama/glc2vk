@@ -10,8 +10,6 @@ import dev.vibris.api.VibrisRuntimeAdapter
 import dev.vibris.protocol.v1.ArtifactMetadata
 import dev.vibris.protocol.v1.ErrorCode
 import dev.vibris.protocol.v1.JobCompleted
-import dev.vibris.protocol.v1.JobResult
-import dev.vibris.protocol.v1.JobResultKind
 import dev.vibris.protocol.v1.JobStage
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.TimeUnit
@@ -28,26 +26,13 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     private val captures = CaptureJobExecutor(shaderLogs as? ArtifactManager, maxActions)
     private val awaiter = RuntimeAwaiter(probe)
     private val actions = ActionJobExecutor(this.runtime, probe, captures, this)
-    private val ab = AbJobExecutor(this, captures, activator)
 
     @Throws(Failure::class)
     fun execute(job: CoreJob, progress: Consumer<JobStage>): TerminalResult {
         val startedAtUnixMs = System.currentTimeMillis()
         val startedNanos = System.nanoTime()
         val deadline = RuntimeJobContext.deadline(job)
-        var result = if (job.submission.hasRecipe() && job.submission.recipe.hasAbCompare()) {
-            ab.execute(job, progress, deadline)
-        } else {
-            val reload = activateSource(job, progress, deadline)
-            applyContext(job, progress, deadline)
-            if (job.submission.hasActions()) {
-                actions.execute(job, progress, deadline, reload)
-            } else {
-                reset(job, progress, deadline)
-                waitFrames(job, progress, deadline, captures.waitFrames(job))
-                capture(job, progress, deadline, reload)
-            }
-        }
+        var result = actions.execute(job, progress, deadline)
         result = awaiter.withTimings(job, result, startedAtUnixMs, startedNanos)
         try {
             activator.verifyActiveSource()
@@ -101,27 +86,6 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     fun probe(): CoreProbe = probe
 
     @Throws(Failure::class)
-    private fun activateSource(job: CoreJob, progress: Consumer<JobStage>, deadline: Long): ReloadResult {
-        if (job.sources.size != 1) {
-            throw Failure(ErrorCode.SOURCE_ACTIVATION_FAILED, "Exactly one prepared source is required.")
-        }
-        val source = job.sources.first()
-        val requested = when {
-            job.submission.hasRecipe() && job.submission.recipe.hasReloadAndCapture() ->
-                job.submission.recipe.reloadAndCapture.sourceUuid
-
-            job.submission.hasRecipe() && job.submission.recipe.hasCaptureDebugBundle() ->
-                job.submission.recipe.captureDebugBundle.sourceUuid
-
-            else -> null
-        }
-        if (requested != null && !source.uuid().equals(requested, ignoreCase = true)) {
-            throw Failure(ErrorCode.INVALID_SOURCE_UUID, "Recipe source UUID does not match the prepared source.")
-        }
-        return activateSource(job, source, progress, deadline)
-    }
-
-    @Throws(Failure::class)
     fun activateSource(
         job: CoreJob,
         source: SourceRegistry.Lease,
@@ -169,29 +133,6 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         }
         activator.fail(activation)
         throw original
-    }
-
-    @Throws(Failure::class)
-    private fun capture(
-        job: CoreJob,
-        progress: Consumer<JobStage>,
-        deadline: Long,
-        reload: ReloadResult,
-    ): JobResult {
-        val prepared = captures.prepare(job, runtime.getResourceCatalog(), reload.diagnostics)
-            ?: return JobResult.newBuilder().setKind(JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE).build()
-        try {
-            prepared.use {
-                val result = capture(job, progress, deadline, prepared, prepared.plan())
-                progress.accept(JobStage.JOB_STAGE_WRITING_ARTIFACTS)
-                probe.event(job.requestId, "WRITING_ARTIFACTS")
-                progress.accept(JobStage.JOB_STAGE_FINALIZING)
-                probe.event(job.requestId, "FINALIZING")
-                return captures.commit(job, prepared, result)
-            }
-        } catch (exception: java.io.IOException) {
-            throw CaptureJobExecutor.failure(exception)
-        }
     }
 
     @Throws(Failure::class)

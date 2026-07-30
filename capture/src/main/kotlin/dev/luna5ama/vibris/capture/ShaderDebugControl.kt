@@ -10,6 +10,7 @@ import kotlinx.serialization.json.put
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.ArrayDeque
+import java.util.concurrent.CompletionStage
 
 class ShaderDebugControl @JvmOverloads constructor(
     private val host: ShaderDebugHost,
@@ -84,22 +85,27 @@ class ShaderDebugControl @JvmOverloads constructor(
         synchronized(screenshotLock) { screenshotFrames = frames }
     }
 
-    fun tickScreenshot() {
+    fun tickFrame() {
         val capture = synchronized(screenshotLock) {
-            if (screenshotFrames == 0) return
-            screenshotFrames--
-            screenshotFrames == 0
+            if (screenshotFrames == 0) false else {
+                screenshotFrames--
+                screenshotFrames == 0
+            }
         }
         if (capture) host.captureScreenshot { lastScreenshotPath = it }
+        metrics.finishFrame()
     }
 
     fun screenshotResult(): JsonObject = buildJsonObject {
         put("path", lastScreenshotPath?.let { JsonPrimitive(it.toString()) } ?: JsonNull)
     }
 
-    fun metricsJson(): JsonObject = buildJsonObject {
+    fun captureMetrics(frames: Int): CompletionStage<JsonObject> =
+        metrics.capture(frames).thenApply(::metricsJson)
+
+    private fun metricsJson(values: Map<String, GpuTimingStats>): JsonObject = buildJsonObject {
         put("gpuTimings", buildJsonObject {
-            metrics.snapshot().forEach { (name, stats) ->
+            values.forEach { (name, stats) ->
                 put(name, buildJsonObject {
                     put("avg", stats.average)
                     put("p5", stats.p5)

@@ -25,9 +25,6 @@ enum Capability {
     CAPABILITY_CONTROL_STREAM = 1;
     CAPABILITY_RESUME = 2;
     CAPABILITY_PREPARED_SOURCES = 3;
-    CAPABILITY_RELOAD_AND_CAPTURE = 4;
-    CAPABILITY_CAPTURE_DEBUG_BUNDLE = 5;
-    CAPABILITY_AB_COMPARE = 6;
     CAPABILITY_ACTION_SEQUENCE = 7;
     CAPABILITY_ARTIFACT_METADATA = 8;
     CAPABILITY_DEBUG_CONTROL = 9;
@@ -80,7 +77,6 @@ message ServerHello {
     bool ready = 4;
     ServerStatus status = 5;
     ServerLimits limits = 6;
-    repeated RecipeKind supported_recipes = 7;
     repeated JobActionKind supported_job_actions = 8;
     repeated ArtifactFormat supported_formats = 9;
     string pending_shaders_root = 10;
@@ -143,7 +139,6 @@ message ServerStatus {
     string artifact_root = 12;
     uint64 artifact_quota_used_bytes = 13;
     uint64 artifact_quota_cap_bytes = 14;
-    repeated RecipeKind supported_recipes = 15;
     repeated JobActionKind supported_job_actions = 16;
     repeated ArtifactFormat supported_formats = 17;
     repeated DebugControlKind supported_debug_controls = 18;
@@ -271,70 +266,13 @@ message SubmitJob {
     string workspace_id = 2;
     SceneContext context = 3;
     repeated PreparedSourceRef sources = 4;
-    oneof execution {
-        RecipeSpec recipe = 5;
-        ActionSequence actions = 6;
-    }
+    ActionSequence actions = 6;
     JobTimeouts timeouts = 7;
     ShaderConfig shader_config = 8;
 }
 
 message ShaderConfig {
     map<string, string> values = 1;
-}
-
-enum RecipeKind {
-    RECIPE_KIND_UNSPECIFIED = 0;
-    RECIPE_KIND_RELOAD_AND_CAPTURE = 1;
-    RECIPE_KIND_CAPTURE_DEBUG_BUNDLE = 2;
-    RECIPE_KIND_AB_COMPARE = 3;
-}
-
-message RecipeSpec {
-    oneof recipe {
-        ReloadAndCaptureRecipe reload_and_capture = 1;
-        CaptureDebugBundleRecipe capture_debug_bundle = 2;
-        AbCompareRecipe ab_compare = 3;
-    }
-}
-
-message ReloadAndCaptureRecipe {
-    string source_uuid = 1;
-    uint32 warmup_frames = 2;
-    ArtifactFormat screenshot_format = 3;
-}
-
-message CaptureDebugBundleRecipe {
-    string source_uuid = 1;
-    uint32 warmup_frames = 2;
-    bool screenshot = 3;
-    repeated string textures = 4;
-    repeated string buffers = 5;
-}
-
-message AbCompareRecipe {
-    SourceVariant baseline = 1;
-    SourceVariant candidate = 2;
-    uint32 warmup_frames = 3;
-    repeated CaptureTarget captures = 4;
-}
-
-message SourceVariant {
-    string label = 1;
-    string source_uuid = 2;
-}
-
-message CaptureTarget {
-    CaptureTargetKind kind = 1;
-    string name = 2;
-    ArtifactFormat format = 3;
-}
-
-enum CaptureTargetKind {
-    CAPTURE_TARGET_KIND_UNSPECIFIED = 0;
-    CAPTURE_TARGET_KIND_SCREENSHOT = 1;
-    CAPTURE_TARGET_KIND_TEXTURE = 2;
-    CAPTURE_TARGET_KIND_BUFFER = 3;
 }
 
 message ActionSequence {
@@ -348,6 +286,8 @@ message Action {
         CaptureScreenshot capture_screenshot = 3;
         DumpTexture dump_texture = 4;
         DumpBuffer dump_buffer = 5;
+        ActivateSource activate_source = 6;
+        CompareCaptures compare_captures = 7;
     }
 }
 
@@ -358,6 +298,19 @@ enum JobActionKind {
     JOB_ACTION_KIND_CAPTURE_SCREENSHOT = 3;
     JOB_ACTION_KIND_DUMP_TEXTURE = 4;
     JOB_ACTION_KIND_DUMP_BUFFER = 5;
+    JOB_ACTION_KIND_ACTIVATE_SOURCE = 6;
+    JOB_ACTION_KIND_COMPARE_CAPTURES = 7;
+}
+
+message ActivateSource {
+    string source_uuid = 1;
+}
+
+message CompareCaptures {
+    uint32 baseline_capture_index = 1;
+    uint32 candidate_capture_index = 2;
+    string baseline_label = 3;
+    string candidate_label = 4;
 }
 
 message ResetTemporalState {}
@@ -504,9 +457,6 @@ enum DiagnosticSeverity {
 
 enum JobResultKind {
     JOB_RESULT_KIND_UNSPECIFIED = 0;
-    JOB_RESULT_KIND_RELOAD_AND_CAPTURE = 1;
-    JOB_RESULT_KIND_CAPTURE_DEBUG_BUNDLE = 2;
-    JOB_RESULT_KIND_AB_COMPARE = 3;
     JOB_RESULT_KIND_ACTION_SEQUENCE = 4;
 }
 
@@ -595,7 +545,7 @@ message DebugControlRequest {
         DebugEmpty shader_errors = 6;
         DebugScheduleScreenshot schedule_screenshot = 7;
         DebugEmpty screenshot_result = 8;
-        DebugEmpty gpu_metrics = 9;
+        DebugGpuMetrics gpu_metrics = 9;
         DebugEmpty list_ssbos = 10;
         DebugDumpSsbo dump_ssbo = 11;
         DebugEmpty list_textures = 12;
@@ -639,6 +589,10 @@ message DebugCaptureMulti {
 }
 
 message DebugScheduleScreenshot {
+    uint32 frames = 1;
+}
+
+message DebugGpuMetrics {
     uint32 frames = 1;
 }
 

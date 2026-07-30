@@ -9,7 +9,7 @@ sealed interface DebugControlCommand {
     data object ShaderErrors : DebugControlCommand
     data class ScheduleScreenshot(val frames: Int) : DebugControlCommand
     data object ScreenshotResult : DebugControlCommand
-    data object GpuMetrics : DebugControlCommand
+    data class GpuMetrics(val frames: Int) : DebugControlCommand
     data object ListSsbos : DebugControlCommand
     data class DumpSsbo(val index: Int) : DebugControlCommand
     data object ListTextures : DebugControlCommand

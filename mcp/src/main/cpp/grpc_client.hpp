@@ -65,7 +65,8 @@ public:
     bool get_status(GetStatusCompletion completion);
     bool debug_control(
         ::vibris::control::v1::DebugControlRequest request,
-        DebugControlCompletion completion);
+        DebugControlCompletion completion,
+        std::chrono::milliseconds deadline);
     bool submit(::vibris::control::v1::ClientMessage message, GrpcCompletion completion);
     bool cancel(std::string_view request_id, std::string reason);
     void shutdown();

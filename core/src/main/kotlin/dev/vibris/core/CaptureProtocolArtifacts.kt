@@ -39,7 +39,7 @@ internal class CaptureProtocolArtifacts {
         }
         val committed = transaction.commit(expectedArtifacts(plans, comparison != null))
         val result = JobResult.newBuilder()
-            .setKind(resultKind(job))
+            .setKind(JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE)
             .setManifestPath(committed.manifest().toString())
         for (index in plans.indices) {
             val plan = plans[index]
@@ -292,15 +292,5 @@ internal class CaptureProtocolArtifacts {
                 -> "application/octet-stream"
             }
 
-        private fun resultKind(job: CoreJob): JobResultKind =
-            when {
-                job.submission.hasRecipe() && job.submission.recipe.hasReloadAndCapture() ->
-                    JobResultKind.JOB_RESULT_KIND_RELOAD_AND_CAPTURE
-                job.submission.hasRecipe() && job.submission.recipe.hasCaptureDebugBundle() ->
-                    JobResultKind.JOB_RESULT_KIND_CAPTURE_DEBUG_BUNDLE
-                job.submission.hasRecipe() && job.submission.recipe.hasAbCompare() ->
-                    JobResultKind.JOB_RESULT_KIND_AB_COMPARE
-                else -> JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE
-            }
     }
 }

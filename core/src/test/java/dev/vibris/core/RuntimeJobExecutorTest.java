@@ -4,11 +4,10 @@ import dev.vibris.api.ReloadResult;
 import dev.vibris.api.TemporalResetResult;
 import dev.vibris.protocol.v1.Action;
 import dev.vibris.protocol.v1.ActionSequence;
+import dev.vibris.protocol.v1.ActivateSource;
 import dev.vibris.protocol.v1.ErrorCode;
 import dev.vibris.protocol.v1.JobStage;
 import dev.vibris.protocol.v1.PreparedSourceRef;
-import dev.vibris.protocol.v1.RecipeSpec;
-import dev.vibris.protocol.v1.ReloadAndCaptureRecipe;
 import dev.vibris.protocol.v1.SceneContext;
 import dev.vibris.protocol.v1.ShaderConfig;
 import dev.vibris.protocol.v1.SubmitJob;
@@ -134,12 +133,12 @@ class RuntimeJobExecutorTest {
     }
 
     @Test
-    void recipeRejectsMismatchedPreparedSourceUuidBeforeActivation() throws Exception {
+    void actionRejectsMismatchedPreparedSourceUuidBeforeActivation() throws Exception {
         Fixture fixture = new Fixture();
         Source source = fixture.source("A");
-        SubmitJob submission = job(source.lease).submission.toBuilder().clearActions()
-            .setRecipe(RecipeSpec.newBuilder().setReloadAndCapture(ReloadAndCaptureRecipe.newBuilder()
-                .setSourceUuid(UUID.randomUUID().toString())))
+        SubmitJob submission = job(source.lease).submission.toBuilder()
+            .setActions(ActionSequence.newBuilder().addActions(Action.newBuilder()
+                .setActivateSource(ActivateSource.newBuilder().setSourceUuid(UUID.randomUUID().toString()))))
             .build();
         CoreJob job = new CoreJob(submission, "message", null);
         job.initialize(List.of(source.lease));
@@ -197,8 +196,10 @@ class RuntimeJobExecutorTest {
                 .setDimensionId("minecraft:overworld")
                 .setFov(70.0))
             .setShaderConfig(ShaderConfig.newBuilder().putValues("SETTING_SAMPLE_COUNT", "32"))
-            .setActions(ActionSequence.newBuilder().addActions(Action.newBuilder()
-                .setWaitFrames(WaitFrames.newBuilder().setFrameCount(3))))
+            .setActions(ActionSequence.newBuilder()
+                .addActions(Action.newBuilder().setActivateSource(
+                    ActivateSource.newBuilder().setSourceUuid(source.uuid())))
+                .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(3))))
             .build();
         CoreJob job = new CoreJob(submission, "message", null);
         job.initialize(List.of(source));
@@ -207,6 +208,8 @@ class RuntimeJobExecutorTest {
 
     private static CoreJob jobWithReset(SourceRegistry.Lease source) {
         SubmitJob submission = job(source).submission.toBuilder().setActions(ActionSequence.newBuilder()
+            .addActions(Action.newBuilder().setActivateSource(
+                ActivateSource.newBuilder().setSourceUuid(source.uuid())))
             .addActions(Action.newBuilder().setResetTemporalState(
                 dev.vibris.protocol.v1.ResetTemporalState.getDefaultInstance()))
             .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(3)))).build();

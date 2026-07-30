@@ -3,6 +3,7 @@ package dev.vibris.integration;
 import dev.vibris.core.VibrisBootstrap;
 import dev.vibris.protocol.v1.Action;
 import dev.vibris.protocol.v1.ActionSequence;
+import dev.vibris.protocol.v1.ActivateSource;
 import dev.vibris.protocol.v1.ArtifactFormat;
 import dev.vibris.protocol.v1.CaptureScreenshot;
 import dev.vibris.protocol.v1.JobCompleted;
@@ -37,6 +38,8 @@ final class ActionSurfaceTest {
              IntegrationHarness.Client client = new IntegrationHarness.Client(bootstrap.port(), WORKSPACE)) {
             PreparedSourceRef source = IntegrationHarness.createSource(pendingRoot, "actions").reference();
             ActionSequence actions = ActionSequence.newBuilder()
+                .addActions(Action.newBuilder().setActivateSource(
+                    ActivateSource.newBuilder().setSourceUuid(source.getUuid())))
                 .addActions(Action.newBuilder().setResetTemporalState(ResetTemporalState.getDefaultInstance()))
                 .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(1)))
                 .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
@@ -57,7 +60,9 @@ final class ActionSurfaceTest {
 
             runtime.events.clear();
             PreparedSourceRef empty = IntegrationHarness.createSource(pendingRoot, "empty").reference();
-            client.submit(submission("empty", empty).setActions(ActionSequence.getDefaultInstance()).build());
+            client.submit(submission("empty", empty).setActions(ActionSequence.newBuilder()
+                .addActions(Action.newBuilder().setActivateSource(
+                    ActivateSource.newBuilder().setSourceUuid(empty.getUuid())))).build());
             JobCompleted emptyResult = client.awaitCompleted("empty");
             assertEquals(JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE, emptyResult.getResult().getKind());
             assertEquals(List.of("reload:empty", "context:empty"), List.copyOf(runtime.events));
@@ -66,9 +71,9 @@ final class ActionSurfaceTest {
             List<String> supported = Action.getDescriptor().getOneofs().getFirst().getFields().stream()
                 .map(field -> field.getName()).toList();
             assertEquals(List.of("reset_temporal_state", "wait_frames", "capture_screenshot",
-                "dump_texture", "dump_buffer"), supported);
-            assertFalse(supported.stream().anyMatch(name -> name.contains("source") || name.contains("reload") ||
-                name.contains("shell") || name.contains("renderdoc")));
+                "dump_texture", "dump_buffer", "activate_source", "compare_captures"), supported);
+            assertFalse(supported.stream().anyMatch(name -> name.contains("shell") || name.contains("renderdoc") ||
+                name.contains("path")));
         }
     }
 

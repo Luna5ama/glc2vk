@@ -56,63 +56,120 @@ void shader_config(const Json& arguments, proto::SubmitJob& job) {
     }
 }
 
+proto::Action* add_action(proto::ActionSequence& sequence) {
+    return sequence.add_actions();
+}
+
+void activate(proto::ActionSequence& sequence, const proto::PreparedSourceRef& source) {
+    add_action(sequence)->mutable_activate_source()->set_source_uuid(source.uuid());
+}
+
+void reset(proto::ActionSequence& sequence) {
+    add_action(sequence)->mutable_reset_temporal_state();
+}
+
+void wait(proto::ActionSequence& sequence, std::uint32_t frames) {
+    if (frames != 0) add_action(sequence)->mutable_wait_frames()->set_frame_count(frames);
+}
+
 void reload_recipe(const Json& arguments, const SessionConfig& config,
-    std::span<const proto::PreparedSourceRef> sources, proto::RecipeSpec& recipe) {
+    std::span<const proto::PreparedSourceRef> sources, proto::ActionSequence& sequence) {
     require_sources(sources, 1);
-    auto* value = recipe.mutable_reload_and_capture();
-    value->set_source_uuid(sources.front().uuid());
-    value->set_warmup_frames(arguments.value("warmup_frames", config.default_warmup_frames));
-    value->set_screenshot_format(format(arguments.value("screenshot_format", std::string("png"))));
+    activate(sequence, sources.front());
+    reset(sequence);
+    wait(sequence, arguments.value("warmup_frames", config.default_warmup_frames));
+    auto* capture = add_action(sequence)->mutable_capture_screenshot();
+    capture->set_artifact_name("screenshot");
+    capture->set_format(format(arguments.value("screenshot_format", std::string("png"))));
 }
 
 void debug_recipe(const Json& arguments, const SessionConfig& config,
-    std::span<const proto::PreparedSourceRef> sources, proto::RecipeSpec& recipe) {
+    std::span<const proto::PreparedSourceRef> sources, proto::ActionSequence& sequence) {
     require_sources(sources, 1);
-    auto* value = recipe.mutable_capture_debug_bundle();
-    value->set_source_uuid(sources.front().uuid());
-    value->set_warmup_frames(arguments.value("warmup_frames", config.default_warmup_frames));
-    value->set_screenshot(arguments.value("screenshot", false));
+    activate(sequence, sources.front());
+    reset(sequence);
+    wait(sequence, arguments.value("warmup_frames", config.default_warmup_frames));
+    if (arguments.value("screenshot", false)) {
+        auto* capture = add_action(sequence)->mutable_capture_screenshot();
+        capture->set_artifact_name("screenshot");
+        capture->set_format(proto::ARTIFACT_FORMAT_PNG);
+    }
     for (const auto& texture : arguments.value("textures", Json::array())) {
-        value->add_textures(texture.get<std::string>());
+        const auto name = texture.get<std::string>();
+        auto* capture = add_action(sequence)->mutable_dump_texture();
+        capture->set_logical_name(name);
+        capture->set_artifact_name(name);
+        capture->set_format(proto::ARTIFACT_FORMAT_RAW);
     }
     for (const auto& buffer : arguments.value("buffers", Json::array())) {
-        value->add_buffers(buffer.get<std::string>());
+        const auto name = buffer.get<std::string>();
+        auto* capture = add_action(sequence)->mutable_dump_buffer();
+        capture->set_logical_name(name);
+        capture->set_artifact_name(name);
+        capture->set_format(proto::ARTIFACT_FORMAT_BIN);
     }
 }
 
-void ab_recipe(const Json& arguments, const SessionConfig& config,
-    std::span<const proto::PreparedSourceRef> sources, proto::RecipeSpec& recipe) {
-    require_sources(sources, 2);
-    auto* value = recipe.mutable_ab_compare();
-    value->mutable_baseline()->set_label(arguments.at("a").at("label").get<std::string>());
-    value->mutable_baseline()->set_source_uuid(sources[0].uuid());
-    value->mutable_candidate()->set_label(arguments.at("b").at("label").get<std::string>());
-    value->mutable_candidate()->set_source_uuid(sources[1].uuid());
-    value->set_warmup_frames(arguments.value("warmup_frames", config.default_warmup_frames));
-    for (const auto& capture : arguments.at("captures")) {
-        auto* target = value->add_captures();
-        const auto type = capture.at("type").get<std::string>();
-        if (type == "screenshot") target->set_kind(proto::CAPTURE_TARGET_KIND_SCREENSHOT);
-        if (type == "texture") target->set_kind(proto::CAPTURE_TARGET_KIND_TEXTURE);
-        if (type == "buffer") target->set_kind(proto::CAPTURE_TARGET_KIND_BUFFER);
-        target->set_name(capture.value("name", std::string{}));
-        const auto default_format = type == "buffer" ? std::string("bin") : std::string("png");
-        target->set_format(format(capture.value("format", default_format)));
+void add_ab_capture(proto::ActionSequence& sequence, const Json& capture, std::string artifact_name) {
+    const auto type = capture.at("type").get<std::string>();
+    if (type == "screenshot") {
+        auto* value = add_action(sequence)->mutable_capture_screenshot();
+        value->set_artifact_name(std::move(artifact_name));
+        value->set_format(format(capture.value("format", std::string("png"))));
+        return;
     }
+    const auto default_format = type == "buffer" ? std::string("bin") : std::string("png");
+    if (type == "texture") {
+        auto* value = add_action(sequence)->mutable_dump_texture();
+        value->set_logical_name(capture.at("name").get<std::string>());
+        value->set_artifact_name(std::move(artifact_name));
+        value->set_format(format(capture.value("format", default_format)));
+        return;
+    }
+    auto* value = add_action(sequence)->mutable_dump_buffer();
+    value->set_logical_name(capture.at("name").get<std::string>());
+    value->set_artifact_name(std::move(artifact_name));
+    value->set_format(format(capture.value("format", default_format)));
+}
+
+void ab_recipe(const Json& arguments, const SessionConfig& config,
+    std::span<const proto::PreparedSourceRef> sources, proto::ActionSequence& sequence) {
+    require_sources(sources, 2);
+    const auto warmup = arguments.value("warmup_frames", config.default_warmup_frames);
+    activate(sequence, sources[0]);
+    reset(sequence);
+    wait(sequence, warmup);
+    std::size_t index = 0;
+    for (const auto& capture : arguments.at("captures")) {
+        add_ab_capture(sequence, capture, "a-" + std::to_string(index++));
+    }
+    activate(sequence, sources[1]);
+    reset(sequence);
+    wait(sequence, warmup);
+    index = 0;
+    for (const auto& capture : arguments.at("captures")) {
+        add_ab_capture(sequence, capture, "b-" + std::to_string(index++));
+    }
+    auto* compare = add_action(sequence)->mutable_compare_captures();
+    compare->set_baseline_capture_index(0);
+    compare->set_candidate_capture_index(1);
+    compare->set_baseline_label(arguments.at("a").at("label").get<std::string>());
+    compare->set_candidate_label(arguments.at("b").at("label").get<std::string>());
 }
 
 void recipe(const Json& arguments, const SessionConfig& config,
     std::span<const proto::PreparedSourceRef> sources, proto::SubmitJob& job) {
     const auto kind = arguments.at("recipe").get<std::string>();
-    if (kind == "reload_and_capture") return reload_recipe(arguments, config, sources, *job.mutable_recipe());
-    if (kind == "capture_debug_bundle") return debug_recipe(arguments, config, sources, *job.mutable_recipe());
-    if (kind == "ab_compare") return ab_recipe(arguments, config, sources, *job.mutable_recipe());
+    if (kind == "reload_and_capture") return reload_recipe(arguments, config, sources, *job.mutable_actions());
+    if (kind == "capture_debug_bundle") return debug_recipe(arguments, config, sources, *job.mutable_actions());
+    if (kind == "ab_compare") return ab_recipe(arguments, config, sources, *job.mutable_actions());
     throw std::invalid_argument("unsupported recipe");
 }
 
 void actions(const Json& arguments, std::span<const proto::PreparedSourceRef> sources, proto::SubmitJob& job) {
     require_sources(sources, 1);
     auto* sequence = job.mutable_actions();
+    activate(*sequence, sources.front());
     for (const auto& input : arguments.at("actions")) {
         auto* action = sequence->add_actions();
         const auto type = input.at("type").get<std::string>();

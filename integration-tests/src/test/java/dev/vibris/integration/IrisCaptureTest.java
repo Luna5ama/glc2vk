@@ -14,6 +14,7 @@ import dev.vibris.api.VibrisRuntimeAdapter;
 import dev.vibris.core.VibrisBootstrap;
 import dev.vibris.protocol.v1.Action;
 import dev.vibris.protocol.v1.ActionSequence;
+import dev.vibris.protocol.v1.ActivateSource;
 import dev.vibris.protocol.v1.ArtifactFormat;
 import dev.vibris.protocol.v1.ArtifactMetadata;
 import dev.vibris.protocol.v1.CaptureScreenshot;
@@ -119,6 +120,8 @@ final class IrisCaptureTest {
 
     private static SubmitJob job(String requestId, PreparedSourceRef source, List<String> textures) {
         ActionSequence.Builder actions = ActionSequence.newBuilder()
+            .addActions(Action.newBuilder().setActivateSource(
+                ActivateSource.newBuilder().setSourceUuid(source.getUuid())))
             .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(2)))
             .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
                 .setArtifactName("beauty").setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)));
@@ -131,9 +134,12 @@ final class IrisCaptureTest {
     }
 
     private static SubmitJob unknownJob(PreparedSourceRef source) {
-        ActionSequence actions = ActionSequence.newBuilder().addActions(Action.newBuilder().setDumpTexture(
-            DumpTexture.newBuilder().setLogicalName("missing_resource").setArtifactName("missing_resource")
-                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_RAW))).build();
+        ActionSequence actions = ActionSequence.newBuilder()
+            .addActions(Action.newBuilder().setActivateSource(
+                ActivateSource.newBuilder().setSourceUuid(source.getUuid())))
+            .addActions(Action.newBuilder().setDumpTexture(
+                DumpTexture.newBuilder().setLogicalName("missing_resource").setArtifactName("missing_resource")
+                    .setFormat(ArtifactFormat.ARTIFACT_FORMAT_RAW))).build();
         return submission("missing", source).setActions(actions).build();
     }
 

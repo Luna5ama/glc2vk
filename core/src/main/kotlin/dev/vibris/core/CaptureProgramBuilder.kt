@@ -2,103 +2,112 @@ package dev.vibris.core
 
 import dev.vibris.api.CapturePlan
 import dev.vibris.api.ResourceCatalog
-import dev.vibris.protocol.v1.CaptureTarget
-import dev.vibris.protocol.v1.CaptureTargetKind
 import dev.vibris.protocol.v1.ErrorCode
 import java.util.Locale
 
 internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_ACTIONS) {
+    private val expandedActionLimit = maxActions.toLong() * 2 + 8
+
     init {
         require(maxActions > 0) { "maxActions must be positive" }
     }
+
     @Throws(RuntimeJobExecutor.Failure::class)
     fun actions(job: CoreJob, catalog: ResourceCatalog): ActionProgram {
-        if (job.submission.actions.actionsCount > maxActions) {
-            throw invalid("Action limit exceeded.")
-        }
+        if (job.submission.actions.actionsCount.toLong() > expandedActionLimit) throw invalid("Action limit exceeded.")
         val steps = ArrayList<ActionStep>()
         val group = ArrayList<CapturePlan.Target>()
         val artifactNames = HashSet<String>()
         var estimatedBytes = 0L
+        var captureCount = 0
+        var comparisons = 0
         for (action in job.submission.actions.actionsList) {
             when {
+                action.hasActivateSource() -> {
+                    estimatedBytes = flush(group, steps, catalog, artifactNames, estimatedBytes)
+                    val uuid = action.activateSource.sourceUuid
+                    if (uuid.isBlank()) throw invalid("Source UUID is missing.")
+                    steps.add(ActionStep.activate(uuid))
+                }
                 action.hasResetTemporalState() -> {
                     estimatedBytes = flush(group, steps, catalog, artifactNames, estimatedBytes)
                     steps.add(ActionStep.reset())
                 }
                 action.hasWaitFrames() -> {
                     estimatedBytes = flush(group, steps, catalog, artifactNames, estimatedBytes)
+                    if (action.waitFrames.frameCount <= 0) throw invalid("Frame count must be positive.")
                     steps.add(ActionStep.waitFrames(action.waitFrames.frameCount))
                 }
-                action.hasCaptureScreenshot() || action.hasDumpTexture() || action.hasDumpBuffer() -> {
+                action.hasCaptureScreenshot() || action.hasDumpTexture() || action.hasDumpBuffer() ->
                     CapturePlanBuilder.addAction(group, action, catalog)
+                action.hasCompareCaptures() -> {
+                    estimatedBytes = flush(group, steps, catalog, artifactNames, estimatedBytes)
+                    captureCount = steps.count { it.type == ActionType.CAPTURE }
+                    val compare = action.compareCaptures
+                    if (
+                        comparisons++ != 0 || compare.baselineCaptureIndex >= captureCount ||
+                        compare.candidateCaptureIndex >= captureCount ||
+                        compare.baselineCaptureIndex == compare.candidateCaptureIndex ||
+                        compare.baselineLabel.isBlank() || compare.candidateLabel.isBlank()
+                    ) {
+                        throw invalid("Capture comparison is invalid.")
+                    }
+                    steps.add(
+                        ActionStep.compare(
+                            Comparison(
+                                compare.baselineCaptureIndex,
+                                compare.candidateCaptureIndex,
+                                compare.baselineLabel,
+                                compare.candidateLabel,
+                            ),
+                        ),
+                    )
                 }
                 else -> throw invalid("Action is not supported.")
             }
         }
         estimatedBytes = flush(group, steps, catalog, artifactNames, estimatedBytes)
+        if (steps.firstOrNull()?.type != ActionType.ACTIVATE) {
+            throw invalid("Action sequence must start by activating a prepared source.")
+        }
         return ActionProgram(java.util.List.copyOf(steps), estimatedBytes)
     }
 
-    @Throws(RuntimeJobExecutor.Failure::class)
-    fun ab(job: CoreJob, catalog: ResourceCatalog): AbProgram {
-        val recipe = job.submission.recipe.abCompare
-        if (recipe.capturesCount == 0 || recipe.capturesCount > maxActions) {
-            throw invalid("A/B capture count is invalid.")
-        }
-        val baseline = ArrayList<CapturePlan.Target>()
-        val candidate = ArrayList<CapturePlan.Target>()
-        for (index in 0 until recipe.capturesCount) {
-            val capture = recipe.getCaptures(index)
-            baseline.add(abTarget(catalog, capture, "a-$index"))
-            candidate.add(abTarget(catalog, capture, "b-$index"))
-        }
-        val a = CapturePlanBuilder.plan(baseline, catalog)
-        val b = CapturePlanBuilder.plan(candidate, catalog)
-        val estimate = try {
-            Math.addExact(a.estimatedBytes, b.estimatedBytes)
-        } catch (_: ArithmeticException) {
-            throw RuntimeJobExecutor.Failure(
-                ErrorCode.ARTIFACT_JOB_TOO_LARGE,
-                "A/B estimate is too large.",
-            )
-        }
-        return AbProgram(a.capture, b.capture, estimate)
-    }
-
     enum class ActionType {
+        ACTIVATE,
         RESET,
         WAIT,
         CAPTURE,
+        COMPARE,
     }
 
     @JvmRecord
     data class ActionStep(
         val type: ActionType,
+        val sourceUuid: String?,
         val frames: Int,
         val capture: CapturePlan?,
+        val comparison: Comparison?,
     ) {
         companion object {
-            @JvmStatic
-            fun reset(): ActionStep = ActionStep(ActionType.RESET, 0, null)
-
-            @JvmStatic
-            fun waitFrames(frames: Int): ActionStep = ActionStep(ActionType.WAIT, frames, null)
-
-            @JvmStatic
-            fun capture(capture: CapturePlan): ActionStep = ActionStep(ActionType.CAPTURE, 0, capture)
+            fun activate(uuid: String) = ActionStep(ActionType.ACTIVATE, uuid, 0, null, null)
+            fun reset() = ActionStep(ActionType.RESET, null, 0, null, null)
+            fun waitFrames(frames: Int) = ActionStep(ActionType.WAIT, null, frames, null, null)
+            fun capture(capture: CapturePlan) = ActionStep(ActionType.CAPTURE, null, 0, capture, null)
+            fun compare(comparison: Comparison) = ActionStep(ActionType.COMPARE, null, 0, null, comparison)
         }
     }
 
     @JvmRecord
-    data class ActionProgram(val steps: List<ActionStep>, val estimatedBytes: Long)
+    data class Comparison(
+        val baselineCaptureIndex: Int,
+        val candidateCaptureIndex: Int,
+        val baselineLabel: String,
+        val candidateLabel: String,
+    )
 
     @JvmRecord
-    data class AbProgram(
-        val baseline: CapturePlan,
-        val candidate: CapturePlan,
-        val estimatedBytes: Long,
-    )
+    data class ActionProgram(val steps: List<ActionStep>, val estimatedBytes: Long)
 
     companion object {
         private const val DEFAULT_MAX_ACTIONS = 64
@@ -111,9 +120,7 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
             artifactNames: MutableSet<String>,
             estimatedBytes: Long,
         ): Long {
-            if (group.isEmpty()) {
-                return estimatedBytes
-            }
+            if (group.isEmpty()) return estimatedBytes
             val planned = CapturePlanBuilder.plan(java.util.List.copyOf(group), catalog)
             for (target in group) {
                 requireUnique(artifactNames, target.fileName())
@@ -136,52 +143,10 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
             }
         }
 
-        @Throws(RuntimeJobExecutor.Failure::class)
         private fun requireUnique(names: MutableSet<String>, name: String) {
-            if (!names.add(name.lowercase(Locale.ROOT))) {
-                throw invalid("Capture artifact names are repeated.")
-            }
+            if (!names.add(name.lowercase(Locale.ROOT))) throw invalid("Capture artifact names are repeated.")
         }
 
-        @Throws(RuntimeJobExecutor.Failure::class)
-        private fun abTarget(
-            catalog: ResourceCatalog,
-            capture: CaptureTarget,
-            artifactName: String,
-        ): CapturePlan.Target {
-            val fallback = when (capture.kind) {
-                CaptureTargetKind.CAPTURE_TARGET_KIND_SCREENSHOT -> CapturePlan.ArtifactFormat.PNG
-                CaptureTargetKind.CAPTURE_TARGET_KIND_TEXTURE -> CapturePlan.ArtifactFormat.RAW
-                CaptureTargetKind.CAPTURE_TARGET_KIND_BUFFER -> CapturePlan.ArtifactFormat.BIN
-                else -> throw invalid("A/B capture kind is invalid.")
-            }
-            val format = CapturePlanBuilder.format(capture.format, fallback)
-            return when (capture.kind) {
-                CaptureTargetKind.CAPTURE_TARGET_KIND_SCREENSHOT ->
-                    CapturePlanBuilder.screenshot(catalog, format, artifactName)
-                CaptureTargetKind.CAPTURE_TARGET_KIND_TEXTURE ->
-                    CapturePlanBuilder.target(
-                        ResourceCatalog.ResourceKind.TEXTURE,
-                        capture.name,
-                        format,
-                        artifactName,
-                        0,
-                        0,
-                    )
-                CaptureTargetKind.CAPTURE_TARGET_KIND_BUFFER ->
-                    CapturePlanBuilder.target(
-                        ResourceCatalog.ResourceKind.BUFFER,
-                        capture.name,
-                        format,
-                        artifactName,
-                        0,
-                        0,
-                    )
-                else -> throw invalid("A/B capture kind is invalid.")
-            }
-        }
-
-        private fun invalid(message: String): RuntimeJobExecutor.Failure =
-            RuntimeJobExecutor.Failure(ErrorCode.CAPTURE_FAILED, message)
+        private fun invalid(message: String) = RuntimeJobExecutor.Failure(ErrorCode.CAPTURE_FAILED, message)
     }
 }

@@ -26,7 +26,8 @@ public:
     bool list_presets(ListPresetsCompletion completion);
     bool validate_context(proto::ValidateContextRequest request, ValidateContextCompletion completion);
     bool get_status(GetStatusCompletion completion);
-    bool debug_control(proto::DebugControlRequest request, DebugControlCompletion completion);
+    bool debug_control(proto::DebugControlRequest request, DebugControlCompletion completion,
+        std::chrono::milliseconds deadline);
     bool submit(proto::ClientMessage message, GrpcCompletion completion);
     bool cancel(std::string_view request_id, std::string reason);
     void shutdown();
@@ -71,7 +72,8 @@ private:
     };
 
     template <typename Request, typename Response, typename Completion, typename StartCall>
-    bool start_unary(Request request, Completion completion, StartCall start_call);
+    bool start_unary(Request request, Completion completion, StartCall start_call,
+        std::chrono::milliseconds deadline = std::chrono::milliseconds::zero());
 
     template <typename Call>
     void finish_unary(Call& call, bool ok) noexcept;

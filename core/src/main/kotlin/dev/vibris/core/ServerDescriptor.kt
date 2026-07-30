@@ -6,7 +6,6 @@ import dev.vibris.protocol.v1.ArtifactFormat
 import dev.vibris.protocol.v1.Capability
 import dev.vibris.protocol.v1.DebugControlKind
 import dev.vibris.protocol.v1.JobActionKind
-import dev.vibris.protocol.v1.RecipeKind
 import dev.vibris.protocol.v1.ResourceCatalog
 import dev.vibris.protocol.v1.ResourceCatalogEntry
 import dev.vibris.protocol.v1.ResourceKind
@@ -29,13 +28,6 @@ internal class ServerDescriptor @JvmOverloads constructor(
         .setPendingShadersRoot(pending.toString())
         .setArtifactRoot(artifacts.root().toString())
         .setArtifactQuotaCapBytes(artifacts.quotaBytes())
-        .addAllSupportedRecipes(
-            listOf(
-                RecipeKind.RECIPE_KIND_RELOAD_AND_CAPTURE,
-                RecipeKind.RECIPE_KIND_CAPTURE_DEBUG_BUNDLE,
-                RecipeKind.RECIPE_KIND_AB_COMPARE,
-            ),
-        )
         .addAllSupportedJobActions(
             listOf(
                 JobActionKind.JOB_ACTION_KIND_RESET_TEMPORAL_STATE,
@@ -43,6 +35,8 @@ internal class ServerDescriptor @JvmOverloads constructor(
                 JobActionKind.JOB_ACTION_KIND_CAPTURE_SCREENSHOT,
                 JobActionKind.JOB_ACTION_KIND_DUMP_TEXTURE,
                 JobActionKind.JOB_ACTION_KIND_DUMP_BUFFER,
+                JobActionKind.JOB_ACTION_KIND_ACTIVATE_SOURCE,
+                JobActionKind.JOB_ACTION_KIND_COMPARE_CAPTURES,
             ),
         )
         .addAllSupportedDebugControls(
@@ -78,9 +72,6 @@ internal class ServerDescriptor @JvmOverloads constructor(
         .addCapabilities(Capability.CAPABILITY_CONTROL_STREAM)
         .addCapabilities(Capability.CAPABILITY_RESUME)
         .addCapabilities(Capability.CAPABILITY_PREPARED_SOURCES)
-        .addCapabilities(Capability.CAPABILITY_RELOAD_AND_CAPTURE)
-        .addCapabilities(Capability.CAPABILITY_CAPTURE_DEBUG_BUNDLE)
-        .addCapabilities(Capability.CAPABILITY_AB_COMPARE)
         .addCapabilities(Capability.CAPABILITY_ACTION_SEQUENCE)
         .addCapabilities(Capability.CAPABILITY_ARTIFACT_METADATA)
         .addCapabilities(Capability.CAPABILITY_DEBUG_CONTROL)
@@ -89,7 +80,6 @@ internal class ServerDescriptor @JvmOverloads constructor(
                 .setMaxSourceBytes(maxSourceBytes)
                 .setMaxSourceFiles(maxSourceFiles),
         )
-        .addAllSupportedRecipes(baseStatus.supportedRecipesList)
         .addAllSupportedJobActions(baseStatus.supportedJobActionsList)
         .addAllSupportedDebugControls(baseStatus.supportedDebugControlsList)
         .addAllSupportedFormats(baseStatus.supportedFormatsList)

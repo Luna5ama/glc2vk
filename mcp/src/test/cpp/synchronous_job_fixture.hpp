@@ -50,9 +50,9 @@ private:
             const auto source_path = job.sources_size() == 1
                 ? fs::path(hello_.pending_shaders_root()) / job.sources(0).uuid()
                 : fs::path{};
-            const bool execution_matches = expected_actions_
-                ? job.has_actions() && job.actions().actions().empty()
-                : job.has_recipe() && job.recipe().has_reload_and_capture();
+            const bool execution_matches = job.has_actions() &&
+                job.actions().actions_size() == (expected_actions_ ? 1 : 4) &&
+                job.actions().actions(0).has_activate_source();
             valid_submit_.store(!source_path.empty() && execution_matches &&
                 job.context().weather_preset_id() == "clear" &&
                 job.context().settings_preset_id() == "quality" && job.context().resolution().width() == 1920 &&
@@ -73,9 +73,7 @@ private:
             proto::ServerMessage completed;
             completed.set_request_id(request.request_id());
             auto* result = completed.mutable_job_completed()->mutable_result();
-            result->set_kind(expected_actions_
-                ? proto::JOB_RESULT_KIND_ACTION_SEQUENCE
-                : proto::JOB_RESULT_KIND_RELOAD_AND_CAPTURE);
+            result->set_kind(proto::JOB_RESULT_KIND_ACTION_SEQUENCE);
             result->set_manifest_path((artifact_root_ / "manifest.json").string());
             result->add_frame_ids(901);
             result->mutable_timings()->set_total_ms(17);

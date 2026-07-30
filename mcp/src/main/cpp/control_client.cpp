@@ -123,6 +123,8 @@ proto::ClientMessage make_submit(const Json& command, const Options& options) {
         source->set_total_bytes(value.at("total_bytes").get<std::uint64_t>());
         source->mutable_origin()->mutable_workspace()->set_display_name(options.workspace_id);
     }
+    if (job->sources().empty()) throw std::invalid_argument("submit requires a prepared source");
+    job->mutable_actions()->add_actions()->mutable_activate_source()->set_source_uuid(job->sources(0).uuid());
     if (command.contains("actions")) {
         for (const auto& action : command.at("actions")) add_action(action, job->mutable_actions());
     } else if (command.contains("wait_frames")) {

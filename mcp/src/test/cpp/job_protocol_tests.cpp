@@ -167,10 +167,13 @@ void request_mapping() {
             job.context().resolution().width() == 1920 && job.context().resolution().height() == 1080 &&
             job.context().fov() == 72.5,
         "Full matched preset context was not copied with the configured FOV override.");
-    require(job.recipe().reload_and_capture().source_uuid() == sources.front().uuid() &&
-            job.recipe().reload_and_capture().warmup_frames() == 19 &&
-            job.recipe().reload_and_capture().screenshot_format() == proto::ARTIFACT_FORMAT_PNG,
-        "reload_and_capture defaults were not mapped exactly.");
+    require(job.has_actions() && job.actions().actions_size() == 4 &&
+            job.actions().actions(0).has_activate_source() &&
+            job.actions().actions(0).activate_source().source_uuid() == sources.front().uuid() &&
+            job.actions().actions(1).has_reset_temporal_state() &&
+            job.actions().actions(2).wait_frames().frame_count() == 19 &&
+            job.actions().actions(3).capture_screenshot().format() == proto::ARTIFACT_FORMAT_PNG,
+        "reload_and_capture was not expanded into runtime actions.");
     require(job.timeouts().queue_timeout_ms() == 60'000 && job.timeouts().execution_timeout_ms() == 120'000 &&
             job.timeouts().total_timeout_ms() == 180'000,
         "SubmitJob timeout defaults were not mapped exactly.");
@@ -187,11 +190,14 @@ void remaining_execution_mappings() {
         {{"recipe", "capture_debug_bundle"}, {"warmup_frames", 5}, {"screenshot", true},
          {"textures", Json::array({"colortex5"})}, {"buffers", Json::array({"debugSsbo"})}},
         config(), context, one_source, "request-debug");
-    const auto& debug_recipe = debug.submit_job().recipe().capture_debug_bundle();
-    require(debug_recipe.source_uuid() == one_source.front().uuid() && debug_recipe.warmup_frames() == 5 &&
-            debug_recipe.screenshot() && debug_recipe.textures(0) == "colortex5" &&
-            debug_recipe.buffers(0) == "debugSsbo",
-        "capture_debug_bundle was not mapped exactly.");
+    const auto& debug_actions = debug.submit_job().actions();
+    require(debug_actions.actions_size() == 6 &&
+            debug_actions.actions(0).activate_source().source_uuid() == one_source.front().uuid() &&
+            debug_actions.actions(2).wait_frames().frame_count() == 5 &&
+            debug_actions.actions(3).capture_screenshot().artifact_name() == "screenshot" &&
+            debug_actions.actions(4).dump_texture().logical_name() == "colortex5" &&
+            debug_actions.actions(5).dump_buffer().logical_name() == "debugSsbo",
+        "capture_debug_bundle was not expanded into runtime actions.");
 
     const std::vector two_sources{source("44444444-4444-4444-8444-444444444444"),
                                   source("55555555-5555-4555-8555-555555555555")};
@@ -203,15 +209,16 @@ void remaining_execution_mappings() {
                                     {{"type", "texture"}, {"name", "colortex5"}},
                                     {{"type", "buffer"}, {"name", "debugSsbo"}}})}},
         config(), context, two_sources, "request-ab");
-    const auto& ab_recipe = ab.submit_job().recipe().ab_compare();
-    require(ab_recipe.baseline().label() == "baseline" &&
-            ab_recipe.baseline().source_uuid() == two_sources[0].uuid() &&
-            ab_recipe.candidate().label() == "candidate" &&
-            ab_recipe.candidate().source_uuid() == two_sources[1].uuid() && ab_recipe.captures_size() == 3 &&
-            ab_recipe.captures(0).format() == proto::ARTIFACT_FORMAT_PNG &&
-            ab_recipe.captures(1).format() == proto::ARTIFACT_FORMAT_PNG &&
-            ab_recipe.captures(2).format() == proto::ARTIFACT_FORMAT_BIN,
-        "ab_compare sources, labels, or capture defaults were not mapped exactly.");
+    const auto& ab_actions = ab.submit_job().actions();
+    require(ab_actions.actions_size() == 13 &&
+            ab_actions.actions(0).activate_source().source_uuid() == two_sources[0].uuid() &&
+            ab_actions.actions(3).capture_screenshot().format() == proto::ARTIFACT_FORMAT_PNG &&
+            ab_actions.actions(4).dump_texture().format() == proto::ARTIFACT_FORMAT_PNG &&
+            ab_actions.actions(5).dump_buffer().format() == proto::ARTIFACT_FORMAT_BIN &&
+            ab_actions.actions(6).activate_source().source_uuid() == two_sources[1].uuid() &&
+            ab_actions.actions(12).compare_captures().baseline_label() == "baseline" &&
+            ab_actions.actions(12).compare_captures().candidate_label() == "candidate",
+        "ab_compare was not expanded into runtime actions.");
 
     const Json action_arguments{{"actions", Json::array({
         {{"type", "reset_temporal_state"}},
@@ -225,11 +232,12 @@ void remaining_execution_mappings() {
     const auto actions = JobProtocol::request(
         "vibris_run_actions", action_arguments, config(), context, one_source, "request-actions");
     const auto& sequence = actions.submit_job().actions();
-    require(sequence.actions_size() == 5 && sequence.actions(0).has_reset_temporal_state() &&
-            sequence.actions(1).wait_frames().frame_count() == 3 &&
-            sequence.actions(2).capture_screenshot().format() == proto::ARTIFACT_FORMAT_PNG &&
-            sequence.actions(3).dump_texture().logical_name() == "colortex5" &&
-            sequence.actions(4).dump_buffer().artifact_name() == "buffer",
+    require(sequence.actions_size() == 6 && sequence.actions(0).has_activate_source() &&
+            sequence.actions(1).has_reset_temporal_state() &&
+            sequence.actions(2).wait_frames().frame_count() == 3 &&
+            sequence.actions(3).capture_screenshot().format() == proto::ARTIFACT_FORMAT_PNG &&
+            sequence.actions(4).dump_texture().logical_name() == "colortex5" &&
+            sequence.actions(5).dump_buffer().artifact_name() == "buffer",
         "Allowed action sequence was not mapped exactly.");
 }
 
@@ -260,8 +268,9 @@ void empty_actions_mapping() {
     const auto context = SceneContextResolver::resolve(config(), presets());
     const auto message = JobProtocol::request(
         "vibris_run_actions", {{"actions", Json::array()}}, config(), context, sources, "request-empty");
-    require(message.submit_job().has_actions() && message.submit_job().actions().actions().empty(),
-        "Empty actions did not select the ActionSequence execution branch.");
+    require(message.submit_job().has_actions() && message.submit_job().actions().actions_size() == 1 &&
+            message.submit_job().actions().actions(0).has_activate_source(),
+        "Empty public actions did not retain the MCP source-activation overlay.");
 }
 
 void progress_does_not_consume_terminal() {
@@ -504,7 +513,10 @@ void grpc_shutdown_does_not_start_operations_after_cq_shutdown() {
         auto* job = request.mutable_submit_job();
         job->set_request_id(request.request_id());
         job->add_sources()->set_uuid("missing-source");
-        job->mutable_recipe()->mutable_reload_and_capture()->set_source_uuid("missing-source");
+        job->mutable_actions()->add_actions()->mutable_activate_source()->set_source_uuid("missing-source");
+        job->mutable_actions()->add_actions()->mutable_reset_temporal_state();
+        job->mutable_actions()->add_actions()->mutable_wait_frames()->set_frame_count(1);
+        job->mutable_actions()->add_actions()->mutable_capture_screenshot()->set_artifact_name("screenshot");
         require(client.submit(std::move(request), [&](const grpc::Status& status,
             const proto::ServerMessage& message) {
             {
@@ -529,7 +541,7 @@ void completed_mapping() {
     proto::ServerMessage message;
     message.set_request_id("request-1");
     auto* result = message.mutable_job_completed()->mutable_result();
-    result->set_kind(proto::JOB_RESULT_KIND_AB_COMPARE);
+    result->set_kind(proto::JOB_RESULT_KIND_ACTION_SEQUENCE);
     result->set_manifest_path(manifest_path);
     result->add_frame_ids(73);
     result->add_frame_ids(74);
@@ -560,8 +572,8 @@ void completed_mapping() {
     const auto outcome = JobProtocol::terminal(message);
     const auto& mapped = std::get<Json>(outcome);
 
-    require(mapped.at("success") == true && mapped.at("kind") == "ab_compare",
-        "JobCompleted did not map to a successful recipe result.");
+    require(mapped.at("success") == true && mapped.at("kind") == "action_sequence",
+        "JobCompleted did not map to a successful action-sequence result.");
     require(mapped.at("diagnostics").at(0).at("message") == "warning-marker" &&
             mapped.at("timings").at("total_ms") == 13 && mapped.at("frame_ids").size() == 2,
         "Diagnostics, timings, or frame IDs were lost.");

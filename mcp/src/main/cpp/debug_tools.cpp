@@ -58,7 +58,10 @@ void append_debug_tool_definitions(Json& definitions) {
                                                                   {"maximum", std::numeric_limits<std::int32_t>::max()},
                                                                   {"default", 1}}}}), false));
     definitions.push_back(definition("vibris_get_screenshot_result", "Read the last completed screenshot path.", empty, true));
-    definitions.push_back(definition("vibris_get_gpu_metrics", "Read recent GPU pass timings.", empty, true));
+    definitions.push_back(definition("vibris_get_gpu_metrics", "Measure GPU pass timings over the next rendered frames.",
+                                     closed_object({{"frames", {{"type", "integer"}, {"minimum", 1},
+                                                                  {"maximum", 10'000}}}},
+                                                   {"frames"}), true));
     definitions.push_back(definition("vibris_list_ssbos", "List active shader storage buffers.", empty, true));
     definitions.push_back(definition("vibris_dump_ssbo", "Dump a shader storage buffer by binding index.",
                                      closed_object({{"index", integer()}}, {"index"}), false));

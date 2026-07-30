@@ -2,6 +2,7 @@ package dev.vibris.integration;
 
 import dev.vibris.protocol.v1.Action;
 import dev.vibris.protocol.v1.ActionSequence;
+import dev.vibris.protocol.v1.ActivateSource;
 import dev.vibris.protocol.v1.Capability;
 import dev.vibris.protocol.v1.CancelJob;
 import dev.vibris.protocol.v1.ClientHello;
@@ -84,6 +85,8 @@ final class IntegrationHarness {
     static SubmitJob job(String requestId, String workspaceId, SceneContext context, PreparedSourceRef source,
                          long executionTimeoutMs, int frames) {
         ActionSequence actions = ActionSequence.newBuilder()
+            .addActions(Action.newBuilder().setActivateSource(
+                ActivateSource.newBuilder().setSourceUuid(source.getUuid())))
             .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(frames)))
             .build();
         return SubmitJob.newBuilder()

@@ -3,7 +3,7 @@
 Vibris exposes one native MCP executable for shader testing. `vibris-mcp.exe` speaks newline-delimited MCP JSON-RPC
 on stdin/stdout and connects to the Vibris server embedded in Iris over loopback gRPC. Iris owns Minecraft, shader
 reloads, render-thread work, and capture resources; the MCP owns worktree configuration, immutable source preparation,
-the worktree lock, and synchronous tool results.
+recipe expansion, the worktree lock, and synchronous tool results.
 
 ```text
 Codex or another MCP client
@@ -199,14 +199,20 @@ Capture and shader-debug controls use the same MCP and gRPC connection:
 | `vibris_get_capture_status`, `vibris_capture_pass`, `vibris_capture_multi` | inspect or queue compute captures |
 | `vibris_reload_shader`, `vibris_get_shader_status`, `vibris_get_shader_errors` | reload and inspect the active shader pack |
 | `vibris_schedule_screenshot`, `vibris_get_screenshot_result` | schedule and locate an asynchronous host screenshot |
-| `vibris_get_gpu_metrics` | read recent GPU pass timings |
+| `vibris_get_gpu_metrics` | measure GPU pass timings over the next required `frames` |
 | `vibris_list_ssbos`, `vibris_dump_ssbo` | inspect or dump SSBOs by binding index |
 | `vibris_list_textures`, `vibris_dump_texture` | inspect or dump textures by logical name or OpenGL ID |
 | `vibris_list_patched_shaders` | inspect patched shader debug files |
 
-Server discovery reports job-sequence capabilities as `supported_job_actions` and immediate controls as
-`supported_debug_controls`. The two lists are intentionally distinct: status and listing operations are controls, not
-actions inside `vibris_run_actions`.
+Server discovery reports runtime job-sequence capabilities as `supported_job_actions` and immediate controls as
+`supported_debug_controls`. Recipes are an MCP-only overlay and are therefore not negotiated with the Minecraft
+runtime. The two capability lists are intentionally distinct: status and listing operations are controls, not actions
+inside `vibris_run_actions`.
+
+`vibris_get_gpu_metrics` requires `{"frames": N}` with `1 <= N <= 10000`. Measurement starts when the runtime receives
+that call, timestamps exactly the next `N` rendered frames, and completes when the final requested frame has been
+collected. Its result contains only aggregate timing fields (`avg`, `p5`, `p50`, and `p95`); callers do not need a
+separate wait or a prior snapshot.
 
 Debug dumps use the running Minecraft instance and execute on its client thread. Optional compute-capture paths are
 resolved inside the game directory; paths escaping it are rejected.
@@ -257,7 +263,9 @@ retained until the next activation, while stale or rejected sources are removed.
 
 ## Recipes
 
-Prefer `vibris_run_recipe` when one of the three standard jobs fits.
+Prefer `vibris_run_recipe` when one of the three standard jobs fits. Recipes exist only in the native MCP: it expands
+each recipe into a bounded action sequence before submitting the job. The protobuf boundary and Minecraft runtime carry
+and execute action sequences only; no recipe enum or recipe decoder exists in the mod.
 
 ### Reload and capture
 
@@ -317,7 +325,9 @@ Use `vibris_run_actions` only when a recipe cannot express the sequence. Support
 - `dump_texture` with logical resource name, raw/PNG format, and artifact name
 - `dump_buffer` with logical resource name, BIN format, and artifact name
 
-The source and configured scene are activated by the system, not by user actions. Job actions do not include shell
+The MCP prepends internal source-activation actions and may add an internal capture-comparison action for A/B recipes.
+Those overlay actions are not part of the public custom-action schema. The configured scene is applied by the runtime.
+Job actions do not include shell
 execution, arbitrary path loads, manual shader reloads, or external capture hooks. Artifact names are safe file-name
 segments, not paths.
 

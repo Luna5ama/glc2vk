@@ -12,7 +12,8 @@ void GrpcClient::Impl::UnaryTag<Request, Response, Completion>::complete(const b
 }
 
 template <typename Request, typename Response, typename Completion, typename StartCall>
-bool GrpcClient::Impl::start_unary(Request request, Completion completion, StartCall start_call) {
+bool GrpcClient::Impl::start_unary(Request request, Completion completion, StartCall start_call,
+    const std::chrono::milliseconds deadline) {
     std::scoped_lock lock(mutex_);
     if (!started_ || stopping_ || !completion ||
         pending_.size() + unary_in_flight_ >= options_.pending_request_limit) {
@@ -21,7 +22,8 @@ bool GrpcClient::Impl::start_unary(Request request, Completion completion, Start
     ensure_stub_locked();
     using Call = UnaryTag<Request, Response, Completion>;
     auto call = std::make_unique<Call>(*this, std::move(request), std::move(completion));
-    call->context.set_deadline(std::chrono::system_clock::now() + options_.unary_deadline);
+    call->context.set_deadline(std::chrono::system_clock::now() +
+        (deadline.count() == 0 ? options_.unary_deadline : deadline));
     call->reader = start_call(*stub_, call->context, call->request, queue_);
     Call* const tag = call.release();
     ++unary_in_flight_;
@@ -83,13 +85,14 @@ bool GrpcClient::Impl::get_status(GetStatusCompletion completion) {
         });
 }
 
-bool GrpcClient::Impl::debug_control(proto::DebugControlRequest request, DebugControlCompletion completion) {
+bool GrpcClient::Impl::debug_control(proto::DebugControlRequest request, DebugControlCompletion completion,
+    const std::chrono::milliseconds deadline) {
     return start_unary<proto::DebugControlRequest, proto::DebugControlResponse>(
         std::move(request), std::move(completion),
         [](proto::VibrisControl::Stub& stub, grpc::ClientContext& context,
             const proto::DebugControlRequest& value, grpc::CompletionQueue& queue) {
             return stub.AsyncDebugControl(&context, value, &queue);
-        });
+        }, deadline);
 }
 
 bool GrpcClient::get_server_info(GetServerInfoCompletion completion) {

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <future>
 #include <iostream>
 #include <string>
@@ -83,7 +84,8 @@ public:
 
 private:
     template <typename Response, typename Start, typename Map>
-    ToolOutcome unary(Start&& start, Map&& map) {
+    ToolOutcome unary(Start&& start, Map&& map,
+        const std::chrono::milliseconds wait = std::chrono::seconds(6)) {
         auto completion = std::make_shared<std::promise<std::pair<grpc::Status, Response>>>();
         auto result = completion->get_future();
         const auto accepted = std::forward<Start>(start)(
@@ -91,7 +93,7 @@ private:
                 completion->set_value({status, response});
             });
         if (!accepted) return ToolFailure{"QUEUE_FULL", "The bounded gRPC request registry is full.", true};
-        if (result.wait_for(std::chrono::seconds(6)) != std::future_status::ready) {
+        if (result.wait_for(wait) != std::future_status::ready) {
             return ToolFailure{"SERVER_OFFLINE", "The local Vibris server did not respond before its deadline.", true};
         }
         auto [status, response] = result.get();
@@ -162,11 +164,15 @@ private:
     }
 
     ToolOutcome debug_control(control::DebugControlRequest request) {
+        const auto deadline = request.has_gpu_metrics()
+            ? std::chrono::seconds(static_cast<std::int64_t>(request.gpu_metrics().frames()) + 5)
+            : std::chrono::seconds(5);
         return unary<control::DebugControlResponse>(
-            [this, request = std::move(request)](auto completion) mutable {
-                return client().debug_control(std::move(request), std::move(completion));
+            [this, request = std::move(request), deadline](auto completion) mutable {
+                return client().debug_control(std::move(request), std::move(completion), deadline);
             },
-            [](const auto& response) -> ToolOutcome { return DebugProtocol::response(response); });
+            [](const auto& response) -> ToolOutcome { return DebugProtocol::response(response); },
+            deadline + std::chrono::seconds(1));
     }
 
     ToolOutcome run_job(std::string_view name, const Json& arguments) {

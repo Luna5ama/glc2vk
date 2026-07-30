@@ -22,8 +22,10 @@ interface VibrisRuntimeHost : AutoCloseable {
 
     fun status(): RuntimeStatus
 
-    fun debugControl(command: DebugControlCommand): String =
-        throw UnsupportedOperationException("Debug control is unavailable")
+    fun debugControl(command: DebugControlCommand): CompletionStage<String> =
+        java.util.concurrent.CompletableFuture.failedFuture(
+            UnsupportedOperationException("Debug control is unavailable"),
+        )
 
     fun presets(): List<ScenePreset> = java.util.List.of()
 

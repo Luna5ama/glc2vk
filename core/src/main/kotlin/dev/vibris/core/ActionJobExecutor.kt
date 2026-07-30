@@ -1,10 +1,9 @@
 package dev.vibris.core
 
-import dev.vibris.api.CapturePlan
 import dev.vibris.api.CaptureResult
 import dev.vibris.api.ReloadResult
-import dev.vibris.api.TemporalResetResult
 import dev.vibris.api.VibrisRuntimeAdapter
+import dev.vibris.protocol.v1.AbComparisonResult
 import dev.vibris.protocol.v1.ErrorCode
 import dev.vibris.protocol.v1.JobResult
 import dev.vibris.protocol.v1.JobResultKind
@@ -19,46 +18,62 @@ internal class ActionJobExecutor(
     private val owner: RuntimeJobExecutor,
 ) {
     @Throws(RuntimeJobExecutor.Failure::class)
-    fun execute(
-        job: CoreJob,
-        progress: Consumer<JobStage>,
-        deadline: Long,
-        reload: ReloadResult,
-    ): JobResult {
+    fun execute(job: CoreJob, progress: Consumer<JobStage>, deadline: Long): JobResult {
+        val first = job.submission.actions.actionsList.firstOrNull()
+        if (first == null || !first.hasActivateSource()) {
+            throw RuntimeJobExecutor.Failure(
+                ErrorCode.SOURCE_ACTIVATION_FAILED,
+                "Action sequence must start by activating a prepared source.",
+            )
+        }
+        var reload = activate(job, first.activateSource.sourceUuid, progress, deadline)
         val action = captures.prepareActions(job, runtime.getResourceCatalog(), reload.diagnostics)
         val prepared = action.prepared
-        if (prepared == null) {
-            for (step in action.program.steps) {
-                when (step.type) {
-                    CaptureProgramBuilder.ActionType.RESET -> reset(job, progress, deadline)
-                    CaptureProgramBuilder.ActionType.WAIT -> waitFrames(job, progress, deadline, step.frames)
-                    CaptureProgramBuilder.ActionType.CAPTURE -> throw RuntimeJobExecutor.Failure(
-                        ErrorCode.CAPTURE_FAILED,
-                        "Capture storage is unavailable.",
-                    )
-                }
-            }
-            val result = JobResult.newBuilder().setKind(JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE)
-            CaptureProtocolArtifacts.addDiagnostics(result, reload.diagnostics, "")
-            return result.build()
-        }
+        val diagnostics = ArrayList(reload.diagnostics)
+        val results = ArrayList<CaptureResult>()
+        var comparison: AbComparisonResult? = null
+        var firstActivation = true
         try {
-            prepared.use {
-                val results = ArrayList<CaptureResult>()
+            fun executeSteps() {
                 for (step in action.program.steps) {
                     when (step.type) {
-                        CaptureProgramBuilder.ActionType.RESET -> reset(job, progress, deadline)
-                        CaptureProgramBuilder.ActionType.WAIT -> waitFrames(job, progress, deadline, step.frames)
-                        CaptureProgramBuilder.ActionType.CAPTURE -> results.add(
-                            capture(job, progress, deadline, prepared, step.capture!!),
-                        )
+                        CaptureProgramBuilder.ActionType.ACTIVATE -> {
+                            if (firstActivation) {
+                                firstActivation = false
+                            } else {
+                                reload = activate(job, step.sourceUuid!!, progress, deadline)
+                                diagnostics.addAll(reload.diagnostics)
+                                prepared?.addDiagnostics(reload.diagnostics)
+                            }
+                        }
+                        CaptureProgramBuilder.ActionType.RESET -> owner.reset(job, progress, deadline)
+                        CaptureProgramBuilder.ActionType.WAIT -> owner.waitFrames(job, progress, deadline, step.frames)
+                        CaptureProgramBuilder.ActionType.CAPTURE -> {
+                            if (prepared == null) throw captureUnavailable()
+                            results.add(owner.capture(job, progress, deadline, prepared, step.capture!!))
+                        }
+                        CaptureProgramBuilder.ActionType.COMPARE -> {
+                            if (prepared == null) throw captureUnavailable()
+                            progress.accept(JobStage.JOB_STAGE_COMPARING)
+                            probe.event(job.requestId, "COMPARING")
+                            comparison = captures.compare(prepared, step.comparison!!)
+                        }
                     }
                 }
+            }
+            if (prepared == null) {
+                executeSteps()
+                val result = JobResult.newBuilder().setKind(JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE)
+                CaptureProtocolArtifacts.addDiagnostics(result, diagnostics, "")
+                return result.build()
+            }
+            prepared.use {
+                executeSteps()
                 progress.accept(JobStage.JOB_STAGE_WRITING_ARTIFACTS)
                 probe.event(job.requestId, "WRITING_ARTIFACTS")
                 progress.accept(JobStage.JOB_STAGE_FINALIZING)
                 probe.event(job.requestId, "FINALIZING")
-                return captures.commit(job, prepared, results, null)
+                return captures.commit(job, prepared, results, comparison)
             }
         } catch (exception: IOException) {
             throw CaptureJobExecutor.failure(exception)
@@ -66,36 +81,24 @@ internal class ActionJobExecutor(
     }
 
     @Throws(RuntimeJobExecutor.Failure::class)
-    private fun reset(job: CoreJob, progress: Consumer<JobStage>, deadline: Long) {
-        progress.accept(JobStage.JOB_STAGE_RESETTING_TEMPORAL_STATE)
-        probe.event(job.requestId, "RESETTING_TEMPORAL_STATE")
-        val reset: TemporalResetResult = owner.await(
-            runtime.resetTemporalState(job.cancellation.token()),
-            job,
-            deadline,
-        )
-        if (!reset.successful) {
-            throw RuntimeJobExecutor.Failure(ErrorCode.INTERNAL_ERROR, "Runtime temporal state reset failed.")
-        }
-    }
-
-    @Throws(RuntimeJobExecutor.Failure::class)
-    private fun waitFrames(job: CoreJob, progress: Consumer<JobStage>, deadline: Long, frames: Int) {
-        progress.accept(JobStage.JOB_STAGE_WARMING_UP)
-        probe.event(job.requestId, "WARMING_UP")
-        owner.await(runtime.waitRenderedFrames(frames, job.cancellation.token()), job, deadline)
-    }
-
-    @Throws(RuntimeJobExecutor.Failure::class)
-    private fun capture(
+    private fun activate(
         job: CoreJob,
+        uuid: String,
         progress: Consumer<JobStage>,
         deadline: Long,
-        prepared: CaptureJobExecutor.Prepared,
-        plan: CapturePlan,
-    ): CaptureResult {
-        progress.accept(JobStage.JOB_STAGE_CAPTURING)
-        probe.event(job.requestId, "CAPTURING")
-        return owner.awaitCapture(runtime.capture(plan, prepared.sink(), job.cancellation.token()), job, deadline)
+    ): ReloadResult {
+        val source = job.sources.firstOrNull { it.uuid().equals(uuid, ignoreCase = true) }
+            ?: throw RuntimeJobExecutor.Failure(
+                ErrorCode.INVALID_SOURCE_UUID,
+                "Action references an unprepared source.",
+            )
+        val reload = owner.activateSource(job, source, progress, deadline)
+        owner.applyContext(job, progress, deadline)
+        return reload
     }
+
+    private fun captureUnavailable() = RuntimeJobExecutor.Failure(
+        ErrorCode.CAPTURE_FAILED,
+        "Capture storage is unavailable.",
+    )
 }

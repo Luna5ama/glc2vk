@@ -1,20 +1,21 @@
 package dev.vibris.integration;
 
 import dev.vibris.core.VibrisBootstrap;
-import dev.vibris.protocol.v1.AbCompareRecipe;
+import dev.vibris.protocol.v1.Action;
+import dev.vibris.protocol.v1.ActivateSource;
 import dev.vibris.protocol.v1.ActionSequence;
 import dev.vibris.protocol.v1.ArtifactFormat;
-import dev.vibris.protocol.v1.CaptureDebugBundleRecipe;
-import dev.vibris.protocol.v1.CaptureTarget;
-import dev.vibris.protocol.v1.CaptureTargetKind;
+import dev.vibris.protocol.v1.CaptureScreenshot;
+import dev.vibris.protocol.v1.CompareCaptures;
+import dev.vibris.protocol.v1.DumpBuffer;
+import dev.vibris.protocol.v1.DumpTexture;
 import dev.vibris.protocol.v1.JobCompleted;
 import dev.vibris.protocol.v1.JobResultKind;
 import dev.vibris.protocol.v1.JobTimeouts;
 import dev.vibris.protocol.v1.PreparedSourceRef;
-import dev.vibris.protocol.v1.RecipeSpec;
-import dev.vibris.protocol.v1.ReloadAndCaptureRecipe;
-import dev.vibris.protocol.v1.SourceVariant;
+import dev.vibris.protocol.v1.ResetTemporalState;
 import dev.vibris.protocol.v1.SubmitJob;
+import dev.vibris.protocol.v1.WaitFrames;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -30,8 +31,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-final class RecipeSurfaceTest {
-    private static final String WORKSPACE = "recipe-tests";
+final class ActionSequenceSurfaceTest {
+    private static final String WORKSPACE = "action-sequence-tests";
 
     @TempDir
     Path temporaryDirectory;
@@ -42,13 +43,15 @@ final class RecipeSurfaceTest {
         try (VibrisBootstrap bootstrap = fixture.start();
              IntegrationHarness.Client client = new IntegrationHarness.Client(bootstrap.port(), WORKSPACE)) {
             PreparedSourceRef reloadSource = IntegrationHarness.createSource(fixture.pendingRoot, "reload").reference();
-            client.submit(submission("reload", reloadSource).setRecipe(RecipeSpec.newBuilder()
-                .setReloadAndCapture(ReloadAndCaptureRecipe.newBuilder()
-                    .setSourceUuid(reloadSource.getUuid()).setWarmupFrames(2)
-                    .setScreenshotFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG))).build());
+            client.submit(submission("reload", reloadSource).setActions(ActionSequence.newBuilder()
+                .addActions(activate(reloadSource))
+                .addActions(reset())
+                .addActions(waitFrames(2))
+                .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
+                    .setArtifactName("screenshot").setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)))).build());
             JobCompleted reload = client.awaitCompleted("reload");
 
-            assertEquals(JobResultKind.JOB_RESULT_KIND_RELOAD_AND_CAPTURE, reload.getResult().getKind());
+            assertEquals(JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE, reload.getResult().getKind());
             assertEquals(3, reload.getResult().getArtifactsCount());
             assertEquals(1, reload.getResult().getFrameIdsCount());
             assertEquals(1, reload.getResult().getShaderDiagnosticsCount());
@@ -58,13 +61,21 @@ final class RecipeSurfaceTest {
             assertTrue(Files.isReadable(Path.of(reload.getResult().getManifestPath())));
 
             PreparedSourceRef bundleSource = IntegrationHarness.createSource(fixture.pendingRoot, "bundle").reference();
-            client.submit(submission("bundle", bundleSource).setRecipe(RecipeSpec.newBuilder()
-                .setCaptureDebugBundle(CaptureDebugBundleRecipe.newBuilder()
-                    .setSourceUuid(bundleSource.getUuid()).setWarmupFrames(2).setScreenshot(true)
-                    .addTextures("colortex0").addBuffers("radiance_cache"))).build());
+            client.submit(submission("bundle", bundleSource).setActions(ActionSequence.newBuilder()
+                .addActions(activate(bundleSource))
+                .addActions(reset())
+                .addActions(waitFrames(2))
+                .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
+                    .setArtifactName("screenshot").setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)))
+                .addActions(Action.newBuilder().setDumpTexture(DumpTexture.newBuilder()
+                    .setLogicalName("colortex0").setArtifactName("colortex0")
+                    .setFormat(ArtifactFormat.ARTIFACT_FORMAT_RAW)))
+                .addActions(Action.newBuilder().setDumpBuffer(DumpBuffer.newBuilder()
+                    .setLogicalName("radiance_cache").setArtifactName("radiance_cache")
+                    .setFormat(ArtifactFormat.ARTIFACT_FORMAT_BIN)))).build());
             JobCompleted bundle = client.awaitCompleted("bundle");
 
-            assertEquals(JobResultKind.JOB_RESULT_KIND_CAPTURE_DEBUG_BUNDLE, bundle.getResult().getKind());
+            assertEquals(JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE, bundle.getResult().getKind());
             assertEquals(5, bundle.getResult().getArtifactsCount());
             assertEquals(1, bundle.getResult().getFrameIdsCount());
             long frameId = bundle.getResult().getFrameIds(0);
@@ -74,7 +85,7 @@ final class RecipeSurfaceTest {
     }
 
     @Test
-    void abCompareIsOneNonInterleavedJob() throws Exception {
+    void twoSourceComparisonIsOneNonInterleavedJob() throws Exception {
         Fixture fixture = new Fixture();
         fixture.runtime.baselineCaptureStarted = new CountDownLatch(1);
         fixture.runtime.releaseBaselineCapture = new CountDownLatch(1);
@@ -86,17 +97,25 @@ final class RecipeSurfaceTest {
             IntegrationHarness.Source sourceC = IntegrationHarness.createSource(fixture.pendingRoot, "C");
             fixture.runtime.baselineDirectory = sourceA.directory();
 
+            ActionSequence abActions = ActionSequence.newBuilder()
+                .addActions(activate(sourceA.reference()))
+                .addActions(reset())
+                .addActions(waitFrames(1))
+                .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
+                    .setArtifactName("a-0").setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)))
+                .addActions(activate(sourceB.reference()))
+                .addActions(reset())
+                .addActions(waitFrames(1))
+                .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
+                    .setArtifactName("b-0").setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)))
+                .addActions(Action.newBuilder().setCompareCaptures(CompareCaptures.newBuilder()
+                    .setBaselineCaptureIndex(0).setCandidateCaptureIndex(1)
+                    .setBaselineLabel("baseline").setCandidateLabel("candidate")))
+                .build();
             SubmitJob ab = SubmitJob.newBuilder().setRequestId("ab").setWorkspaceId(WORKSPACE)
                 .setContext(IntegrationHarness.context("ab"))
                 .addSources(sourceA.reference()).addSources(sourceB.reference())
-                .setRecipe(RecipeSpec.newBuilder().setAbCompare(AbCompareRecipe.newBuilder()
-                    .setBaseline(SourceVariant.newBuilder().setLabel("baseline")
-                        .setSourceUuid(sourceA.reference().getUuid()))
-                    .setCandidate(SourceVariant.newBuilder().setLabel("candidate")
-                        .setSourceUuid(sourceB.reference().getUuid()))
-                    .setWarmupFrames(1)
-                    .addCaptures(CaptureTarget.newBuilder().setKind(CaptureTargetKind.CAPTURE_TARGET_KIND_SCREENSHOT)
-                        .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG))))
+                .setActions(abActions)
                 .setTimeouts(timeouts()).build();
             abClient.submit(ab);
             abClient.awaitAccepted("ab");
@@ -105,12 +124,13 @@ final class RecipeSurfaceTest {
 
             competitor.submit(SubmitJob.newBuilder().setRequestId("competitor").setWorkspaceId("competitor")
                 .setContext(IntegrationHarness.context("competitor")).addSources(sourceC.reference())
-                .setActions(ActionSequence.getDefaultInstance()).setTimeouts(timeouts()).build());
+                .setActions(ActionSequence.newBuilder().addActions(activate(sourceC.reference())))
+                .setTimeouts(timeouts()).build());
             competitor.awaitAccepted("competitor");
             fixture.runtime.releaseBaselineCapture.countDown();
 
             JobCompleted completed = abClient.awaitCompleted("ab");
-            assertEquals(JobResultKind.JOB_RESULT_KIND_AB_COMPARE, completed.getResult().getKind());
+            assertEquals(JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE, completed.getResult().getKind());
             assertEquals(List.of(101L, 102L), completed.getResult().getFrameIdsList());
             assertEquals("baseline", completed.getResult().getComparison().getBaselineLabel());
             assertEquals("candidate", completed.getResult().getComparison().getCandidateLabel());
@@ -120,7 +140,6 @@ final class RecipeSurfaceTest {
             Path heatmap = artifact(completed, "diff-heatmap.png");
             assertTrue(Files.readString(metrics).contains("mean_absolute_error"));
             assertNotNull(ImageIO.read(heatmap.toFile()));
-            assertTrue(fixture.runtime.baselineDeletedBeforeCandidateCapture);
             assertFalse(Files.exists(sourceA.directory()));
 
             competitor.awaitCompleted("competitor");
@@ -134,6 +153,19 @@ final class RecipeSurfaceTest {
     private static SubmitJob.Builder submission(String requestId, PreparedSourceRef source) {
         return SubmitJob.newBuilder().setRequestId(requestId).setWorkspaceId(WORKSPACE)
             .setContext(IntegrationHarness.context(requestId)).addSources(source).setTimeouts(timeouts());
+    }
+
+    private static Action activate(PreparedSourceRef source) {
+        return Action.newBuilder().setActivateSource(
+            ActivateSource.newBuilder().setSourceUuid(source.getUuid())).build();
+    }
+
+    private static Action reset() {
+        return Action.newBuilder().setResetTemporalState(ResetTemporalState.getDefaultInstance()).build();
+    }
+
+    private static Action waitFrames(int frames) {
+        return Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(frames)).build();
     }
 
     private static JobTimeouts timeouts() {

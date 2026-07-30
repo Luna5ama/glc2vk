@@ -56,7 +56,9 @@ class ServerDescriptorTest {
                 JobActionKind.JOB_ACTION_KIND_WAIT_FRAMES,
                 JobActionKind.JOB_ACTION_KIND_CAPTURE_SCREENSHOT,
                 JobActionKind.JOB_ACTION_KIND_DUMP_TEXTURE,
-                JobActionKind.JOB_ACTION_KIND_DUMP_BUFFER),
+                JobActionKind.JOB_ACTION_KIND_DUMP_BUFFER,
+                JobActionKind.JOB_ACTION_KIND_ACTIVATE_SOURCE,
+                JobActionKind.JOB_ACTION_KIND_COMPARE_CAPTURES),
             hello.getSupportedJobActionsList());
         assertIterableEquals(
             java.util.Arrays.stream(DebugControlKind.values())
@@ -69,9 +71,6 @@ class ServerDescriptorTest {
                 Capability.CAPABILITY_CONTROL_STREAM,
                 Capability.CAPABILITY_RESUME,
                 Capability.CAPABILITY_PREPARED_SOURCES,
-                Capability.CAPABILITY_RELOAD_AND_CAPTURE,
-                Capability.CAPABILITY_CAPTURE_DEBUG_BUNDLE,
-                Capability.CAPABILITY_AB_COMPARE,
                 Capability.CAPABILITY_ACTION_SEQUENCE,
                 Capability.CAPABILITY_ARTIFACT_METADATA,
                 Capability.CAPABILITY_DEBUG_CONTROL),

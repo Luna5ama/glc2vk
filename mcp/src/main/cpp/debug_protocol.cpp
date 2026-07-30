@@ -44,7 +44,9 @@ std::optional<control::DebugControlRequest> DebugProtocol::request(
     else if (tool_name == "vibris_schedule_screenshot") {
         request.mutable_schedule_screenshot()->set_frames(arguments.value("frames", 1));
     } else if (tool_name == "vibris_get_screenshot_result") request.mutable_screenshot_result();
-    else if (tool_name == "vibris_get_gpu_metrics") request.mutable_gpu_metrics();
+    else if (tool_name == "vibris_get_gpu_metrics") {
+        request.mutable_gpu_metrics()->set_frames(arguments.at("frames").get<std::uint32_t>());
+    }
     else if (tool_name == "vibris_list_ssbos") request.mutable_list_ssbos();
     else if (tool_name == "vibris_dump_ssbo") {
         request.mutable_dump_ssbo()->set_index(arguments.at("index").get<std::uint32_t>());

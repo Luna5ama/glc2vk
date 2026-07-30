@@ -15,26 +15,9 @@ internal class CaptureJobExecutor(
     private val artifacts: ArtifactManager?,
     maxActions: Int = ServerConfiguration.DEFAULT_MAX_ACTIONS_PER_JOB,
 ) {
-    private val plans = CapturePlanBuilder(maxActions)
     private val programs = CaptureProgramBuilder(maxActions)
     private val protocol = CaptureProtocolArtifacts()
     private val comparisons = AbArtifactComparator()
-
-    @Throws(RuntimeJobExecutor.Failure::class)
-    fun waitFrames(job: CoreJob): Int = plans.waitFrames(job)
-
-    @Throws(RuntimeJobExecutor.Failure::class)
-    fun prepare(
-        job: CoreJob,
-        catalog: ResourceCatalog,
-        diagnostics: List<ReloadResult.Diagnostic>,
-    ): Prepared? {
-        val planned = plans.build(job, catalog)
-        if (planned.capture.targets.isEmpty()) {
-            return null
-        }
-        return prepare(job, listOf(planned.capture), planned.estimatedBytes, diagnostics)
-    }
 
     @Throws(RuntimeJobExecutor.Failure::class)
     fun prepareActions(
@@ -52,24 +35,6 @@ internal class CaptureJobExecutor(
             prepare(job, captures, program.estimatedBytes, diagnostics)
         }
         return ActionPrepared(program, prepared)
-    }
-
-    @Throws(RuntimeJobExecutor.Failure::class)
-    fun prepareAb(
-        job: CoreJob,
-        catalog: ResourceCatalog,
-        diagnostics: List<ReloadResult.Diagnostic>,
-    ): AbPrepared {
-        val program = programs.ab(job, catalog)
-        return AbPrepared(
-            program,
-            prepare(
-                job,
-                listOf(program.baseline, program.candidate),
-                program.estimatedBytes,
-                diagnostics,
-            ),
-        )
     }
 
     @Throws(RuntimeJobExecutor.Failure::class)
@@ -123,15 +88,17 @@ internal class CaptureJobExecutor(
     }
 
     @Throws(RuntimeJobExecutor.Failure::class)
-    fun compare(job: CoreJob, prepared: AbPrepared): AbComparisonResult {
-        val recipe = job.submission.recipe.abCompare
+    fun compare(
+        prepared: Prepared,
+        comparison: CaptureProgramBuilder.Comparison,
+    ): AbComparisonResult {
         try {
             return comparisons.compare(
-                prepared.prepared.transaction,
-                prepared.program.baseline,
-                prepared.program.candidate,
-                recipe.baseline.label,
-                recipe.candidate.label,
+                prepared.transaction,
+                prepared.plans[comparison.baselineCaptureIndex],
+                prepared.plans[comparison.candidateCaptureIndex],
+                comparison.baselineLabel,
+                comparison.candidateLabel,
             )
         } catch (exception: Exception) {
             throw failure(exception)
@@ -175,12 +142,6 @@ internal class CaptureJobExecutor(
     data class ActionPrepared(
         val program: CaptureProgramBuilder.ActionProgram,
         val prepared: Prepared?,
-    )
-
-    @JvmRecord
-    data class AbPrepared(
-        val program: CaptureProgramBuilder.AbProgram,
-        val prepared: Prepared,
     )
 
     companion object {

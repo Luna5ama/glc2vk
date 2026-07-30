@@ -47,7 +47,7 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
     )
 
     override fun debugControl(command: DebugControlCommand): CompletionStage<String> =
-        onClient(Supplier { host.debugControl(command) }, CancellationToken.none())
+        onClientStage(Supplier { host.debugControl(command) }, CancellationToken.none())
 
     override fun listPresets(): CompletionStage<List<ScenePreset>> =
         onClient(Supplier(host::presets), CancellationToken.none())

@@ -5,6 +5,7 @@ import dev.vibris.protocol.v1.DebugCaptureMulti
 import dev.vibris.protocol.v1.DebugCapturePass
 import dev.vibris.protocol.v1.DebugControlRequest
 import dev.vibris.protocol.v1.DebugDumpTexture
+import dev.vibris.protocol.v1.DebugGpuMetrics
 import dev.vibris.protocol.v1.DebugReloadShader
 import dev.vibris.protocol.v1.DebugScheduleScreenshot
 import dev.vibris.protocol.v1.ShaderConfig
@@ -48,6 +49,13 @@ class DebugControlProtocolTest {
             DebugControlRequest.newBuilder().setReloadShader(DebugReloadShader.getDefaultInstance()).build(),
         )
         assertEquals(DebugControlCommand.ReloadShader(null), reloadWithoutConfig)
+
+        val metrics = DebugControlProtocol.toApi(
+            DebugControlRequest.newBuilder()
+                .setGpuMetrics(DebugGpuMetrics.newBuilder().setFrames(17))
+                .build(),
+        )
+        assertEquals(DebugControlCommand.GpuMetrics(17), metrics)
     }
 
     @Test
@@ -66,6 +74,16 @@ class DebugControlProtocolTest {
         assertInvalid(
             DebugControlRequest.newBuilder()
                 .setScheduleScreenshot(DebugScheduleScreenshot.getDefaultInstance())
+                .build(),
+        )
+        assertInvalid(
+            DebugControlRequest.newBuilder()
+                .setGpuMetrics(DebugGpuMetrics.newBuilder().setFrames(10_001))
+                .build(),
+        )
+        assertInvalid(
+            DebugControlRequest.newBuilder()
+                .setGpuMetrics(DebugGpuMetrics.getDefaultInstance())
                 .build(),
         )
         assertInvalid(

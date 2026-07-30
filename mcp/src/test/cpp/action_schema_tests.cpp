@@ -97,6 +97,15 @@ void debug_tool_schemas_reject_invalid_arguments() {
                 registry.invoke("vibris_schedule_screenshot", {{"frames", 0}})),
         "Screenshot scheduling accepted zero frames.");
     require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_get_gpu_metrics", Json::object())),
+        "GPU metrics accepted a missing frame count.");
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_get_gpu_metrics", {{"frames", 0}})),
+        "GPU metrics accepted zero frames.");
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_get_gpu_metrics", {{"frames", 10'001}})),
+        "GPU metrics accepted more than the bounded frame count.");
+    require(std::holds_alternative<InvocationError>(
                 registry.invoke("vibris_dump_texture", Json::object())),
         "Texture dump accepted no texture selector.");
     require(std::holds_alternative<InvocationError>(
@@ -131,7 +140,7 @@ void debug_tools_map_to_distinct_typed_commands() {
         std::pair{"vibris_get_shader_errors", Json::object()},
         std::pair{"vibris_schedule_screenshot", Json::object()},
         std::pair{"vibris_get_screenshot_result", Json::object()},
-        std::pair{"vibris_get_gpu_metrics", Json::object()},
+        std::pair{"vibris_get_gpu_metrics", Json{{"frames", 17}}},
         std::pair{"vibris_list_ssbos", Json::object()},
         std::pair{"vibris_dump_ssbo", Json{{"index", 3}}},
         std::pair{"vibris_list_textures", Json::object()},
@@ -164,6 +173,9 @@ void debug_tools_map_to_distinct_typed_commands() {
                 reload->reload_shader().config().values().at("SETTING_SAMPLE_COUNT") == "32" &&
                 reload->reload_shader().config().values().at("SETTING_CLOUDS") == "false",
         "Shader config was not mapped to the reload command.");
+    const auto metrics = DebugProtocol::request("vibris_get_gpu_metrics", calls[8].second);
+    require(metrics->gpu_metrics().frames() == 17,
+        "GPU metric frame count was not mapped to the capture command.");
 }
 
 void registry_declares_accurate_tool_annotations() {

@@ -92,13 +92,12 @@ class ShaderDebugRuntimeTest {
                 assertTrue(Files.isRegularFile(temp.resolve("volume_layer1.png")))
 
                 val metrics = GpuTimingMetrics()
+                val captured = metrics.capture(1).toCompletableFuture()
                 metrics.begin("test_draw")
                 glClear(GL_COLOR_BUFFER_BIT)
                 metrics.end()
-                glFinish()
-                metrics.begin("drain")
-                metrics.end()
-                assertTrue(metrics.snapshot().getValue("test_draw").p50 >= 0)
+                metrics.finishFrame()
+                assertTrue(captured.join().getValue("test_draw").p50 >= 0)
             } finally {
                 glPixelStorei(GL_PACK_SKIP_PIXELS, 0)
                 glPixelStorei(GL_PACK_SWAP_BYTES, 0)

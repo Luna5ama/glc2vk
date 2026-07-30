@@ -27,7 +27,8 @@ internal object DebugControlProtocol {
         DebugControlRequest.CommandCase.SCHEDULE_SCREENSHOT ->
             DebugControlCommand.ScheduleScreenshot(request.scheduleScreenshot.frames.requirePositive("frames"))
         DebugControlRequest.CommandCase.SCREENSHOT_RESULT -> DebugControlCommand.ScreenshotResult
-        DebugControlRequest.CommandCase.GPU_METRICS -> DebugControlCommand.GpuMetrics
+        DebugControlRequest.CommandCase.GPU_METRICS ->
+            DebugControlCommand.GpuMetrics(request.gpuMetrics.frames.requireRange("frames", 1, 10_000))
         DebugControlRequest.CommandCase.LIST_SSBOS -> DebugControlCommand.ListSsbos
         DebugControlRequest.CommandCase.DUMP_SSBO -> DebugControlCommand.DumpSsbo(request.dumpSsbo.index)
         DebugControlRequest.CommandCase.LIST_TEXTURES -> DebugControlCommand.ListTextures
@@ -57,6 +58,10 @@ internal object DebugControlProtocol {
 
     private fun Int.requirePositive(field: String): Int = apply {
         require(this > 0) { "$field must be positive" }
+    }
+
+    private fun Int.requireRange(field: String, minimum: Int, maximum: Int): Int = apply {
+        require(this in minimum..maximum) { "$field must be between $minimum and $maximum" }
     }
 
     private val captureTypes = setOf("prepare", "begin", "deferred", "composite")

@@ -90,7 +90,11 @@ ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& ar
         sources_.retire(request_id);
         if (!status.ok()) return transport_failure(status);
         if (!terminal) throw std::logic_error("gRPC completed without a terminal job message");
-        return JobProtocol::terminal(*terminal);
+        auto outcome = JobProtocol::terminal(*terminal);
+        if (tool_name == "vibris_run_recipe" && std::holds_alternative<Json>(outcome)) {
+            std::get<Json>(outcome)["kind"] = arguments.at("recipe");
+        }
+        return outcome;
     } catch (...) {
         sources_.retire(request_id);
         throw;
