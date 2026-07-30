@@ -2,46 +2,49 @@
   "schema_version": 1,
   "expected_execution_order": ["A1", "B1", "C1", "A2", "B2", "C2"],
   "preset_catalog": {
-    "schema_version": 1,
-    "time_presets": [
-      {"id": "sunset", "tick": 12000, "weather": "clear"},
-      {"id": "midnight", "tick": 18000, "weather": "clear"},
-      {"id": "sunrise", "tick": 23000, "weather": "clear"}
-    ],
-    "settings_presets": [
-      {"id": "automation-deterministic"}
-    ],
-    "worlds": [
+    "schema_version": 2,
+    "presets": [
       {
-        "id": "vibris-automation-world",
+        "id": "camera-a",
+        "save_id": "vibris-automation-world",
         "save_name": "vibris-automation-world",
-        "dimensions": ["minecraft:overworld", "minecraft:the_nether", "minecraft:the_end"],
-        "cameras": [
-          {
-            "id": "camera-a",
-            "dimension_id": "minecraft:overworld",
-            "position": [0.5, 96.0, 0.5],
-            "yaw": 180.0,
-            "pitch": 15.0,
-            "default_fov": 61.0
-          },
-          {
-            "id": "camera-b",
-            "dimension_id": "minecraft:the_nether",
-            "position": [0.5, 80.0, 0.5],
-            "yaw": 90.0,
-            "pitch": 5.0,
-            "default_fov": 72.0
-          },
-          {
-            "id": "camera-c",
-            "dimension_id": "minecraft:the_end",
-            "position": [0.5, 96.0, 0.5],
-            "yaw": -90.0,
-            "pitch": -10.0,
-            "default_fov": 83.0
-          }
-        ]
+        "dimension_id": "minecraft:overworld",
+        "position": [0.5, 96.0, 0.5],
+        "yaw": 180.0,
+        "pitch": 15.0,
+        "fov": 61.0,
+        "tick": 12000,
+        "weather": "clear",
+        "resolution": [1280, 720],
+        "settings_preset_id": "automation-deterministic"
+      },
+      {
+        "id": "camera-b",
+        "save_id": "vibris-automation-world",
+        "save_name": "vibris-automation-world",
+        "dimension_id": "minecraft:the_nether",
+        "position": [0.5, 80.0, 0.5],
+        "yaw": 90.0,
+        "pitch": 5.0,
+        "fov": 72.0,
+        "tick": 18000,
+        "weather": "clear",
+        "resolution": [1280, 720],
+        "settings_preset_id": "automation-deterministic"
+      },
+      {
+        "id": "camera-c",
+        "save_id": "vibris-automation-world",
+        "save_name": "vibris-automation-world",
+        "dimension_id": "minecraft:the_end",
+        "position": [0.5, 96.0, 0.5],
+        "yaw": -90.0,
+        "pitch": -10.0,
+        "fov": 83.0,
+        "tick": 23000,
+        "weather": "clear",
+        "resolution": [1280, 720],
+        "settings_preset_id": "automation-deterministic"
       }
     ]
   },
@@ -51,7 +54,7 @@
       "configure": {
         "save_id": "vibris-automation-world",
         "dimension_id": "minecraft:overworld",
-        "time_preset_id": "sunset",
+        "time_preset_id": "camera-a",
         "camera_preset_id": "camera-a",
         "fov": 61.0,
         "default_warmup_frames": 2
@@ -74,7 +77,7 @@
       "configure": {
         "save_id": "vibris-automation-world",
         "dimension_id": "minecraft:the_nether",
-        "time_preset_id": "midnight",
+        "time_preset_id": "camera-b",
         "camera_preset_id": "camera-b",
         "fov": 72.0,
         "default_warmup_frames": 2
@@ -97,7 +100,7 @@
       "configure": {
         "save_id": "vibris-automation-world",
         "dimension_id": "minecraft:the_end",
-        "time_preset_id": "sunrise",
+        "time_preset_id": "camera-c",
         "camera_preset_id": "camera-c",
         "fov": 83.0,
         "default_warmup_frames": 2

@@ -6,7 +6,6 @@ import dev.vibris.api.ScenePreset
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -21,124 +20,68 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.util.HashMap
-import java.util.HashSet
 
 class VibrisPresetCatalog private constructor(
     private val path: Path,
-    times: Map<String, TimePreset>,
-    worlds: Map<String, WorldPreset>,
-    settings: Set<String>,
+    presets: Map<String, Preset>,
 ) {
     @Volatile
-    private var times = java.util.Map.copyOf(times)
-
-    @Volatile
-    private var worlds = java.util.Map.copyOf(worlds)
-
-    private val settings = java.util.Set.copyOf(settings)
+    private var values = java.util.Map.copyOf(presets)
 
     @Synchronized
-    fun save(snapshot: PresetSnapshot): String {
-        val setting = settings.minOrNull() ?: throw IllegalStateException("No settings preset is configured")
-        val updatedTimes = HashMap(times)
-        updatedTimes[snapshot.id] = TimePreset(snapshot.tick, snapshot.weather)
-
-        val existingWorld = worlds.entries.firstOrNull { it.value.saveName == snapshot.saveName }
-        val worldId = existingWorld?.key ?: snapshot.saveName
-        val oldWorld = existingWorld?.value ?: WorldPreset(snapshot.saveName, emptySet(), emptyMap())
-        val updatedCameras = HashMap(oldWorld.cameras)
-        updatedCameras[snapshot.id] = snapshot.camera
-        val updatedWorld = WorldPreset(
-            oldWorld.saveName,
-            oldWorld.dimensions + snapshot.dimensionId,
-            updatedCameras,
-        )
-        val updatedWorlds = HashMap(worlds)
-        updatedWorlds[worldId] = updatedWorld
-
-        write(path, updatedTimes, updatedWorlds, settings)
-        times = java.util.Map.copyOf(updatedTimes)
-        worlds = java.util.Map.copyOf(updatedWorlds)
-        return listOf(worldId, snapshot.dimensionId, snapshot.id, snapshot.id, setting).joinToString("/")
+    fun save(preset: Preset): String {
+        val saveId = values.values.firstOrNull { it.saveName == preset.saveName }?.saveId ?: preset.saveId
+        val stored = preset.copy(saveId = saveId)
+        val updated = HashMap(values)
+        updated[stored.id] = stored
+        write(path, updated)
+        values = java.util.Map.copyOf(updated)
+        return stored.id
     }
 
     @Synchronized
     fun resolve(context: SceneContext): ResolvedContext {
-        val world = requirePreset(worlds, context.saveId, "save")
-        if (!world.dimensions.contains(context.dimensionId)) {
-            throw IllegalArgumentException("Unknown dimension preset: ${context.dimensionId}")
-        }
-        val camera = requirePreset(world.cameras, context.cameraPresetId, "camera")
-        if (camera.dimensionId != context.dimensionId) {
-            throw IllegalArgumentException("Camera preset belongs to another dimension")
-        }
-        val time = requirePreset(times, context.timePresetId, "time")
-        if (time.weather != context.weatherPresetId) {
-            throw IllegalArgumentException("Weather preset does not match the selected time preset")
-        }
-        if (!settings.contains(context.settingsPresetId)) {
-            throw IllegalArgumentException("Unknown settings preset: ${context.settingsPresetId}")
-        }
-        return ResolvedContext(world.saveName, time.tick, time.weather, camera)
+        val preset = requirePreset(context, false)
+        return ResolvedContext(
+            preset.saveName,
+            preset.tick,
+            preset.weather,
+            CameraPreset(preset.x, preset.y, preset.z, preset.yaw, preset.pitch),
+        )
     }
 
     @Synchronized
-    fun presets(): List<ScenePreset> {
-        val result = ArrayList<ScenePreset>()
-        val worldEntries = worlds.entries.sortedBy { it.key }
-        val timeEntries = times.entries.sortedBy { it.key }
-        val settingIds = settings.sorted()
-        for ((worldId, world) in worldEntries) {
-            val cameras = world.cameras.entries.sortedBy { it.key }
-            for (dimension in world.dimensions.sorted()) {
-                for ((cameraId, camera) in cameras) {
-                    if (camera.dimensionId != dimension) {
-                        continue
-                    }
-                    for ((timeId, time) in timeEntries) {
-                        for (setting in settingIds) {
-                            val id = listOf(worldId, dimension, timeId, cameraId, setting).joinToString("/")
-                            val context = SceneContext(
-                                worldId,
-                                dimension,
-                                timeId,
-                                time.weather,
-                                cameraId,
-                                70.0,
-                                SceneContext.Resolution.unspecified(),
-                                setting,
-                            )
-                            result.add(ScenePreset(id, id, context))
-                        }
-                    }
-                }
-            }
-        }
-        return java.util.List.copyOf(result)
-    }
+    fun presets(): List<ScenePreset> = values.values
+        .sortedBy { it.id }
+        .map { ScenePreset(it.id, it.id, it.context()) }
 
     @Synchronized
-    fun validate(context: SceneContext): ContextValidationResult {
-        return try {
-            val world = requirePreset(worlds, context.saveId, "save")
-            if (!world.dimensions.contains(context.dimensionId)) {
-                throw IllegalArgumentException("Unknown dimension preset: ${context.dimensionId}")
-            }
-            val camera = requirePreset(world.cameras, context.cameraPresetId, "camera")
-            if (camera.dimensionId != context.dimensionId) {
-                throw IllegalArgumentException("Camera preset belongs to another dimension")
-            }
-            val time = requirePreset(times, context.timePresetId, "time")
-            if (context.weatherPresetId.isNotEmpty() && time.weather != context.weatherPresetId) {
-                throw IllegalArgumentException("Weather preset does not match the selected time preset")
-            }
-            if (context.settingsPresetId.isNotEmpty() && !settings.contains(context.settingsPresetId)) {
-                throw IllegalArgumentException("Unknown settings preset: ${context.settingsPresetId}")
-            }
-            ContextValidationResult.accepted()
-        } catch (exception: IllegalArgumentException) {
-            ContextValidationResult.invalid(exception.message!!)
+    fun validate(context: SceneContext): ContextValidationResult = try {
+        requirePreset(context, true)
+        ContextValidationResult.accepted()
+    } catch (exception: IllegalArgumentException) {
+        ContextValidationResult.invalid(exception.message!!)
+    }
+
+    private fun requirePreset(context: SceneContext, allowIncomplete: Boolean): Preset {
+        val preset = values[context.cameraPresetId]
+            ?: throw IllegalArgumentException("Unknown preset: ${context.cameraPresetId}")
+        require(context.timePresetId == preset.id) { "Time and camera must select the same preset" }
+        require(context.saveId == preset.saveId) { "Preset belongs to another save" }
+        require(context.dimensionId == preset.dimensionId) { "Preset belongs to another dimension" }
+        require(context.fov == preset.fov) { "Field of view does not match the selected preset" }
+        if (!allowIncomplete || context.weatherPresetId.isNotEmpty()) {
+            require(context.weatherPresetId == preset.weather) { "Weather does not match the selected preset" }
         }
+        if (!allowIncomplete || context.settingsPresetId.isNotEmpty()) {
+            require(context.settingsPresetId == preset.settingsPresetId) {
+                "Settings do not match the selected preset"
+            }
+        }
+        if (!allowIncomplete || context.resolution.isSpecified()) {
+            require(context.resolution == preset.resolution) { "Resolution does not match the selected preset" }
+        }
+        return preset
     }
 
     @JvmRecord
@@ -151,7 +94,6 @@ class VibrisPresetCatalog private constructor(
 
     @JvmRecord
     data class CameraPreset(
-        val dimensionId: String,
         val x: Double,
         val y: Double,
         val z: Double,
@@ -160,187 +102,128 @@ class VibrisPresetCatalog private constructor(
     )
 
     @JvmRecord
-    data class PresetSnapshot(
+    data class Preset(
         val id: String,
+        val saveId: String,
         val saveName: String,
         val dimensionId: String,
+        val x: Double,
+        val y: Double,
+        val z: Double,
+        val yaw: Float,
+        val pitch: Float,
+        val fov: Double,
         val tick: Long,
         val weather: String,
-        val camera: CameraPreset,
+        val resolution: SceneContext.Resolution,
+        val settingsPresetId: String,
     ) {
         init {
             require(id.isNotBlank() && '/' !in id) { "Invalid preset id" }
-            require(saveName.isNotBlank() && dimensionId.isNotBlank()) { "World preset fields are blank" }
+            require(saveId.isNotBlank() && saveName.isNotBlank() && dimensionId.isNotBlank()) {
+                "World preset fields are blank"
+            }
+            require(x.isFinite() && y.isFinite() && z.isFinite() && yaw.isFinite() && pitch.isFinite()) {
+                "Camera values must be finite"
+            }
+            require(fov.isFinite() && fov > 0.0 && fov < 180.0) { "Invalid field of view" }
             require(weather == "clear" || weather == "rain" || weather == "thunder") {
                 "Unknown weather preset: $weather"
             }
+            require(resolution.isSpecified()) { "Preset resolution is unspecified" }
+            require(settingsPresetId.isNotBlank()) { "Settings preset is blank" }
         }
+
+        fun context(): SceneContext = SceneContext(
+            saveId,
+            dimensionId,
+            id,
+            weather,
+            id,
+            fov,
+            resolution,
+            settingsPresetId,
+        )
     }
-
-    private data class TimePreset(
-        val tick: Long,
-        val weather: String,
-    )
-
-    private data class WorldPreset(
-        val saveName: String,
-        val dimensions: Set<String>,
-        val cameras: Map<String, CameraPreset>,
-    )
 
     companion object {
         @JvmStatic
         @Throws(IOException::class)
         fun load(path: Path): VibrisPresetCatalog {
             try {
-                val document: JsonElement = Json.parseToJsonElement(Files.readString(path))
-                val root = document as JsonObject
-                if (integer(root, "schema_version") != 1) {
-                    throw IOException("Unsupported Vibris preset schema")
+                val root = Json.parseToJsonElement(Files.readString(path)) as JsonObject
+                if (integer(root, "schema_version") != 2) throw IOException("Unsupported Vibris preset schema")
+                val presets = HashMap<String, Preset>()
+                for (element in array(root, "presets")) {
+                    val value = element as JsonObject
+                    val position = array(value, "position")
+                    val resolution = array(value, "resolution")
+                    require(position.size == 3) { "Preset position must have three values" }
+                    require(resolution.size == 2) { "Preset resolution must have two values" }
+                    val preset = Preset(
+                        string(value, "id"),
+                        string(value, "save_id"),
+                        string(value, "save_name"),
+                        string(value, "dimension_id"),
+                        position[0].jsonPrimitive.double,
+                        position[1].jsonPrimitive.double,
+                        position[2].jsonPrimitive.double,
+                        value.getValue("yaw").jsonPrimitive.float,
+                        value.getValue("pitch").jsonPrimitive.float,
+                        value.getValue("fov").jsonPrimitive.double,
+                        value.getValue("tick").jsonPrimitive.long,
+                        string(value, "weather"),
+                        SceneContext.Resolution(
+                            resolution[0].jsonPrimitive.int,
+                            resolution[1].jsonPrimitive.int,
+                        ),
+                        string(value, "settings_preset_id"),
+                    )
+                    if (presets.putIfAbsent(preset.id, preset) != null) {
+                        throw IllegalArgumentException("Duplicate preset id: ${preset.id}")
+                    }
                 }
-                return VibrisPresetCatalog(path, parseTimes(root), parseWorlds(root), parseSettings(root))
+                return VibrisPresetCatalog(path, presets)
             } catch (exception: RuntimeException) {
                 throw IOException("Invalid Vibris preset file: $path", exception)
             }
         }
 
-        private fun parseTimes(root: JsonObject): Map<String, TimePreset> {
-            val result = HashMap<String, TimePreset>()
-            for (element in array(root, "time_presets")) {
-                val value = element as JsonObject
-                val id = string(value, "id")
-                putUnique(result, id, TimePreset(longValue(value, "tick"), string(value, "weather")))
+        private fun array(value: JsonObject, name: String): JsonArray =
+            value[name] as? JsonArray ?: throw IllegalArgumentException("Missing array: $name")
+
+        private fun string(value: JsonObject, name: String): String =
+            value.getValue(name).jsonPrimitive.content.also {
+                require(it.isNotBlank()) { "Blank preset field: $name" }
             }
-            return result
-        }
 
-        private fun parseWorlds(root: JsonObject): Map<String, WorldPreset> {
-            val result = HashMap<String, WorldPreset>()
-            for (element in array(root, "worlds")) {
-                val value = element as JsonObject
-                val dimensions = HashSet<String>()
-                for (dimension in array(value, "dimensions")) {
-                    dimensions.add(dimension.jsonPrimitive.content)
-                }
-                val cameras = HashMap<String, CameraPreset>()
-                for (cameraElement in array(value, "cameras")) {
-                    val camera = cameraElement as JsonObject
-                    val position = array(camera, "position")
-                    if (position.size != 3) {
-                        throw IllegalArgumentException("Camera position must have three values")
-                    }
-                    putUnique(
-                        cameras,
-                        string(camera, "id"),
-                        CameraPreset(
-                            string(camera, "dimension_id"),
-                            position[0].jsonPrimitive.double,
-                            position[1].jsonPrimitive.double,
-                            position[2].jsonPrimitive.double,
-                            camera.getValue("yaw").jsonPrimitive.float,
-                            camera.getValue("pitch").jsonPrimitive.float,
-                        ),
-                    )
-                }
-                putUnique(
-                    result,
-                    string(value, "id"),
-                    WorldPreset(
-                        string(value, "save_name"),
-                        java.util.Set.copyOf(dimensions),
-                        java.util.Map.copyOf(cameras),
-                    ),
-                )
-            }
-            return result
-        }
-
-        private fun parseSettings(root: JsonObject): Set<String> {
-            val result = HashSet<String>()
-            for (element in array(root, "settings_presets")) {
-                if (element is JsonPrimitive) {
-                    result.add(element.content)
-                } else {
-                    result.add(string(element as JsonObject, "id"))
-                }
-            }
-            return result
-        }
-
-        private fun array(objectValue: JsonObject, name: String): JsonArray {
-            val value = objectValue[name]
-            if (value !is JsonArray) {
-                throw IllegalArgumentException("Missing array: $name")
-            }
-            return value
-        }
-
-        private fun string(objectValue: JsonObject, name: String): String {
-            val value = objectValue.getValue(name).jsonPrimitive.content
-            if (value.isBlank()) {
-                throw IllegalArgumentException("Blank preset field: $name")
-            }
-            return value
-        }
-
-        private fun integer(objectValue: JsonObject, name: String): Int {
-            return objectValue.getValue(name).jsonPrimitive.int
-        }
-
-        private fun longValue(objectValue: JsonObject, name: String): Long {
-            return objectValue.getValue(name).jsonPrimitive.long
-        }
-
-        private fun <T> requirePreset(values: Map<String, T>, id: String, kind: String): T {
-            return values[id] ?: throw IllegalArgumentException("Unknown $kind preset: $id")
-        }
-
-        private fun <T> putUnique(values: MutableMap<String, T>, id: String, value: T) {
-            if (values.putIfAbsent(id, value) != null) {
-                throw IllegalArgumentException("Duplicate preset id: $id")
-            }
-        }
+        private fun integer(value: JsonObject, name: String): Int = value.getValue(name).jsonPrimitive.int
 
         @OptIn(ExperimentalSerializationApi::class)
-        private fun write(
-            path: Path,
-            times: Map<String, TimePreset>,
-            worlds: Map<String, WorldPreset>,
-            settings: Set<String>,
-        ) {
+        private fun write(path: Path, presets: Map<String, Preset>) {
             val root = buildJsonObject {
-                put("schema_version", JsonPrimitive(1))
-                put("time_presets", buildJsonArray {
-                    for ((id, time) in times.toSortedMap()) add(buildJsonObject {
-                        put("id", JsonPrimitive(id))
-                        put("tick", JsonPrimitive(time.tick))
-                        put("weather", JsonPrimitive(time.weather))
-                    })
-                })
-                put("settings_presets", buildJsonArray {
-                    for (id in settings.sorted()) add(buildJsonObject { put("id", JsonPrimitive(id)) })
-                })
-                put("worlds", buildJsonArray {
-                    for ((id, world) in worlds.toSortedMap()) add(buildJsonObject {
-                        put("id", JsonPrimitive(id))
-                        put("save_name", JsonPrimitive(world.saveName))
-                        put("dimensions", buildJsonArray {
-                            for (dimension in world.dimensions.sorted()) add(JsonPrimitive(dimension))
+                put("schema_version", JsonPrimitive(2))
+                put("presets", buildJsonArray {
+                    for (preset in presets.values.sortedBy { it.id }) add(buildJsonObject {
+                        put("id", JsonPrimitive(preset.id))
+                        put("save_id", JsonPrimitive(preset.saveId))
+                        put("save_name", JsonPrimitive(preset.saveName))
+                        put("dimension_id", JsonPrimitive(preset.dimensionId))
+                        put("position", buildJsonArray {
+                            add(JsonPrimitive(preset.x))
+                            add(JsonPrimitive(preset.y))
+                            add(JsonPrimitive(preset.z))
                         })
-                        put("cameras", buildJsonArray {
-                            for ((cameraId, camera) in world.cameras.toSortedMap()) add(buildJsonObject {
-                                put("id", JsonPrimitive(cameraId))
-                                put("dimension_id", JsonPrimitive(camera.dimensionId))
-                                put("position", buildJsonArray {
-                                    add(JsonPrimitive(camera.x))
-                                    add(JsonPrimitive(camera.y))
-                                    add(JsonPrimitive(camera.z))
-                                })
-                                put("yaw", JsonPrimitive(camera.yaw))
-                                put("pitch", JsonPrimitive(camera.pitch))
-                                put("default_fov", JsonPrimitive(70.0))
-                            })
+                        put("yaw", JsonPrimitive(preset.yaw))
+                        put("pitch", JsonPrimitive(preset.pitch))
+                        put("fov", JsonPrimitive(preset.fov))
+                        put("tick", JsonPrimitive(preset.tick))
+                        put("weather", JsonPrimitive(preset.weather))
+                        put("resolution", buildJsonArray {
+                            add(JsonPrimitive(preset.resolution.width))
+                            add(JsonPrimitive(preset.resolution.height))
                         })
+                        put("settings_preset_id", JsonPrimitive(preset.settingsPresetId))
                     })
                 })
             }

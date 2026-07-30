@@ -141,7 +141,7 @@ thread joins, prepared sources still owned by the MCP are removed, and the workt
   "shader_directory": "shaders",
   "save_id": "vibris-automation-world",
   "dimension_id": "minecraft:overworld",
-  "time_preset_id": "sunset",
+  "time_preset_id": "rooftop",
   "camera_preset_id": "rooftop",
   "fov": 70.0,
   "default_warmup_frames": 32
@@ -153,7 +153,30 @@ updates. The user-facing configure call supplies only the remaining six scene fi
 worktree and survives MCP restarts.
 
 Iris reads its preset catalog from `<gameDir>/config/vibris/presets.json`. Use `vibris_list_presets` before configuring
-when save, dimension, time, or camera identifiers are not known.
+when a preset identifier is not known. Each schema-v2 entry is a complete scene instead of a cross-product of separate
+world, time, and camera catalogs:
+
+```json
+{
+  "schema_version": 2,
+  "presets": [{
+    "id": "rooftop",
+    "save_id": "shader-test-world",
+    "save_name": "shader-test-world",
+    "dimension_id": "minecraft:overworld",
+    "position": [124.5, 82.0, -31.5],
+    "yaw": 137.0,
+    "pitch": -8.0,
+    "fov": 70.0,
+    "tick": 12000,
+    "weather": "clear",
+    "resolution": [1920, 1080],
+    "settings_preset_id": "default"
+  }]
+}
+```
+
+The configure request uses that same preset ID for `time_preset_id` and `camera_preset_id`.
 
 ## Six MCP tools
 
