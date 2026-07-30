@@ -25,9 +25,6 @@ void prepare_one(SourcePreparer& preparer, const Json* source, std::list<Prepare
 }
 
 [[nodiscard]] SourceLimits server_limits(const control::ServerHello& server) {
-    if (!server.ready()) {
-        throw StateError("SERVER_NOT_READY", "The local Vibris server is not ready.", true);
-    }
     if (server.pending_shaders_root().empty() || !std::filesystem::path(server.pending_shaders_root()).is_absolute() ||
         server.limits().max_source_bytes() == 0 || server.limits().max_source_files() == 0) {
         throw StateError("SERVER_NOT_READY", "The local Vibris server did not advertise a usable source root.", true);

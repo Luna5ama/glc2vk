@@ -333,6 +333,22 @@ void synchronous_submit_waits_for_terminal() {
     synchronous_submit_case("vibris_run_actions", {{"actions", Json::array()}}, true);
 }
 
+void title_screen_runtime_can_prepare_source_for_world_loading_job() {
+    WorkspaceFixture fixture;
+    proto::ServerHello hello;
+    hello.set_ready(false);
+    hello.set_pending_shaders_root(std::filesystem::absolute(fixture.pending()).string());
+    hello.mutable_limits()->set_max_source_bytes(1024 * 1024);
+    hello.mutable_limits()->set_max_source_files(128);
+    vibris::mcp::SourceHandler sources(fixture.worktree());
+
+    sources.prepare("vibris_run_recipe", {{"recipe", "reload_and_capture"}}, hello);
+    const auto references = sources.bind_latest("title-screen-request");
+
+    require(references.size() == 1 && !references.front().uuid().empty(),
+        "A title-screen runtime blocked the source for the job that loads its preset world.");
+}
+
 void synchronous_submit_resumes_after_acceptance() {
     WorkspaceFixture fixture;
     ReconnectServer server(55066, 0);
@@ -598,6 +614,7 @@ int main() {
         empty_actions_mapping();
         progress_does_not_consume_terminal();
         synchronous_submit_waits_for_terminal();
+        title_screen_runtime_can_prepare_source_for_world_loading_job();
         synchronous_submit_resumes_after_acceptance();
         synchronous_submit_has_local_total_deadline();
         cancel_waits_for_dispatched_acceptance();
