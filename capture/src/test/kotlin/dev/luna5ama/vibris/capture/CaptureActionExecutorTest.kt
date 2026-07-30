@@ -1,6 +1,6 @@
 package dev.luna5ama.vibris.capture
 
-import dev.vibris.api.DebugControlCommand
+import dev.vibris.api.RuntimeAction
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -13,23 +13,23 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
-class CaptureDebugControlTest {
+class CaptureActionExecutorTest {
     @Test
     fun queuesPassCaptureInsideTheGameDirectory() {
-        val root = createTempDirectory("vibris-debug-control")
+        val root = createTempDirectory("vibris-action-executor")
         try {
             val manager = CaptureManager()
-            val control = CaptureDebugControl(root, manager, ShaderDebugControl(EmptyHost(root), EmptyDumper))
+            val executor = CaptureActionExecutor(root, manager, ShaderDebugControl(EmptyHost(root), EmptyDumper))
 
             val result = Json.parseToJsonElement(
-                control.execute(DebugControlCommand.CapturePass("composite", "vibris/test-capture"))
+                executor.execute(RuntimeAction.CapturePass("composite", "vibris/test-capture"))
                     .toCompletableFuture().join(),
             ).jsonObject
 
             assertTrue(manager.status().pending)
             assertEquals(root.resolve("vibris/test-capture").toString(), result["path"]!!.jsonPrimitive.content)
             assertFailsWith<IllegalArgumentException> {
-                control.execute(DebugControlCommand.CapturePass("composite", "../outside"))
+                executor.execute(RuntimeAction.CapturePass("composite", "../outside"))
                     .toCompletableFuture().join()
             }
         } finally {

@@ -10,7 +10,6 @@
 
 #include "config_document.hpp"
 #include "config_store.hpp"
-#include "debug_protocol.hpp"
 #include "source_handler.hpp"
 #include "result_mapper.hpp"
 #include "scene_context_resolver.hpp"
@@ -63,7 +62,6 @@ public:
             if (name == "vibris_configure") return configure(arguments);
             if (name == "vibris_get_status") return get_status();
             if (name == "vibris_profile") return profile(arguments);
-            if (auto request = DebugProtocol::request(name, arguments)) return debug_control(std::move(*request));
             if (name == "vibris_run_recipe" || name == "vibris_run_actions") {
                 return run_job(name, arguments);
             }
@@ -164,37 +162,26 @@ private:
             });
     }
 
-    ToolOutcome debug_control(control::DebugControlRequest request) {
-        const auto deadline = request.has_gpu_metrics()
-            ? std::chrono::seconds(static_cast<std::int64_t>(request.gpu_metrics().frames()) + 5)
-            : std::chrono::seconds(5);
-        return unary<control::DebugControlResponse>(
-            [this, request = std::move(request), deadline](auto completion) mutable {
-                return client().debug_control(std::move(request), std::move(completion), deadline);
-            },
-            [](const auto& response) -> ToolOutcome { return DebugProtocol::response(response); },
-            deadline + std::chrono::seconds(1));
-    }
-
     ToolOutcome profile(const Json& arguments) {
         Json setup{{"actions", Json::array({{{"type", "reset_temporal_state"}}})}};
-        if (arguments.contains("source")) setup["source"] = arguments["source"];
+        setup["source"] = arguments.value("source", Json{{"kind", "workspace"}});
         if (arguments.contains("config")) setup["config"] = arguments["config"];
         const auto warmup = arguments.value(
             "warmup_frames", config_ ? config_->default_warmup_frames : std::uint32_t{0});
         if (warmup != 0) {
             setup["actions"].push_back({{"type", "wait_frames"}, {"frames", warmup}});
         }
-        auto prepared = run_job("vibris_run_actions", setup);
-        if (std::holds_alternative<ToolFailure>(prepared)) return prepared;
-
-        auto request = DebugProtocol::request(
-            "vibris_get_gpu_metrics", {{"frames", arguments.at("frames")}});
-        if (!request) throw std::logic_error("GPU metrics debug request is unavailable");
-        auto measured = debug_control(std::move(*request));
-        if (auto* result = std::get_if<Json>(&measured)) {
-            (*result)["frames"] = arguments.at("frames");
-            (*result)["warmup_frames"] = warmup;
+        setup["actions"].push_back({{"type", "get_gpu_metrics"}, {"frames", arguments.at("frames")}});
+        auto measured = run_job("vibris_run_actions", setup);
+        if (auto* job = std::get_if<Json>(&measured)) {
+            for (const auto& action : job->at("action_results")) {
+                if (action.at("kind") != "get_gpu_metrics") continue;
+                auto result = action.at("result");
+                result["frames"] = arguments.at("frames");
+                result["warmup_frames"] = warmup;
+                return result;
+            }
+            throw std::logic_error("GPU metrics action result is missing");
         }
         return measured;
     }

@@ -136,8 +136,8 @@ try
     $actions = @(
         [ordered] @{ type = "wait_frames"; frames = 2 },
         [ordered] @{ type = "capture_screenshot"; format = $Screenshot; artifact_name = "beauty" },
-        [ordered] @{ type = "dump_texture"; name = $Texture; format = "raw"; artifact_name = $Texture },
-        [ordered] @{ type = "dump_buffer"; name = $Buffer; format = "bin"; artifact_name = $Buffer }
+        [ordered] @{ type = "capture_texture"; name = $Texture; format = "raw"; artifact_name = $Texture },
+        [ordered] @{ type = "capture_buffer"; name = $Buffer; format = "bin"; artifact_name = $Buffer }
     )
     $command = New-CoreSubmitCommand -MessageId "g006-c001" -RequestId "g006-c001" `
         -Sources @($prepared) -Context $contextValue -Actions $actions -Timeouts @{

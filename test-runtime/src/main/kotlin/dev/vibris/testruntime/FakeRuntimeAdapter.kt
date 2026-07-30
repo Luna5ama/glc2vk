@@ -8,6 +8,7 @@ import dev.vibris.api.ContextApplyResult
 import dev.vibris.api.ReloadResult
 import dev.vibris.api.ResourceCatalog
 import dev.vibris.api.RuntimeStatus
+import dev.vibris.api.RuntimeAction
 import dev.vibris.api.SceneContext
 import dev.vibris.api.TemporalResetResult
 import dev.vibris.api.VibrisRuntimeAdapter
@@ -110,6 +111,27 @@ class FakeRuntimeAdapter : VibrisRuntimeAdapter {
         immediate(cancellation) {
             CaptureResult(renderedFrames.get(), emptyMap())
         }
+
+    override fun executeAction(action: RuntimeAction): CompletionStage<String> = immediate {
+        when (action) {
+            RuntimeAction.CaptureStatus -> "{\"pending\":false,\"active\":false,\"saving\":false}"
+            is RuntimeAction.ReloadShader -> "{\"success\":true}"
+            is RuntimeAction.CapturePass -> "{\"ok\":true,\"path\":\"capture-pass\"}"
+            is RuntimeAction.CaptureMulti -> "{\"ok\":true,\"path\":\"capture-multi\"}"
+            RuntimeAction.ShaderStatus -> "{\"loaded\":true,\"pack\":\"vibris\"}"
+            RuntimeAction.ShaderErrors -> "{\"errors\":[]}"
+            is RuntimeAction.ScheduleScreenshot ->
+                "{\"scheduled\":true,\"frames\":${action.frames}}"
+            RuntimeAction.ScreenshotResult -> "{\"path\":null}"
+            is RuntimeAction.GpuMetrics ->
+                "{\"avg\":1.0,\"p5\":0.9,\"p50\":1.0,\"p95\":1.1}"
+            RuntimeAction.ListSsbos -> "{\"buffers\":[]}"
+            is RuntimeAction.DumpSsbo -> "{\"path\":\"ssbo.bin\"}"
+            RuntimeAction.ListTextures -> "{\"textures\":[]}"
+            is RuntimeAction.DumpTexture -> "{\"path\":\"texture.raw\"}"
+            RuntimeAction.ListPatchedShaders -> "{\"files\":[]}"
+        }
+    }
 
     fun pauseExecution() {
         synchronized(frameGate) {

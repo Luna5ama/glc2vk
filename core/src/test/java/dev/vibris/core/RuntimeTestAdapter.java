@@ -8,6 +8,7 @@ import dev.vibris.api.ContextApplyResult;
 import dev.vibris.api.ReloadResult;
 import dev.vibris.api.ResourceCatalog;
 import dev.vibris.api.RuntimeStatus;
+import dev.vibris.api.RuntimeAction;
 import dev.vibris.api.SceneContext;
 import dev.vibris.api.TemporalResetResult;
 import dev.vibris.api.VibrisRuntimeAdapter;
@@ -23,6 +24,7 @@ import java.util.concurrent.CompletionStage;
 final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     final List<String> events = new ArrayList<>();
     final ArrayDeque<ReloadResult> reloads = new ArrayDeque<>();
+    final ArrayDeque<String> actionResponses = new ArrayDeque<>();
     RuntimeStatus status = new RuntimeStatus(true, "save", "minecraft:overworld", "");
     TemporalResetResult reset = new TemporalResetResult(true);
     ResourceCatalog catalog = ResourceCatalog.empty();
@@ -73,6 +75,13 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     @Override
     public ResourceCatalog getResourceCatalog() {
         return catalog;
+    }
+
+    @Override
+    public CompletionStage<String> executeAction(RuntimeAction action) {
+        events.add("action:" + action.getClass().getSimpleName());
+        String response = actionResponses.isEmpty() ? "{}" : actionResponses.removeFirst();
+        return CompletableFuture.completedFuture(response);
     }
 
     @Override

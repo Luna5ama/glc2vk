@@ -104,8 +104,6 @@ target_link_libraries(vibris-control-client PRIVATE vibris_control_protocol nloh
 add_library(vibris_mcp_core STATIC
     src/main/cpp/config_document.cpp
     src/main/cpp/config_store.cpp
-    src/main/cpp/debug_tools.cpp
-    src/main/cpp/debug_protocol.cpp
     src/main/cpp/commit_extractor.cpp
     src/main/cpp/git_repository.cpp
     src/main/cpp/grpc_client.cpp

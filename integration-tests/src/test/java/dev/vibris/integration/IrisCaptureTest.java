@@ -18,8 +18,8 @@ import dev.vibris.protocol.v1.ActivateSource;
 import dev.vibris.protocol.v1.ArtifactFormat;
 import dev.vibris.protocol.v1.ArtifactMetadata;
 import dev.vibris.protocol.v1.CaptureScreenshot;
-import dev.vibris.protocol.v1.DumpBuffer;
-import dev.vibris.protocol.v1.DumpTexture;
+import dev.vibris.protocol.v1.CaptureBuffer;
+import dev.vibris.protocol.v1.CaptureTexture;
 import dev.vibris.protocol.v1.ErrorCode;
 import dev.vibris.protocol.v1.JobCompleted;
 import dev.vibris.protocol.v1.JobTimeouts;
@@ -125,9 +125,9 @@ final class IrisCaptureTest {
             .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(2)))
             .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
                 .setArtifactName("beauty").setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)));
-        textures.forEach(name -> actions.addActions(Action.newBuilder().setDumpTexture(DumpTexture.newBuilder()
+        textures.forEach(name -> actions.addActions(Action.newBuilder().setCaptureTexture(CaptureTexture.newBuilder()
             .setLogicalName(name).setArtifactName(name).setFormat(ArtifactFormat.ARTIFACT_FORMAT_RAW))));
-        actions.addActions(Action.newBuilder().setDumpBuffer(DumpBuffer.newBuilder()
+        actions.addActions(Action.newBuilder().setCaptureBuffer(CaptureBuffer.newBuilder()
             .setLogicalName("radiance_cache").setArtifactName("radiance_cache")
             .setFormat(ArtifactFormat.ARTIFACT_FORMAT_BIN)));
         return submission(requestId, source).setActions(actions).build();
@@ -137,8 +137,8 @@ final class IrisCaptureTest {
         ActionSequence actions = ActionSequence.newBuilder()
             .addActions(Action.newBuilder().setActivateSource(
                 ActivateSource.newBuilder().setSourceUuid(source.getUuid())))
-            .addActions(Action.newBuilder().setDumpTexture(
-                DumpTexture.newBuilder().setLogicalName("missing_resource").setArtifactName("missing_resource")
+            .addActions(Action.newBuilder().setCaptureTexture(
+                CaptureTexture.newBuilder().setLogicalName("missing_resource").setArtifactName("missing_resource")
                     .setFormat(ArtifactFormat.ARTIFACT_FORMAT_RAW))).build();
         return submission("missing", source).setActions(actions).build();
     }

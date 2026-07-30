@@ -11,7 +11,6 @@ service VibrisControl {
     rpc ListPresets(ListPresetsRequest) returns (ListPresetsResponse);
     rpc ValidateContext(ValidateContextRequest) returns (ValidateContextResponse);
     rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
-    rpc DebugControl(DebugControlRequest) returns (DebugControlResponse);
     rpc Control(stream ClientMessage) returns (stream ServerMessage);
 }
 
@@ -27,7 +26,6 @@ enum Capability {
     CAPABILITY_PREPARED_SOURCES = 3;
     CAPABILITY_ACTION_SEQUENCE = 7;
     CAPABILITY_ARTIFACT_METADATA = 8;
-    CAPABILITY_DEBUG_CONTROL = 9;
 }
 
 message ClientMessage {
@@ -81,7 +79,6 @@ message ServerHello {
     repeated ArtifactFormat supported_formats = 9;
     string pending_shaders_root = 10;
     string artifact_root = 11;
-    repeated DebugControlKind supported_debug_controls = 12;
 }
 
 message ServerLimits {
@@ -141,7 +138,6 @@ message ServerStatus {
     uint64 artifact_quota_cap_bytes = 14;
     repeated JobActionKind supported_job_actions = 16;
     repeated ArtifactFormat supported_formats = 17;
-    repeated DebugControlKind supported_debug_controls = 18;
 }
 
 enum ServerState {
@@ -284,10 +280,24 @@ message Action {
         ResetTemporalState reset_temporal_state = 1;
         WaitFrames wait_frames = 2;
         CaptureScreenshot capture_screenshot = 3;
-        DumpTexture dump_texture = 4;
-        DumpBuffer dump_buffer = 5;
+        CaptureTexture capture_texture = 4;
+        CaptureBuffer capture_buffer = 5;
         ActivateSource activate_source = 6;
         CompareCaptures compare_captures = 7;
+        EmptyAction get_capture_status = 20;
+        ReloadShader reload_shader = 21;
+        CapturePass capture_pass = 22;
+        CaptureMulti capture_multi = 23;
+        EmptyAction get_shader_status = 24;
+        EmptyAction get_shader_errors = 25;
+        ScheduleScreenshot schedule_screenshot = 26;
+        EmptyAction get_screenshot_result = 27;
+        GetGpuMetrics get_gpu_metrics = 28;
+        EmptyAction list_ssbos = 29;
+        DumpSsbo dump_ssbo = 30;
+        EmptyAction list_textures = 31;
+        DumpTexture dump_texture = 32;
+        EmptyAction list_patched_shaders = 33;
     }
 }
 
@@ -296,10 +306,24 @@ enum JobActionKind {
     JOB_ACTION_KIND_RESET_TEMPORAL_STATE = 1;
     JOB_ACTION_KIND_WAIT_FRAMES = 2;
     JOB_ACTION_KIND_CAPTURE_SCREENSHOT = 3;
-    JOB_ACTION_KIND_DUMP_TEXTURE = 4;
-    JOB_ACTION_KIND_DUMP_BUFFER = 5;
+    JOB_ACTION_KIND_CAPTURE_TEXTURE = 4;
+    JOB_ACTION_KIND_CAPTURE_BUFFER = 5;
     JOB_ACTION_KIND_ACTIVATE_SOURCE = 6;
     JOB_ACTION_KIND_COMPARE_CAPTURES = 7;
+    JOB_ACTION_KIND_GET_CAPTURE_STATUS = 20;
+    JOB_ACTION_KIND_RELOAD_SHADER = 21;
+    JOB_ACTION_KIND_CAPTURE_PASS = 22;
+    JOB_ACTION_KIND_CAPTURE_MULTI = 23;
+    JOB_ACTION_KIND_GET_SHADER_STATUS = 24;
+    JOB_ACTION_KIND_GET_SHADER_ERRORS = 25;
+    JOB_ACTION_KIND_SCHEDULE_SCREENSHOT = 26;
+    JOB_ACTION_KIND_GET_SCREENSHOT_RESULT = 27;
+    JOB_ACTION_KIND_GET_GPU_METRICS = 28;
+    JOB_ACTION_KIND_LIST_SSBOS = 29;
+    JOB_ACTION_KIND_DUMP_SSBO = 30;
+    JOB_ACTION_KIND_LIST_TEXTURES = 31;
+    JOB_ACTION_KIND_DUMP_TEXTURE = 32;
+    JOB_ACTION_KIND_LIST_PATCHED_SHADERS = 33;
 }
 
 message ActivateSource {
@@ -324,7 +348,7 @@ message CaptureScreenshot {
     ArtifactFormat format = 2;
 }
 
-message DumpTexture {
+message CaptureTexture {
     string logical_name = 1;
     uint32 mip_level = 2;
     uint32 layer = 3;
@@ -332,7 +356,7 @@ message DumpTexture {
     string artifact_name = 5;
 }
 
-message DumpBuffer {
+message CaptureBuffer {
     string logical_name = 1;
     ArtifactFormat format = 2;
     string artifact_name = 3;
@@ -429,6 +453,13 @@ message JobResult {
     repeated ShaderDiagnostic shader_diagnostics = 5;
     repeated uint64 frame_ids = 6;
     string manifest_path = 7;
+    repeated ActionResult action_results = 8;
+}
+
+message ActionResult {
+    uint32 action_index = 1;
+    JobActionKind kind = 2;
+    string json = 3;
 }
 
 message JobTimings {
@@ -535,79 +566,38 @@ enum ScalarType {
     SCALAR_TYPE_FLOAT32 = 8;
 }
 
-message DebugControlRequest {
-    oneof command {
-        DebugEmpty capture_status = 1;
-        DebugReloadShader reload_shader = 2;
-        DebugCapturePass capture_pass = 3;
-        DebugCaptureMulti capture_multi = 4;
-        DebugEmpty shader_status = 5;
-        DebugEmpty shader_errors = 6;
-        DebugScheduleScreenshot schedule_screenshot = 7;
-        DebugEmpty screenshot_result = 8;
-        DebugGpuMetrics gpu_metrics = 9;
-        DebugEmpty list_ssbos = 10;
-        DebugDumpSsbo dump_ssbo = 11;
-        DebugEmpty list_textures = 12;
-        DebugDumpTexture dump_texture = 13;
-        DebugEmpty list_patched_shaders = 14;
-    }
-}
+message EmptyAction {}
 
-message DebugReloadShader {
+message ReloadShader {
     ShaderConfig config = 1;
 }
 
-enum DebugControlKind {
-    DEBUG_CONTROL_KIND_UNSPECIFIED = 0;
-    DEBUG_CONTROL_KIND_CAPTURE_STATUS = 1;
-    DEBUG_CONTROL_KIND_RELOAD_SHADER = 2;
-    DEBUG_CONTROL_KIND_CAPTURE_PASS = 3;
-    DEBUG_CONTROL_KIND_CAPTURE_MULTI = 4;
-    DEBUG_CONTROL_KIND_SHADER_STATUS = 5;
-    DEBUG_CONTROL_KIND_SHADER_ERRORS = 6;
-    DEBUG_CONTROL_KIND_SCHEDULE_SCREENSHOT = 7;
-    DEBUG_CONTROL_KIND_SCREENSHOT_RESULT = 8;
-    DEBUG_CONTROL_KIND_GPU_METRICS = 9;
-    DEBUG_CONTROL_KIND_LIST_SSBOS = 10;
-    DEBUG_CONTROL_KIND_DUMP_SSBO = 11;
-    DEBUG_CONTROL_KIND_LIST_TEXTURES = 12;
-    DEBUG_CONTROL_KIND_DUMP_TEXTURE = 13;
-    DEBUG_CONTROL_KIND_LIST_PATCHED_SHADERS = 14;
-}
-
-message DebugEmpty {}
-
-message DebugCapturePass {
+message CapturePass {
     string pass = 1;
     optional string path = 2;
 }
 
-message DebugCaptureMulti {
+message CaptureMulti {
     string type = 1;
     optional string path = 2;
 }
 
-message DebugScheduleScreenshot {
+message ScheduleScreenshot {
     uint32 frames = 1;
 }
 
-message DebugGpuMetrics {
+message GetGpuMetrics {
     uint32 frames = 1;
 }
 
-message DebugDumpSsbo {
+message DumpSsbo {
     uint32 index = 1;
 }
 
-message DebugDumpTexture {
+message DumpTexture {
     oneof selector {
         string name = 1;
         uint32 id = 2;
     }
     bool raw = 3;
-}
-
-message DebugControlResponse {
-    string json = 1;
 }

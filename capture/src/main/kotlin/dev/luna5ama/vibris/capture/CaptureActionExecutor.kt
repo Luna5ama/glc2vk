@@ -1,6 +1,6 @@
 package dev.luna5ama.vibris.capture
 
-import dev.vibris.api.DebugControlCommand
+import dev.vibris.api.RuntimeAction
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -9,37 +9,37 @@ import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 
-class CaptureDebugControl(
+class CaptureActionExecutor(
     gameDirectory: Path,
     private val captureManager: CaptureManager,
     private val shader: ShaderDebugControl,
 ) {
     private val gameDirectory = gameDirectory.toAbsolutePath().normalize()
 
-    fun execute(command: DebugControlCommand): CompletionStage<String> = when (command) {
-        is DebugControlCommand.GpuMetrics -> shader.captureMetrics(command.frames).thenApply { it.toString() }
-        else -> CompletableFuture.completedFuture(executeImmediately(command).toString())
+    fun execute(action: RuntimeAction): CompletionStage<String> = when (action) {
+        is RuntimeAction.GpuMetrics -> shader.captureMetrics(action.frames).thenApply { it.toString() }
+        else -> CompletableFuture.completedFuture(executeImmediately(action).toString())
     }
 
-    private fun executeImmediately(command: DebugControlCommand) = when (command) {
-        DebugControlCommand.CaptureStatus -> captureStatus()
-        is DebugControlCommand.ReloadShader -> shader.reload()
-        is DebugControlCommand.CapturePass -> queuePass(command)
-        is DebugControlCommand.CaptureMulti -> queueMulti(command)
-        DebugControlCommand.ShaderStatus -> shader.status()
-        DebugControlCommand.ShaderErrors -> shader.errorsJson()
-        is DebugControlCommand.ScheduleScreenshot -> buildJsonObject {
-            shader.scheduleScreenshot(command.frames)
+    private fun executeImmediately(action: RuntimeAction) = when (action) {
+        RuntimeAction.CaptureStatus -> captureStatus()
+        is RuntimeAction.ReloadShader -> shader.reload()
+        is RuntimeAction.CapturePass -> queuePass(action)
+        is RuntimeAction.CaptureMulti -> queueMulti(action)
+        RuntimeAction.ShaderStatus -> shader.status()
+        RuntimeAction.ShaderErrors -> shader.errorsJson()
+        is RuntimeAction.ScheduleScreenshot -> buildJsonObject {
+            shader.scheduleScreenshot(action.frames)
             put("scheduled", true)
-            put("frames", command.frames)
+            put("frames", action.frames)
         }
-        DebugControlCommand.ScreenshotResult -> shader.screenshotResult()
-        is DebugControlCommand.GpuMetrics -> error("GPU metrics are asynchronous")
-        DebugControlCommand.ListSsbos -> shader.storageBuffersJson()
-        is DebugControlCommand.DumpSsbo -> shader.dumpStorageBuffer(command.index)
-        DebugControlCommand.ListTextures -> shader.texturesJson()
-        is DebugControlCommand.DumpTexture -> shader.dumpTexture(command.name, command.id, command.raw)
-        DebugControlCommand.ListPatchedShaders -> shader.patchedShadersJson()
+        RuntimeAction.ScreenshotResult -> shader.screenshotResult()
+        is RuntimeAction.GpuMetrics -> error("GPU metrics are asynchronous")
+        RuntimeAction.ListSsbos -> shader.storageBuffersJson()
+        is RuntimeAction.DumpSsbo -> shader.dumpStorageBuffer(action.index)
+        RuntimeAction.ListTextures -> shader.texturesJson()
+        is RuntimeAction.DumpTexture -> shader.dumpTexture(action.name, action.id, action.raw)
+        RuntimeAction.ListPatchedShaders -> shader.patchedShadersJson()
     }
 
     private fun captureStatus() = captureManager.status().let { status ->
@@ -52,14 +52,14 @@ class CaptureDebugControl(
         }
     }
 
-    private fun queuePass(command: DebugControlCommand.CapturePass) = buildJsonObject {
+    private fun queuePass(command: RuntimeAction.CapturePass) = buildJsonObject {
         val path = capturePath(command.path, command.pass)
         captureManager.prepareSingleCapture(path, command.pass)
         put("ok", true)
         put("path", path.toString())
     }
 
-    private fun queueMulti(command: DebugControlCommand.CaptureMulti) = buildJsonObject {
+    private fun queueMulti(command: RuntimeAction.CaptureMulti) = buildJsonObject {
         val path = capturePath(command.path, command.type)
         captureManager.prepareMultiCapture(path, command.type)
         put("ok", true)

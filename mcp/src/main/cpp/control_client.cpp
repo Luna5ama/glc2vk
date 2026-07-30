@@ -94,15 +94,15 @@ void add_action(const Json& value, proto::ActionSequence* sequence) {
         auto* capture = action->mutable_capture_screenshot();
         capture->set_artifact_name(value.value("artifact_name", std::string{"beauty"}));
         capture->set_format(artifact_format(value.value("format", std::string{"png"})));
-    } else if (type == "dump_texture") {
-        auto* capture = action->mutable_dump_texture();
+    } else if (type == "capture_texture") {
+        auto* capture = action->mutable_capture_texture();
         capture->set_logical_name(value.at("name").get<std::string>());
         capture->set_mip_level(value.value("mip_level", std::uint32_t{}));
         capture->set_layer(value.value("layer", std::uint32_t{}));
         capture->set_artifact_name(value.value("artifact_name", capture->logical_name()));
         capture->set_format(artifact_format(value.value("format", std::string{"raw"})));
-    } else if (type == "dump_buffer") {
-        auto* capture = action->mutable_dump_buffer();
+    } else if (type == "capture_buffer") {
+        auto* capture = action->mutable_capture_buffer();
         capture->set_logical_name(value.at("name").get<std::string>());
         capture->set_artifact_name(value.value("artifact_name", capture->logical_name()));
         capture->set_format(artifact_format(value.value("format", std::string{"bin"})));

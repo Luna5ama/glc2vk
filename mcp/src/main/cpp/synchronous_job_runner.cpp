@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -91,6 +92,14 @@ ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& ar
         if (!status.ok()) return transport_failure(status);
         if (!terminal) throw std::logic_error("gRPC completed without a terminal job message");
         auto outcome = JobProtocol::terminal(*terminal);
+        if (tool_name == "vibris_run_actions" && arguments.contains("source") &&
+            std::holds_alternative<Json>(outcome)) {
+            for (auto& result : std::get<Json>(outcome).at("action_results")) {
+                const auto protocol_index = result.at("action_index").get<std::uint32_t>();
+                if (protocol_index == 0) throw std::logic_error("runtime action result refers to source overlay");
+                result["action_index"] = protocol_index - 1;
+            }
+        }
         if (tool_name == "vibris_run_recipe" && std::holds_alternative<Json>(outcome)) {
             std::get<Json>(outcome)["kind"] = arguments.at("recipe");
         }

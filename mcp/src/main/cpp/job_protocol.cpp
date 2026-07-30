@@ -51,8 +51,16 @@ void scene(const SessionConfig& config, const proto::SceneContext& scene_context
 
 void shader_config(const Json& arguments, proto::SubmitJob& job) {
     if (!arguments.contains("config")) return;
+    auto* config = job.mutable_shader_config();
     for (const auto& [key, value] : arguments.at("config").items()) {
-        (*job.mutable_shader_config()->mutable_values())[key] = config_value(value);
+        (*config->mutable_values())[key] = config_value(value);
+    }
+}
+
+void shader_config(const Json& arguments, proto::ShaderConfig& config) {
+    if (!arguments.contains("config")) return;
+    for (const auto& [key, value] : arguments.at("config").items()) {
+        (*config.mutable_values())[key] = config_value(value);
     }
 }
 
@@ -96,14 +104,14 @@ void debug_recipe(const Json& arguments, const SessionConfig& config,
     }
     for (const auto& texture : arguments.value("textures", Json::array())) {
         const auto name = texture.get<std::string>();
-        auto* capture = add_action(sequence)->mutable_dump_texture();
+        auto* capture = add_action(sequence)->mutable_capture_texture();
         capture->set_logical_name(name);
         capture->set_artifact_name(name);
         capture->set_format(proto::ARTIFACT_FORMAT_RAW);
     }
     for (const auto& buffer : arguments.value("buffers", Json::array())) {
         const auto name = buffer.get<std::string>();
-        auto* capture = add_action(sequence)->mutable_dump_buffer();
+        auto* capture = add_action(sequence)->mutable_capture_buffer();
         capture->set_logical_name(name);
         capture->set_artifact_name(name);
         capture->set_format(proto::ARTIFACT_FORMAT_BIN);
@@ -120,13 +128,13 @@ void add_ab_capture(proto::ActionSequence& sequence, const Json& capture, std::s
     }
     const auto default_format = type == "buffer" ? std::string("bin") : std::string("png");
     if (type == "texture") {
-        auto* value = add_action(sequence)->mutable_dump_texture();
+        auto* value = add_action(sequence)->mutable_capture_texture();
         value->set_logical_name(capture.at("name").get<std::string>());
         value->set_artifact_name(std::move(artifact_name));
         value->set_format(format(capture.value("format", default_format)));
         return;
     }
-    auto* value = add_action(sequence)->mutable_dump_buffer();
+    auto* value = add_action(sequence)->mutable_capture_buffer();
     value->set_logical_name(capture.at("name").get<std::string>());
     value->set_artifact_name(std::move(artifact_name));
     value->set_format(format(capture.value("format", default_format)));
@@ -167,33 +175,60 @@ void recipe(const Json& arguments, const SessionConfig& config,
 }
 
 void actions(const Json& arguments, std::span<const proto::PreparedSourceRef> sources, proto::SubmitJob& job) {
-    require_sources(sources, 1);
+    if (sources.size() > 1) throw std::invalid_argument("custom actions accept at most one prepared source");
     auto* sequence = job.mutable_actions();
-    activate(*sequence, sources.front());
+    if (!sources.empty()) activate(*sequence, sources.front());
     for (const auto& input : arguments.at("actions")) {
         auto* action = sequence->add_actions();
         const auto type = input.at("type").get<std::string>();
-        if (type == "reset_temporal_state") action->mutable_reset_temporal_state();
-        if (type == "wait_frames") {
+        if (type == "reset_temporal_state") {
+            action->mutable_reset_temporal_state();
+        } else if (type == "wait_frames") {
             action->mutable_wait_frames()->set_frame_count(input.at("frames").get<std::uint32_t>());
-        }
-        if (type == "capture_screenshot") {
+        } else if (type == "capture_screenshot") {
             auto* value = action->mutable_capture_screenshot();
             value->set_format(format(input.value("format", std::string("png"))));
             value->set_artifact_name(input.value("artifact_name", std::string{}));
-        }
-        if (type == "dump_texture") {
+        } else if (type == "capture_texture") {
+            auto* value = action->mutable_capture_texture();
+            value->set_logical_name(input.at("name").get<std::string>());
+            value->set_format(format(input.at("format").get<std::string>()));
+            value->set_artifact_name(input.at("artifact_name").get<std::string>());
+        } else if (type == "capture_buffer") {
+            auto* value = action->mutable_capture_buffer();
+            value->set_logical_name(input.at("name").get<std::string>());
+            value->set_format(format(input.at("format").get<std::string>()));
+            value->set_artifact_name(input.at("artifact_name").get<std::string>());
+        } else if (type == "get_capture_status") action->mutable_get_capture_status();
+        else if (type == "reload_shader") {
+            auto* reload = action->mutable_reload_shader();
+            if (input.contains("config")) shader_config(input, *reload->mutable_config());
+        } else if (type == "capture_pass") {
+            auto* value = action->mutable_capture_pass();
+            value->set_pass(input.at("pass").get<std::string>());
+            if (input.contains("path")) value->set_path(input.at("path").get<std::string>());
+        } else if (type == "capture_multi") {
+            auto* value = action->mutable_capture_multi();
+            value->set_type(input.at("capture_type").get<std::string>());
+            if (input.contains("path")) value->set_path(input.at("path").get<std::string>());
+        } else if (type == "get_shader_status") action->mutable_get_shader_status();
+        else if (type == "get_shader_errors") action->mutable_get_shader_errors();
+        else if (type == "schedule_screenshot") {
+            action->mutable_schedule_screenshot()->set_frames(input.value("frames", std::uint32_t{1}));
+        } else if (type == "get_screenshot_result") action->mutable_get_screenshot_result();
+        else if (type == "get_gpu_metrics") {
+            action->mutable_get_gpu_metrics()->set_frames(input.at("frames").get<std::uint32_t>());
+        } else if (type == "list_ssbos") action->mutable_list_ssbos();
+        else if (type == "dump_ssbo") {
+            action->mutable_dump_ssbo()->set_index(input.at("index").get<std::uint32_t>());
+        } else if (type == "list_textures") action->mutable_list_textures();
+        else if (type == "dump_texture") {
             auto* value = action->mutable_dump_texture();
-            value->set_logical_name(input.at("name").get<std::string>());
-            value->set_format(format(input.at("format").get<std::string>()));
-            value->set_artifact_name(input.at("artifact_name").get<std::string>());
-        }
-        if (type == "dump_buffer") {
-            auto* value = action->mutable_dump_buffer();
-            value->set_logical_name(input.at("name").get<std::string>());
-            value->set_format(format(input.at("format").get<std::string>()));
-            value->set_artifact_name(input.at("artifact_name").get<std::string>());
-        }
+            if (input.contains("name")) value->set_name(input.at("name").get<std::string>());
+            else value->set_id(input.at("id").get<std::uint32_t>());
+            value->set_raw(input.value("raw", false));
+        } else if (type == "list_patched_shaders") action->mutable_list_patched_shaders();
+        else throw std::invalid_argument("unsupported action type");
     }
 }
 
@@ -248,6 +283,18 @@ Json comparison(const proto::JobResult& value) {
             {"max_absolute_error", comparison.max_absolute_error()}};
 }
 
+Json action_results(const proto::JobResult& value) {
+    Json results = Json::array();
+    for (const auto& action : value.action_results()) {
+        Json payload = Json::object();
+        if (!action.json().empty()) payload = Json::parse(action.json());
+        results.push_back({{"action_index", action.action_index()},
+                           {"kind", short_name(proto::JobActionKind_Name(action.kind()), "JOB_ACTION_KIND_")},
+                           {"result", std::move(payload)}});
+    }
+    return results;
+}
+
 ToolOutcome completed(const proto::JobCompleted& completed) {
     const auto& value = completed.result();
     if (value.manifest_path().empty()) {
@@ -260,6 +307,7 @@ ToolOutcome completed(const proto::JobCompleted& completed) {
                 {"kind", short_name(proto::JobResultKind_Name(value.kind()), "JOB_RESULT_KIND_")},
                 {"diagnostics", diagnostics(value.shader_diagnostics())},
                 {"comparison", comparison(value)},
+                {"action_results", action_results(value)},
                 {"timings", {{"started_at_unix_ms", timing.started_at_unix_ms()},
                              {"completed_at_unix_ms", timing.completed_at_unix_ms()},
                              {"queue_ms", timing.queue_ms()}, {"execution_ms", timing.execution_ms()},

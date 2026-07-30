@@ -52,7 +52,9 @@ void SourceHandler::prepare(
         prepare_one(preparer, &arguments.at("b").at("source"), prepared);
     } else {
         const auto source = arguments.find("source");
-        prepare_one(preparer, source == arguments.end() ? nullptr : &*source, prepared);
+        if (tool_name != "vibris_run_actions" || source != arguments.end()) {
+            prepare_one(preparer, source == arguments.end() ? nullptr : &*source, prepared);
+        }
     }
 
     source_batches_.emplace_back();

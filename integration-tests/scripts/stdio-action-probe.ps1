@@ -48,17 +48,12 @@ try
         ForEach-Object { $_.name })
     $expectedTools = @(
         "vibris_get_config", "vibris_list_presets", "vibris_configure",
-        "vibris_get_status", "vibris_profile", "vibris_run_recipe", "vibris_run_actions",
-        "vibris_get_capture_status", "vibris_reload_shader", "vibris_capture_pass",
-        "vibris_capture_multi", "vibris_get_shader_status", "vibris_get_shader_errors",
-        "vibris_schedule_screenshot", "vibris_get_screenshot_result", "vibris_get_gpu_metrics",
-        "vibris_list_ssbos", "vibris_dump_ssbo", "vibris_list_textures",
-        "vibris_dump_texture", "vibris_list_patched_shaders"
+        "vibris_get_status", "vibris_profile", "vibris_run_recipe", "vibris_run_actions"
     )
     if ([string]::Join("`n", $tools) -cne [string]::Join("`n", $expectedTools) -or
         @($tools | Where-Object { $_ -match '(?i)atomic|submit|poll|wait' }).Count -ne 0)
     {
-        throw "tools/list did not remain the expected 21-tool surface."
+        throw "tools/list did not remain the expected 7-tool surface."
     }
     $empty = Get-G007ToolPayload (Get-G007Response -Responses $allowedResponses -Id 4)
     $allowed = Get-G007ToolPayload (Get-G007Response -Responses $allowedResponses -Id 5)
@@ -68,6 +63,15 @@ try
         $allowed.kind -cne "action_sequence" -or @($allowed.frame_ids).Count -ne 1)
     {
         throw "Empty or allowed action sequence returned the wrong terminal shape."
+    }
+    $actionKinds = @($allowed.action_results | ForEach-Object { $_.kind })
+    $expectedActionKinds = @(
+        "get_shader_status", "get_shader_errors", "get_gpu_metrics",
+        "list_textures", "list_ssbos", "list_patched_shaders"
+    )
+    if ([string]::Join("`n", $actionKinds) -cne [string]::Join("`n", $expectedActionKinds))
+    {
+        throw "Runtime action results were missing or out of order."
     }
 
     $pendingBefore = Get-OwnedTreeSnapshot -Root $scope.PendingRoot
@@ -89,8 +93,9 @@ try
     {
         throw "Frozen run_shell adversarial command changed."
     }
-    $summary = "PASS criterion=G007-C003 tools=6 empty_actions=true allowed_job=true " +
-        "forbidden_before_prepare=5 absolute_path_rejected=true atomic_tools=false"
+    $summary = "PASS criterion=G007-C003 tools=7 empty_actions=true allowed_job=true " +
+        "forbidden_before_prepare=5 invalid_metrics=true duplicate_selector=true traversal_rejected=true " +
+        "absolute_path_rejected=true atomic_tools=false"
 }
 catch
 {

@@ -193,32 +193,35 @@ content item and matching structured content.
 | `vibris_run_recipe` | one recipe form below | synchronous terminal job result and artifact metadata |
 | `vibris_run_actions` | optional source plus up to 64 actions | synchronous terminal job result and artifact metadata |
 
-Capture and shader-debug controls use the same MCP and gRPC connection:
+All low-level capture and shader-debug operations are variants in the `actions` array of `vibris_run_actions`; none is
+advertised as a separate MCP tool. One invocation becomes one `SubmitJob`, and result-bearing actions are returned in
+execution order through `action_results` with their action index, kind, and JSON result.
 
-| Tools | Purpose |
-|-------|---------|
-| `vibris_get_capture_status`, `vibris_capture_pass`, `vibris_capture_multi` | inspect or queue compute captures |
-| `vibris_reload_shader`, `vibris_get_shader_status`, `vibris_get_shader_errors` | reload and inspect the active shader pack |
-| `vibris_schedule_screenshot`, `vibris_get_screenshot_result` | schedule and locate an asynchronous host screenshot |
-| `vibris_get_gpu_metrics` | measure GPU pass timings over the next required `frames` |
-| `vibris_list_ssbos`, `vibris_dump_ssbo` | inspect or dump SSBOs by binding index |
-| `vibris_list_textures`, `vibris_dump_texture` | inspect or dump textures by logical name or OpenGL ID |
-| `vibris_list_patched_shaders` | inspect patched shader debug files |
+| Action types | Purpose |
+|--------------|---------|
+| `reset_temporal_state`, `wait_frames` | control temporal history and rendered-frame waits |
+| `capture_screenshot`, `capture_texture`, `capture_buffer` | write same-frame managed artifacts |
+| `get_capture_status`, `capture_pass`, `capture_multi` | inspect or queue compute captures |
+| `reload_shader`, `get_shader_status`, `get_shader_errors` | reload and inspect the active shader pack |
+| `schedule_screenshot`, `get_screenshot_result` | schedule and locate an asynchronous host screenshot |
+| `get_gpu_metrics` | measure GPU pass timings over its next required `frames` |
+| `list_ssbos`, `dump_ssbo` | inspect or dump SSBOs by binding index |
+| `list_textures`, `dump_texture` | inspect or dump textures by logical name or OpenGL ID |
+| `list_patched_shaders` | inspect patched shader debug files |
 
-Server discovery reports runtime job-sequence capabilities as `supported_job_actions` and immediate controls as
-`supported_debug_controls`. Recipes are an MCP-only overlay and are therefore not negotiated with the Minecraft
-runtime. The two capability lists are intentionally distinct: status and listing operations are controls, not actions
-inside `vibris_run_actions`.
+Server discovery reports the complete runtime surface only as `supported_job_actions`. Recipes and profiling are
+MCP-only overlays: each expands to an action sequence before gRPC submission, while Minecraft only decodes and executes
+atomic actions.
 
-`vibris_get_gpu_metrics` requires `{"frames": N}` with `1 <= N <= 10000`. Measurement starts when the runtime receives
-that call, timestamps exactly the next `N` rendered frames, and completes when the final requested frame has been
-collected. Its result contains only aggregate timing fields (`avg`, `p5`, `p50`, and `p95`); callers do not need a
-separate wait or a prior snapshot.
+The `get_gpu_metrics` action requires `{"type":"get_gpu_metrics","frames":N}` with `1 <= N <= 10000`. Measurement
+starts when that action executes, timestamps exactly the next `N` rendered frames, and completes when the final requested
+frame has been collected. Its result contains only aggregate timing fields (`avg`, `p5`, `p50`, and `p95`); callers do
+not need a separate wait or a prior snapshot.
 
 `vibris_profile` is the high-level performance workflow. It snapshots the selected workspace or commit, activates and
 reloads that source with the optional shader config, resets temporal state, waits `warmup_frames` (or the configured
 default), and then measures exactly the next required `frames`. It returns the same `avg`, `p5`, `p50`, and `p95`
-aggregates as `vibris_get_gpu_metrics`. Repeat the tool with different config objects for a controlled settings matrix;
+aggregates as the `get_gpu_metrics` action. Repeat the tool with different config objects for a controlled settings matrix;
 the scene preset remains fixed by `vibris_configure`. This direct in-game path replaces project-local wrappers for
 routine profiling. Compute capture and external replay/Nsight analysis remain separate diagnostic workflows and are
 not used by `vibris_profile`.
@@ -228,8 +231,9 @@ resolved inside the game directory; paths escaping it are rejected.
 
 ### Shader config
 
-`vibris_reload_shader`, `vibris_run_recipe`, and `vibris_run_actions` accept an optional `config` JSON object. Boolean,
-number, and printable ASCII string values are converted to Iris `KEY=VALUE` properties before the shader reload:
+`vibris_profile`, `vibris_run_recipe`, and source-bearing `vibris_run_actions` calls accept an optional top-level
+`config` JSON object for source activation. A `reload_shader` action can instead carry its own `config`. Boolean, number,
+and printable ASCII string values are converted to Iris `KEY=VALUE` properties before the shader reload:
 
 ```json
 {
@@ -326,19 +330,28 @@ texture raw/PNG, and buffer BIN. The result includes comparison metrics and the 
 
 ## Custom actions
 
-Use `vibris_run_actions` only when a recipe cannot express the sequence. Supported actions are:
+Use `vibris_run_actions` when a recipe cannot express the sequence. The full action set is listed in the MCP table
+above. Same-frame artifacts use `capture_screenshot`, `capture_texture`, and `capture_buffer`; live debug resource dumps
+use `dump_texture` and `dump_ssbo`, so their ownership and result semantics remain unambiguous.
 
-- `reset_temporal_state`
-- `wait_frames` with `frames >= 1`
-- `capture_screenshot` with optional PNG format and artifact name
-- `dump_texture` with logical resource name, raw/PNG format, and artifact name
-- `dump_buffer` with logical resource name, BIN format, and artifact name
+```json
+{
+  "actions": [
+    {"type": "reload_shader", "config": {"SETTING_PARALLAX_MODE": 0}},
+    {"type": "get_shader_status"},
+    {"type": "get_shader_errors"},
+    {"type": "get_gpu_metrics", "frames": 120},
+    {"type": "list_textures"},
+    {"type": "list_ssbos"}
+  ]
+}
+```
 
-The MCP prepends internal source-activation actions and may add an internal capture-comparison action for A/B recipes.
-Those overlay actions are not part of the public custom-action schema. The configured scene is applied by the runtime.
-Job actions do not include shell
-execution, arbitrary path loads, manual shader reloads, or external capture hooks. Artifact names are safe file-name
-segments, not paths.
+When `source` is present the MCP prepends its source activation; without it, the sequence operates on the current
+runtime. A/B recipes may also add internal source activations and a capture-comparison action. The configured scene is
+applied when a source is activated. Actions never expose shell execution, arbitrary source paths, or external process
+hooks. Managed artifact names are safe flat file-name segments, and optional compute-capture paths must stay within the
+game directory.
 
 ## Results and artifacts
 

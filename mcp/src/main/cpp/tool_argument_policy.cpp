@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <filesystem>
 #include <string>
 
 namespace vibris::mcp {
@@ -36,6 +37,15 @@ bool safe_config_value(const Json& value) {
     });
 }
 
+bool safe_relative_path(std::string_view value) {
+    if (value.empty()) return false;
+    const std::filesystem::path path{std::string(value)};
+    if (path.is_absolute() || path.has_root_name() || path.has_root_directory()) return false;
+    return std::none_of(path.begin(), path.end(), [](const std::filesystem::path& component) {
+        return component == "..";
+    });
+}
+
 std::optional<InvocationError> validate_shader_config(const Json& arguments) {
     const auto config = arguments.find("config");
     if (config == arguments.end() || !config->is_object()) return std::nullopt;
@@ -62,15 +72,26 @@ std::optional<InvocationError> validate_argument_policy(std::string_view tool_na
         if (const auto error = validate_shader_config(arguments)) return error;
     }
     if (tool_name != "vibris_run_actions" || !arguments.is_object()) return std::nullopt;
+    if (arguments.contains("config") && !arguments.contains("source")) {
+        return InvocationError{InvocationErrorCode::InvalidArguments,
+            "arguments.config requires source; use a reload_shader action to configure the current runtime"};
+    }
     const auto actions = arguments.find("actions");
     if (actions == arguments.end() || !actions->is_array()) return std::nullopt;
     for (std::size_t index = 0; index < actions->size(); ++index) {
         if (!(*actions)[index].is_object()) continue;
+        if (const auto error = validate_shader_config((*actions)[index])) return error;
         const auto name = (*actions)[index].find("artifact_name");
         if (name != (*actions)[index].end() && name->is_string() &&
             !safe_flat_name(name->get_ref<const std::string&>())) {
             return InvocationError{InvocationErrorCode::InvalidArguments,
                 "arguments.actions[" + std::to_string(index) + "].artifact_name must be a safe flat name"};
+        }
+        const auto path = (*actions)[index].find("path");
+        if (path != (*actions)[index].end() && path->is_string() &&
+            !safe_relative_path(path->get_ref<const std::string&>())) {
+            return InvocationError{InvocationErrorCode::InvalidArguments,
+                "arguments.actions[" + std::to_string(index) + "].path must be relative and remain in the game directory"};
         }
     }
     return std::nullopt;

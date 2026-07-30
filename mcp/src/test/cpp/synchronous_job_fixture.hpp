@@ -51,8 +51,9 @@ private:
                 ? fs::path(hello_.pending_shaders_root()) / job.sources(0).uuid()
                 : fs::path{};
             const bool execution_matches = job.has_actions() &&
-                job.actions().actions_size() == (expected_actions_ ? 1 : 4) &&
-                job.actions().actions(0).has_activate_source();
+                job.actions().actions_size() == (expected_actions_ ? 2 : 4) &&
+                job.actions().actions(0).has_activate_source() &&
+                (!expected_actions_ || job.actions().actions(1).has_get_shader_status());
             valid_submit_.store(!source_path.empty() && execution_matches &&
                 job.context().weather_preset_id() == "clear" &&
                 job.context().settings_preset_id() == "quality" && job.context().resolution().width() == 1920 &&
@@ -77,6 +78,12 @@ private:
             result->set_manifest_path((artifact_root_ / "manifest.json").string());
             result->add_frame_ids(901);
             result->mutable_timings()->set_total_ms(17);
+            if (expected_actions_) {
+                auto* action_result = result->add_action_results();
+                action_result->set_action_index(1);
+                action_result->set_kind(proto::JOB_ACTION_KIND_GET_SHADER_STATUS);
+                action_result->set_json(R"({"loaded":true})");
+            }
             auto* artifact = result->add_artifacts();
             artifact->set_artifact_id("runtime-artifact");
             artifact->set_file_name("capture.png");

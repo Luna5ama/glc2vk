@@ -8,9 +8,12 @@ import dev.vibris.protocol.v1.ActivateSource;
 import dev.vibris.protocol.v1.ArtifactFormat;
 import dev.vibris.protocol.v1.ArtifactKind;
 import dev.vibris.protocol.v1.CaptureScreenshot;
-import dev.vibris.protocol.v1.DumpBuffer;
-import dev.vibris.protocol.v1.DumpTexture;
+import dev.vibris.protocol.v1.CaptureBuffer;
+import dev.vibris.protocol.v1.CaptureTexture;
 import dev.vibris.protocol.v1.ErrorCode;
+import dev.vibris.protocol.v1.EmptyAction;
+import dev.vibris.protocol.v1.GetGpuMetrics;
+import dev.vibris.protocol.v1.JobActionKind;
 import dev.vibris.protocol.v1.PreparedSourceRef;
 import dev.vibris.protocol.v1.SceneContext;
 import dev.vibris.protocol.v1.SubmitJob;
@@ -80,8 +83,8 @@ class RuntimeJobExecutorCaptureTest {
         Fixture fixture = new Fixture();
         fixture.runtime.catalog = new ResourceCatalog(List.of(
             resource("final", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 1, 16)));
-        ActionSequence actions = ActionSequence.newBuilder().addActions(Action.newBuilder().setDumpTexture(
-            DumpTexture.newBuilder().setLogicalName("missing").setFormat(ArtifactFormat.ARTIFACT_FORMAT_RAW)
+        ActionSequence actions = ActionSequence.newBuilder().addActions(Action.newBuilder().setCaptureTexture(
+            CaptureTexture.newBuilder().setLogicalName("missing").setFormat(ArtifactFormat.ARTIFACT_FORMAT_RAW)
                 .setArtifactName("missing"))).build();
 
         RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
@@ -154,14 +157,39 @@ class RuntimeJobExecutorCaptureTest {
         assertFalse(fixture.runtime.events.contains("capture"));
     }
 
+    @Test
+    void executesRuntimeActionsInOrderAndReturnsTypedResults() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.runtime.actionResponses.add("{\"loaded\":true}");
+        fixture.runtime.actionResponses.add("{\"p50\":1.25}");
+        ActionSequence actions = ActionSequence.newBuilder()
+            .addActions(Action.newBuilder().setGetShaderStatus(EmptyAction.getDefaultInstance()))
+            .addActions(Action.newBuilder().setGetGpuMetrics(GetGpuMetrics.newBuilder().setFrames(8)))
+            .build();
+
+        TerminalResult terminal = fixture.executor.execute(fixture.job(actions), ignored -> {});
+
+        assertEquals(List.of("link:A", "reload", "context", "action:ShaderStatus", "action:GpuMetrics"),
+            fixture.runtime.events);
+        assertEquals(List.of(1, 2), terminal.completed().getResult().getActionResultsList().stream()
+            .map(result -> result.getActionIndex()).toList());
+        assertEquals(List.of(JobActionKind.JOB_ACTION_KIND_GET_SHADER_STATUS,
+                JobActionKind.JOB_ACTION_KIND_GET_GPU_METRICS),
+            terminal.completed().getResult().getActionResultsList().stream()
+                .map(result -> result.getKind()).toList());
+        assertEquals(List.of("{\"loaded\":true}", "{\"p50\":1.25}"),
+            terminal.completed().getResult().getActionResultsList().stream()
+                .map(result -> result.getJson()).toList());
+    }
+
     private static ActionSequence bundleActions() {
         return ActionSequence.newBuilder()
             .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(2)))
             .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
                 .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setArtifactName("screenshot")))
-            .addActions(Action.newBuilder().setDumpTexture(DumpTexture.newBuilder().setLogicalName("colortex0")
+            .addActions(Action.newBuilder().setCaptureTexture(CaptureTexture.newBuilder().setLogicalName("colortex0")
                 .setFormat(ArtifactFormat.ARTIFACT_FORMAT_RAW).setArtifactName("colortex0")))
-            .addActions(Action.newBuilder().setDumpBuffer(DumpBuffer.newBuilder().setLogicalName("radiance_cache")
+            .addActions(Action.newBuilder().setCaptureBuffer(CaptureBuffer.newBuilder().setLogicalName("radiance_cache")
                 .setFormat(ArtifactFormat.ARTIFACT_FORMAT_BIN).setArtifactName("radiance_cache")))
             .build();
     }

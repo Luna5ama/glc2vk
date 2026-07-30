@@ -122,9 +122,9 @@ try
     $bundleActions = @(
         [ordered] @{ type = "wait_frames"; frames = 2 },
         [ordered] @{ type = "capture_screenshot"; format = "png"; artifact_name = "beauty" },
-        [ordered] @{ type = "dump_texture"; name = "colortex0"; format = "raw"; artifact_name = "colortex0" },
-        [ordered] @{ type = "dump_texture"; name = "depthtex0"; format = "raw"; artifact_name = "depthtex0" },
-        [ordered] @{ type = "dump_buffer"; name = "radiance_cache"; format = "bin"; artifact_name = "radiance_cache" }
+        [ordered] @{ type = "capture_texture"; name = "colortex0"; format = "raw"; artifact_name = "colortex0" },
+        [ordered] @{ type = "capture_texture"; name = "depthtex0"; format = "raw"; artifact_name = "depthtex0" },
+        [ordered] @{ type = "capture_buffer"; name = "radiance_cache"; format = "bin"; artifact_name = "radiance_cache" }
     )
     $bundleCommand = New-CoreSubmitCommand -MessageId "g006-c002-bundle" `
         -RequestId "g006-c002-bundle" -Sources @($sourceA) -Context $contextValue `
@@ -193,7 +193,7 @@ try
 
     $sourceB = New-IrisPreparedSource -Scope $scope -Source $sourceRoot
     $failureActions = @(
-        [ordered] @{ type = "dump_texture"; name = $AlsoRequest; format = "raw"; artifact_name = $AlsoRequest }
+        [ordered] @{ type = "capture_texture"; name = $AlsoRequest; format = "raw"; artifact_name = $AlsoRequest }
     )
     $failureCommand = New-CoreSubmitCommand -MessageId "g006-c002-missing" `
         -RequestId "g006-c002-missing" -Sources @($sourceB) -Context $contextValue `

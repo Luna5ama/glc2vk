@@ -85,16 +85,6 @@ bool GrpcClient::Impl::get_status(GetStatusCompletion completion) {
         });
 }
 
-bool GrpcClient::Impl::debug_control(proto::DebugControlRequest request, DebugControlCompletion completion,
-    const std::chrono::milliseconds deadline) {
-    return start_unary<proto::DebugControlRequest, proto::DebugControlResponse>(
-        std::move(request), std::move(completion),
-        [](proto::VibrisControl::Stub& stub, grpc::ClientContext& context,
-            const proto::DebugControlRequest& value, grpc::CompletionQueue& queue) {
-            return stub.AsyncDebugControl(&context, value, &queue);
-        }, deadline);
-}
-
 bool GrpcClient::get_server_info(GetServerInfoCompletion completion) {
     return impl_->get_server_info(std::move(completion));
 }

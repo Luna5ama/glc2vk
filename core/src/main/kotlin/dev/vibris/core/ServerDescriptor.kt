@@ -4,7 +4,6 @@ import dev.vibris.api.RuntimeStatus
 import dev.vibris.api.VibrisRuntimeAdapter
 import dev.vibris.protocol.v1.ArtifactFormat
 import dev.vibris.protocol.v1.Capability
-import dev.vibris.protocol.v1.DebugControlKind
 import dev.vibris.protocol.v1.JobActionKind
 import dev.vibris.protocol.v1.ResourceCatalog
 import dev.vibris.protocol.v1.ResourceCatalogEntry
@@ -33,28 +32,24 @@ internal class ServerDescriptor @JvmOverloads constructor(
                 JobActionKind.JOB_ACTION_KIND_RESET_TEMPORAL_STATE,
                 JobActionKind.JOB_ACTION_KIND_WAIT_FRAMES,
                 JobActionKind.JOB_ACTION_KIND_CAPTURE_SCREENSHOT,
-                JobActionKind.JOB_ACTION_KIND_DUMP_TEXTURE,
-                JobActionKind.JOB_ACTION_KIND_DUMP_BUFFER,
+                JobActionKind.JOB_ACTION_KIND_CAPTURE_TEXTURE,
+                JobActionKind.JOB_ACTION_KIND_CAPTURE_BUFFER,
                 JobActionKind.JOB_ACTION_KIND_ACTIVATE_SOURCE,
                 JobActionKind.JOB_ACTION_KIND_COMPARE_CAPTURES,
-            ),
-        )
-        .addAllSupportedDebugControls(
-            listOf(
-                DebugControlKind.DEBUG_CONTROL_KIND_CAPTURE_STATUS,
-                DebugControlKind.DEBUG_CONTROL_KIND_RELOAD_SHADER,
-                DebugControlKind.DEBUG_CONTROL_KIND_CAPTURE_PASS,
-                DebugControlKind.DEBUG_CONTROL_KIND_CAPTURE_MULTI,
-                DebugControlKind.DEBUG_CONTROL_KIND_SHADER_STATUS,
-                DebugControlKind.DEBUG_CONTROL_KIND_SHADER_ERRORS,
-                DebugControlKind.DEBUG_CONTROL_KIND_SCHEDULE_SCREENSHOT,
-                DebugControlKind.DEBUG_CONTROL_KIND_SCREENSHOT_RESULT,
-                DebugControlKind.DEBUG_CONTROL_KIND_GPU_METRICS,
-                DebugControlKind.DEBUG_CONTROL_KIND_LIST_SSBOS,
-                DebugControlKind.DEBUG_CONTROL_KIND_DUMP_SSBO,
-                DebugControlKind.DEBUG_CONTROL_KIND_LIST_TEXTURES,
-                DebugControlKind.DEBUG_CONTROL_KIND_DUMP_TEXTURE,
-                DebugControlKind.DEBUG_CONTROL_KIND_LIST_PATCHED_SHADERS,
+                JobActionKind.JOB_ACTION_KIND_GET_CAPTURE_STATUS,
+                JobActionKind.JOB_ACTION_KIND_RELOAD_SHADER,
+                JobActionKind.JOB_ACTION_KIND_CAPTURE_PASS,
+                JobActionKind.JOB_ACTION_KIND_CAPTURE_MULTI,
+                JobActionKind.JOB_ACTION_KIND_GET_SHADER_STATUS,
+                JobActionKind.JOB_ACTION_KIND_GET_SHADER_ERRORS,
+                JobActionKind.JOB_ACTION_KIND_SCHEDULE_SCREENSHOT,
+                JobActionKind.JOB_ACTION_KIND_GET_SCREENSHOT_RESULT,
+                JobActionKind.JOB_ACTION_KIND_GET_GPU_METRICS,
+                JobActionKind.JOB_ACTION_KIND_LIST_SSBOS,
+                JobActionKind.JOB_ACTION_KIND_DUMP_SSBO,
+                JobActionKind.JOB_ACTION_KIND_LIST_TEXTURES,
+                JobActionKind.JOB_ACTION_KIND_DUMP_TEXTURE,
+                JobActionKind.JOB_ACTION_KIND_LIST_PATCHED_SHADERS,
             ),
         )
         .addAllSupportedFormats(
@@ -74,14 +69,12 @@ internal class ServerDescriptor @JvmOverloads constructor(
         .addCapabilities(Capability.CAPABILITY_PREPARED_SOURCES)
         .addCapabilities(Capability.CAPABILITY_ACTION_SEQUENCE)
         .addCapabilities(Capability.CAPABILITY_ARTIFACT_METADATA)
-        .addCapabilities(Capability.CAPABILITY_DEBUG_CONTROL)
         .setLimits(
             ServerLimits.newBuilder()
                 .setMaxSourceBytes(maxSourceBytes)
                 .setMaxSourceFiles(maxSourceFiles),
         )
         .addAllSupportedJobActions(baseStatus.supportedJobActionsList)
-        .addAllSupportedDebugControls(baseStatus.supportedDebugControlsList)
         .addAllSupportedFormats(baseStatus.supportedFormatsList)
         .setPendingShadersRoot(pending.toString())
         .setArtifactRoot(artifacts.root().toString())

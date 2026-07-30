@@ -23,8 +23,8 @@ interface VibrisRuntimeAdapter : AutoCloseable {
 
     fun getStatus(): CompletionStage<RuntimeStatus>
 
-    fun debugControl(command: DebugControlCommand): CompletionStage<String> =
-        CompletableFuture.failedFuture(UnsupportedOperationException("Debug control is unavailable"))
+    fun executeAction(action: RuntimeAction): CompletionStage<String> =
+        CompletableFuture.failedFuture(UnsupportedOperationException("Runtime action is unavailable"))
 
     fun ensureWorldAndContext(
         context: SceneContext,

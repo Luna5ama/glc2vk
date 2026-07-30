@@ -26,8 +26,8 @@ internal object CapturePlanBuilder {
                     ),
                 )
             }
-            action.hasDumpTexture() -> {
-                val dump = action.dumpTexture
+            action.hasCaptureTexture() -> {
+                val dump = action.captureTexture
                 targets.add(
                     target(
                         ResourceCatalog.ResourceKind.TEXTURE,
@@ -39,8 +39,8 @@ internal object CapturePlanBuilder {
                     ),
                 )
             }
-            action.hasDumpBuffer() -> {
-                val dump = action.dumpBuffer
+            action.hasCaptureBuffer() -> {
+                val dump = action.captureBuffer
                 targets.add(
                     target(
                         ResourceCatalog.ResourceKind.BUFFER,

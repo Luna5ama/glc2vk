@@ -9,7 +9,6 @@
 #include <utility>
 
 #include "tool_argument_policy.hpp"
-#include "debug_tools.hpp"
 
 namespace vibris::mcp {
 namespace {
@@ -89,8 +88,14 @@ Json recipe_schema() {
 Json action_schema() {
     const Json artifact_name{{"type", "string"}, {"minLength", 1}};
     const Json resource_name{{"type", "string"}, {"minLength", 1}};
+    const Json config{{"type", "object"}};
+    const auto frames = bounded_integer(1, 10'000);
+    const auto index = bounded_integer(0, std::numeric_limits<std::uint32_t>::max());
+    const auto empty_action = [](const char* type) {
+        return closed_object({{"type", enum_string({type})}}, {"type"});
+    };
     return one_of({
-        closed_object({{"type", enum_string({"reset_temporal_state"})}}, {"type"}),
+        empty_action("reset_temporal_state"),
         closed_object({{"type", enum_string({"wait_frames"})},
                        {"frames", bounded_integer(1, std::numeric_limits<std::uint32_t>::max())}},
                       {"type", "frames"}),
@@ -98,16 +103,36 @@ Json action_schema() {
                        {"format", enum_string({"png"})},
                        {"artifact_name", artifact_name}},
                       {"type"}),
-        closed_object({{"type", enum_string({"dump_texture"})},
+        closed_object({{"type", enum_string({"capture_texture"})},
                        {"name", resource_name},
                        {"format", enum_string({"raw", "png"})},
                        {"artifact_name", artifact_name}},
                       {"type", "name", "format", "artifact_name"}),
-        closed_object({{"type", enum_string({"dump_buffer"})},
+        closed_object({{"type", enum_string({"capture_buffer"})},
                        {"name", resource_name},
                        {"format", enum_string({"bin"})},
                        {"artifact_name", artifact_name}},
                       {"type", "name", "format", "artifact_name"}),
+        empty_action("get_capture_status"),
+        closed_object({{"type", enum_string({"reload_shader"})}, {"config", config}}, {"type"}),
+        closed_object({{"type", enum_string({"capture_pass"})},
+                       {"pass", resource_name}, {"path", resource_name}}, {"type", "pass"}),
+        closed_object({{"type", enum_string({"capture_multi"})},
+                       {"capture_type", enum_string({"prepare", "begin", "deferred", "composite"})},
+                       {"path", resource_name}}, {"type", "capture_type"}),
+        empty_action("get_shader_status"),
+        empty_action("get_shader_errors"),
+        closed_object({{"type", enum_string({"schedule_screenshot"})}, {"frames", frames}}, {"type"}),
+        empty_action("get_screenshot_result"),
+        closed_object({{"type", enum_string({"get_gpu_metrics"})}, {"frames", frames}}, {"type", "frames"}),
+        empty_action("list_ssbos"),
+        closed_object({{"type", enum_string({"dump_ssbo"})}, {"index", index}}, {"type", "index"}),
+        empty_action("list_textures"),
+        closed_object({{"type", enum_string({"dump_texture"})}, {"name", resource_name},
+                       {"raw", {{"type", "boolean"}}}}, {"type", "name"}),
+        closed_object({{"type", enum_string({"dump_texture"})}, {"id", index},
+                       {"raw", {{"type", "boolean"}}}}, {"type", "id"}),
+        empty_action("list_patched_shaders"),
     });
 }
 
@@ -152,15 +177,14 @@ Json build_definitions() {
                    "when no existing recipe can express the request.",
                    recipe_schema(), false),
         definition("vibris_run_actions",
-                   "Advanced escape hatch for custom wait, capture, and dump sequences that recipes cannot express. "
-                   "Source and context activation remain system-managed, and all actions run as one non-interruptible "
-                   "job.",
+                   "Universal atomic action sequence for shader reload, capture, diagnostics, screenshots, GPU "
+                   "metrics, SSBOs, textures, and patched shaders. An optional source is activated before the listed "
+                   "actions; all actions run as one non-interruptible job and return ordered action_results.",
                    closed_object({{"source", source_schema()},
                                   {"config", {{"type", "object"}}},
                                   {"actions", {{"type", "array"}, {"items", action_schema()}, {"maxItems", 64}}}},
                                  {"actions"}), false),
     });
-    append_debug_tool_definitions(definitions);
     return definitions;
 }
 

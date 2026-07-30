@@ -7,8 +7,8 @@ import dev.vibris.protocol.v1.ActionSequence;
 import dev.vibris.protocol.v1.ArtifactFormat;
 import dev.vibris.protocol.v1.CaptureScreenshot;
 import dev.vibris.protocol.v1.CompareCaptures;
-import dev.vibris.protocol.v1.DumpBuffer;
-import dev.vibris.protocol.v1.DumpTexture;
+import dev.vibris.protocol.v1.CaptureBuffer;
+import dev.vibris.protocol.v1.CaptureTexture;
 import dev.vibris.protocol.v1.JobCompleted;
 import dev.vibris.protocol.v1.JobResultKind;
 import dev.vibris.protocol.v1.JobTimeouts;
@@ -67,10 +67,10 @@ final class ActionSequenceSurfaceTest {
                 .addActions(waitFrames(2))
                 .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
                     .setArtifactName("screenshot").setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)))
-                .addActions(Action.newBuilder().setDumpTexture(DumpTexture.newBuilder()
+                .addActions(Action.newBuilder().setCaptureTexture(CaptureTexture.newBuilder()
                     .setLogicalName("colortex0").setArtifactName("colortex0")
                     .setFormat(ArtifactFormat.ARTIFACT_FORMAT_RAW)))
-                .addActions(Action.newBuilder().setDumpBuffer(DumpBuffer.newBuilder()
+                .addActions(Action.newBuilder().setCaptureBuffer(CaptureBuffer.newBuilder()
                     .setLogicalName("radiance_cache").setArtifactName("radiance_cache")
                     .setFormat(ArtifactFormat.ARTIFACT_FORMAT_BIN)))).build());
             JobCompleted bundle = client.awaitCompleted("bundle");

@@ -26,8 +26,6 @@ public:
     bool list_presets(ListPresetsCompletion completion);
     bool validate_context(proto::ValidateContextRequest request, ValidateContextCompletion completion);
     bool get_status(GetStatusCompletion completion);
-    bool debug_control(proto::DebugControlRequest request, DebugControlCompletion completion,
-        std::chrono::milliseconds deadline);
     bool submit(proto::ClientMessage message, GrpcCompletion completion);
     bool cancel(std::string_view request_id, std::string reason);
     void shutdown();

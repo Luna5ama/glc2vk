@@ -195,8 +195,8 @@ void remaining_execution_mappings() {
             debug_actions.actions(0).activate_source().source_uuid() == one_source.front().uuid() &&
             debug_actions.actions(2).wait_frames().frame_count() == 5 &&
             debug_actions.actions(3).capture_screenshot().artifact_name() == "screenshot" &&
-            debug_actions.actions(4).dump_texture().logical_name() == "colortex5" &&
-            debug_actions.actions(5).dump_buffer().logical_name() == "debugSsbo",
+            debug_actions.actions(4).capture_texture().logical_name() == "colortex5" &&
+            debug_actions.actions(5).capture_buffer().logical_name() == "debugSsbo",
         "capture_debug_bundle was not expanded into runtime actions.");
 
     const std::vector two_sources{source("44444444-4444-4444-8444-444444444444"),
@@ -213,8 +213,8 @@ void remaining_execution_mappings() {
     require(ab_actions.actions_size() == 13 &&
             ab_actions.actions(0).activate_source().source_uuid() == two_sources[0].uuid() &&
             ab_actions.actions(3).capture_screenshot().format() == proto::ARTIFACT_FORMAT_PNG &&
-            ab_actions.actions(4).dump_texture().format() == proto::ARTIFACT_FORMAT_PNG &&
-            ab_actions.actions(5).dump_buffer().format() == proto::ARTIFACT_FORMAT_BIN &&
+            ab_actions.actions(4).capture_texture().format() == proto::ARTIFACT_FORMAT_PNG &&
+            ab_actions.actions(5).capture_buffer().format() == proto::ARTIFACT_FORMAT_BIN &&
             ab_actions.actions(6).activate_source().source_uuid() == two_sources[1].uuid() &&
             ab_actions.actions(12).compare_captures().baseline_label() == "baseline" &&
             ab_actions.actions(12).compare_captures().candidate_label() == "candidate",
@@ -224,9 +224,9 @@ void remaining_execution_mappings() {
         {{"type", "reset_temporal_state"}},
         {{"type", "wait_frames"}, {"frames", 3}},
         {{"type", "capture_screenshot"}, {"artifact_name", "beauty"}},
-        {{"type", "dump_texture"}, {"name", "colortex5"}, {"format", "raw"},
+        {{"type", "capture_texture"}, {"name", "colortex5"}, {"format", "raw"},
          {"artifact_name", "texture"}},
-        {{"type", "dump_buffer"}, {"name", "debugSsbo"}, {"format", "bin"},
+        {{"type", "capture_buffer"}, {"name", "debugSsbo"}, {"format", "bin"},
          {"artifact_name", "buffer"}},
     })}};
     const auto actions = JobProtocol::request(
@@ -236,8 +236,8 @@ void remaining_execution_mappings() {
             sequence.actions(1).has_reset_temporal_state() &&
             sequence.actions(2).wait_frames().frame_count() == 3 &&
             sequence.actions(3).capture_screenshot().format() == proto::ARTIFACT_FORMAT_PNG &&
-            sequence.actions(4).dump_texture().logical_name() == "colortex5" &&
-            sequence.actions(5).dump_buffer().artifact_name() == "buffer",
+            sequence.actions(4).capture_texture().logical_name() == "colortex5" &&
+            sequence.actions(5).capture_buffer().artifact_name() == "buffer",
         "Allowed action sequence was not mapped exactly.");
 }
 
@@ -331,6 +331,12 @@ void synchronous_submit_case(std::string_view tool_name, const Json& arguments, 
             result.at("timings").at("total_ms") == 17 &&
             result.at("kind") == (actions ? "action_sequence" : "reload_and_capture"),
         "Synchronous runner returned before or lost the terminal result.");
+    if (actions) {
+        require(result.at("action_results").size() == 1 &&
+                result.at("action_results").at(0).at("action_index") == 0 &&
+                result.at("action_results").at(0).at("kind") == "get_shader_status",
+            "MCP source activation leaked into the public action result index.");
+    }
     require(server.valid_submit() && server.submit_jobs() == 1 && server.terminal_writes() == 1,
         "Synchronous runner did not submit one complete job and consume exactly one terminal.");
     require(stats.pending_requests == 0 && vibris::mcp::test::pending_has_no_sources(fixture.pending()),
@@ -339,7 +345,26 @@ void synchronous_submit_case(std::string_view tool_name, const Json& arguments, 
 
 void synchronous_submit_waits_for_terminal() {
     synchronous_submit_case("vibris_run_recipe", {{"recipe", "reload_and_capture"}}, false);
-    synchronous_submit_case("vibris_run_actions", {{"actions", Json::array()}}, true);
+    synchronous_submit_case("vibris_run_actions",
+        {{"source", {{"kind", "workspace"}}},
+         {"actions", Json::array({{{"type", "get_shader_status"}}})}}, true);
+}
+
+void source_free_runtime_actions_mapping() {
+    const auto context = SceneContextResolver::resolve(config(), presets());
+    const Json arguments{{"actions", Json::array({
+        {{"type", "get_shader_status"}},
+        {{"type", "get_gpu_metrics"}, {"frames", 12}},
+    })}};
+
+    const auto message = JobProtocol::request(
+        "vibris_run_actions", arguments, config(), context, {}, "request-runtime-actions");
+    const auto& sequence = message.submit_job().actions();
+
+    require(message.submit_job().sources().empty() && sequence.actions_size() == 2 &&
+            sequence.actions(0).has_get_shader_status() &&
+            sequence.actions(1).get_gpu_metrics().frames() == 12,
+        "Source-free runtime controls were not encoded as one action sequence.");
 }
 
 void title_screen_runtime_can_prepare_source_for_world_loading_job() {
@@ -568,6 +593,14 @@ void completed_mapping() {
     artifact->set_media_type("image/png");
     artifact->set_byte_size(128);
     artifact->set_path(artifact_path);
+    auto* status = result->add_action_results();
+    status->set_action_index(1);
+    status->set_kind(proto::JOB_ACTION_KIND_GET_SHADER_STATUS);
+    status->set_json(R"({"loaded":true})");
+    auto* metrics = result->add_action_results();
+    metrics->set_action_index(2);
+    metrics->set_kind(proto::JOB_ACTION_KIND_GET_GPU_METRICS);
+    metrics->set_json(R"({"p50":1.25})");
 
     const auto outcome = JobProtocol::terminal(message);
     const auto& mapped = std::get<Json>(outcome);
@@ -583,6 +616,13 @@ void completed_mapping() {
     require(mapped.at("artifacts").at(0).at("path") == artifact_path &&
             mapped.at("manifest_path") == manifest_path,
         "Absolute artifact or manifest paths were not preserved.");
+    require(mapped.at("action_results").size() == 2 &&
+            mapped.at("action_results").at(0).at("action_index") == 1 &&
+            mapped.at("action_results").at(0).at("kind") == "get_shader_status" &&
+            mapped.at("action_results").at(0).at("result").at("loaded") == true &&
+            mapped.at("action_results").at(1).at("kind") == "get_gpu_metrics" &&
+            mapped.at("action_results").at(1).at("result").at("p50") == 1.25,
+        "Ordered runtime action results were not preserved.");
 }
 
 void artifact_free_completed_mapping() {
@@ -624,6 +664,7 @@ int main() {
         incomplete_preset_rejected();
         default_settings_disambiguates_scene_presets();
         empty_actions_mapping();
+        source_free_runtime_actions_mapping();
         progress_does_not_consume_terminal();
         synchronous_submit_waits_for_terminal();
         title_screen_runtime_can_prepare_source_for_world_loading_job();

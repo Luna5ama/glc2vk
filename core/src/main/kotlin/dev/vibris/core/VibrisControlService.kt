@@ -2,8 +2,6 @@ package dev.vibris.core
 
 import dev.vibris.api.VibrisRuntimeAdapter
 import dev.vibris.protocol.v1.ClientMessage
-import dev.vibris.protocol.v1.DebugControlRequest
-import dev.vibris.protocol.v1.DebugControlResponse
 import dev.vibris.protocol.v1.ErrorCode
 import dev.vibris.protocol.v1.GetServerInfoRequest
 import dev.vibris.protocol.v1.GetServerInfoResponse
@@ -127,26 +125,6 @@ class VibrisControlService internal constructor(
         val status = descriptor.status(engine)
         observer.onNext(GetStatusResponse.newBuilder().setReady(status.runtimeReady).setStatus(status).build())
         observer.onCompleted()
-    }
-
-    override fun debugControl(
-        request: DebugControlRequest,
-        observer: StreamObserver<DebugControlResponse>,
-    ) {
-        val command = try {
-            DebugControlProtocol.toApi(request)
-        } catch (exception: IllegalArgumentException) {
-            observer.onError(Status.INVALID_ARGUMENT.withDescription(exception.message).asRuntimeException())
-            return
-        }
-        runtime.debugControl(command).whenComplete { json, failure ->
-            if (failure != null) {
-                observer.onError(Status.INTERNAL.withDescription(failure.message).withCause(failure).asRuntimeException())
-                return@whenComplete
-            }
-            observer.onNext(DebugControlResponse.newBuilder().setJson(json).build())
-            observer.onCompleted()
-        }
     }
 
     override fun control(responses: StreamObserver<ServerMessage>): StreamObserver<ClientMessage> {

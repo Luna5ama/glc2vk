@@ -21,7 +21,7 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
         var estimatedBytes = 0L
         var captureCount = 0
         var comparisons = 0
-        for (action in job.submission.actions.actionsList) {
+        for ((actionIndex, action) in job.submission.actions.actionsList.withIndex()) {
             when {
                 action.hasActivateSource() -> {
                     estimatedBytes = flush(group, steps, catalog, artifactNames, estimatedBytes)
@@ -38,7 +38,7 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                     if (action.waitFrames.frameCount <= 0) throw invalid("Frame count must be positive.")
                     steps.add(ActionStep.waitFrames(action.waitFrames.frameCount))
                 }
-                action.hasCaptureScreenshot() || action.hasDumpTexture() || action.hasDumpBuffer() ->
+                action.hasCaptureScreenshot() || action.hasCaptureTexture() || action.hasCaptureBuffer() ->
                     CapturePlanBuilder.addAction(group, action, catalog)
                 action.hasCompareCaptures() -> {
                     estimatedBytes = flush(group, steps, catalog, artifactNames, estimatedBytes)
@@ -63,12 +63,17 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                         ),
                     )
                 }
+                RuntimeActionProtocol.isRuntime(action) -> {
+                    estimatedBytes = flush(group, steps, catalog, artifactNames, estimatedBytes)
+                    steps.add(ActionStep.runtime(actionIndex, action))
+                }
                 else -> throw invalid("Action is not supported.")
             }
         }
         estimatedBytes = flush(group, steps, catalog, artifactNames, estimatedBytes)
-        if (steps.firstOrNull()?.type != ActionType.ACTIVATE) {
-            throw invalid("Action sequence must start by activating a prepared source.")
+        val firstActivation = steps.indexOfFirst { it.type == ActionType.ACTIVATE }
+        if (firstActivation > 0) {
+            throw invalid("Source activation must be the first action.")
         }
         return ActionProgram(java.util.List.copyOf(steps), estimatedBytes)
     }
@@ -79,6 +84,7 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
         WAIT,
         CAPTURE,
         COMPARE,
+        RUNTIME,
     }
 
     @JvmRecord
@@ -88,13 +94,18 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
         val frames: Int,
         val capture: CapturePlan?,
         val comparison: Comparison?,
+        val actionIndex: Int,
+        val runtimeAction: dev.vibris.protocol.v1.Action?,
     ) {
         companion object {
-            fun activate(uuid: String) = ActionStep(ActionType.ACTIVATE, uuid, 0, null, null)
-            fun reset() = ActionStep(ActionType.RESET, null, 0, null, null)
-            fun waitFrames(frames: Int) = ActionStep(ActionType.WAIT, null, frames, null, null)
-            fun capture(capture: CapturePlan) = ActionStep(ActionType.CAPTURE, null, 0, capture, null)
-            fun compare(comparison: Comparison) = ActionStep(ActionType.COMPARE, null, 0, null, comparison)
+            fun activate(uuid: String) = ActionStep(ActionType.ACTIVATE, uuid, 0, null, null, -1, null)
+            fun reset() = ActionStep(ActionType.RESET, null, 0, null, null, -1, null)
+            fun waitFrames(frames: Int) = ActionStep(ActionType.WAIT, null, frames, null, null, -1, null)
+            fun capture(capture: CapturePlan) = ActionStep(ActionType.CAPTURE, null, 0, capture, null, -1, null)
+            fun compare(comparison: Comparison) =
+                ActionStep(ActionType.COMPARE, null, 0, null, comparison, -1, null)
+            fun runtime(actionIndex: Int, action: dev.vibris.protocol.v1.Action) =
+                ActionStep(ActionType.RUNTIME, null, 0, null, null, actionIndex, action)
         }
     }
 

@@ -4,6 +4,7 @@ import dev.vibris.api.CaptureResult
 import dev.vibris.api.ReloadResult
 import dev.vibris.api.VibrisRuntimeAdapter
 import dev.vibris.protocol.v1.AbComparisonResult
+import dev.vibris.protocol.v1.ActionResult
 import dev.vibris.protocol.v1.ErrorCode
 import dev.vibris.protocol.v1.JobResult
 import dev.vibris.protocol.v1.JobResultKind
@@ -20,17 +21,16 @@ internal class ActionJobExecutor(
     @Throws(RuntimeJobExecutor.Failure::class)
     fun execute(job: CoreJob, progress: Consumer<JobStage>, deadline: Long): JobResult {
         val first = job.submission.actions.actionsList.firstOrNull()
-        if (first == null || !first.hasActivateSource()) {
-            throw RuntimeJobExecutor.Failure(
-                ErrorCode.SOURCE_ACTIVATION_FAILED,
-                "Action sequence must start by activating a prepared source.",
-            )
+        var reload = if (first != null && first.hasActivateSource()) {
+            activate(job, first.activateSource.sourceUuid, progress, deadline)
+        } else {
+            ReloadResult.success(emptyList())
         }
-        var reload = activate(job, first.activateSource.sourceUuid, progress, deadline)
         val action = captures.prepareActions(job, runtime.getResourceCatalog(), reload.diagnostics)
         val prepared = action.prepared
         val diagnostics = ArrayList(reload.diagnostics)
         val results = ArrayList<CaptureResult>()
+        val actionResults = ArrayList<ActionResult>()
         var comparison: AbComparisonResult? = null
         var firstActivation = true
         try {
@@ -58,6 +58,21 @@ internal class ActionJobExecutor(
                             probe.event(job.requestId, "COMPARING")
                             comparison = captures.compare(prepared, step.comparison!!)
                         }
+                        CaptureProgramBuilder.ActionType.RUNTIME -> {
+                            val action = step.runtimeAction!!
+                            val json = owner.await(
+                                runtime.executeAction(RuntimeActionProtocol.toApi(action)),
+                                job,
+                                deadline,
+                            )
+                            actionResults.add(
+                                ActionResult.newBuilder()
+                                    .setActionIndex(step.actionIndex)
+                                    .setKind(RuntimeActionProtocol.kind(action))
+                                    .setJson(json)
+                                    .build(),
+                            )
+                        }
                     }
                 }
             }
@@ -65,6 +80,7 @@ internal class ActionJobExecutor(
                 executeSteps()
                 val result = JobResult.newBuilder().setKind(JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE)
                 CaptureProtocolArtifacts.addDiagnostics(result, diagnostics, "")
+                result.addAllActionResults(actionResults)
                 return result.build()
             }
             prepared.use {
@@ -73,7 +89,9 @@ internal class ActionJobExecutor(
                 probe.event(job.requestId, "WRITING_ARTIFACTS")
                 progress.accept(JobStage.JOB_STAGE_FINALIZING)
                 probe.event(job.requestId, "FINALIZING")
-                return captures.commit(job, prepared, results, comparison)
+                return captures.commit(job, prepared, results, comparison).toBuilder()
+                    .addAllActionResults(actionResults)
+                    .build()
             }
         } catch (exception: IOException) {
             throw CaptureJobExecutor.failure(exception)
