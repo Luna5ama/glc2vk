@@ -107,6 +107,21 @@ class VibrisBootstrapTest {
     }
 
     @Test
+    void configuredRootUsesARealWriteProbe() throws Exception {
+        String externalRoot = System.getenv("VIBRIS_TEST_WRITABLE_ROOT");
+        Path pending = externalRoot == null
+            ? Files.createDirectory(temp.resolve("writable-pending"))
+            : Path.of(externalRoot);
+        Path artifacts = Files.createDirectory(temp.resolve("writable-artifacts"));
+        Path shaderpack = Files.createDirectory(temp.resolve("writable-shaderpack"));
+        writeServerConfig(temp, pending, artifacts, shaderpack, 50123);
+
+        ServerConfiguration configuration = ServerConfiguration.Companion.load(temp);
+
+        assertEquals(pending.toAbsolutePath().normalize(), configuration.getPaths().pendingShadersRoot());
+    }
+
+    @Test
     void notReadyStatusIsQueryableOverLoopbackGrpc() throws Exception {
         int port;
         try (ServerSocket reservation = new ServerSocket(0)) {

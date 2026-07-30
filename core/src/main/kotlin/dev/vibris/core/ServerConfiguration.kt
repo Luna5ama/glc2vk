@@ -150,10 +150,14 @@ internal data class ServerConfiguration(
         private fun requireWritableDirectory(path: Path, field: String) {
             require(
                 Files.isDirectory(path, NOFOLLOW_LINKS) &&
-                    !Files.isSymbolicLink(path) &&
-                    Files.isWritable(path),
+                    !Files.isSymbolicLink(path),
             ) {
                 "$field is missing or not writable"
+            }
+            try {
+                Files.delete(Files.createTempFile(path, ".vibris-write-probe-", ".tmp"))
+            } catch (exception: IOException) {
+                throw IllegalArgumentException("$field is missing or not writable", exception)
             }
         }
 
