@@ -578,35 +578,52 @@ enum ScalarType {
 }
 
 message DebugControlRequest {
-    DebugOperation operation = 1;
-    string pass = 2;
-    string path = 3;
-    uint32 frames = 4;
-    uint32 index = 5;
-    optional string texture_name = 6;
-    optional uint32 texture_id = 7;
-    bool raw = 8;
-    string capture_type = 9;
+    oneof command {
+        DebugEmpty capture_status = 1;
+        DebugEmpty reload_shader = 2;
+        DebugCapturePass capture_pass = 3;
+        DebugCaptureMulti capture_multi = 4;
+        DebugEmpty shader_status = 5;
+        DebugEmpty shader_errors = 6;
+        DebugScheduleScreenshot schedule_screenshot = 7;
+        DebugEmpty screenshot_result = 8;
+        DebugEmpty gpu_metrics = 9;
+        DebugEmpty list_ssbos = 10;
+        DebugDumpSsbo dump_ssbo = 11;
+        DebugEmpty list_textures = 12;
+        DebugDumpTexture dump_texture = 13;
+        DebugEmpty list_patched_shaders = 14;
+    }
+}
+
+message DebugEmpty {}
+
+message DebugCapturePass {
+    string pass = 1;
+    optional string path = 2;
+}
+
+message DebugCaptureMulti {
+    string type = 1;
+    optional string path = 2;
+}
+
+message DebugScheduleScreenshot {
+    uint32 frames = 1;
+}
+
+message DebugDumpSsbo {
+    uint32 index = 1;
+}
+
+message DebugDumpTexture {
+    oneof selector {
+        string name = 1;
+        uint32 id = 2;
+    }
+    bool raw = 3;
 }
 
 message DebugControlResponse {
     string json = 1;
-}
-
-enum DebugOperation {
-    DEBUG_OPERATION_UNSPECIFIED = 0;
-    DEBUG_OPERATION_CAPTURE_STATUS = 1;
-    DEBUG_OPERATION_RELOAD_SHADER = 2;
-    DEBUG_OPERATION_CAPTURE_PASS = 3;
-    DEBUG_OPERATION_CAPTURE_MULTI = 4;
-    DEBUG_OPERATION_SHADER_STATUS = 5;
-    DEBUG_OPERATION_SHADER_ERRORS = 6;
-    DEBUG_OPERATION_SCHEDULE_SCREENSHOT = 7;
-    DEBUG_OPERATION_SCREENSHOT_RESULT = 8;
-    DEBUG_OPERATION_GPU_METRICS = 9;
-    DEBUG_OPERATION_LIST_SSBOS = 10;
-    DEBUG_OPERATION_DUMP_SSBO = 11;
-    DEBUG_OPERATION_LIST_TEXTURES = 12;
-    DEBUG_OPERATION_DUMP_TEXTURE = 13;
-    DEBUG_OPERATION_LIST_PATCHED_SHADERS = 14;
 }

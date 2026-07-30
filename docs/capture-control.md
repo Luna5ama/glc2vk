@@ -192,7 +192,7 @@ content item and matching structured content.
 | `vibris_run_recipe` | one recipe form below | synchronous terminal job result and artifact metadata |
 | `vibris_run_actions` | optional source plus up to 64 actions | synchronous terminal job result and artifact metadata |
 
-The legacy capture/debug controls are exposed through the same MCP and gRPC connection:
+Capture and shader-debug controls use the same MCP and gRPC connection:
 
 | Tools | Purpose |
 |-------|---------|

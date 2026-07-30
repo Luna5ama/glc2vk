@@ -1,50 +1,45 @@
 #include "debug_protocol.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
 #include <nlohmann/json.hpp>
 
 namespace vibris::mcp {
-namespace {
-
 namespace control = ::vibris::control::v1;
 
-control::DebugOperation operation(const std::string_view name) {
-    if (name == "vibris_get_capture_status") return control::DEBUG_OPERATION_CAPTURE_STATUS;
-    if (name == "vibris_reload_shader") return control::DEBUG_OPERATION_RELOAD_SHADER;
-    if (name == "vibris_capture_pass") return control::DEBUG_OPERATION_CAPTURE_PASS;
-    if (name == "vibris_capture_multi") return control::DEBUG_OPERATION_CAPTURE_MULTI;
-    if (name == "vibris_get_shader_status") return control::DEBUG_OPERATION_SHADER_STATUS;
-    if (name == "vibris_get_shader_errors") return control::DEBUG_OPERATION_SHADER_ERRORS;
-    if (name == "vibris_schedule_screenshot") return control::DEBUG_OPERATION_SCHEDULE_SCREENSHOT;
-    if (name == "vibris_get_screenshot_result") return control::DEBUG_OPERATION_SCREENSHOT_RESULT;
-    if (name == "vibris_get_gpu_metrics") return control::DEBUG_OPERATION_GPU_METRICS;
-    if (name == "vibris_list_ssbos") return control::DEBUG_OPERATION_LIST_SSBOS;
-    if (name == "vibris_dump_ssbo") return control::DEBUG_OPERATION_DUMP_SSBO;
-    if (name == "vibris_list_textures") return control::DEBUG_OPERATION_LIST_TEXTURES;
-    if (name == "vibris_dump_texture") return control::DEBUG_OPERATION_DUMP_TEXTURE;
-    if (name == "vibris_list_patched_shaders") return control::DEBUG_OPERATION_LIST_PATCHED_SHADERS;
-    throw std::invalid_argument("Unknown debug tool");
-}
-
-}
-
-control::DebugControlRequest DebugProtocol::request(
+std::optional<control::DebugControlRequest> DebugProtocol::request(
     const std::string_view tool_name, const nlohmann::json& arguments) {
     control::DebugControlRequest request;
-    request.set_operation(operation(tool_name));
-    if (tool_name == "vibris_capture_pass") request.set_pass(arguments.at("pass").get<std::string>());
-    if (tool_name == "vibris_capture_multi") request.set_capture_type(arguments.at("type").get<std::string>());
-    if (arguments.contains("path")) request.set_path(arguments.at("path").get<std::string>());
-    if (tool_name == "vibris_schedule_screenshot") request.set_frames(arguments.value("frames", 1));
-    if (tool_name == "vibris_dump_ssbo") request.set_index(arguments.value("index", 0));
-    if (tool_name == "vibris_dump_texture") {
-        if (arguments.contains("name")) request.set_texture_name(arguments.at("name").get<std::string>());
-        if (arguments.contains("id")) request.set_texture_id(arguments.at("id").get<std::uint32_t>());
-        request.set_raw(arguments.value("raw", false));
-    }
+    if (tool_name == "vibris_get_capture_status") request.mutable_capture_status();
+    else if (tool_name == "vibris_reload_shader") request.mutable_reload_shader();
+    else if (tool_name == "vibris_capture_pass") {
+        auto& command = *request.mutable_capture_pass();
+        command.set_pass(arguments.at("pass").get<std::string>());
+        if (arguments.contains("path")) command.set_path(arguments.at("path").get<std::string>());
+    } else if (tool_name == "vibris_capture_multi") {
+        auto& command = *request.mutable_capture_multi();
+        command.set_type(arguments.at("type").get<std::string>());
+        if (arguments.contains("path")) command.set_path(arguments.at("path").get<std::string>());
+    } else if (tool_name == "vibris_get_shader_status") request.mutable_shader_status();
+    else if (tool_name == "vibris_get_shader_errors") request.mutable_shader_errors();
+    else if (tool_name == "vibris_schedule_screenshot") {
+        request.mutable_schedule_screenshot()->set_frames(arguments.value("frames", 1));
+    } else if (tool_name == "vibris_get_screenshot_result") request.mutable_screenshot_result();
+    else if (tool_name == "vibris_get_gpu_metrics") request.mutable_gpu_metrics();
+    else if (tool_name == "vibris_list_ssbos") request.mutable_list_ssbos();
+    else if (tool_name == "vibris_dump_ssbo") {
+        request.mutable_dump_ssbo()->set_index(arguments.at("index").get<std::uint32_t>());
+    } else if (tool_name == "vibris_list_textures") request.mutable_list_textures();
+    else if (tool_name == "vibris_dump_texture") {
+        auto& command = *request.mutable_dump_texture();
+        if (arguments.contains("name")) command.set_name(arguments.at("name").get<std::string>());
+        else command.set_id(arguments.at("id").get<std::uint32_t>());
+        command.set_raw(arguments.value("raw", false));
+    } else if (tool_name == "vibris_list_patched_shaders") request.mutable_list_patched_shaders();
+    else return std::nullopt;
     return request;
 }
 

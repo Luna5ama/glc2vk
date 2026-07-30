@@ -1,3 +1,4 @@
+#include "debug_protocol.hpp"
 #include "tool_registry.hpp"
 
 #include <array>
@@ -6,12 +7,14 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 
 using vibris::mcp::InvocationError;
 using vibris::mcp::InvocationErrorCode;
 using vibris::mcp::Json;
+using vibris::mcp::DebugProtocol;
 using vibris::mcp::ToolRegistry;
 
 void require(bool condition, std::string_view message) {
@@ -108,6 +111,44 @@ void debug_tool_schemas_reject_invalid_arguments() {
     require(dispatches == 1, "Invalid debug arguments reached dispatch.");
 }
 
+void debug_tools_map_to_distinct_typed_commands() {
+    const std::array calls{
+        std::pair{"vibris_get_capture_status", Json::object()},
+        std::pair{"vibris_reload_shader", Json::object()},
+        std::pair{"vibris_capture_pass", Json{{"pass", "begin1"}, {"path", "vibris/capture"}}},
+        std::pair{"vibris_capture_multi", Json{{"type", "begin"}}},
+        std::pair{"vibris_get_shader_status", Json::object()},
+        std::pair{"vibris_get_shader_errors", Json::object()},
+        std::pair{"vibris_schedule_screenshot", Json::object()},
+        std::pair{"vibris_get_screenshot_result", Json::object()},
+        std::pair{"vibris_get_gpu_metrics", Json::object()},
+        std::pair{"vibris_list_ssbos", Json::object()},
+        std::pair{"vibris_dump_ssbo", Json{{"index", 3}}},
+        std::pair{"vibris_list_textures", Json::object()},
+        std::pair{"vibris_dump_texture", Json{{"name", "colortex0"}, {"raw", true}}},
+        std::pair{"vibris_list_patched_shaders", Json::object()},
+    };
+    std::set<vibris::control::v1::DebugControlRequest::CommandCase> command_cases;
+    for (const auto& [name, arguments] : calls) {
+        const auto request = DebugProtocol::request(name, arguments);
+        require(request.has_value(), "Advertised debug tool did not map to a request.");
+        require(request->command_case() != vibris::control::v1::DebugControlRequest::COMMAND_NOT_SET,
+                "Debug tool produced an empty command.");
+        command_cases.insert(request->command_case());
+    }
+    require(command_cases.size() == calls.size(), "Two debug tools mapped to the same command variant.");
+    require(!DebugProtocol::request("vibris_unknown", Json::object()).has_value(),
+            "Unknown tool mapped to a debug command.");
+
+    const auto pass = DebugProtocol::request("vibris_capture_pass", calls[2].second);
+    require(pass->capture_pass().pass() == "begin1" && pass->capture_pass().path() == "vibris/capture",
+            "Capture pass arguments were not isolated in its command.");
+    const auto texture = DebugProtocol::request("vibris_dump_texture", calls[12].second);
+    require(texture->dump_texture().selector_case() == vibris::control::v1::DebugDumpTexture::kName &&
+                texture->dump_texture().name() == "colortex0" && texture->dump_texture().raw(),
+            "Texture arguments were not isolated in its command.");
+}
+
 void registry_declares_accurate_tool_annotations() {
     ToolRegistry registry;
     const std::set<std::string> read_only{
@@ -131,6 +172,7 @@ int main() {
         schema_rejects_before_dispatch();
         registry_has_exactly_the_supported_tools();
         debug_tool_schemas_reject_invalid_arguments();
+        debug_tools_map_to_distinct_typed_commands();
         registry_declares_accurate_tool_annotations();
         std::cout << "PASS ActionSchemaRejectsForbiddenAndDuplicateTools\n";
         return 0;

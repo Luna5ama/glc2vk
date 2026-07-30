@@ -1,7 +1,5 @@
 #include "debug_tools.hpp"
 
-#include <algorithm>
-#include <array>
 #include <cstdint>
 #include <initializer_list>
 #include <limits>
@@ -31,12 +29,6 @@ Json integer() {
     return {{"type", "integer"}, {"minimum", 0}, {"maximum", std::numeric_limits<std::int32_t>::max()}};
 }
 
-constexpr std::array names{
-    "vibris_get_capture_status", "vibris_reload_shader", "vibris_capture_pass", "vibris_capture_multi",
-    "vibris_get_shader_status", "vibris_get_shader_errors", "vibris_schedule_screenshot",
-    "vibris_get_screenshot_result", "vibris_get_gpu_metrics", "vibris_list_ssbos", "vibris_dump_ssbo",
-    "vibris_list_textures", "vibris_dump_texture", "vibris_list_patched_shaders"};
-
 }
 
 void append_debug_tool_definitions(Json& definitions) {
@@ -49,7 +41,7 @@ void append_debug_tool_definitions(Json& definitions) {
                            {closed_object({{"name", text}, {"raw", raw}}, {"name"}),
                             closed_object({{"id", integer()}, {"raw", raw}}, {"id"})}}};
 
-    definitions.push_back(definition("vibris_get_capture_status", "Read legacy compute capture state.", empty, true));
+    definitions.push_back(definition("vibris_get_capture_status", "Read compute capture state.", empty, true));
     definitions.push_back(definition("vibris_reload_shader", "Reload the active shader and return shader errors.", empty, false));
     definitions.push_back(definition("vibris_capture_pass", "Queue one compute pass capture for the next frame.",
                                      closed_object({{"pass", text}, {"path", path}}, {"pass"}), false));
@@ -71,10 +63,6 @@ void append_debug_tool_definitions(Json& definitions) {
     definitions.push_back(definition("vibris_list_textures", "List active render and custom textures.", empty, true));
     definitions.push_back(definition("vibris_dump_texture", "Dump a texture by logical name or OpenGL id.", texture, false));
     definitions.push_back(definition("vibris_list_patched_shaders", "List patched shader debug files.", empty, true));
-}
-
-bool is_debug_tool(const std::string_view name) noexcept {
-    return std::find(names.begin(), names.end(), name) != names.end();
 }
 
 }
