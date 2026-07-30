@@ -3,11 +3,14 @@ package dev.luna5ama.vibris.capture
 import dev.vibris.api.ContextValidationResult
 import dev.vibris.api.SceneContext
 import dev.vibris.api.ScenePreset
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.double
 import kotlinx.serialization.json.float
 import kotlinx.serialization.json.int
@@ -16,18 +19,50 @@ import kotlinx.serialization.json.long
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.util.HashMap
 import java.util.HashSet
 
 class VibrisPresetCatalog private constructor(
+    private val path: Path,
     times: Map<String, TimePreset>,
     worlds: Map<String, WorldPreset>,
     settings: Set<String>,
 ) {
-    private val times = java.util.Map.copyOf(times)
-    private val worlds = java.util.Map.copyOf(worlds)
+    @Volatile
+    private var times = java.util.Map.copyOf(times)
+
+    @Volatile
+    private var worlds = java.util.Map.copyOf(worlds)
+
     private val settings = java.util.Set.copyOf(settings)
 
+    @Synchronized
+    fun save(snapshot: PresetSnapshot): String {
+        val setting = settings.minOrNull() ?: throw IllegalStateException("No settings preset is configured")
+        val updatedTimes = HashMap(times)
+        updatedTimes[snapshot.id] = TimePreset(snapshot.tick, snapshot.weather)
+
+        val existingWorld = worlds.entries.firstOrNull { it.value.saveName == snapshot.saveName }
+        val worldId = existingWorld?.key ?: snapshot.saveName
+        val oldWorld = existingWorld?.value ?: WorldPreset(snapshot.saveName, emptySet(), emptyMap())
+        val updatedCameras = HashMap(oldWorld.cameras)
+        updatedCameras[snapshot.id] = snapshot.camera
+        val updatedWorld = WorldPreset(
+            oldWorld.saveName,
+            oldWorld.dimensions + snapshot.dimensionId,
+            updatedCameras,
+        )
+        val updatedWorlds = HashMap(worlds)
+        updatedWorlds[worldId] = updatedWorld
+
+        write(path, updatedTimes, updatedWorlds, settings)
+        times = java.util.Map.copyOf(updatedTimes)
+        worlds = java.util.Map.copyOf(updatedWorlds)
+        return listOf(worldId, snapshot.dimensionId, snapshot.id, snapshot.id, setting).joinToString("/")
+    }
+
+    @Synchronized
     fun resolve(context: SceneContext): ResolvedContext {
         val world = requirePreset(worlds, context.saveId, "save")
         if (!world.dimensions.contains(context.dimensionId)) {
@@ -47,6 +82,7 @@ class VibrisPresetCatalog private constructor(
         return ResolvedContext(world.saveName, time.tick, time.weather, camera)
     }
 
+    @Synchronized
     fun presets(): List<ScenePreset> {
         val result = ArrayList<ScenePreset>()
         val worldEntries = worlds.entries.sortedBy { it.key }
@@ -81,6 +117,7 @@ class VibrisPresetCatalog private constructor(
         return java.util.List.copyOf(result)
     }
 
+    @Synchronized
     fun validate(context: SceneContext): ContextValidationResult {
         return try {
             val world = requirePreset(worlds, context.saveId, "save")
@@ -122,6 +159,24 @@ class VibrisPresetCatalog private constructor(
         val pitch: Float,
     )
 
+    @JvmRecord
+    data class PresetSnapshot(
+        val id: String,
+        val saveName: String,
+        val dimensionId: String,
+        val tick: Long,
+        val weather: String,
+        val camera: CameraPreset,
+    ) {
+        init {
+            require(id.isNotBlank() && '/' !in id) { "Invalid preset id" }
+            require(saveName.isNotBlank() && dimensionId.isNotBlank()) { "World preset fields are blank" }
+            require(weather == "clear" || weather == "rain" || weather == "thunder") {
+                "Unknown weather preset: $weather"
+            }
+        }
+    }
+
     private data class TimePreset(
         val tick: Long,
         val weather: String,
@@ -143,7 +198,7 @@ class VibrisPresetCatalog private constructor(
                 if (integer(root, "schema_version") != 1) {
                     throw IOException("Unsupported Vibris preset schema")
                 }
-                return VibrisPresetCatalog(parseTimes(root), parseWorlds(root), parseSettings(root))
+                return VibrisPresetCatalog(path, parseTimes(root), parseWorlds(root), parseSettings(root))
             } catch (exception: RuntimeException) {
                 throw IOException("Invalid Vibris preset file: $path", exception)
             }
@@ -243,6 +298,69 @@ class VibrisPresetCatalog private constructor(
         private fun <T> putUnique(values: MutableMap<String, T>, id: String, value: T) {
             if (values.putIfAbsent(id, value) != null) {
                 throw IllegalArgumentException("Duplicate preset id: $id")
+            }
+        }
+
+        @OptIn(ExperimentalSerializationApi::class)
+        private fun write(
+            path: Path,
+            times: Map<String, TimePreset>,
+            worlds: Map<String, WorldPreset>,
+            settings: Set<String>,
+        ) {
+            val root = buildJsonObject {
+                put("schema_version", JsonPrimitive(1))
+                put("time_presets", buildJsonArray {
+                    for ((id, time) in times.toSortedMap()) add(buildJsonObject {
+                        put("id", JsonPrimitive(id))
+                        put("tick", JsonPrimitive(time.tick))
+                        put("weather", JsonPrimitive(time.weather))
+                    })
+                })
+                put("settings_presets", buildJsonArray {
+                    for (id in settings.sorted()) add(buildJsonObject { put("id", JsonPrimitive(id)) })
+                })
+                put("worlds", buildJsonArray {
+                    for ((id, world) in worlds.toSortedMap()) add(buildJsonObject {
+                        put("id", JsonPrimitive(id))
+                        put("save_name", JsonPrimitive(world.saveName))
+                        put("dimensions", buildJsonArray {
+                            for (dimension in world.dimensions.sorted()) add(JsonPrimitive(dimension))
+                        })
+                        put("cameras", buildJsonArray {
+                            for ((cameraId, camera) in world.cameras.toSortedMap()) add(buildJsonObject {
+                                put("id", JsonPrimitive(cameraId))
+                                put("dimension_id", JsonPrimitive(camera.dimensionId))
+                                put("position", buildJsonArray {
+                                    add(JsonPrimitive(camera.x))
+                                    add(JsonPrimitive(camera.y))
+                                    add(JsonPrimitive(camera.z))
+                                })
+                                put("yaw", JsonPrimitive(camera.yaw))
+                                put("pitch", JsonPrimitive(camera.pitch))
+                                put("default_fov", JsonPrimitive(70.0))
+                            })
+                        })
+                    })
+                })
+            }
+            val absolutePath = path.toAbsolutePath()
+            Files.createDirectories(absolutePath.parent)
+            val temporary = Files.createTempFile(absolutePath.parent, absolutePath.fileName.toString(), ".tmp")
+            try {
+                Files.writeString(temporary, Json { prettyPrint = true; prettyPrintIndent = "  " }.encodeToString(root))
+                try {
+                    Files.move(
+                        temporary,
+                        absolutePath,
+                        StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING,
+                    )
+                } catch (_: IOException) {
+                    Files.move(temporary, absolutePath, StandardCopyOption.REPLACE_EXISTING)
+                }
+            } finally {
+                Files.deleteIfExists(temporary)
             }
         }
     }
