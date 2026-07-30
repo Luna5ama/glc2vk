@@ -30,6 +30,7 @@ enum Capability {
     CAPABILITY_AB_COMPARE = 6;
     CAPABILITY_ACTION_SEQUENCE = 7;
     CAPABILITY_ARTIFACT_METADATA = 8;
+    CAPABILITY_DEBUG_CONTROL = 9;
 }
 
 message ClientMessage {
@@ -80,10 +81,11 @@ message ServerHello {
     ServerStatus status = 5;
     ServerLimits limits = 6;
     repeated RecipeKind supported_recipes = 7;
-    repeated ActionKind supported_actions = 8;
+    repeated JobActionKind supported_job_actions = 8;
     repeated ArtifactFormat supported_formats = 9;
     string pending_shaders_root = 10;
     string artifact_root = 11;
+    repeated DebugControlKind supported_debug_controls = 12;
 }
 
 message ServerLimits {
@@ -142,8 +144,9 @@ message ServerStatus {
     uint64 artifact_quota_used_bytes = 13;
     uint64 artifact_quota_cap_bytes = 14;
     repeated RecipeKind supported_recipes = 15;
-    repeated ActionKind supported_actions = 16;
+    repeated JobActionKind supported_job_actions = 16;
     repeated ArtifactFormat supported_formats = 17;
+    repeated DebugControlKind supported_debug_controls = 18;
 }
 
 enum ServerState {
@@ -343,13 +346,13 @@ message Action {
     }
 }
 
-enum ActionKind {
-    ACTION_KIND_UNSPECIFIED = 0;
-    ACTION_KIND_RESET_TEMPORAL_STATE = 1;
-    ACTION_KIND_WAIT_FRAMES = 2;
-    ACTION_KIND_CAPTURE_SCREENSHOT = 3;
-    ACTION_KIND_DUMP_TEXTURE = 4;
-    ACTION_KIND_DUMP_BUFFER = 5;
+enum JobActionKind {
+    JOB_ACTION_KIND_UNSPECIFIED = 0;
+    JOB_ACTION_KIND_RESET_TEMPORAL_STATE = 1;
+    JOB_ACTION_KIND_WAIT_FRAMES = 2;
+    JOB_ACTION_KIND_CAPTURE_SCREENSHOT = 3;
+    JOB_ACTION_KIND_DUMP_TEXTURE = 4;
+    JOB_ACTION_KIND_DUMP_BUFFER = 5;
 }
 
 message ResetTemporalState {}
@@ -594,6 +597,24 @@ message DebugControlRequest {
         DebugDumpTexture dump_texture = 13;
         DebugEmpty list_patched_shaders = 14;
     }
+}
+
+enum DebugControlKind {
+    DEBUG_CONTROL_KIND_UNSPECIFIED = 0;
+    DEBUG_CONTROL_KIND_CAPTURE_STATUS = 1;
+    DEBUG_CONTROL_KIND_RELOAD_SHADER = 2;
+    DEBUG_CONTROL_KIND_CAPTURE_PASS = 3;
+    DEBUG_CONTROL_KIND_CAPTURE_MULTI = 4;
+    DEBUG_CONTROL_KIND_SHADER_STATUS = 5;
+    DEBUG_CONTROL_KIND_SHADER_ERRORS = 6;
+    DEBUG_CONTROL_KIND_SCHEDULE_SCREENSHOT = 7;
+    DEBUG_CONTROL_KIND_SCREENSHOT_RESULT = 8;
+    DEBUG_CONTROL_KIND_GPU_METRICS = 9;
+    DEBUG_CONTROL_KIND_LIST_SSBOS = 10;
+    DEBUG_CONTROL_KIND_DUMP_SSBO = 11;
+    DEBUG_CONTROL_KIND_LIST_TEXTURES = 12;
+    DEBUG_CONTROL_KIND_DUMP_TEXTURE = 13;
+    DEBUG_CONTROL_KIND_LIST_PATCHED_SHADERS = 14;
 }
 
 message DebugEmpty {}

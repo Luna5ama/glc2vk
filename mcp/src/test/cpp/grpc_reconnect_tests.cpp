@@ -142,7 +142,7 @@ int run(const Options& options) {
     GrpcClient client({
         .target = "127.0.0.1:" + std::to_string(options.port),
         .workspace_id = "grpc-reconnect-test",
-        .mcp_version = "phase1-red",
+        .mcp_version = "reconnect-test",
         .process_instance_uuid = "grpc-reconnect-test",
         .pending_request_limit = options.registry_limit,
         .reconnect_delay = 1ms,

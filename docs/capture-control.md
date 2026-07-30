@@ -204,6 +204,10 @@ Capture and shader-debug controls use the same MCP and gRPC connection:
 | `vibris_list_textures`, `vibris_dump_texture` | inspect or dump textures by logical name or OpenGL ID |
 | `vibris_list_patched_shaders` | inspect patched shader debug files |
 
+Server discovery reports job-sequence capabilities as `supported_job_actions` and immediate controls as
+`supported_debug_controls`. The two lists are intentionally distinct: status and listing operations are controls, not
+actions inside `vibris_run_actions`.
+
 Debug dumps use the running Minecraft instance and execute on its client thread. Optional compute-capture paths are
 resolved inside the game directory; paths escaping it are rejected.
 

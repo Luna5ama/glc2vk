@@ -24,13 +24,13 @@ class WorkspaceIsolationTest {
     void foreignWorkspaceCannotObserveCancelOrResumeRequest() throws Exception {
         Path pending = temp.resolve("pending");
         try (FakeVibrisServer server = FakeVibrisServer.start(0, pending, temp.resolve("artifacts"));
-             PhaseThreeHarness.Client owner = new PhaseThreeHarness.Client(server, "workspace-a");
-             PhaseThreeHarness.Client foreign = new PhaseThreeHarness.Client(server, "workspace-b")) {
-            PhaseThreeHarness.Probe probe = new PhaseThreeHarness.Probe(server);
+             IntegrationHarness.Client owner = new IntegrationHarness.Client(server, "workspace-a");
+             IntegrationHarness.Client foreign = new IntegrationHarness.Client(server, "workspace-b")) {
+            IntegrationHarness.Probe probe = new IntegrationHarness.Probe(server);
             probe.pauseExecution();
-            PhaseThreeHarness.Source source = PhaseThreeHarness.createSource(pending, "shared-request");
-            SceneContext context = PhaseThreeHarness.context("shared-request");
-            SubmitJob ownerJob = PhaseThreeHarness.job(
+            IntegrationHarness.Source source = IntegrationHarness.createSource(pending, "shared-request");
+            SceneContext context = IntegrationHarness.context("shared-request");
+            SubmitJob ownerJob = IntegrationHarness.job(
                 "shared-request", "workspace-a", context, source.reference(), 5_000, 1_000);
             SubmitJob foreignJob = ownerJob.toBuilder().setWorkspaceId("workspace-b").build();
 
@@ -56,12 +56,12 @@ class WorkspaceIsolationTest {
     void malformedEnvelopeDisconnectsAcceptedJobAndReclaimsItsSource() throws Exception {
         Path pending = temp.resolve("pending-malformed");
         try (FakeVibrisServer server = FakeVibrisServer.start(0, pending, temp.resolve("artifacts-malformed"));
-             PhaseThreeHarness.Client client = new PhaseThreeHarness.Client(server, "workspace-owner")) {
-            PhaseThreeHarness.Probe probe = new PhaseThreeHarness.Probe(server);
+             IntegrationHarness.Client client = new IntegrationHarness.Client(server, "workspace-owner")) {
+            IntegrationHarness.Probe probe = new IntegrationHarness.Probe(server);
             probe.pauseExecution();
-            PhaseThreeHarness.Source source = PhaseThreeHarness.createSource(pending, "malformed-envelope");
-            SubmitJob job = PhaseThreeHarness.job(
-                "malformed-envelope", "workspace-owner", PhaseThreeHarness.context("malformed-envelope"),
+            IntegrationHarness.Source source = IntegrationHarness.createSource(pending, "malformed-envelope");
+            SubmitJob job = IntegrationHarness.job(
+                "malformed-envelope", "workspace-owner", IntegrationHarness.context("malformed-envelope"),
                 source.reference(), 5_000, 1_000);
 
             client.submit(job);

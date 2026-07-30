@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
 final class ActionSurfaceTest {
-    private static final String WORKSPACE = "phase-six-actions";
+    private static final String WORKSPACE = "action-tests";
 
     @TempDir
     Path temporaryDirectory;
@@ -31,11 +31,11 @@ final class ActionSurfaceTest {
     void allowedSequenceAndForbiddenActions() throws Exception {
         Path pendingRoot = temporaryDirectory.resolve("pending");
         Path shaderLink = temporaryDirectory.resolve("shaderpacks/vibris");
-        PhaseSixRuntime runtime = new PhaseSixRuntime(shaderLink);
+        CaptureTestRuntime runtime = new CaptureTestRuntime(shaderLink);
         try (VibrisBootstrap bootstrap = VibrisBootstrap.start(new VibrisBootstrap.Config(
             0, pendingRoot, temporaryDirectory.resolve("artifacts"), shaderLink), runtime);
-             PhaseThreeHarness.Client client = new PhaseThreeHarness.Client(bootstrap.port(), WORKSPACE)) {
-            PreparedSourceRef source = PhaseThreeHarness.createSource(pendingRoot, "actions").reference();
+             IntegrationHarness.Client client = new IntegrationHarness.Client(bootstrap.port(), WORKSPACE)) {
+            PreparedSourceRef source = IntegrationHarness.createSource(pendingRoot, "actions").reference();
             ActionSequence actions = ActionSequence.newBuilder()
                 .addActions(Action.newBuilder().setResetTemporalState(ResetTemporalState.getDefaultInstance()))
                 .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(1)))
@@ -56,7 +56,7 @@ final class ActionSurfaceTest {
                 List.copyOf(runtime.events));
 
             runtime.events.clear();
-            PreparedSourceRef empty = PhaseThreeHarness.createSource(pendingRoot, "empty").reference();
+            PreparedSourceRef empty = IntegrationHarness.createSource(pendingRoot, "empty").reference();
             client.submit(submission("empty", empty).setActions(ActionSequence.getDefaultInstance()).build());
             JobCompleted emptyResult = client.awaitCompleted("empty");
             assertEquals(JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE, emptyResult.getResult().getKind());
@@ -74,7 +74,7 @@ final class ActionSurfaceTest {
 
     private static SubmitJob.Builder submission(String requestId, PreparedSourceRef source) {
         return SubmitJob.newBuilder().setRequestId(requestId).setWorkspaceId(WORKSPACE)
-            .setContext(PhaseThreeHarness.context(requestId)).addSources(source)
+            .setContext(IntegrationHarness.context(requestId)).addSources(source)
             .setTimeouts(JobTimeouts.newBuilder().setExecutionTimeoutMs(10_000).setTotalTimeoutMs(15_000));
     }
 }

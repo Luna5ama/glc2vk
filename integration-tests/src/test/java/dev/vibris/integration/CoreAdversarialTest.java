@@ -28,8 +28,8 @@ class CoreAdversarialTest {
         Path pending = temp.resolve("pending");
         Path artifacts = temp.resolve("artifacts");
         try (FakeVibrisServer server = FakeVibrisServer.start(0, pending, artifacts);
-             PhaseThreeHarness.Client client = new PhaseThreeHarness.Client(server, "edge")) {
-            PhaseThreeHarness.Probe probe = new PhaseThreeHarness.Probe(server);
+             IntegrationHarness.Client client = new IntegrationHarness.Client(server, "edge")) {
+            IntegrationHarness.Probe probe = new IntegrationHarness.Probe(server);
             probe.pauseExecution();
 
             SubmitJob blocker = newJob(pending, "blocker", 30_000, 1_000);
@@ -81,8 +81,8 @@ class CoreAdversarialTest {
             Files.delete(pending.resolve(overflow.getSources(0).getUuid()).resolve("main.glsl"));
             Files.delete(pending.resolve(overflow.getSources(0).getUuid()));
             probe.assertRegistriesBounded();
-            PhaseThreeHarness.assertDirectoryEmpty(pending);
-            PhaseThreeHarness.assertDirectoryEmpty(artifacts);
+            IntegrationHarness.assertDirectoryEmpty(pending);
+            IntegrationHarness.assertDirectoryEmpty(artifacts);
         }
     }
 
@@ -91,11 +91,11 @@ class CoreAdversarialTest {
         Path pending = temp.resolve("pending-validation-race");
         try (FakeVibrisServer server = FakeVibrisServer.start(
                  0, pending, temp.resolve("artifacts-validation-race"));
-             PhaseThreeHarness.Client first = new PhaseThreeHarness.Client(server, "race-workspace");
-             PhaseThreeHarness.Client duplicate = new PhaseThreeHarness.Client(server, "race-workspace")) {
-            PhaseThreeHarness.Probe probe = new PhaseThreeHarness.Probe(server);
+             IntegrationHarness.Client first = new IntegrationHarness.Client(server, "race-workspace");
+             IntegrationHarness.Client duplicate = new IntegrationHarness.Client(server, "race-workspace")) {
+            IntegrationHarness.Probe probe = new IntegrationHarness.Probe(server);
             probe.pauseExecution();
-            PhaseThreeHarness.Source source = PhaseThreeHarness.createSource(pending, "validation-race");
+            IntegrationHarness.Source source = IntegrationHarness.createSource(pending, "validation-race");
             long extraBytes = 0;
             int extraFiles = 4_096;
             for (int index = 0; index < extraFiles; index++) {
@@ -106,8 +106,8 @@ class CoreAdversarialTest {
                 .setFileCount(source.reference().getFileCount() + extraFiles)
                 .setTotalBytes(source.reference().getTotalBytes() + extraBytes)
                 .build();
-            SubmitJob job = PhaseThreeHarness.job(
-                "validation-race", "race-workspace", PhaseThreeHarness.context("validation-race"),
+            SubmitJob job = IntegrationHarness.job(
+                "validation-race", "race-workspace", IntegrationHarness.context("validation-race"),
                 reference, 5_000, 1);
 
             first.submit(job);
@@ -128,22 +128,22 @@ class CoreAdversarialTest {
 
     private static SubmitJob newJob(Path pending, String id, String workspaceId, long timeoutMs, int frames)
         throws Exception {
-        PhaseThreeHarness.Source source = PhaseThreeHarness.createSource(pending, id);
-        SceneContext context = PhaseThreeHarness.context(id);
-        return PhaseThreeHarness.job(id, workspaceId, context, source.reference(), timeoutMs, frames);
+        IntegrationHarness.Source source = IntegrationHarness.createSource(pending, id);
+        SceneContext context = IntegrationHarness.context(id);
+        return IntegrationHarness.job(id, workspaceId, context, source.reference(), timeoutMs, frames);
     }
 
     private static void assertDisconnectResume(FakeVibrisServer server, Path pending,
-                                               PhaseThreeHarness.Probe probe) throws Exception {
+                                               IntegrationHarness.Probe probe) throws Exception {
         probe.pauseExecution();
-        PhaseThreeHarness.Client first = new PhaseThreeHarness.Client(server, "resume-workspace");
+        IntegrationHarness.Client first = new IntegrationHarness.Client(server, "resume-workspace");
         SubmitJob job = newJob(pending, "resume-job", "resume-workspace", 5_000, 1_000);
         first.submit(job);
         first.awaitAccepted("resume-job");
         first.awaitProgress("resume-job", JobStage.JOB_STAGE_WARMING_UP);
         first.disconnect();
 
-        try (PhaseThreeHarness.Client resumed = new PhaseThreeHarness.Client(server, "resume-workspace")) {
+        try (IntegrationHarness.Client resumed = new IntegrationHarness.Client(server, "resume-workspace")) {
             assertEquals(JobState.JOB_STATE_RUNNING, resumed.resume("resume-job").getState());
             probe.resumeExecution();
             resumed.awaitCompleted("resume-job");
@@ -151,7 +151,7 @@ class CoreAdversarialTest {
             assertEquals(1, probe.executionCount("resume-job"));
             resumed.disconnect();
         }
-        try (PhaseThreeHarness.Client replay = new PhaseThreeHarness.Client(server, "resume-workspace")) {
+        try (IntegrationHarness.Client replay = new IntegrationHarness.Client(server, "resume-workspace")) {
             assertEquals(JobState.JOB_STATE_COMPLETED, replay.resume("resume-job").getState());
             replay.awaitCompleted("resume-job");
         }

@@ -1,4 +1,4 @@
-#include "phase_one_backend.hpp"
+#include "mcp_backend.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -10,7 +10,7 @@
 #include "config_document.hpp"
 #include "config_store.hpp"
 #include "debug_protocol.hpp"
-#include "phase_two_source_handler.hpp"
+#include "source_handler.hpp"
 #include "result_mapper.hpp"
 #include "scene_context_resolver.hpp"
 #include "state_error.hpp"
@@ -44,7 +44,7 @@ std::string bounded(std::string value) {
 
 } // namespace
 
-class PhaseOneBackend::Impl final {
+class McpBackend::Impl final {
 public:
     Impl(std::optional<std::filesystem::path> workspace_root, std::string server_address)
         : binding_(resolve_workspace(std::move(workspace_root))),
@@ -220,22 +220,22 @@ private:
     std::string server_address_;
     std::string process_id_;
     std::optional<SessionConfig> config_;
-    PhaseTwoSourceHandler source_handler_;
+    SourceHandler source_handler_;
     std::unique_ptr<GrpcClient> grpc_;
     GrpcClientStats aggregate_{};
     bool used_client_ = false;
 };
 
-PhaseOneBackend::PhaseOneBackend(std::optional<std::filesystem::path> workspace_root, std::string server_address)
+McpBackend::McpBackend(std::optional<std::filesystem::path> workspace_root, std::string server_address)
     : impl_(std::make_unique<Impl>(std::move(workspace_root), std::move(server_address))) {}
 
-PhaseOneBackend::~PhaseOneBackend() = default;
+McpBackend::~McpBackend() = default;
 
-ToolOutcome PhaseOneBackend::dispatch(std::string_view name, const Json& arguments) {
+ToolOutcome McpBackend::dispatch(std::string_view name, const Json& arguments) {
     return impl_->dispatch(name, arguments);
 }
 
-std::optional<GrpcClientStats> PhaseOneBackend::shutdown() {
+std::optional<GrpcClientStats> McpBackend::shutdown() {
     return impl_->shutdown();
 }
 

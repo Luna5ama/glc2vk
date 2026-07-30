@@ -115,8 +115,8 @@ add_library(vibris_mcp_core STATIC
     src/main/cpp/mcp_stdio_server.cpp
     src/main/cpp/native_metrics.cpp
     src/main/cpp/pending_request_registry.cpp
-    src/main/cpp/phase_one_backend.cpp
-    src/main/cpp/phase_two_source_handler.cpp
+    src/main/cpp/mcp_backend.cpp
+    src/main/cpp/source_handler.cpp
     src/main/cpp/prepared_source.cpp
     src/main/cpp/result_mapper.cpp
     src/main/cpp/scene_context_resolver.cpp

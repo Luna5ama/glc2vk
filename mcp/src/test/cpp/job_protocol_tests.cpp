@@ -291,7 +291,7 @@ void synchronous_submit_case(std::string_view tool_name, const Json& arguments, 
     const auto artifact_root = fixture.pending().parent_path() / "artifacts";
     std::filesystem::create_directories(artifact_root);
     TerminalJobServer server(fixture.pending(), artifact_root, actions);
-    vibris::mcp::PhaseTwoSourceHandler sources(fixture.worktree());
+    vibris::mcp::SourceHandler sources(fixture.worktree());
     vibris::mcp::GrpcClient client({
         .target = "127.0.0.1:" + std::to_string(server.port()),
         .workspace_id = "workspace-id",
@@ -333,7 +333,7 @@ void synchronous_submit_resumes_after_acceptance() {
     hello.set_pending_shaders_root(std::filesystem::absolute(fixture.pending()).string());
     hello.mutable_limits()->set_max_source_bytes(1024 * 1024);
     hello.mutable_limits()->set_max_source_files(128);
-    vibris::mcp::PhaseTwoSourceHandler sources(fixture.worktree());
+    vibris::mcp::SourceHandler sources(fixture.worktree());
     vibris::mcp::GrpcClient client({
         .target = "127.0.0.1:55066",
         .workspace_id = "workspace-id",
@@ -365,7 +365,7 @@ void synchronous_submit_has_local_total_deadline() {
     hello.set_pending_shaders_root(std::filesystem::absolute(fixture.pending()).string());
     hello.mutable_limits()->set_max_source_bytes(1024 * 1024);
     hello.mutable_limits()->set_max_source_files(128);
-    vibris::mcp::PhaseTwoSourceHandler sources(fixture.worktree());
+    vibris::mcp::SourceHandler sources(fixture.worktree());
     vibris::mcp::GrpcClient client({
         .target = "127.0.0.1:" + std::to_string(server.port()),
         .workspace_id = "workspace-id",

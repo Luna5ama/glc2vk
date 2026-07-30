@@ -1,4 +1,4 @@
-#include "phase_two_source_handler.hpp"
+#include "source_handler.hpp"
 
 #include "state_error.hpp"
 
@@ -15,22 +15,6 @@ namespace vibris::mcp {
 namespace {
 
 namespace control = ::vibris::control::v1;
-
-[[nodiscard]] Json source_json(const PreparedSource& source) {
-    const auto& reference = source.reference();
-    Json result{{"uuid", reference.uuid()},
-                {"kind", reference.origin().has_workspace() ? "workspace" : "commit"},
-                {"file_count", reference.file_count()},
-                {"total_bytes", reference.total_bytes()},
-                {"attempts", source.attempts()}};
-    if (reference.origin().has_commit()) {
-        result["requested_revision"] = std::string(source.requested_revision());
-        result["resolved_revision"] = reference.origin().commit().revision();
-    } else {
-        result["head_revision"] = std::string(source.resolved_revision());
-    }
-    return result;
-}
 
 void prepare_one(SourcePreparer& preparer, const Json* source, std::list<PreparedSource>& prepared) {
     if (source == nullptr || source->value("kind", std::string("workspace")) == "workspace") {
@@ -54,14 +38,14 @@ void prepare_one(SourcePreparer& preparer, const Json* source, std::list<Prepare
 
 } // namespace
 
-PhaseTwoSourceHandler::PhaseTwoSourceHandler(std::filesystem::path workspace_root)
+SourceHandler::SourceHandler(std::filesystem::path workspace_root)
     : workspace_root_(std::move(workspace_root)) {}
 
-PhaseTwoSourceHandler::~PhaseTwoSourceHandler() {
+SourceHandler::~SourceHandler() {
     clear();
 }
 
-Json PhaseTwoSourceHandler::prepare(
+void SourceHandler::prepare(
     std::string_view tool_name, const Json& arguments, const control::ServerHello& server) {
     SourcePreparer preparer(
         workspace_root_, std::filesystem::path(server.pending_shaders_root()), server_limits(server));
@@ -74,18 +58,11 @@ Json PhaseTwoSourceHandler::prepare(
         prepare_one(preparer, source == arguments.end() ? nullptr : &*source, prepared);
     }
 
-    Json summaries = Json::array();
-    for (const auto& source : prepared) summaries.push_back(source_json(source));
-    Json result{{"phase", 2},
-                {"execution_available", false},
-                {"source_prepared", true},
-                {"prepared_sources", std::move(summaries)}};
     source_batches_.emplace_back();
     source_batches_.back().sources.splice(source_batches_.back().sources.end(), prepared);
-    return result;
 }
 
-std::vector<control::PreparedSourceRef> PhaseTwoSourceHandler::bind_latest(std::string request_id) {
+std::vector<control::PreparedSourceRef> SourceHandler::bind_latest(std::string request_id) {
     if (request_id.empty()) throw std::invalid_argument("source request ID must not be empty");
     if (source_batches_.empty() || !source_batches_.back().request_id.empty()) {
         throw std::logic_error("no unbound prepared source batch");
@@ -107,7 +84,7 @@ std::vector<control::PreparedSourceRef> PhaseTwoSourceHandler::bind_latest(std::
     return references;
 }
 
-void PhaseTwoSourceHandler::observe(const control::ServerMessage& message) noexcept {
+void SourceHandler::observe(const control::ServerMessage& message) noexcept {
     const auto transfer = [](SourceBatch& batch) {
         if (!batch.released) {
             for (auto& source : batch.sources) source.release();
@@ -147,7 +124,7 @@ void PhaseTwoSourceHandler::observe(const control::ServerMessage& message) noexc
     }
 }
 
-void PhaseTwoSourceHandler::retire(std::string_view request_id) noexcept {
+void SourceHandler::retire(std::string_view request_id) noexcept {
     const auto batch = std::find_if(source_batches_.begin(), source_batches_.end(), [&](const SourceBatch& item) {
         return item.request_id == request_id;
     });
@@ -161,7 +138,7 @@ void PhaseTwoSourceHandler::retire(std::string_view request_id) noexcept {
     source_batches_.erase(batch);
 }
 
-void PhaseTwoSourceHandler::clear() noexcept {
+void SourceHandler::clear() noexcept {
     for (const auto& batch : source_batches_) {
         if (!batch.server_owned && batch.released) {
             for (const auto& source : batch.sources) {

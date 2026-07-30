@@ -36,9 +36,9 @@ class SourceTrustBoundaryTest {
         Files.writeString(outside, "unchanged", StandardCharsets.UTF_8);
         try (FakeVibrisServer server = FakeVibrisServer.start(0, pending, artifacts)) {
             Files.delete(pending);
-            try (PhaseThreeHarness.Client invalid = new PhaseThreeHarness.Client(server, "invalid")) {
-                PreparedSourceRef source = PhaseThreeHarness.invalidSource("../outside");
-                SubmitJob job = PhaseThreeHarness.job("invalid", "invalid", PhaseThreeHarness.context("invalid"),
+            try (IntegrationHarness.Client invalid = new IntegrationHarness.Client(server, "invalid")) {
+                PreparedSourceRef source = IntegrationHarness.invalidSource("../outside");
+                SubmitJob job = IntegrationHarness.job("invalid", "invalid", IntegrationHarness.context("invalid"),
                     source, 5_000, 1);
                 invalid.submit(job);
                 invalid.awaitFailed("invalid", ErrorCode.INVALID_SOURCE_UUID);
@@ -48,12 +48,12 @@ class SourceTrustBoundaryTest {
             assertFalse(Files.exists(temp.resolve("main.glsl")));
 
             Files.createDirectories(pending);
-            PhaseThreeHarness.Probe probe = new PhaseThreeHarness.Probe(server);
+            IntegrationHarness.Probe probe = new IntegrationHarness.Probe(server);
             probe.pauseExecution();
-            PhaseThreeHarness.Source accepted = PhaseThreeHarness.createSource(pending, "disconnect");
-            SceneContext context = PhaseThreeHarness.context("disconnect");
-            PhaseThreeHarness.Client owner = new PhaseThreeHarness.Client(server, "owner");
-            owner.submit(PhaseThreeHarness.job("disconnect", "owner", context, accepted.reference(), 5_000, 1_000));
+            IntegrationHarness.Source accepted = IntegrationHarness.createSource(pending, "disconnect");
+            SceneContext context = IntegrationHarness.context("disconnect");
+            IntegrationHarness.Client owner = new IntegrationHarness.Client(server, "owner");
+            owner.submit(IntegrationHarness.job("disconnect", "owner", context, accepted.reference(), 5_000, 1_000));
             owner.awaitAccepted("disconnect");
             owner.awaitProgress("disconnect", JobStage.JOB_STAGE_WARMING_UP);
             owner.disconnect();
@@ -65,14 +65,14 @@ class SourceTrustBoundaryTest {
             assertEquals("VALIDATED", states.get(0));
             assertEquals("DELETED", states.get(states.size() - 1));
             assertTrue(SOURCE_STATES.containsAll(states), () -> "Unexpected source state trace: " + states);
-            PhaseThreeHarness.assertDirectoryEmpty(pending);
-            PhaseThreeHarness.assertDirectoryEmpty(artifacts);
+            IntegrationHarness.assertDirectoryEmpty(pending);
+            IntegrationHarness.assertDirectoryEmpty(artifacts);
             assertCoreIndependent();
         }
     }
 
     private static void awaitDeleted(Path source) throws Exception {
-        long deadline = System.nanoTime() + PhaseThreeHarness.WAIT.toNanos();
+        long deadline = System.nanoTime() + IntegrationHarness.WAIT.toNanos();
         while (Files.exists(source) && System.nanoTime() < deadline) Thread.sleep(10);
         assertFalse(Files.exists(source), "Server did not clean its accepted source after disconnect");
     }

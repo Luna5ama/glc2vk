@@ -60,8 +60,8 @@ final class IrisCaptureTest {
     void screenshotTextureBufferReadable() throws Exception {
         Fixture fixture = new Fixture();
         try (VibrisBootstrap bootstrap = fixture.start();
-             PhaseThreeHarness.Client client = new PhaseThreeHarness.Client(bootstrap.port(), WORKSPACE)) {
-            PreparedSourceRef source = PhaseThreeHarness.createSource(fixture.pendingRoot, "readable").reference();
+             IntegrationHarness.Client client = new IntegrationHarness.Client(bootstrap.port(), WORKSPACE)) {
+            PreparedSourceRef source = IntegrationHarness.createSource(fixture.pendingRoot, "readable").reference();
 
             client.submit(job("readable", source, List.of("colortex0")));
             JobCompleted completed = client.awaitCompleted("readable");
@@ -88,8 +88,8 @@ final class IrisCaptureTest {
     void sameFrameBundleAndUnknownResource() throws Exception {
         Fixture fixture = new Fixture();
         try (VibrisBootstrap bootstrap = fixture.start();
-             PhaseThreeHarness.Client client = new PhaseThreeHarness.Client(bootstrap.port(), WORKSPACE)) {
-            PreparedSourceRef valid = PhaseThreeHarness.createSource(fixture.pendingRoot, "bundle").reference();
+             IntegrationHarness.Client client = new IntegrationHarness.Client(bootstrap.port(), WORKSPACE)) {
+            PreparedSourceRef valid = IntegrationHarness.createSource(fixture.pendingRoot, "bundle").reference();
 
             client.submit(job("bundle", valid, List.of("colortex0", "depthtex0")));
             JobCompleted completed = client.awaitCompleted("bundle");
@@ -106,7 +106,7 @@ final class IrisCaptureTest {
             assertTrue(Files.isRegularFile(manifest.resolveSibling("depthtex0.json")));
             assertTrue(Files.isRegularFile(manifest.resolveSibling("radiance_cache.json")));
             List<String> beforeFailure = artifactTree(fixture.artifactRoot);
-            PreparedSourceRef missing = PhaseThreeHarness.createSource(fixture.pendingRoot, "missing").reference();
+            PreparedSourceRef missing = IntegrationHarness.createSource(fixture.pendingRoot, "missing").reference();
 
             client.submit(unknownJob(missing));
             var failed = client.awaitFailed("missing", ErrorCode.CAPTURE_RESOURCE_NOT_FOUND);
@@ -139,7 +139,7 @@ final class IrisCaptureTest {
 
     private static SubmitJob.Builder submission(String requestId, PreparedSourceRef source) {
         return SubmitJob.newBuilder().setRequestId(requestId).setWorkspaceId(WORKSPACE)
-            .setContext(PhaseThreeHarness.context(requestId)).addSources(source)
+            .setContext(IntegrationHarness.context(requestId)).addSources(source)
             .setTimeouts(JobTimeouts.newBuilder().setExecutionTimeoutMs(5_000).setTotalTimeoutMs(10_000));
     }
 

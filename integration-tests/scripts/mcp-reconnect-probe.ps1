@@ -242,7 +242,7 @@ try
 
     Write-McpMessage -Message @{
         jsonrpc = "2.0"
-        id = "phase1-init"
+        id = "reconnect-init"
         method = "initialize"
         params = @{
             protocolVersion = "2024-11-05"
@@ -250,7 +250,7 @@ try
             clientInfo = @{ name = "probe"; version = "1" }
         }
     }
-    [void] (Read-McpResponse -ExpectedId "phase1-init")
+    [void] (Read-McpResponse -ExpectedId "reconnect-init")
     Write-McpMessage -Message @{ jsonrpc = "2.0"; method = "notifications/initialized"; params = @{} }
 
     for ($id = 1; $id -le $DropAfter; $id++)

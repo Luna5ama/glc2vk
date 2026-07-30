@@ -46,11 +46,11 @@ import java.util.function.Predicate;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-final class PhaseThreeHarness {
+final class IntegrationHarness {
     static final Duration WAIT = Duration.ofSeconds(5);
     private static final ProtocolVersion V1 = ProtocolVersion.newBuilder().setMajor(1).setMinor(0).build();
 
-    private PhaseThreeHarness() {
+    private IntegrationHarness() {
     }
 
     static Source createSource(Path pendingRoot, String requestId) throws IOException {
@@ -159,7 +159,7 @@ final class PhaseThreeHarness {
             send(ClientMessage.newBuilder()
                 .setClientHello(ClientHello.newBuilder()
                     .setProtocolVersion(V1)
-                    .setMcpVersion("phase-three-red")
+                    .setMcpVersion("integration-test")
                     .setWorkspaceId(workspaceId)
                     .setProcessInstanceUuid(UUID.randomUUID().toString())
                     .addCapabilities(Capability.CAPABILITY_CONTROL_STREAM)
@@ -276,7 +276,7 @@ final class PhaseThreeHarness {
                     long remaining = deadline - System.nanoTime();
                     if (remaining <= 0) {
                         throw new AssertionError(
-                            "Phase 3 server did not emit " + description + "; received " + messages
+                            "Test server did not emit " + description + "; received " + messages
                         );
                     }
                     TimeUnit.NANOSECONDS.timedWait(messages, remaining);
@@ -296,7 +296,7 @@ final class PhaseThreeHarness {
         private final Object delegate;
 
         Probe(FakeVibrisServer server) {
-            delegate = invoke(server, "phaseThreeProbe", new Class<?>[0]);
+            delegate = invoke(server, "testProbe", new Class<?>[0]);
         }
 
         void pauseExecution() {
@@ -342,14 +342,14 @@ final class PhaseThreeHarness {
                 Method method = target.getClass().getMethod(name, parameters);
                 return method.invoke(target, arguments);
             } catch (NoSuchMethodException exception) {
-                throw new AssertionError("Missing Phase 3 fake-runtime test seam: " + name, exception);
+                throw new AssertionError("Missing test-runtime seam: " + name, exception);
             } catch (IllegalAccessException exception) {
-                throw new AssertionError("Inaccessible Phase 3 fake-runtime test seam: " + name, exception);
+                throw new AssertionError("Inaccessible test-runtime seam: " + name, exception);
             } catch (InvocationTargetException exception) {
                 Throwable cause = exception.getCause();
                 if (cause instanceof RuntimeException runtime) throw runtime;
                 if (cause instanceof Error error) throw error;
-                throw new AssertionError("Phase 3 fake-runtime test seam failed: " + name, cause);
+                throw new AssertionError("Test-runtime seam failed: " + name, cause);
             }
         }
     }

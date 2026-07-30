@@ -24,19 +24,19 @@ class SchedulerTest {
         Path pending = temp.resolve("pending");
         Path artifacts = temp.resolve("artifacts");
         try (FakeVibrisServer server = FakeVibrisServer.start(0, pending, artifacts);
-             PhaseThreeHarness.Client a = new PhaseThreeHarness.Client(server, "A");
-             PhaseThreeHarness.Client b = new PhaseThreeHarness.Client(server, "B");
-             PhaseThreeHarness.Client c = new PhaseThreeHarness.Client(server, "C")) {
-            PhaseThreeHarness.Probe probe = new PhaseThreeHarness.Probe(server);
+             IntegrationHarness.Client a = new IntegrationHarness.Client(server, "A");
+             IntegrationHarness.Client b = new IntegrationHarness.Client(server, "B");
+             IntegrationHarness.Client c = new IntegrationHarness.Client(server, "C")) {
+            IntegrationHarness.Probe probe = new IntegrationHarness.Probe(server);
             probe.pauseExecution();
             Map<String, SceneContext> contexts = new LinkedHashMap<>();
             Map<String, SubmitJob> jobs = new LinkedHashMap<>();
             for (String id : List.of("A1", "A2", "B1", "B2", "C1")) {
                 String workspace = id.substring(0, 1);
-                SceneContext context = PhaseThreeHarness.context(id);
-                PhaseThreeHarness.Source source = PhaseThreeHarness.createSource(pending, id);
+                SceneContext context = IntegrationHarness.context(id);
+                IntegrationHarness.Source source = IntegrationHarness.createSource(pending, id);
                 contexts.put(id, context);
-                jobs.put(id, PhaseThreeHarness.job(id, workspace, context, source.reference(), 5_000, 1));
+                jobs.put(id, IntegrationHarness.job(id, workspace, context, source.reference(), 5_000, 1));
             }
 
             a.submit(jobs.get("A1"));
@@ -58,8 +58,8 @@ class SchedulerTest {
             assertEquals(expected.stream().map(contexts::get).toList(), probe.contexts());
             assertEquals(1, probe.integer("maxConcurrentJobs"));
             assertNoExecutionEventInterleaves(probe.strings("executionEvents"));
-            PhaseThreeHarness.assertDirectoryEmpty(pending);
-            PhaseThreeHarness.assertDirectoryEmpty(artifacts);
+            IntegrationHarness.assertDirectoryEmpty(pending);
+            IntegrationHarness.assertDirectoryEmpty(artifacts);
         }
     }
 
@@ -68,26 +68,26 @@ class SchedulerTest {
         Path pending = temp.resolve("pending-six");
         Path artifacts = temp.resolve("artifacts-six");
         try (FakeVibrisServer server = FakeVibrisServer.start(0, pending, artifacts);
-             PhaseThreeHarness.Client a = new PhaseThreeHarness.Client(server, "A");
-             PhaseThreeHarness.Client b = new PhaseThreeHarness.Client(server, "B");
-             PhaseThreeHarness.Client c = new PhaseThreeHarness.Client(server, "C")) {
-            PhaseThreeHarness.Probe probe = new PhaseThreeHarness.Probe(server);
+             IntegrationHarness.Client a = new IntegrationHarness.Client(server, "A");
+             IntegrationHarness.Client b = new IntegrationHarness.Client(server, "B");
+             IntegrationHarness.Client c = new IntegrationHarness.Client(server, "C")) {
+            IntegrationHarness.Probe probe = new IntegrationHarness.Probe(server);
             probe.pauseExecution();
             Map<String, SceneContext> contexts = new LinkedHashMap<>();
             Map<String, SubmitJob> jobs = new LinkedHashMap<>();
             for (String id : List.of("A1", "A2", "B1", "B2", "C1", "C2")) {
                 String workspace = id.substring(0, 1);
-                SceneContext context = PhaseThreeHarness.context(id);
-                PhaseThreeHarness.Source source = PhaseThreeHarness.createSource(pending, id);
+                SceneContext context = IntegrationHarness.context(id);
+                IntegrationHarness.Source source = IntegrationHarness.createSource(pending, id);
                 contexts.put(id, context);
-                jobs.put(id, PhaseThreeHarness.job(id, workspace, context, source.reference(), 5_000, 1));
+                jobs.put(id, IntegrationHarness.job(id, workspace, context, source.reference(), 5_000, 1));
             }
 
             a.submit(jobs.get("A1"));
             a.awaitAccepted("A1");
             a.awaitProgress("A1", JobStage.JOB_STAGE_WARMING_UP);
             for (String id : List.of("B1", "C1", "A2", "B2", "C2")) {
-                PhaseThreeHarness.Client owner = client(id, a, b, c);
+                IntegrationHarness.Client owner = client(id, a, b, c);
                 owner.submit(jobs.get(id));
                 owner.awaitAccepted(id);
             }
@@ -99,13 +99,13 @@ class SchedulerTest {
             assertEquals(expected.stream().map(contexts::get).toList(), probe.contexts());
             assertEquals(1, probe.integer("maxConcurrentJobs"));
             assertNoExecutionEventInterleaves(probe.strings("executionEvents"));
-            PhaseThreeHarness.assertDirectoryEmpty(pending);
-            PhaseThreeHarness.assertDirectoryEmpty(artifacts);
+            IntegrationHarness.assertDirectoryEmpty(pending);
+            IntegrationHarness.assertDirectoryEmpty(artifacts);
         }
     }
 
-    private static PhaseThreeHarness.Client client(String requestId, PhaseThreeHarness.Client a,
-                                                    PhaseThreeHarness.Client b, PhaseThreeHarness.Client c) {
+    private static IntegrationHarness.Client client(String requestId, IntegrationHarness.Client a,
+                                                    IntegrationHarness.Client b, IntegrationHarness.Client c) {
         return switch (requestId.charAt(0)) {
             case 'A' -> a;
             case 'B' -> b;

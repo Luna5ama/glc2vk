@@ -47,7 +47,7 @@ int main() {
         const auto original = fs::current_path();
         fs::current_path(nested);
 
-        // When: the stable Phase-1 worktree discovery seam resolves the implicit root.
+        // When: the worktree discovery seam resolves the implicit root.
         const auto binding = resolve_workspace();
         fs::current_path(original);
 

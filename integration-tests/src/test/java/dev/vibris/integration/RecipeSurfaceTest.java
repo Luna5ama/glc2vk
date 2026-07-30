@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RecipeSurfaceTest {
-    private static final String WORKSPACE = "phase-six-recipes";
+    private static final String WORKSPACE = "recipe-tests";
 
     @TempDir
     Path temporaryDirectory;
@@ -40,8 +40,8 @@ final class RecipeSurfaceTest {
     void reloadAndDebugBundle() throws Exception {
         Fixture fixture = new Fixture();
         try (VibrisBootstrap bootstrap = fixture.start();
-             PhaseThreeHarness.Client client = new PhaseThreeHarness.Client(bootstrap.port(), WORKSPACE)) {
-            PreparedSourceRef reloadSource = PhaseThreeHarness.createSource(fixture.pendingRoot, "reload").reference();
+             IntegrationHarness.Client client = new IntegrationHarness.Client(bootstrap.port(), WORKSPACE)) {
+            PreparedSourceRef reloadSource = IntegrationHarness.createSource(fixture.pendingRoot, "reload").reference();
             client.submit(submission("reload", reloadSource).setRecipe(RecipeSpec.newBuilder()
                 .setReloadAndCapture(ReloadAndCaptureRecipe.newBuilder()
                     .setSourceUuid(reloadSource.getUuid()).setWarmupFrames(2)
@@ -57,7 +57,7 @@ final class RecipeSurfaceTest {
                 reload.getResult().getTimings().getStartedAtUnixMs());
             assertTrue(Files.isReadable(Path.of(reload.getResult().getManifestPath())));
 
-            PreparedSourceRef bundleSource = PhaseThreeHarness.createSource(fixture.pendingRoot, "bundle").reference();
+            PreparedSourceRef bundleSource = IntegrationHarness.createSource(fixture.pendingRoot, "bundle").reference();
             client.submit(submission("bundle", bundleSource).setRecipe(RecipeSpec.newBuilder()
                 .setCaptureDebugBundle(CaptureDebugBundleRecipe.newBuilder()
                     .setSourceUuid(bundleSource.getUuid()).setWarmupFrames(2).setScreenshot(true)
@@ -79,15 +79,15 @@ final class RecipeSurfaceTest {
         fixture.runtime.baselineCaptureStarted = new CountDownLatch(1);
         fixture.runtime.releaseBaselineCapture = new CountDownLatch(1);
         try (VibrisBootstrap bootstrap = fixture.start();
-             PhaseThreeHarness.Client abClient = new PhaseThreeHarness.Client(bootstrap.port(), WORKSPACE);
-             PhaseThreeHarness.Client competitor = new PhaseThreeHarness.Client(bootstrap.port(), "competitor")) {
-            PhaseThreeHarness.Source sourceA = PhaseThreeHarness.createSource(fixture.pendingRoot, "A");
-            PhaseThreeHarness.Source sourceB = PhaseThreeHarness.createSource(fixture.pendingRoot, "B");
-            PhaseThreeHarness.Source sourceC = PhaseThreeHarness.createSource(fixture.pendingRoot, "C");
+             IntegrationHarness.Client abClient = new IntegrationHarness.Client(bootstrap.port(), WORKSPACE);
+             IntegrationHarness.Client competitor = new IntegrationHarness.Client(bootstrap.port(), "competitor")) {
+            IntegrationHarness.Source sourceA = IntegrationHarness.createSource(fixture.pendingRoot, "A");
+            IntegrationHarness.Source sourceB = IntegrationHarness.createSource(fixture.pendingRoot, "B");
+            IntegrationHarness.Source sourceC = IntegrationHarness.createSource(fixture.pendingRoot, "C");
             fixture.runtime.baselineDirectory = sourceA.directory();
 
             SubmitJob ab = SubmitJob.newBuilder().setRequestId("ab").setWorkspaceId(WORKSPACE)
-                .setContext(PhaseThreeHarness.context("ab"))
+                .setContext(IntegrationHarness.context("ab"))
                 .addSources(sourceA.reference()).addSources(sourceB.reference())
                 .setRecipe(RecipeSpec.newBuilder().setAbCompare(AbCompareRecipe.newBuilder()
                     .setBaseline(SourceVariant.newBuilder().setLabel("baseline")
@@ -101,10 +101,10 @@ final class RecipeSurfaceTest {
             abClient.submit(ab);
             abClient.awaitAccepted("ab");
             assertTrue(fixture.runtime.baselineCaptureStarted.await(
-                PhaseThreeHarness.WAIT.toMillis(), TimeUnit.MILLISECONDS));
+                IntegrationHarness.WAIT.toMillis(), TimeUnit.MILLISECONDS));
 
             competitor.submit(SubmitJob.newBuilder().setRequestId("competitor").setWorkspaceId("competitor")
-                .setContext(PhaseThreeHarness.context("competitor")).addSources(sourceC.reference())
+                .setContext(IntegrationHarness.context("competitor")).addSources(sourceC.reference())
                 .setActions(ActionSequence.getDefaultInstance()).setTimeouts(timeouts()).build());
             competitor.awaitAccepted("competitor");
             fixture.runtime.releaseBaselineCapture.countDown();
@@ -133,7 +133,7 @@ final class RecipeSurfaceTest {
 
     private static SubmitJob.Builder submission(String requestId, PreparedSourceRef source) {
         return SubmitJob.newBuilder().setRequestId(requestId).setWorkspaceId(WORKSPACE)
-            .setContext(PhaseThreeHarness.context(requestId)).addSources(source).setTimeouts(timeouts());
+            .setContext(IntegrationHarness.context(requestId)).addSources(source).setTimeouts(timeouts());
     }
 
     private static JobTimeouts timeouts() {
@@ -150,7 +150,7 @@ final class RecipeSurfaceTest {
         final Path pendingRoot = temporaryDirectory.resolve("pending");
         final Path artifactRoot = temporaryDirectory.resolve("artifacts");
         final Path shaderLink = temporaryDirectory.resolve("shaderpacks/vibris");
-        final PhaseSixRuntime runtime = new PhaseSixRuntime(shaderLink);
+        final CaptureTestRuntime runtime = new CaptureTestRuntime(shaderLink);
 
         VibrisBootstrap start() throws VibrisBootstrap.Failure {
             return VibrisBootstrap.start(new VibrisBootstrap.Config(

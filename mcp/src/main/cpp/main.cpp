@@ -7,7 +7,7 @@
 #include <utility>
 
 #include "mcp_stdio_server.hpp"
-#include "phase_one_backend.hpp"
+#include "mcp_backend.hpp"
 #include "state_error.hpp"
 #include "tool_registry.hpp"
 
@@ -49,7 +49,7 @@ std::string bounded(std::string value) {
 int main(int argc, char** argv) {
     try {
         auto options = parse_options(argc, argv);
-        vibris::mcp::PhaseOneBackend backend(std::move(options.workspace_root), std::move(options.server_address));
+        vibris::mcp::McpBackend backend(std::move(options.workspace_root), std::move(options.server_address));
         const vibris::mcp::ToolRegistry tools(
             [&backend](std::string_view name, const vibris::mcp::Json& arguments) {
                 return backend.dispatch(name, arguments);

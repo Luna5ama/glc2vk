@@ -239,7 +239,7 @@ InvocationResult ToolRegistry::invoke(std::string_view name, const Json& argumen
 
     ToolOutcome outcome = dispatch_
                               ? dispatch_(name, arguments)
-                              : ToolFailure{"SERVER_NOT_READY", "The Phase 1 tool backend is not connected.", true,
+                              : ToolFailure{"SERVER_NOT_READY", "The MCP backend is not connected.", true,
                                             {{"tool", std::string(name)}}};
     if (const auto* value = std::get_if<Json>(&outcome)) return mcp_result(*value, false);
 

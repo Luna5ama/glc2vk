@@ -12,12 +12,12 @@
 
 namespace vibris::mcp {
 
-class PhaseTwoSourceHandler final {
+class SourceHandler final {
 public:
-    explicit PhaseTwoSourceHandler(std::filesystem::path workspace_root);
-    ~PhaseTwoSourceHandler();
+    explicit SourceHandler(std::filesystem::path workspace_root);
+    ~SourceHandler();
 
-    [[nodiscard]] Json prepare(
+    void prepare(
         std::string_view tool_name,
         const Json& arguments,
         const ::vibris::control::v1::ServerHello& server);

@@ -38,7 +38,7 @@ ToolFailure transport_failure(const grpc::Status& status) {
 }
 
 SynchronousJobRunner::SynchronousJobRunner(
-    GrpcClient& client, PhaseTwoSourceHandler& sources, const SessionConfig& config,
+    GrpcClient& client, SourceHandler& sources, const SessionConfig& config,
     const std::chrono::milliseconds maximum_wait)
     : client_(client), sources_(sources), config_(config), maximum_wait_(maximum_wait) {
     if (maximum_wait_.count() < 0) throw std::invalid_argument("maximum wait must not be negative");
@@ -47,7 +47,7 @@ SynchronousJobRunner::SynchronousJobRunner(
 ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& arguments,
     const proto::ServerHello& server, const proto::SceneContext& context) {
     const auto request_id = detail::generate_uuid();
-    (void)sources_.prepare(tool_name, arguments, server);
+    sources_.prepare(tool_name, arguments, server);
     const auto references = sources_.bind_latest(request_id);
     try {
         auto request = JobProtocol::request(tool_name, arguments, config_, context, references, request_id);

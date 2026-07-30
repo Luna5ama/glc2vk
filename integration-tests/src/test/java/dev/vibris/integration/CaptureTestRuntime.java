@@ -29,7 +29,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
-final class PhaseSixRuntime implements VibrisRuntimeAdapter {
+final class CaptureTestRuntime implements VibrisRuntimeAdapter {
     private final Path shaderLink;
     private final Map<String, ResourceCatalog.ResourceDescriptor> resources;
     private final AtomicLong frame = new AtomicLong(100);
@@ -40,7 +40,7 @@ final class PhaseSixRuntime implements VibrisRuntimeAdapter {
     volatile boolean baselineDeletedBeforeCandidateCapture;
     private volatile String active = "none";
 
-    PhaseSixRuntime(Path shaderLink) {
+    CaptureTestRuntime(Path shaderLink) {
         this.shaderLink = shaderLink.resolve("shaders");
         resources = Map.of(
             "beauty", resource("beauty", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 4, 16),

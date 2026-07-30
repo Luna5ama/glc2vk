@@ -26,7 +26,7 @@ class FakeVibrisServer private constructor(
 
     fun isTerminated(): Boolean = server.isTerminated
 
-    fun phaseThreeProbe(): FakeRuntimeProbe = probe
+    fun testProbe(): FakeRuntimeProbe = probe
 
     @Throws(InterruptedException::class)
     override fun close() {

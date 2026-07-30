@@ -1,4 +1,4 @@
-#include "phase_two_source_handler.hpp"
+#include "source_handler.hpp"
 #include "workspace_source_fixture.hpp"
 
 #include <array>
@@ -15,7 +15,7 @@ namespace {
 namespace fs = std::filesystem;
 namespace proto = ::vibris::control::v1;
 using vibris::mcp::Json;
-using vibris::mcp::PhaseTwoSourceHandler;
+using vibris::mcp::SourceHandler;
 using vibris::mcp::test::WorkspaceFixture;
 using vibris::mcp::test::require;
 
@@ -28,10 +28,11 @@ proto::ServerHello server(const WorkspaceFixture& fixture) {
     return hello;
 }
 
-std::vector<fs::path> prepared_paths(const Json& result, const WorkspaceFixture& fixture) {
+std::vector<fs::path> prepared_paths(
+    const std::vector<proto::PreparedSourceRef>& sources, const WorkspaceFixture& fixture) {
     std::vector<fs::path> paths;
-    for (const auto& source : result.at("prepared_sources")) {
-        paths.push_back(fixture.pending() / source.at("uuid").get<std::string>());
+    for (const auto& source : sources) {
+        paths.push_back(fixture.pending() / source.uuid());
     }
     return paths;
 }
@@ -46,15 +47,15 @@ proto::ServerMessage accepted(std::string_view id) {
 void single_job_accepted_transfers_ab_sources_once() {
     // Given: one A/B preparation batch containing two independently owned source directories.
     WorkspaceFixture fixture;
-    PhaseTwoSourceHandler handler(fixture.worktree());
+    SourceHandler handler(fixture.worktree());
     const Json arguments{
         {"recipe", "ab_compare"},
         {"a", {{"source", {{"kind", "workspace"}}}}},
         {"b", {{"source", {{"kind", "workspace"}}}}},
     };
-    const auto paths = prepared_paths(handler.prepare("vibris_run_recipe", arguments, server(fixture)), fixture);
+    handler.prepare("vibris_run_recipe", arguments, server(fixture));
+    const auto paths = prepared_paths(handler.bind_latest("job-ab"), fixture);
     require(paths.size() == 2, "A/B fixture did not prepare exactly two sources.");
-    handler.bind_latest("job-ab");
 
     // When: the same JobAccepted is observed twice and the handler releases its remaining state.
     handler.observe(accepted("job-ab"));
@@ -67,21 +68,21 @@ void single_job_accepted_transfers_ab_sources_once() {
 }
 
 fs::path prepare_bound(
-    PhaseTwoSourceHandler& handler,
+    SourceHandler& handler,
     const WorkspaceFixture& fixture,
     const proto::ServerHello& hello,
     std::string_view request_id) {
     const Json arguments{{"source", {{"kind", "workspace"}}}};
-    const auto paths = prepared_paths(handler.prepare("vibris_run_actions", arguments, hello), fixture);
+    handler.prepare("vibris_run_actions", arguments, hello);
+    const auto paths = prepared_paths(handler.bind_latest(std::string(request_id)), fixture);
     require(paths.size() == 1, "Ownership fixture did not prepare exactly one source.");
-    handler.bind_latest(std::string(request_id));
     return paths.front();
 }
 
 void resume_state_controls_source_ownership() {
     // Given: four prepared requests whose acceptance was ambiguous across a stream disconnect.
     WorkspaceFixture fixture;
-    PhaseTwoSourceHandler handler(fixture.worktree());
+    SourceHandler handler(fixture.worktree());
     const auto hello = server(fixture);
     const auto queued = prepare_bound(handler, fixture, hello, "job-queued");
     const auto running = prepare_bound(handler, fixture, hello, "job-running");

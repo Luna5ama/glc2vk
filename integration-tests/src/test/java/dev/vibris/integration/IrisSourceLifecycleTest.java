@@ -45,22 +45,22 @@ final class IrisSourceLifecycleTest {
 
         try {
             assertTrue(bootstrap.port() > 0);
-            PhaseThreeHarness.assertDirectoryEmpty(pendingRoot);
+            IntegrationHarness.assertDirectoryEmpty(pendingRoot);
             assertFalse(Files.exists(shaderLink));
 
-            try (var client = new PhaseThreeHarness.Client(bootstrap.port(), "phase-four-lifecycle")) {
-                var sourceA = PhaseThreeHarness.createSource(pendingRoot, "lifecycle-source-a");
-                client.submit(PhaseThreeHarness.job(
-                    "lifecycle-a", "phase-four-lifecycle", PhaseThreeHarness.context("a"),
+            try (var client = new IntegrationHarness.Client(bootstrap.port(), "source-lifecycle-tests")) {
+                var sourceA = IntegrationHarness.createSource(pendingRoot, "lifecycle-source-a");
+                client.submit(IntegrationHarness.job(
+                    "lifecycle-a", "source-lifecycle-tests", IntegrationHarness.context("a"),
                     sourceA.reference(), 5_000, 1));
                 client.awaitCompleted("lifecycle-a");
 
                 assertEquals(sourceA.directory(), Files.readSymbolicLink(shaderLink));
                 assertTrue(Files.isDirectory(sourceA.directory()));
 
-                var sourceB = PhaseThreeHarness.createSource(pendingRoot, "lifecycle-source-b");
-                client.submit(PhaseThreeHarness.job(
-                    "lifecycle-b", "phase-four-lifecycle", PhaseThreeHarness.context("b"),
+                var sourceB = IntegrationHarness.createSource(pendingRoot, "lifecycle-source-b");
+                client.submit(IntegrationHarness.job(
+                    "lifecycle-b", "source-lifecycle-tests", IntegrationHarness.context("b"),
                     sourceB.reference(), 5_000, 1));
                 client.awaitCompleted("lifecycle-b");
 
@@ -74,7 +74,7 @@ final class IrisSourceLifecycleTest {
         }
 
         assertFalse(Files.exists(shaderLink));
-        PhaseThreeHarness.assertDirectoryEmpty(pendingRoot);
+        IntegrationHarness.assertDirectoryEmpty(pendingRoot);
         assertEquals(1, runtime.closeCount);
     }
 

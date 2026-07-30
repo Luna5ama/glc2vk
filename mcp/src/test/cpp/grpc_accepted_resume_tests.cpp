@@ -34,7 +34,7 @@ void accepted_request_resumes_after_disconnect() {
     GrpcClient client({
         .target = "127.0.0.1:" + std::to_string(port),
         .workspace_id = "accepted-resume-test",
-        .mcp_version = "phase3-test",
+        .mcp_version = "accepted-resume-test",
         .process_instance_uuid = "accepted-resume-test",
         .pending_request_limit = 4,
         .reconnect_delay = 1ms,

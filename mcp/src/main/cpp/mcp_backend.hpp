@@ -11,13 +11,13 @@
 
 namespace vibris::mcp {
 
-class PhaseOneBackend final {
+class McpBackend final {
 public:
-    PhaseOneBackend(std::optional<std::filesystem::path> workspace_root, std::string server_address);
-    ~PhaseOneBackend();
+    McpBackend(std::optional<std::filesystem::path> workspace_root, std::string server_address);
+    ~McpBackend();
 
-    PhaseOneBackend(const PhaseOneBackend&) = delete;
-    PhaseOneBackend& operator=(const PhaseOneBackend&) = delete;
+    McpBackend(const McpBackend&) = delete;
+    McpBackend& operator=(const McpBackend&) = delete;
 
     [[nodiscard]] ToolOutcome dispatch(std::string_view name, const Json& arguments);
     [[nodiscard]] std::optional<GrpcClientStats> shutdown();

@@ -26,8 +26,8 @@ object FakeVibrisServerMain {
                 awaitProbeShutdown()
                 server.close()
                 ProbeJson.write(
-                    server.phaseThreeProbe().snapshot(),
-                    server.phaseThreeProbe().maxConcurrentRuntimeOperations(),
+                    server.testProbe().snapshot(),
+                    server.testProbe().maxConcurrentRuntimeOperations(),
                     System.out,
                 )
             } else {

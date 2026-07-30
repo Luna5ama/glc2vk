@@ -160,9 +160,9 @@ try
     if ([string]::IsNullOrWhiteSpace($PingId))
     {
         $PingId = if ($port -eq 55051) {
-            "phase0-c001"
+            "protocol-c001"
         } elseif ($port -eq 55052) {
-            "phase0-c002"
+            "protocol-c002"
         } else {
             "protocol-smoke-ping"
         }

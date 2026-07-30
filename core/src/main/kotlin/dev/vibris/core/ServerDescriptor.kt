@@ -2,9 +2,10 @@ package dev.vibris.core
 
 import dev.vibris.api.RuntimeStatus
 import dev.vibris.api.VibrisRuntimeAdapter
-import dev.vibris.protocol.v1.ActionKind
 import dev.vibris.protocol.v1.ArtifactFormat
 import dev.vibris.protocol.v1.Capability
+import dev.vibris.protocol.v1.DebugControlKind
+import dev.vibris.protocol.v1.JobActionKind
 import dev.vibris.protocol.v1.RecipeKind
 import dev.vibris.protocol.v1.ResourceCatalog
 import dev.vibris.protocol.v1.ResourceCatalogEntry
@@ -35,13 +36,31 @@ internal class ServerDescriptor @JvmOverloads constructor(
                 RecipeKind.RECIPE_KIND_AB_COMPARE,
             ),
         )
-        .addAllSupportedActions(
+        .addAllSupportedJobActions(
             listOf(
-                ActionKind.ACTION_KIND_RESET_TEMPORAL_STATE,
-                ActionKind.ACTION_KIND_WAIT_FRAMES,
-                ActionKind.ACTION_KIND_CAPTURE_SCREENSHOT,
-                ActionKind.ACTION_KIND_DUMP_TEXTURE,
-                ActionKind.ACTION_KIND_DUMP_BUFFER,
+                JobActionKind.JOB_ACTION_KIND_RESET_TEMPORAL_STATE,
+                JobActionKind.JOB_ACTION_KIND_WAIT_FRAMES,
+                JobActionKind.JOB_ACTION_KIND_CAPTURE_SCREENSHOT,
+                JobActionKind.JOB_ACTION_KIND_DUMP_TEXTURE,
+                JobActionKind.JOB_ACTION_KIND_DUMP_BUFFER,
+            ),
+        )
+        .addAllSupportedDebugControls(
+            listOf(
+                DebugControlKind.DEBUG_CONTROL_KIND_CAPTURE_STATUS,
+                DebugControlKind.DEBUG_CONTROL_KIND_RELOAD_SHADER,
+                DebugControlKind.DEBUG_CONTROL_KIND_CAPTURE_PASS,
+                DebugControlKind.DEBUG_CONTROL_KIND_CAPTURE_MULTI,
+                DebugControlKind.DEBUG_CONTROL_KIND_SHADER_STATUS,
+                DebugControlKind.DEBUG_CONTROL_KIND_SHADER_ERRORS,
+                DebugControlKind.DEBUG_CONTROL_KIND_SCHEDULE_SCREENSHOT,
+                DebugControlKind.DEBUG_CONTROL_KIND_SCREENSHOT_RESULT,
+                DebugControlKind.DEBUG_CONTROL_KIND_GPU_METRICS,
+                DebugControlKind.DEBUG_CONTROL_KIND_LIST_SSBOS,
+                DebugControlKind.DEBUG_CONTROL_KIND_DUMP_SSBO,
+                DebugControlKind.DEBUG_CONTROL_KIND_LIST_TEXTURES,
+                DebugControlKind.DEBUG_CONTROL_KIND_DUMP_TEXTURE,
+                DebugControlKind.DEBUG_CONTROL_KIND_LIST_PATCHED_SHADERS,
             ),
         )
         .addAllSupportedFormats(
@@ -59,13 +78,20 @@ internal class ServerDescriptor @JvmOverloads constructor(
         .addCapabilities(Capability.CAPABILITY_CONTROL_STREAM)
         .addCapabilities(Capability.CAPABILITY_RESUME)
         .addCapabilities(Capability.CAPABILITY_PREPARED_SOURCES)
+        .addCapabilities(Capability.CAPABILITY_RELOAD_AND_CAPTURE)
+        .addCapabilities(Capability.CAPABILITY_CAPTURE_DEBUG_BUNDLE)
+        .addCapabilities(Capability.CAPABILITY_AB_COMPARE)
+        .addCapabilities(Capability.CAPABILITY_ACTION_SEQUENCE)
+        .addCapabilities(Capability.CAPABILITY_ARTIFACT_METADATA)
+        .addCapabilities(Capability.CAPABILITY_DEBUG_CONTROL)
         .setLimits(
             ServerLimits.newBuilder()
                 .setMaxSourceBytes(maxSourceBytes)
                 .setMaxSourceFiles(maxSourceFiles),
         )
         .addAllSupportedRecipes(baseStatus.supportedRecipesList)
-        .addAllSupportedActions(baseStatus.supportedActionsList)
+        .addAllSupportedJobActions(baseStatus.supportedJobActionsList)
+        .addAllSupportedDebugControls(baseStatus.supportedDebugControlsList)
         .addAllSupportedFormats(baseStatus.supportedFormatsList)
         .setPendingShadersRoot(pending.toString())
         .setArtifactRoot(artifacts.root().toString())
