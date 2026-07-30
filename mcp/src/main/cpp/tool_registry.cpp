@@ -120,6 +120,7 @@ Json definition(const char* name, const char* description, Json input_schema, bo
 
 Json build_definitions() {
     const auto empty = closed_object({});
+    const auto metric_frames = bounded_integer(1, 10'000);
     const auto configure = closed_object(
         {{"save_id", {{"type", "string"}, {"minLength", 1}}},
          {"dimension_id", {{"type", "string"}, {"minLength", 1}}},
@@ -136,6 +137,15 @@ Json build_definitions() {
                    false),
         definition("vibris_get_status", "Read MCP, server, runtime, queue, resource, and artifact status.", empty,
                    true),
+        definition("vibris_profile",
+                   "Reload a workspace or commit snapshot, reset temporal state, warm it up, then measure exactly "
+                   "the next requested GPU frames. Prefer this direct runtime profile over capture/replay for shader "
+                   "performance comparisons.",
+                   closed_object({{"source", source_schema()},
+                                  {"config", {{"type", "object"}}},
+                                  {"warmup_frames", bounded_integer(0, std::numeric_limits<std::uint32_t>::max())},
+                                  {"frames", metric_frames}},
+                                 {"frames"}), false),
         definition("vibris_run_recipe",
                    "Prefer this tool for standard shader tests. The MCP prepares immutable source data, submits one "
                    "non-interruptible job, and waits synchronously for the final result. Use vibris_run_actions only "

@@ -260,6 +260,7 @@ try
         "vibris_list_presets",
         "vibris_configure",
         "vibris_get_status",
+        "vibris_profile",
         "vibris_run_recipe",
         "vibris_run_actions",
         "vibris_get_capture_status",
@@ -279,7 +280,7 @@ try
     )
     if ([string]::Join("`n", $listed) -cne [string]::Join("`n", $expectedTools))
     {
-        throw "tools/list did not expose exactly the expected 20-tool surface."
+        throw "tools/list did not expose exactly the expected 21-tool surface."
     }
 
     $configured = Get-ToolPayload (Get-Response -Responses $first.Responses -Id 3)

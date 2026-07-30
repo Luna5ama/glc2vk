@@ -189,6 +189,7 @@ content item and matching structured content.
 | `vibris_list_presets` | optional non-empty `filter` | matching live preset catalog entries |
 | `vibris_configure` | save, dimension, time, camera, FOV, default warmup frames | validated persisted config |
 | `vibris_get_status` | empty object | server/runtime state, queue, resources, pending/artifact roots and quota |
+| `vibris_profile` | source/config, optional warmup, required frame count | direct future-frame GPU timing aggregates |
 | `vibris_run_recipe` | one recipe form below | synchronous terminal job result and artifact metadata |
 | `vibris_run_actions` | optional source plus up to 64 actions | synchronous terminal job result and artifact metadata |
 
@@ -213,6 +214,14 @@ inside `vibris_run_actions`.
 that call, timestamps exactly the next `N` rendered frames, and completes when the final requested frame has been
 collected. Its result contains only aggregate timing fields (`avg`, `p5`, `p50`, and `p95`); callers do not need a
 separate wait or a prior snapshot.
+
+`vibris_profile` is the high-level performance workflow. It snapshots the selected workspace or commit, activates and
+reloads that source with the optional shader config, resets temporal state, waits `warmup_frames` (or the configured
+default), and then measures exactly the next required `frames`. It returns the same `avg`, `p5`, `p50`, and `p95`
+aggregates as `vibris_get_gpu_metrics`. Repeat the tool with different config objects for a controlled settings matrix;
+the scene preset remains fixed by `vibris_configure`. This direct in-game path replaces project-local wrappers for
+routine profiling. Compute capture and external replay/Nsight analysis remain separate diagnostic workflows and are
+not used by `vibris_profile`.
 
 Debug dumps use the running Minecraft instance and execute on its client thread. Optional compute-capture paths are
 resolved inside the game directory; paths escaping it are rejected.

@@ -108,6 +108,7 @@ $expectedTools = @(
     "vibris_list_presets",
     "vibris_configure",
     "vibris_get_status",
+    "vibris_profile",
     "vibris_run_recipe",
     "vibris_run_actions",
     "vibris_get_capture_status",
@@ -128,7 +129,7 @@ $expectedTools = @(
 if ([string]::Join("`n", $tools) -cne [string]::Join("`n", $expectedTools) -or
     @($tools | Select-Object -Unique).Count -ne $expectedTools.Count)
 {
-    throw "Native MCP tool registry does not expose exactly the expected 20-tool surface."
+    throw "Native MCP tool registry does not expose exactly the expected 21-tool surface."
 }
 
 $mixinRoots = @("common", "fabric", "neoforge") | ForEach-Object {
@@ -156,6 +157,6 @@ if ($extraModJars.Count -ne 0)
     throw "Packaging must not emit a separate Vibris mod JAR: $($extraModJars[0].FullName)"
 }
 
-Write-Output ("PASS source_audit=true transport=grpc source_payload=reference tools=20 " +
+Write-Output ("PASS source_audit=true transport=grpc source_payload=reference tools=21 " +
     "jvm_language=kotlin native_mcp=cpp core_iris_jgit_imports=0 vibris_mixins=0 " +
     "renderdoc_dependencies=0 package_exe=1 package_iris_jar=1 extra_mod_jars=0")

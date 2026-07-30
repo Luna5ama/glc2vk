@@ -65,7 +65,7 @@ void registry_has_exactly_the_supported_tools() {
     }
     const std::set<std::string> expected{
         "vibris_get_config", "vibris_list_presets", "vibris_configure",
-        "vibris_get_status", "vibris_run_recipe", "vibris_run_actions",
+        "vibris_get_status", "vibris_profile", "vibris_run_recipe", "vibris_run_actions",
         "vibris_get_capture_status", "vibris_reload_shader", "vibris_capture_pass",
         "vibris_capture_multi", "vibris_get_shader_status", "vibris_get_shader_errors",
         "vibris_schedule_screenshot", "vibris_get_screenshot_result", "vibris_get_gpu_metrics",
@@ -178,6 +178,29 @@ void debug_tools_map_to_distinct_typed_commands() {
         "GPU metric frame count was not mapped to the capture command.");
 }
 
+void profile_schema_requires_bounded_future_frames() {
+    std::size_t dispatches = 0;
+    ToolRegistry registry([&](std::string_view name, const Json& arguments) {
+        ++dispatches;
+        require(name == "vibris_profile", "Profile schema dispatched the wrong tool.");
+        require(arguments.at("frames") == 64, "Profile schema changed the frame count.");
+        return Json{{"accepted", true}};
+    });
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_profile", Json::object())),
+        "Profile accepted a missing frame count.");
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_profile", {{"frames", 0}})),
+        "Profile accepted zero frames.");
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_profile", {{"frames", 10'001}})),
+        "Profile accepted too many frames.");
+    require(std::holds_alternative<Json>(registry.invoke("vibris_profile", {
+        {"source", {{"kind", "workspace"}}},
+        {"config", {{"SETTING_PARALLAX_MODE", 0}}},
+        {"warmup_frames", 32},
+        {"frames", 64},
+    })), "Profile rejected a valid direct runtime measurement.");
+    require(dispatches == 1, "Invalid profile arguments reached dispatch.");
+}
+
 void registry_declares_accurate_tool_annotations() {
     ToolRegistry registry;
     const std::set<std::string> read_only{
@@ -201,6 +224,7 @@ int main() {
         schema_rejects_before_dispatch();
         registry_has_exactly_the_supported_tools();
         debug_tool_schemas_reject_invalid_arguments();
+        profile_schema_requires_bounded_future_frames();
         debug_tools_map_to_distinct_typed_commands();
         registry_declares_accurate_tool_annotations();
         std::cout << "PASS ActionSchemaRejectsForbiddenAndDuplicateTools\n";

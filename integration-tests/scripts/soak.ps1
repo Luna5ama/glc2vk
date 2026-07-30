@@ -188,7 +188,7 @@ function Assert-SoakToolSurface
     $actual = @($response.result.tools | ForEach-Object { $_.name })
     $expected = @(
         "vibris_get_config", "vibris_list_presets", "vibris_configure",
-        "vibris_get_status", "vibris_run_recipe", "vibris_run_actions",
+        "vibris_get_status", "vibris_profile", "vibris_run_recipe", "vibris_run_actions",
         "vibris_get_capture_status", "vibris_reload_shader", "vibris_capture_pass",
         "vibris_capture_multi", "vibris_get_shader_status", "vibris_get_shader_errors",
         "vibris_schedule_screenshot", "vibris_get_screenshot_result", "vibris_get_gpu_metrics",
@@ -198,7 +198,7 @@ function Assert-SoakToolSurface
     if ([string]::Join("`n", $actual) -cne [string]::Join("`n", $expected) -or
         @($actual | Select-Object -Unique).Count -ne $expected.Count)
     {
-        throw "Runtime MCP did not expose exactly the expected 20-tool surface."
+        throw "Runtime MCP did not expose exactly the expected 21-tool surface."
     }
 }
 
