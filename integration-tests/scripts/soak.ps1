@@ -26,7 +26,7 @@ $cleanup = [ordered] @{
     mcp_process_exited = $false
     completion_queues_closed = $false
     worker_threads_joined = $false
-    worktree_mutex_reacquired = $false
+    mcp_restart_succeeded = $false
     iris_process_exited = $false
     grpc_listener_closed = $false
     pending_sources_removed = $false
@@ -495,16 +495,23 @@ finally
         {
             try
             {
-                $probe = @([ordered] @{
+                $restartProbe = @([ordered] @{
                     jsonrpc = "2.0"; id = 1; method = "initialize"
                     params = @{
                         protocolVersion = "2024-11-05"; capabilities = @{}
-                        clientInfo = @{ name = "vibris-soak-lock-probe"; version = "1" }
+                        clientInfo = @{ name = "vibris-soak-restart-probe"; version = "1" }
                     }
                 })
-                [void] (Invoke-G007Mcp -Exe $releaseExe -WorkspaceRoot $scope.WorkspaceRoot `
-                    -Messages $probe -TimeoutSeconds $timeoutSeconds)
-                $cleanup.worktree_mutex_reacquired = $true
+                $restartResponses = @(Invoke-G007Mcp -Exe $releaseExe -WorkspaceRoot $scope.WorkspaceRoot `
+                    -Messages $restartProbe -TimeoutSeconds $timeoutSeconds)
+                $initializeResponse = Get-G007Response -Responses $restartResponses -Id 1
+                if ($null -ne $initializeResponse.PSObject.Properties["error"] -or
+                    $null -eq $initializeResponse.PSObject.Properties["result"] -or
+                    $initializeResponse.result.protocolVersion -cne "2024-11-05")
+                {
+                    throw "MCP restart probe returned an invalid initialize response."
+                }
+                $cleanup.mcp_restart_succeeded = $true
             }
             catch
             {
@@ -580,4 +587,4 @@ if ($null -ne $failure)
 Write-Output ("PASS criterion=G008-C003 iterations=$Iterations source_bytes=$SourceBytes " +
     "reload_capture=$([bool] $ReloadCapture) metrics=$metricsPath")
 Write-Output ("CLEANUP criterion=G008-C003 mcp_closed=true workers_joined=true listener_closed=true " +
-    "mutex_reacquired=true pending_removed=true root_removed=true")
+    "mcp_restart_succeeded=true pending_removed=true root_removed=true")

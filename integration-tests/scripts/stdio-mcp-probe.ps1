@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)] [string] $WorkspaceRoot,
     [Parameter(Mandatory)] [string] $FakeServerJar,
     [Parameter(Mandatory)] [string] $Requests,
-    [int] $TimeoutSeconds = 15
+    [ValidateRange(1, 60)] [int] $TimeoutSeconds = 15
 )
 
 Set-StrictMode -Version Latest
@@ -132,9 +132,12 @@ function Invoke-Mcp
     }
 
     $lines = @($stdout -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    if ($lines.Count -ne $Messages.Count)
+    $expectedResponseCount = @($Messages | Where-Object {
+        $_.PSObject.Properties.Name -contains "id"
+    }).Count
+    if ($lines.Count -ne $expectedResponseCount)
     {
-        throw "Expected $($Messages.Count) JSON-RPC responses, received $($lines.Count). stdout: $stdout"
+        throw "Expected $expectedResponseCount JSON-RPC responses, received $($lines.Count). stdout: $stdout"
     }
     $responses = @($lines | ForEach-Object { $_ | ConvertFrom-Json })
     if (@($responses | Where-Object { $_.jsonrpc -ne "2.0" }).Count -ne 0)
@@ -214,6 +217,21 @@ try
     {
         throw "Expected six request fixture messages, found $($messages.Count)."
     }
+    $initializeRequest = $messages[0]
+    if ($initializeRequest.method -cne "initialize" -or
+        $initializeRequest.params.protocolVersion -cne "2024-11-05" -or
+        -not ($initializeRequest.params.PSObject.Properties.Name -contains "capabilities") -or
+        [string]::IsNullOrWhiteSpace([string] $initializeRequest.params.clientInfo.name) -or
+        [string]::IsNullOrWhiteSpace([string] $initializeRequest.params.clientInfo.version))
+    {
+        throw "Initialize fixture must contain the complete 2024-11-05 client handshake."
+    }
+    $initializedNotification = [ordered]@{
+        jsonrpc = "2.0"
+        method = "notifications/initialized"
+        params = @{}
+    }
+    $sessionMessages = @($messages[0], $initializedNotification) + @($messages[1..($messages.Count - 1)])
 
     [void] (New-Item -ItemType Directory -Path $tempBase -Force)
     if (Test-Path -LiteralPath $tempRoot)
@@ -247,9 +265,9 @@ try
     $ownedProcesses.Add($server)
     Wait-ForServer -Server $server
 
-    $first = Invoke-Mcp -Messages $messages
+    $first = Invoke-Mcp -Messages $sessionMessages
     $initialize = Get-Response -Responses $first.Responses -Id 1
-    if ($initialize.result.protocolVersion -ne "2024-11-05")
+    if ($initialize.result.protocolVersion -cne "2024-11-05")
     {
         throw "Native stdio MCP negotiated an unexpected protocol version."
     }
@@ -281,11 +299,6 @@ try
     {
         throw "vibris_configure workspace_id is not a UUID: $workspaceId"
     }
-    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf))
-    {
-        throw "vibris_configure did not persist $configPath."
-    }
-
     $config = Get-ToolPayload (Get-Response -Responses $first.Responses -Id 4)
     if (@(Get-NamedValue -Value $config -Name "workspace_id") -cnotcontains $workspaceId)
     {
@@ -304,14 +317,16 @@ try
         throw "vibris_list_presets did not expose the fake gRPC preset."
     }
 
-    $restartMessages = @($messages | Where-Object { $_.id -in @(1, 4) })
+    $restartRequests = @($messages | Where-Object { $_.id -in @(1, 4) })
+    $restartMessages = @($restartRequests[0], $initializedNotification, $restartRequests[1])
     $second = Invoke-Mcp -Messages $restartMessages
     $restartedConfig = Get-ToolPayload (Get-Response -Responses $second.Responses -Id 4)
-    if (@(Get-NamedValue -Value $restartedConfig -Name "workspace_id") -cnotcontains $workspaceId)
+    if (@(Get-NamedValue -Value $restartedConfig -Name "workspace_id") -cnotcontains $workspaceId -or
+        $restartedConfig.configured -ne $false -or $null -ne $restartedConfig.config)
     {
-        throw "Native stdio MCP restart did not preserve workspace_id $workspaceId."
+        throw "Native stdio MCP restart did not preserve identity with an unconfigured process-local scene."
     }
-    Write-Output "PASS tools=6 workspace_id=$workspaceId grpc_status=test-save restart_persisted=true"
+    Write-Output "PASS tools=7 workspace_id=$workspaceId grpc_status=test-save restart_unconfigured=true"
 }
 finally
 {

@@ -327,7 +327,7 @@ if(BUILD_TESTING)
     endfunction()
 
     add_stdio_mcp_probe(StdioMcpToolHappyPath)
-    add_stdio_mcp_probe(ConfigPersistence)
+    add_stdio_mcp_probe(RestartIsUnconfigured)
     add_stdio_mcp_probe(FakeServerStatus)
     add_stdio_mcp_probe(StdioLifecycle)
 
