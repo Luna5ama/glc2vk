@@ -161,6 +161,62 @@ function New-IrisPreparedSource
     }
 }
 
+function Read-IrisEventLines
+{
+    param([Parameter(Mandatory)] [string] $Path)
+
+    $stream = [System.IO.FileStream]::new(
+        $Path,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read,
+        [System.IO.FileShare]::ReadWrite)
+    try
+    {
+        $snapshotLength = $stream.Length
+        if ($snapshotLength -gt [int]::MaxValue)
+        {
+            throw [System.IO.InvalidDataException]::new("Iris event file exceeds the bounded reader limit.")
+        }
+        $bytes = [byte[]]::new([int] $snapshotLength)
+        $offset = 0
+        while ($offset -lt $bytes.Length)
+        {
+            $read = $stream.Read($bytes, $offset, $bytes.Length - $offset)
+            if ($read -eq 0) { break }
+            $offset += $read
+        }
+    }
+    finally
+    {
+        $stream.Dispose()
+    }
+
+    while ($offset -gt 0 -and $bytes[$offset - 1] -ne 10) { $offset-- }
+    if ($offset -eq 0) { return [string[]]::new(0) }
+
+    $snapshot = [System.IO.MemoryStream]::new($bytes, 0, $offset, $false, $true)
+    $reader = [System.IO.StreamReader]::new(
+        $snapshot,
+        [System.Text.UTF8Encoding]::new($false, $true),
+        $true,
+        4096,
+        $false)
+    try
+    {
+        $lines = [System.Collections.Generic.List[string]]::new()
+        while (-not $reader.EndOfStream)
+        {
+            $line = $reader.ReadLine()
+            if ($null -ne $line) { $lines.Add($line) }
+        }
+        return $lines.ToArray()
+    }
+    finally
+    {
+        $reader.Dispose()
+    }
+}
+
 function Wait-IrisEvent
 {
     param(
@@ -177,7 +233,7 @@ function Wait-IrisEvent
         {
             try
             {
-                $lines = [System.IO.File]::ReadAllLines($Scope.EventFile)
+                $lines = Read-IrisEventLines -Path $Scope.EventFile
             }
             catch [System.IO.IOException]
             {
