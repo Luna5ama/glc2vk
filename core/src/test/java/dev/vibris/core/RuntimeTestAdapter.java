@@ -10,6 +10,7 @@ import dev.vibris.api.ResourceCatalog;
 import dev.vibris.api.RuntimeStatus;
 import dev.vibris.api.RuntimeAction;
 import dev.vibris.api.SceneContext;
+import dev.vibris.api.ScenePreset;
 import dev.vibris.api.TemporalResetResult;
 import dev.vibris.api.VibrisRuntimeAdapter;
 
@@ -31,6 +32,8 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     CaptureResult captureResult = new CaptureResult(0, Map.of());
     final Map<String, byte[]> captureFiles = new LinkedHashMap<>();
     Map<String, String> lastShaderConfig;
+    SceneContext lastContext;
+    List<ScenePreset> presets = List.of();
     Runnable beforeReloadResult = () -> {};
     RuntimeException closeFailure;
     int closeCount;
@@ -41,11 +44,17 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     }
 
     @Override
+    public CompletionStage<List<ScenePreset>> listPresets() {
+        return CompletableFuture.completedFuture(presets);
+    }
+
+    @Override
     public CompletionStage<ContextApplyResult> ensureWorldAndContext(
         SceneContext context,
         CancellationToken cancellation
     ) {
         events.add("context");
+        lastContext = context;
         return completed(cancellation, ContextApplyResult.success(context));
     }
 

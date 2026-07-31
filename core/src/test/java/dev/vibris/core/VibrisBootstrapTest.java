@@ -1,8 +1,12 @@
 package dev.vibris.core;
 
+import dev.vibris.api.SceneContext;
+import dev.vibris.api.ScenePreset;
 import dev.vibris.protocol.v1.ErrorCode;
 import dev.vibris.protocol.v1.GetStatusRequest;
 import dev.vibris.protocol.v1.GetStatusResponse;
+import dev.vibris.protocol.v1.ValidateContextRequest;
+import dev.vibris.protocol.v1.ValidateContextResponse;
 import dev.vibris.protocol.v1.VibrisControlGrpc;
 import io.grpc.BindableService;
 import io.grpc.ManagedChannel;
@@ -170,6 +174,55 @@ class VibrisBootstrapTest {
     }
 
     @Test
+    void validatedContextIsAppliedWhenMinecraftStartsAgain() throws Exception {
+        Path pending = Files.createDirectory(temp.resolve("auto-enter-pending"));
+        Path artifacts = Files.createDirectory(temp.resolve("auto-enter-artifacts"));
+        Path shaderpack = Files.createDirectory(temp.resolve("auto-enter-shaderpack"));
+        writeServerConfig(temp, pending, artifacts, shaderpack, 50125);
+        AtomicReference<BindableService> captured = new AtomicReference<>();
+        RuntimeTestAdapter configuredRuntime = new RuntimeTestAdapter();
+        VibrisBootstrap configured = VibrisBootstrap.start(temp, configuredRuntime, (address, service) -> {
+            captured.set(service);
+            return new TestListener();
+        });
+        dev.vibris.protocol.v1.SceneContext context = dev.vibris.protocol.v1.SceneContext.newBuilder()
+            .setSaveId("shader-test-world")
+            .setDimensionId("minecraft:overworld")
+            .setTimePresetId("rooftop")
+            .setCameraPresetId("rooftop")
+            .setFov(70.0)
+            .build();
+
+        ValidateContextResponse validation = validate(captured.get(), context);
+        configured.close();
+
+        assertTrue(validation.getValid());
+        RuntimeTestAdapter restartedRuntime = new RuntimeTestAdapter();
+        restartedRuntime.presets = List.of(new ScenePreset(
+            "rooftop",
+            "Rooftop",
+            new SceneContext(
+                "shader-test-world",
+                "minecraft:overworld",
+                "rooftop",
+                "clear",
+                "rooftop",
+                70.0,
+                new SceneContext.Resolution(1280, 720),
+                "default"
+            )
+        ));
+        VibrisBootstrap restarted = VibrisBootstrap.start(temp, restartedRuntime, (address, service) ->
+            new TestListener());
+        assertEquals(List.of("context"), restartedRuntime.events);
+        assertEquals("shader-test-world", restartedRuntime.lastContext.saveId());
+        assertEquals("rooftop", restartedRuntime.lastContext.cameraPresetId());
+        assertEquals("clear", restartedRuntime.lastContext.weatherPresetId());
+        assertEquals(new SceneContext.Resolution(1280, 720), restartedRuntime.lastContext.resolution());
+        restarted.close();
+    }
+
+    @Test
     void startupCleansLinkAndPendingRootBeforeListenerStarts() throws Exception {
         // Given
         Path pending = Files.createDirectory(temp.resolve("pending"));
@@ -315,6 +368,34 @@ class VibrisBootstrapTest {
             }
         );
         assertTrue(failure.get() == null, () -> "GetStatus failed: " + failure.get());
+        return response.get();
+    }
+
+    private static ValidateContextResponse validate(
+        BindableService service,
+        dev.vibris.protocol.v1.SceneContext context
+    ) {
+        AtomicReference<ValidateContextResponse> response = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        ((VibrisControlGrpc.VibrisControlImplBase) service).validateContext(
+            ValidateContextRequest.newBuilder().setContext(context).build(),
+            new StreamObserver<>() {
+                @Override
+                public void onNext(ValidateContextResponse value) {
+                    response.set(value);
+                }
+
+                @Override
+                public void onError(Throwable throwable) {
+                    failure.set(throwable);
+                }
+
+                @Override
+                public void onCompleted() {
+                }
+            }
+        );
+        assertTrue(failure.get() == null, () -> "ValidateContext failed: " + failure.get());
         return response.get();
     }
 
