@@ -1,81 +1,1387 @@
 [CmdletBinding()]
 param(
-    [string] $McpExe,
-    [string] $IrisJar,
-    [string] $OutputDirectory
+    [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $McpExe,
+    [Parameter(Mandatory)] [Alias("IrisJar")] [ValidateNotNullOrEmpty()] [string] $PatchedIrisJar,
+    [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $BuildReceipt,
+    [string] $OutputDirectory,
+    [Parameter(DontShow)]
+    [ValidateSet("None", "ManifestLocked", "StateLocked", "RootRemoval")]
+    [string] $TestCleanupFailure = "None",
+    [Parameter(DontShow)] [string] $TestBeforeRecordReady,
+    [Parameter(DontShow)] [string] $TestBeforeRecordAck
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-$irisRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "..\Iris"))
-$buildRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "build"))
-if (-not $McpExe) { $McpExe = Join-Path $repoRoot "mcp\out\build\Release\vibris-mcp.exe" }
-if (-not $OutputDirectory) { $OutputDirectory = Join-Path $buildRoot "delivery" }
-if (-not $IrisJar)
-{
-    $IrisJar = Get-ChildItem -LiteralPath (Join-Path $irisRoot "build\libs") `
-        -Filter "iris-fabric-*-local.jar" -File |
-        Sort-Object LastWriteTimeUtc -Descending |
-        Select-Object -First 1 -ExpandProperty FullName
-}
 
-$McpExe = [System.IO.Path]::GetFullPath($McpExe)
-$IrisJar = [System.IO.Path]::GetFullPath($IrisJar)
-$OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
-$buildPrefix = $buildRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) +
-    [System.IO.Path]::DirectorySeparatorChar
-if (-not $OutputDirectory.StartsWith($buildPrefix, [System.StringComparison]::OrdinalIgnoreCase))
+function ConvertTo-NormalizedPath
 {
-    throw "OutputDirectory must be below $buildRoot."
-}
-if (-not (Test-Path -LiteralPath $McpExe -PathType Leaf)) { throw "Missing MCP executable: $McpExe" }
-if (-not (Test-Path -LiteralPath $IrisJar -PathType Leaf)) { throw "Missing patched Iris JAR: $IrisJar" }
+    param([Parameter(Mandatory)] [string] $Path)
 
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-$archive = [System.IO.Compression.ZipFile]::OpenRead($IrisJar)
-try
-{
-    $entries = @($archive.Entries | ForEach-Object FullName)
-    foreach ($pattern in @(
-        "META-INF/jars/vibris-api-*.jar",
-        "META-INF/jars/vibris-core-*.jar",
-        "META-INF/jars/vibris-protocol-java.jar",
-        "META-INF/jars/grpc-*.jar"))
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $root = [System.IO.Path]::GetPathRoot($fullPath)
+    if ($fullPath.Length -gt $root.Length)
     {
-        if (@($entries | Where-Object { $_ -like $pattern }).Count -eq 0)
+        $fullPath = $fullPath.TrimEnd(
+            [System.IO.Path]::DirectorySeparatorChar,
+            [System.IO.Path]::AltDirectorySeparatorChar)
+    }
+    if (Test-Path -LiteralPath $fullPath)
+    {
+        $fullPath = (Get-Item -LiteralPath $fullPath -Force).FullName
+        $root = [System.IO.Path]::GetPathRoot($fullPath)
+        if ($fullPath.Length -gt $root.Length)
         {
-            throw "Patched Iris JAR is missing embedded dependency $pattern."
+            $fullPath = $fullPath.TrimEnd(
+                [System.IO.Path]::DirectorySeparatorChar,
+                [System.IO.Path]::AltDirectorySeparatorChar)
+        }
+    }
+    return $fullPath
+}
+
+function Assert-NoReparseComponents
+{
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [string] $Label,
+        [switch] $RequireExisting
+    )
+
+    $fullPath = ConvertTo-NormalizedPath -Path $Path
+    $root = [System.IO.Path]::GetPathRoot($fullPath)
+    $rootItem = Get-Item -LiteralPath $root -Force
+    if ($rootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+    {
+        throw "$Label traverses a reparse-point root: $root"
+    }
+
+    $current = $root
+    $missing = $false
+    $relative = $fullPath.Substring($root.Length)
+    foreach ($component in @($relative -split '[\\/]' | Where-Object { $_.Length -ne 0 }))
+    {
+        $current = Join-Path $current $component
+        if ($missing -or -not (Test-Path -LiteralPath $current))
+        {
+            $missing = $true
+            continue
+        }
+        $item = Get-Item -LiteralPath $current -Force
+        if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+        {
+            throw "$Label traverses a reparse point: $($item.FullName)"
+        }
+    }
+    if ($RequireExisting -and $missing)
+    {
+        throw "$Label does not exist: $fullPath"
+    }
+    return $fullPath
+}
+
+function Ensure-OrdinaryDirectory
+{
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [string] $Label
+    )
+
+    $fullPath = Assert-NoReparseComponents -Path $Path -Label $Label
+    $root = [System.IO.Path]::GetPathRoot($fullPath)
+    $current = $root
+    $relative = $fullPath.Substring($root.Length)
+    foreach ($component in @($relative -split '[\\/]' | Where-Object { $_.Length -ne 0 }))
+    {
+        $current = Join-Path $current $component
+        if (-not (Test-Path -LiteralPath $current))
+        {
+            [void] (New-Item -ItemType Directory -Path $current)
+        }
+        $item = Get-Item -LiteralPath $current -Force
+        if (-not $item.PSIsContainer -or
+            $item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+        {
+            throw "$Label must contain only ordinary directories: $($item.FullName)"
+        }
+    }
+    return (ConvertTo-NormalizedPath -Path $fullPath)
+}
+
+function Assert-ContainedPath
+{
+    param(
+        [Parameter(Mandatory)] [string] $Root,
+        [Parameter(Mandatory)] [string] $Candidate,
+        [Parameter(Mandatory)] [string] $Label
+    )
+
+    $relative = [System.IO.Path]::GetRelativePath($Root, $Candidate)
+    if ($relative -eq "." -or [System.IO.Path]::IsPathRooted($relative) -or
+        $relative -eq ".." -or
+        $relative.StartsWith("..\", [System.StringComparison]::Ordinal) -or
+        $relative.StartsWith("../", [System.StringComparison]::Ordinal))
+    {
+        throw "$Label must be below $Root`: $Candidate"
+    }
+}
+
+function Test-IsSameOrDescendant
+{
+    param(
+        [Parameter(Mandatory)] [string] $Root,
+        [Parameter(Mandatory)] [string] $Candidate
+    )
+
+    if ([string]::Equals($Root, $Candidate, [System.StringComparison]::OrdinalIgnoreCase))
+    {
+        return $true
+    }
+    $relative = [System.IO.Path]::GetRelativePath($Root, $Candidate)
+    return -not [System.IO.Path]::IsPathRooted($relative) -and $relative -ne ".." -and
+        -not $relative.StartsWith("..\", [System.StringComparison]::Ordinal) -and
+        -not $relative.StartsWith("../", [System.StringComparison]::Ordinal)
+}
+
+function Resolve-OrdinaryFile
+{
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [string] $Label
+    )
+
+    $fullPath = Assert-NoReparseComponents -Path $Path -Label $Label -RequireExisting
+    $item = Get-Item -LiteralPath $fullPath -Force
+    if ($item.PSIsContainer -or $item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+    {
+        throw "$Label must be an ordinary file: $fullPath"
+    }
+    return $item.FullName
+}
+
+function Get-FileRecord
+{
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [string] $Name
+    )
+
+    $item = Get-Item -LiteralPath $Path -Force
+    return [ordered] @{
+        name = $Name
+        length = [long] $item.Length
+        sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $item.FullName).Hash
+    }
+}
+
+function Assert-RecordMatches
+{
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [object] $Record,
+        [Parameter(Mandatory)] [string] $Label
+    )
+
+    $file = Resolve-OrdinaryFile -Path $Path -Label $Label
+    $item = Get-Item -LiteralPath $file -Force
+    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash
+    if ($item.Length -ne [long] $Record.length -or $hash -cne [string] $Record.sha256)
+    {
+        throw "$Label does not match its transaction record: $file"
+    }
+}
+
+function Get-ExistingDeliveryRecord
+{
+    param([Parameter(Mandatory)] [string] $Directory)
+
+    if (-not (Test-Path -LiteralPath $Directory))
+    {
+        return [ordered] @{ present = $false }
+    }
+    [void] (Assert-NoReparseComponents -Path $Directory -Label "Existing delivery" -RequireExisting)
+    $directoryItem = Get-Item -LiteralPath $Directory -Force
+    if (-not $directoryItem.PSIsContainer)
+    {
+        throw "Existing delivery is not a directory: $Directory"
+    }
+    $entries = @(Get-ChildItem -LiteralPath $Directory -Force)
+    if ($entries.Count -ne 2 -or @($entries | Where-Object {
+        $_.PSIsContainer -or $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint
+    }).Count -ne 0)
+    {
+        throw "Existing delivery must contain exactly two ordinary files: $Directory"
+    }
+    $mcp = @($entries | Where-Object { $_.Name -ceq "vibris-mcp.exe" })
+    $jar = @($entries | Where-Object { $_.Name -cmatch '^iris-fabric-.+-local[.]jar$' })
+    if ($mcp.Count -ne 1 -or $jar.Count -ne 1)
+    {
+        throw "Existing delivery has unexpected file names: $Directory"
+    }
+    return [ordered] @{
+        present = $true
+        mcp = Get-FileRecord -Path $mcp[0].FullName -Name $mcp[0].Name
+        iris = Get-FileRecord -Path $jar[0].FullName -Name $jar[0].Name
+    }
+}
+
+function Assert-DeliveryRecordShape
+{
+    param(
+        [Parameter(Mandatory)] [object] $Record,
+        [Parameter(Mandatory)] [string] $Label
+    )
+
+    if (-not [bool] $Record.present) { return }
+    $mcpName = [string] $Record.mcp.name
+    $irisName = [string] $Record.iris.name
+    if ($mcpName -cne "vibris-mcp.exe" -or
+        $irisName -cnotmatch '^iris-fabric-.+-local[.]jar$' -or
+        [string]::Equals($mcpName, $irisName, [System.StringComparison]::OrdinalIgnoreCase))
+    {
+        throw "$Label has invalid or duplicate delivery record names."
+    }
+    foreach ($fileRecord in @($Record.mcp, $Record.iris))
+    {
+        if ([long] $fileRecord.length -lt 0 -or
+            [string] $fileRecord.sha256 -cnotmatch '^[0-9A-F]{64}$')
+        {
+            throw "$Label has an invalid delivery file record."
         }
     }
 }
-finally
+
+function Assert-DeliveryMatches
 {
-    $archive.Dispose()
+    param(
+        [Parameter(Mandatory)] [string] $Directory,
+        [Parameter(Mandatory)] [object] $Record,
+        [Parameter(Mandatory)] [string] $Label
+    )
+
+    Assert-DeliveryRecordShape -Record $Record -Label $Label
+    if (-not [bool] $Record.present)
+    {
+        if (Test-Path -LiteralPath $Directory) { throw "$Label must be absent: $Directory" }
+        return
+    }
+    [void] (Assert-NoReparseComponents -Path $Directory -Label $Label -RequireExisting)
+    $entries = @(Get-ChildItem -LiteralPath $Directory -Force)
+    if ($entries.Count -ne 2 -or @($entries | Where-Object {
+        $_.PSIsContainer -or $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint
+    }).Count -ne 0)
+    {
+        throw "$Label must contain exactly two ordinary files: $Directory"
+    }
+    $names = @($entries | ForEach-Object Name)
+    if ($names -cnotcontains [string] $Record.mcp.name -or
+        $names -cnotcontains [string] $Record.iris.name)
+    {
+        throw "$Label file names do not match its transaction record: $Directory"
+    }
+    Assert-RecordMatches -Path (Join-Path $Directory ([string] $Record.mcp.name)) `
+        -Record $Record.mcp -Label "$Label MCP"
+    Assert-RecordMatches -Path (Join-Path $Directory ([string] $Record.iris.name)) `
+        -Record $Record.iris -Label "$Label Iris JAR"
 }
 
-$stage = Join-Path $buildRoot (".delivery-" + [guid]::NewGuid().ToString("N"))
-[void] (New-Item -ItemType Directory -Path $stage)
+function Get-DeliveryRecordNames
+{
+    param([Parameter(Mandatory)] [object] $Record)
+
+    if (-not [bool] $Record.present) { return @() }
+    return @([string] $Record.mcp.name, [string] $Record.iris.name)
+}
+
+function Test-DeliveryMatches
+{
+    param(
+        [Parameter(Mandatory)] [string] $Directory,
+        [Parameter(Mandatory)] [object] $Record
+    )
+
+    try
+    {
+        Assert-DeliveryMatches -Directory $Directory -Record $Record -Label "Delivery"
+        return $true
+    }
+    catch
+    {
+        return $false
+    }
+}
+
+function Write-AtomicText
+{
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [string] $Text
+    )
+
+    $nextPath = "$Path.next"
+    if (Test-Path -LiteralPath $nextPath)
+    {
+        [void] (Assert-NoReparseComponents -Path $nextPath -Label "Transaction metadata temp" -RequireExisting)
+        Remove-Item -LiteralPath $nextPath -Force
+    }
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    $bytes = $encoding.GetBytes($Text)
+    $stream = [System.IO.File]::Open(
+        $nextPath,
+        [System.IO.FileMode]::CreateNew,
+        [System.IO.FileAccess]::Write,
+        [System.IO.FileShare]::None)
+    try
+    {
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush($true)
+    }
+    finally
+    {
+        $stream.Dispose()
+    }
+    [System.IO.File]::Move($nextPath, $Path, $true)
+}
+
+function Remove-ExactFlatDirectory
+{
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [string[]] $AllowedNames,
+        [Parameter(Mandatory)] [string] $Label
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    [void] (Assert-NoReparseComponents -Path $Path -Label $Label -RequireExisting)
+    $item = Get-Item -LiteralPath $Path -Force
+    if (-not $item.PSIsContainer) { throw "$Label is not a directory: $Path" }
+    foreach ($entry in @(Get-ChildItem -LiteralPath $Path -Force))
+    {
+        if ($entry.PSIsContainer -or
+            $entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint -or
+            $AllowedNames -cnotcontains $entry.Name)
+        {
+            throw "$Label contains an unexpected entry: $($entry.FullName)"
+        }
+    }
+    Remove-Item -LiteralPath $Path -Recurse -Force
+}
+
+function Assert-TransactionRootShape
+{
+    param([Parameter(Mandatory)] [string] $Path)
+
+    $allowed = @(
+        "manifest.json", "manifest.json.next", "state.txt", "state.txt.next",
+        "next", "audit", "previous", "failed")
+    foreach ($entry in @(Get-ChildItem -LiteralPath $Path -Force))
+    {
+        if ($allowed -cnotcontains $entry.Name -or
+            $entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+        {
+            throw "Transaction root contains an unexpected entry: $($entry.FullName)"
+        }
+    }
+}
+
+function Remove-TransactionMetadata
+{
+    param([Parameter(Mandatory)] [string] $Root)
+
+    foreach ($name in @("manifest.json.next", "manifest.json", "state.txt.next", "state.txt"))
+    {
+        $path = Join-Path $Root $name
+        if (Test-Path -LiteralPath $path)
+        {
+            [void] (Assert-NoReparseComponents -Path $path -Label "Transaction metadata" -RequireExisting)
+            Remove-Item -LiteralPath $path -Force
+        }
+    }
+    $remaining = @(Get-ChildItem -LiteralPath $Root -Force)
+    if ($remaining.Count -ne 0)
+    {
+        throw "Transaction root is not empty after metadata cleanup: $Root"
+    }
+    Remove-Item -LiteralPath $Root -Force
+}
+
+function Remove-TerminalTransaction
+{
+    param(
+        [Parameter(Mandatory)] [string] $Root,
+        [Parameter(Mandatory)] [string] $Manifest,
+        [Parameter(Mandatory)] [string] $State,
+        [Parameter(Mandatory)] [string] $TerminalState,
+        [Parameter(Mandatory)] [string] $Failure
+    )
+
+    # Payload retirement happens before this durable terminal marker. Once it
+    # exists, recovery is cleanup-only even if either metadata file disappears.
+    Write-AtomicText -Path $State -Text $TerminalState
+
+    $manifestNext = "$Manifest.next"
+    if (Test-Path -LiteralPath $manifestNext)
+    {
+        [void] (Assert-NoReparseComponents -Path $manifestNext `
+            -Label "Transaction manifest temp" -RequireExisting)
+        Remove-Item -LiteralPath $manifestNext -Force
+    }
+    if (Test-Path -LiteralPath $Manifest)
+    {
+        [void] (Assert-NoReparseComponents -Path $Manifest `
+            -Label "Transaction manifest" -RequireExisting)
+        if ($Failure -ceq "ManifestLocked")
+        {
+            $lockedManifest = [System.IO.File]::Open(
+                $Manifest,
+                [System.IO.FileMode]::Open,
+                [System.IO.FileAccess]::Read,
+                [System.IO.FileShare]::Read)
+            try
+            {
+                Remove-Item -LiteralPath $Manifest -Force
+            }
+            finally
+            {
+                $lockedManifest.Dispose()
+            }
+        }
+        else
+        {
+            Remove-Item -LiteralPath $Manifest -Force
+        }
+    }
+
+    $stateNext = "$State.next"
+    if (Test-Path -LiteralPath $stateNext)
+    {
+        [void] (Assert-NoReparseComponents -Path $stateNext `
+            -Label "Transaction state temp" -RequireExisting)
+        Remove-Item -LiteralPath $stateNext -Force
+    }
+    if (Test-Path -LiteralPath $State)
+    {
+        [void] (Assert-NoReparseComponents -Path $State `
+            -Label "Transaction state" -RequireExisting)
+        if ($Failure -ceq "StateLocked")
+        {
+            $lockedState = [System.IO.File]::Open(
+                $State,
+                [System.IO.FileMode]::Open,
+                [System.IO.FileAccess]::Read,
+                [System.IO.FileShare]::Read)
+            try
+            {
+                Remove-Item -LiteralPath $State -Force
+            }
+            finally
+            {
+                $lockedState.Dispose()
+            }
+        }
+        else
+        {
+            Remove-Item -LiteralPath $State -Force
+        }
+    }
+
+    $remaining = @(Get-ChildItem -LiteralPath $Root -Force)
+    if ($remaining.Count -ne 0)
+    {
+        throw "Terminal transaction root is not empty after cleanup: $Root"
+    }
+    if ($Failure -ceq "RootRemoval")
+    {
+        throw "Injected transaction root cleanup interruption: $Root"
+    }
+    Remove-Item -LiteralPath $Root -Force
+}
+
+function Open-ImmutableReadHandle
+{
+    param([Parameter(Mandatory)] [string] $Path)
+
+    return [System.IO.File]::Open(
+        $Path,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read,
+        [System.IO.FileShare]::Read)
+}
+
+function Invoke-GitText
+{
+    param(
+        [Parameter(Mandatory)] [string] $Root,
+        [Parameter(Mandatory)] [string[]] $Arguments,
+        [Parameter(Mandatory)] [string] $Label
+    )
+
+    $text = (& git -C $Root @Arguments 2>$null | Out-String)
+    if ($LASTEXITCODE -ne 0) { throw "$Label failed for $Root" }
+    return $text.Replace("`r`n", "`n").TrimEnd("`n")
+}
+
+function Get-RepositorySourceState
+{
+    param([Parameter(Mandatory)] [string] $Root)
+
+    $root = ConvertTo-NormalizedPath -Path $Root
+    [void] (Assert-NoReparseComponents -Path $root -Label "Receipt repository root" -RequireExisting)
+    $gitRoot = Invoke-GitText -Root $root -Arguments @(
+        "rev-parse", "--show-toplevel") -Label "Git root read"
+    $gitRoot = ConvertTo-NormalizedPath -Path $gitRoot
+    if (-not [string]::Equals($root, $gitRoot, [System.StringComparison]::OrdinalIgnoreCase))
+    {
+        throw "Receipt repository root is not an exact Git worktree root: $root"
+    }
+
+    $head = Invoke-GitText -Root $root -Arguments @("rev-parse", "HEAD") -Label "Git HEAD read"
+    $diff = Invoke-GitText -Root $root -Arguments @(
+        "diff", "--no-ext-diff", "--binary", "HEAD", "--") -Label "Git source diff"
+    $submodules = Invoke-GitText -Root $root -Arguments @(
+        "submodule", "status", "--recursive") -Label "Git submodule state"
+    $untrackedText = Invoke-GitText -Root $root -Arguments @(
+        "ls-files", "--others", "--exclude-standard") -Label "Git untracked source list"
+    $untracked = [System.Collections.Generic.List[object]]::new()
+    foreach ($relative in @($untrackedText -split "`n" | Where-Object { $_.Length -ne 0 } |
+        Sort-Object -CaseSensitive))
+    {
+        $path = Join-Path $root $relative
+        $path = Resolve-OrdinaryFile -Path $path -Label "Git untracked source"
+        $item = Get-Item -LiteralPath $path -Force
+        $untracked.Add([ordered] @{
+            path = $relative.Replace('\', '/')
+            length = [long] $item.Length
+            sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $item.FullName).Hash
+        })
+    }
+    $payload = [ordered] @{
+        head = $head
+        diff = $diff
+        submodules = $submodules
+        untracked = @($untracked)
+    } | ConvertTo-Json -Depth 6 -Compress
+    $hasher = [System.Security.Cryptography.SHA256]::Create()
+    try
+    {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+        $fingerprint = [System.Convert]::ToHexString($hasher.ComputeHash($bytes))
+    }
+    finally
+    {
+        $hasher.Dispose()
+    }
+    return [ordered] @{ head = $head; fingerprint = $fingerprint }
+}
+
+function ConvertTo-ReceiptUtc
+{
+    param([Parameter(Mandatory)] [object] $Value, [Parameter(Mandatory)] [string] $Label)
+
+    try
+    {
+        if ($Value -is [datetime])
+        {
+            return ([datetime] $Value).ToUniversalTime()
+        }
+        if ($Value -is [datetimeoffset])
+        {
+            return ([datetimeoffset] $Value).UtcDateTime
+        }
+        return [datetime]::ParseExact(
+            [string] $Value,
+            "o",
+            [System.Globalization.CultureInfo]::InvariantCulture,
+            [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+    }
+    catch
+    {
+        throw "$Label is not a round-trip UTC timestamp."
+    }
+}
+
+function Assert-ReceiptArtifact
+{
+    param(
+        [Parameter(Mandatory)] [object] $Record,
+        [Parameter(Mandatory)] [string] $ExpectedPath,
+        [Parameter(Mandatory)] [string] $Label,
+        [datetime] $ProducedAfterUtc,
+        [datetime] $ProducedBeforeUtc
+    )
+
+    $path = Resolve-OrdinaryFile -Path $ExpectedPath -Label $Label
+    $recordPath = ConvertTo-NormalizedPath -Path ([string] $Record.path)
+    if (-not [string]::Equals($path, $recordPath, [System.StringComparison]::OrdinalIgnoreCase) -or
+        [long] $Record.length -lt 0 -or
+        [string] $Record.sha256 -cnotmatch '^[0-9A-F]{64}$')
+    {
+        throw "$Label has invalid or mismatched build provenance."
+    }
+    Assert-RecordMatches -Path $path -Record $Record -Label $Label
+    $recordWriteUtc = ConvertTo-ReceiptUtc -Value $Record.last_write_utc `
+        -Label "$Label last_write_utc"
+    $actualWriteUtc = (Get-Item -LiteralPath $path -Force).LastWriteTimeUtc
+    if ($recordWriteUtc.Ticks -ne $actualWriteUtc.Ticks)
+    {
+        throw "$Label write time does not match its build receipt."
+    }
+    if ($PSBoundParameters.ContainsKey("ProducedAfterUtc") -and
+        ($actualWriteUtc -lt $ProducedAfterUtc.AddSeconds(-2) -or
+            $actualWriteUtc -gt $ProducedBeforeUtc.AddSeconds(2)))
+    {
+        throw "$Label is stale for the recorded build phase."
+    }
+}
+
+function Assert-ReceiptSourceCurrent
+{
+    param(
+        [Parameter(Mandatory)] [object] $Receipt,
+        [Parameter(Mandatory)] [string] $VibrisRoot,
+        [Parameter(Mandatory)] [string] $IrisRoot
+    )
+
+    $currentVibris = Get-RepositorySourceState -Root $VibrisRoot
+    $currentIris = Get-RepositorySourceState -Root $IrisRoot
+    if ([string] $Receipt.source.vibris.head -cne $currentVibris.head -or
+        [string] $Receipt.source.vibris.fingerprint -cne $currentVibris.fingerprint -or
+        [string] $Receipt.source.iris.head -cne $currentIris.head -or
+        [string] $Receipt.source.iris.fingerprint -cne $currentIris.fingerprint)
+    {
+        throw "Repository source does not match the recorded delivery build session."
+    }
+}
+
+function Assert-BuildSessionLockActive
+{
+    param([Parameter(Mandatory)] [string] $Path)
+
+    $probe = $null
+    try
+    {
+        $probe = [System.IO.File]::Open(
+            $Path,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::ReadWrite,
+            [System.IO.FileShare]::None)
+    }
+    catch [System.IO.IOException]
+    {
+        return
+    }
+    finally
+    {
+        if ($null -ne $probe) { $probe.Dispose() }
+    }
+    throw "Build receipt session is not active: $Path"
+}
+
+$repoRoot = ConvertTo-NormalizedPath -Path (Join-Path $PSScriptRoot "..")
+$buildRoot = Ensure-OrdinaryDirectory -Path (Join-Path $repoRoot "build") -Label "Vibris build root"
+if (-not $OutputDirectory) { $OutputDirectory = Join-Path $buildRoot "delivery" }
+$OutputDirectory = ConvertTo-NormalizedPath -Path $OutputDirectory
+[void] (Assert-ContainedPath -Root $buildRoot -Candidate $OutputDirectory -Label "OutputDirectory")
+[void] (Assert-NoReparseComponents -Path $OutputDirectory -Label "OutputDirectory")
+$outputParent = Ensure-OrdinaryDirectory -Path (Split-Path -Parent $OutputDirectory) -Label "Delivery parent"
+
+$McpExe = Resolve-OrdinaryFile -Path $McpExe -Label "MCP executable"
+$PatchedIrisJar = Resolve-OrdinaryFile -Path $PatchedIrisJar -Label "Patched Iris JAR"
+if ((Split-Path -Leaf $McpExe) -cne "vibris-mcp.exe")
+{
+    throw "MCP executable must be named vibris-mcp.exe: $McpExe"
+}
+if ((Split-Path -Leaf $PatchedIrisJar) -cnotmatch '^iris-fabric-.+-local[.]jar$')
+{
+    throw "Patched Iris JAR must be an iris-fabric-*-local.jar artifact: $PatchedIrisJar"
+}
+
+$receiptRoot = ConvertTo-NormalizedPath -Path (Join-Path $buildRoot ".delivery-receipts")
+[void] (Assert-NoReparseComponents -Path $receiptRoot -Label "Build receipt root" -RequireExisting)
+$receiptRootItem = Get-Item -LiteralPath $receiptRoot -Force
+if (-not $receiptRootItem.PSIsContainer)
+{
+    throw "Build receipt root is not a directory: $receiptRoot"
+}
+$BuildReceipt = Resolve-OrdinaryFile -Path $BuildReceipt -Label "Build receipt"
+[void] (Assert-ContainedPath -Root $receiptRoot -Candidate $BuildReceipt -Label "BuildReceipt")
 try
 {
-    Copy-Item -LiteralPath $McpExe -Destination (Join-Path $stage "vibris-mcp.exe")
-    Copy-Item -LiteralPath $IrisJar -Destination (Join-Path $stage (Split-Path -Leaf $IrisJar))
-    if (@(Get-ChildItem -LiteralPath $stage -File).Count -ne 2) { throw "Delivery staging is not exact." }
-    if (Test-Path -LiteralPath $OutputDirectory)
-    {
-        Remove-Item -LiteralPath $OutputDirectory -Recurse -Force
-    }
-    Move-Item -LiteralPath $stage -Destination $OutputDirectory
-    $stage = $null
+    $receipt = Get-Content -Raw -LiteralPath $BuildReceipt | ConvertFrom-Json
 }
-finally
+catch
 {
-    if ($stage -and (Test-Path -LiteralPath $stage))
+    throw "Build receipt is malformed: $BuildReceipt"
+}
+if ([int] $receipt.schema_version -ne 1)
+{
+    throw "Build receipt has an unsupported schema: $BuildReceipt"
+}
+$sessionId = [guid]::Empty
+if (-not [guid]::TryParseExact([string] $receipt.session_id, "D", [ref] $sessionId) -or
+    (Split-Path -Leaf $BuildReceipt) -cne "$($sessionId.ToString("D")).json")
+{
+    throw "Build receipt has an invalid session identity: $BuildReceipt"
+}
+$receiptVibrisRoot = ConvertTo-NormalizedPath -Path ([string] $receipt.vibris_root)
+$receiptIrisRoot = ConvertTo-NormalizedPath -Path ([string] $receipt.iris_root)
+if (-not [string]::Equals($repoRoot, $receiptVibrisRoot,
+        [System.StringComparison]::OrdinalIgnoreCase))
+{
+    throw "Build receipt belongs to a different Vibris root."
+}
+$sessionLockPath = Resolve-OrdinaryFile -Path ([string] $receipt.session_lock_path) `
+    -Label "Build receipt session lock"
+$expectedSessionLock = Join-Path $receiptRoot "$($sessionId.ToString("D")).lock"
+if (-not [string]::Equals($sessionLockPath, $expectedSessionLock,
+        [System.StringComparison]::OrdinalIgnoreCase))
+{
+    throw "Build receipt session lock path is invalid."
+}
+Assert-BuildSessionLockActive -Path $sessionLockPath
+
+$buildStarted = ConvertTo-ReceiptUtc -Value $receipt.build_started_utc `
+    -Label "Build receipt build_started_utc"
+$buildCompleted = ConvertTo-ReceiptUtc -Value $receipt.build_completed_utc `
+    -Label "Build receipt build_completed_utc"
+$phaseTimes = @{}
+foreach ($phaseName in @("native", "protocol", "iris"))
+{
+    $phase = $receipt.phases.$phaseName
+    $started = ConvertTo-ReceiptUtc -Value $phase.started_utc `
+        -Label "Build receipt $phaseName started_utc"
+    $completed = ConvertTo-ReceiptUtc -Value $phase.completed_utc `
+        -Label "Build receipt $phaseName completed_utc"
+    if ($started -lt $buildStarted -or $completed -lt $started -or
+        $completed -gt $buildCompleted)
     {
-        Remove-Item -LiteralPath $stage -Recurse -Force
+        throw "Build receipt has an invalid $phaseName phase interval."
+    }
+    $phaseTimes[$phaseName] = [pscustomobject] @{ started = $started; completed = $completed }
+}
+if ($buildCompleted -lt $buildStarted -or $buildCompleted -gt [datetime]::UtcNow.AddMinutes(2))
+{
+    throw "Build receipt has an invalid build interval."
+}
+
+$validatedAuditSources = [ordered] @{
+    java = Resolve-OrdinaryFile -Path (Join-Path $repoRoot `
+        "protocol-java\build\libs\vibris-protocol-java.jar") -Label "Java protocol JAR"
+    cpp = Resolve-OrdinaryFile -Path (Join-Path $repoRoot `
+        "mcp\out\build\Release\vibris-descriptor-dump.exe") -Label "C++ descriptor dump"
+    proto = Resolve-OrdinaryFile -Path (Join-Path $repoRoot `
+        "proto\vibris_control.proto") -Label "Protocol schema"
+}
+$buildScript = Resolve-OrdinaryFile -Path (Join-Path $repoRoot "tools\build-delivery.ps1") `
+    -Label "Delivery build script"
+$packageScript = Resolve-OrdinaryFile -Path $PSCommandPath -Label "Delivery package script"
+Assert-ReceiptSourceCurrent -Receipt $receipt -VibrisRoot $receiptVibrisRoot `
+    -IrisRoot $receiptIrisRoot
+Assert-ReceiptArtifact -Record $receipt.scripts.build -ExpectedPath $buildScript `
+    -Label "Build script provenance"
+Assert-ReceiptArtifact -Record $receipt.scripts.package -ExpectedPath $packageScript `
+    -Label "Package script provenance"
+Assert-ReceiptArtifact -Record $receipt.artifacts.mcp -ExpectedPath $McpExe `
+    -Label "MCP build provenance" -ProducedAfterUtc $phaseTimes.native.started `
+    -ProducedBeforeUtc $phaseTimes.native.completed
+Assert-ReceiptArtifact -Record $receipt.artifacts.iris -ExpectedPath $PatchedIrisJar `
+    -Label "Iris build provenance" -ProducedAfterUtc $phaseTimes.iris.started `
+    -ProducedBeforeUtc $phaseTimes.iris.completed
+Assert-ReceiptArtifact -Record $receipt.artifacts.java_descriptor `
+    -ExpectedPath $validatedAuditSources.java -Label "Java descriptor provenance" `
+    -ProducedAfterUtc $phaseTimes.protocol.started -ProducedBeforeUtc $phaseTimes.protocol.completed
+Assert-ReceiptArtifact -Record $receipt.artifacts.cpp_descriptor `
+    -ExpectedPath $validatedAuditSources.cpp -Label "C++ descriptor provenance" `
+    -ProducedAfterUtc $phaseTimes.native.started -ProducedBeforeUtc $phaseTimes.native.completed
+Assert-ReceiptArtifact -Record $receipt.artifacts.proto `
+    -ExpectedPath $validatedAuditSources.proto -Label "Protocol schema provenance"
+$receiptRecord = Get-FileRecord -Path $BuildReceipt -Name (Split-Path -Leaf $BuildReceipt)
+
+$testBeforeRecord = [bool] $TestBeforeRecordReady -or [bool] $TestBeforeRecordAck
+if ($testBeforeRecord)
+{
+    if (-not $TestBeforeRecordReady -or -not $TestBeforeRecordAck)
+    {
+        throw "Both pre-record test hook paths are required."
+    }
+    $testHookRoot = ConvertTo-NormalizedPath -Path (Join-Path $buildRoot ".delivery-test-hooks")
+    [void] (Assert-NoReparseComponents -Path $testHookRoot `
+        -Label "Pre-record test hook root" -RequireExisting)
+    $TestBeforeRecordReady = ConvertTo-NormalizedPath -Path $TestBeforeRecordReady
+    $TestBeforeRecordAck = ConvertTo-NormalizedPath -Path $TestBeforeRecordAck
+    $testHookSession = Split-Path -Parent $TestBeforeRecordReady
+    $testHookSessionId = [guid]::Empty
+    if (-not [string]::Equals($testHookSession, (Split-Path -Parent $TestBeforeRecordAck),
+            [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not [guid]::TryParseExact(
+            (Split-Path -Leaf $testHookSession), "D", [ref] $testHookSessionId) -or
+        (Split-Path -Leaf $TestBeforeRecordReady) -cne "ready.txt" -or
+        (Split-Path -Leaf $TestBeforeRecordAck) -cne "ack.txt")
+    {
+        throw "Pre-record test hooks must use one GUID session with ready.txt and ack.txt."
+    }
+    [void] (Assert-ContainedPath -Root $testHookRoot -Candidate $testHookSession `
+        -Label "Pre-record test hook session")
+    [void] (Assert-NoReparseComponents -Path $testHookSession `
+        -Label "Pre-record test hook session" -RequireExisting)
+    if ((Test-Path -LiteralPath $TestBeforeRecordReady) -or
+        (Test-Path -LiteralPath $TestBeforeRecordAck))
+    {
+        throw "Pre-record test hook files already exist."
     }
 }
 
-$files = @(Get-ChildItem -LiteralPath $OutputDirectory -File | Sort-Object Name)
-Write-Output "PASS delivery_files=$($files.Count) output=$OutputDirectory"
-foreach ($file in $files) { Write-Output "$($file.Name) $($file.Length)" }
+if ((Test-IsSameOrDescendant -Root $OutputDirectory -Candidate $McpExe) -or
+    (Test-IsSameOrDescendant -Root $OutputDirectory -Candidate $PatchedIrisJar) -or
+    (Test-IsSameOrDescendant -Root $OutputDirectory -Candidate $BuildReceipt) -or
+    (Test-IsSameOrDescendant -Root $receiptRoot -Candidate $OutputDirectory))
+{
+    throw "Explicit delivery inputs and receipt storage must not overlap OutputDirectory."
+}
+
+$targetHasher = [System.Security.Cryptography.SHA256]::Create()
+try
+{
+    $targetBytes = [System.Text.Encoding]::UTF8.GetBytes($OutputDirectory.ToUpperInvariant())
+    $targetKey = [System.Convert]::ToHexString($targetHasher.ComputeHash($targetBytes))
+}
+finally
+{
+    $targetHasher.Dispose()
+}
+$transactionsRoot = Ensure-OrdinaryDirectory -Path (Join-Path $buildRoot ".delivery-transactions") `
+    -Label "Delivery transaction root"
+if (Test-IsSameOrDescendant -Root $transactionsRoot -Candidate $OutputDirectory)
+{
+    throw "OutputDirectory must not be inside the private transaction root."
+}
+$transactionRoot = Ensure-OrdinaryDirectory -Path (Join-Path $transactionsRoot $targetKey) `
+    -Label "Target transaction root"
+foreach ($input in @($McpExe, $PatchedIrisJar, $BuildReceipt, $sessionLockPath))
+{
+    if (Test-IsSameOrDescendant -Root $transactionRoot -Candidate $input)
+    {
+        throw "Explicit input must not be inside its private transaction root: $input"
+    }
+}
+
+$manifestPath = Join-Path $transactionRoot "manifest.json"
+$statePath = Join-Path $transactionRoot "state.txt"
+$nextDirectory = Join-Path $transactionRoot "next"
+$auditDirectory = Join-Path $transactionRoot "audit"
+$previousDirectory = Join-Path $transactionRoot "previous"
+$failedDirectory = Join-Path $transactionRoot "failed"
+$lockPath = Join-Path $buildRoot ".delivery.lock"
+[void] (Assert-NoReparseComponents -Path $lockPath -Label "Delivery lock")
+$deliveryLock = $null
+$immutableHandles = [System.Collections.Generic.List[System.IDisposable]]::new()
+$committed = $false
+$cleanupOnly = $false
+$cleanupPending = $false
+$manifest = $null
+
+try
+{
+    try
+    {
+        $deliveryLock = [System.IO.File]::Open(
+            $lockPath,
+            [System.IO.FileMode]::OpenOrCreate,
+            [System.IO.FileAccess]::ReadWrite,
+            [System.IO.FileShare]::None)
+    }
+    catch [System.IO.IOException]
+    {
+        throw "Another delivery publication is already running: $lockPath"
+    }
+    [void] (Assert-NoReparseComponents -Path $lockPath -Label "Delivery lock" -RequireExisting)
+    Assert-TransactionRootShape -Path $transactionRoot
+
+    if (Test-Path -LiteralPath $manifestPath)
+    {
+        $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+        if ([int] $manifest.schema_version -ne 1 -or
+            [string] $manifest.target_path -cne $OutputDirectory -or
+            [string] $manifest.target_sha256 -cne $targetKey)
+        {
+            throw "Transaction manifest does not belong to OutputDirectory: $manifestPath"
+        }
+        Assert-DeliveryRecordShape -Record $manifest.new -Label "Manifest new delivery"
+        Assert-DeliveryRecordShape -Record $manifest.previous -Label "Manifest previous delivery"
+        if (-not (Test-Path -LiteralPath $statePath -PathType Leaf))
+        {
+            throw "Transaction state marker is missing: $statePath"
+        }
+        $state = (Get-Content -Raw -LiteralPath $statePath).Trim()
+        if ($state -ceq "COMMITTED" -or $state -ceq "CLEANUP_COMPLETE")
+        {
+            # Both states are irreversible. CLEANUP_COMPLETE additionally says
+            # all payload directories were retired before metadata teardown.
+            $committed = $true
+            Assert-DeliveryMatches -Directory $OutputDirectory -Record $manifest.new -Label "Committed delivery"
+            if ([bool] $manifest.previous.present)
+            {
+                Remove-ExactFlatDirectory -Path $previousDirectory `
+                    -AllowedNames @(Get-DeliveryRecordNames -Record $manifest.previous) `
+                    -Label "Committed rollback"
+            }
+            Remove-ExactFlatDirectory -Path $nextDirectory `
+                -AllowedNames @([string] $manifest.new.mcp.name, [string] $manifest.new.iris.name) `
+                -Label "Committed next snapshot"
+            Remove-ExactFlatDirectory -Path $auditDirectory `
+                -AllowedNames @("vibris-protocol-java.jar", "vibris-descriptor-dump.exe", "vibris_control.proto") `
+                -Label "Committed audit snapshot"
+            Remove-ExactFlatDirectory -Path $failedDirectory `
+                -AllowedNames @([string] $manifest.new.mcp.name, [string] $manifest.new.iris.name) `
+                -Label "Committed failed snapshot"
+            Remove-TerminalTransaction -Root $transactionRoot `
+                -Manifest $manifestPath -State $statePath -TerminalState "CLEANUP_COMPLETE" `
+                -Failure $TestCleanupFailure
+            Write-Output "RECOVERED committed_delivery=$OutputDirectory"
+        }
+        elseif ($state -ceq "ABORT_CLEANUP_COMPLETE")
+        {
+            $cleanupOnly = $true
+            Assert-DeliveryMatches -Directory $OutputDirectory -Record $manifest.previous `
+                -Label "Aborted last-good delivery"
+            Remove-ExactFlatDirectory -Path $nextDirectory `
+                -AllowedNames @([string] $manifest.new.mcp.name, [string] $manifest.new.iris.name) `
+                -Label "Aborted terminal next snapshot"
+            Remove-ExactFlatDirectory -Path $auditDirectory `
+                -AllowedNames @("vibris-protocol-java.jar", "vibris-descriptor-dump.exe", "vibris_control.proto") `
+                -Label "Aborted terminal audit snapshot"
+            Remove-ExactFlatDirectory -Path $previousDirectory `
+                -AllowedNames @(Get-DeliveryRecordNames -Record $manifest.previous) `
+                -Label "Aborted terminal rollback"
+            Remove-ExactFlatDirectory -Path $failedDirectory `
+                -AllowedNames @([string] $manifest.new.mcp.name, [string] $manifest.new.iris.name) `
+                -Label "Aborted terminal failed snapshot"
+            Remove-TerminalTransaction -Root $transactionRoot `
+                -Manifest $manifestPath -State $statePath `
+                -TerminalState "ABORT_CLEANUP_COMPLETE" -Failure $TestCleanupFailure
+            Write-Output "RECOVERED abort_cleanup_complete=$OutputDirectory"
+            $cleanupOnly = $false
+        }
+        else
+        {
+            $knownStates = @(
+                "PREPARING", "PREPARED", "OLD_MOVE_INTENT", "OLD_MOVED",
+                "PUBLISH_INTENT", "PUBLISHED")
+            if ($knownStates -cnotcontains $state)
+            {
+                throw "Unknown delivery transaction state '$state'."
+            }
+            if ([bool] $manifest.previous.present)
+            {
+                if (Test-Path -LiteralPath $previousDirectory)
+                {
+                    Assert-DeliveryMatches -Directory $previousDirectory -Record $manifest.previous `
+                        -Label "Recoverable rollback"
+                    if (Test-Path -LiteralPath $OutputDirectory)
+                    {
+                        if (-not (Test-DeliveryMatches -Directory $OutputDirectory -Record $manifest.new))
+                        {
+                            throw "Recovery found an unknown current delivery; refusing replacement."
+                        }
+                        if (Test-Path -LiteralPath $failedDirectory)
+                        {
+                            throw "Recovery failed directory already exists: $failedDirectory"
+                        }
+                        [System.IO.Directory]::Move($OutputDirectory, $failedDirectory)
+                    }
+                    [System.IO.Directory]::Move($previousDirectory, $OutputDirectory)
+                    Assert-DeliveryMatches -Directory $OutputDirectory -Record $manifest.previous `
+                        -Label "Restored last-good delivery"
+                }
+                elseif (-not (Test-DeliveryMatches -Directory $OutputDirectory -Record $manifest.previous))
+                {
+                    throw "Recoverable transaction has neither a complete rollback nor the last-good target."
+                }
+            }
+            elseif (Test-Path -LiteralPath $OutputDirectory)
+            {
+                if ($state -ceq "PREPARING" -or
+                    -not (Test-DeliveryMatches -Directory $OutputDirectory -Record $manifest.new))
+                {
+                    throw "First-publication recovery found an unknown target."
+                }
+                Write-AtomicText -Path $statePath -Text "COMMITTED"
+                $state = "COMMITTED"
+                $committed = $true
+            }
+
+            if ($state -cne "COMMITTED")
+            {
+                Remove-ExactFlatDirectory -Path $nextDirectory `
+                    -AllowedNames @([string] $manifest.new.mcp.name, [string] $manifest.new.iris.name) `
+                    -Label "Aborted next snapshot"
+                Remove-ExactFlatDirectory -Path $auditDirectory `
+                    -AllowedNames @("vibris-protocol-java.jar", "vibris-descriptor-dump.exe", "vibris_control.proto") `
+                    -Label "Aborted audit snapshot"
+                Remove-ExactFlatDirectory -Path $failedDirectory `
+                    -AllowedNames @([string] $manifest.new.mcp.name, [string] $manifest.new.iris.name) `
+                    -Label "Aborted failed snapshot"
+                $cleanupOnly = $true
+                Remove-TerminalTransaction -Root $transactionRoot `
+                    -Manifest $manifestPath -State $statePath `
+                    -TerminalState "ABORT_CLEANUP_COMPLETE" -Failure $TestCleanupFailure
+                Write-Output "RECOVERED last_good_delivery=$OutputDirectory"
+                $cleanupOnly = $false
+            }
+            else
+            {
+                Remove-ExactFlatDirectory -Path $nextDirectory `
+                    -AllowedNames @([string] $manifest.new.mcp.name, [string] $manifest.new.iris.name) `
+                    -Label "Recovered committed next snapshot"
+                Remove-ExactFlatDirectory -Path $auditDirectory `
+                    -AllowedNames @("vibris-protocol-java.jar", "vibris-descriptor-dump.exe", "vibris_control.proto") `
+                    -Label "Recovered committed audit snapshot"
+                Remove-ExactFlatDirectory -Path $failedDirectory `
+                    -AllowedNames @([string] $manifest.new.mcp.name, [string] $manifest.new.iris.name) `
+                    -Label "Recovered committed failed snapshot"
+                Remove-TerminalTransaction -Root $transactionRoot `
+                    -Manifest $manifestPath -State $statePath -TerminalState "CLEANUP_COMPLETE" `
+                    -Failure $TestCleanupFailure
+                Write-Output "RECOVERED first_delivery=$OutputDirectory"
+            }
+        }
+        $manifest = $null
+        $committed = $false
+        $cleanupOnly = $false
+    }
+    else
+    {
+        $orphanState = $null
+        if (Test-Path -LiteralPath $statePath -PathType Leaf)
+        {
+            $orphanState = (Get-Content -Raw -LiteralPath $statePath).Trim()
+        }
+        if ($orphanState -ceq "CLEANUP_COMPLETE")
+        {
+            $committed = $true
+            Remove-TerminalTransaction -Root $transactionRoot `
+                -Manifest $manifestPath -State $statePath -TerminalState "CLEANUP_COMPLETE" `
+                -Failure $TestCleanupFailure
+            Write-Output "RECOVERED cleanup_complete=$OutputDirectory"
+            $committed = $false
+        }
+        elseif ($orphanState -ceq "ABORT_CLEANUP_COMPLETE")
+        {
+            $cleanupOnly = $true
+            Remove-TerminalTransaction -Root $transactionRoot `
+                -Manifest $manifestPath -State $statePath `
+                -TerminalState "ABORT_CLEANUP_COMPLETE" -Failure $TestCleanupFailure
+            Write-Output "RECOVERED abort_cleanup_complete=$OutputDirectory"
+            $cleanupOnly = $false
+        }
+        elseif ($null -ne $orphanState -and $orphanState -cne "PREPARING")
+        {
+            throw "Transaction manifest is missing for state '$orphanState'."
+        }
+        else
+        {
+            if (Test-Path -LiteralPath $previousDirectory)
+            {
+                throw "Transaction rollback exists without a manifest: $previousDirectory"
+            }
+            Remove-ExactFlatDirectory -Path $nextDirectory -AllowedNames @(
+                "vibris-mcp.exe", (Split-Path -Leaf $PatchedIrisJar)) -Label "Uncommitted next snapshot"
+            Remove-ExactFlatDirectory -Path $auditDirectory -AllowedNames @(
+                "vibris-protocol-java.jar", "vibris-descriptor-dump.exe", "vibris_control.proto") `
+                -Label "Uncommitted audit snapshot"
+            if (Test-Path -LiteralPath $failedDirectory)
+            {
+                throw "Transaction failed directory exists without a manifest: $failedDirectory"
+            }
+            Remove-TransactionMetadata -Root $transactionRoot
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $transactionRoot))
+    {
+        [void] (Ensure-OrdinaryDirectory -Path $transactionRoot -Label "Target transaction root")
+    }
+
+    if ($testBeforeRecord)
+    {
+        Write-AtomicText -Path $TestBeforeRecordReady -Text "READY"
+        $deadline = [datetime]::UtcNow.AddSeconds(20)
+        while (-not (Test-Path -LiteralPath $TestBeforeRecordAck -PathType Leaf))
+        {
+            if ([datetime]::UtcNow -ge $deadline)
+            {
+                throw "Timed out waiting for pre-record replacement acknowledgement."
+            }
+            Start-Sleep -Milliseconds 1
+        }
+        [void] (Assert-NoReparseComponents -Path $TestBeforeRecordAck `
+            -Label "Pre-record test acknowledgement" -RequireExisting)
+        if ((Get-Content -Raw -LiteralPath $TestBeforeRecordAck).Trim() -cne "REPLACED")
+        {
+            throw "Pre-record replacement acknowledgement is invalid."
+        }
+    }
+
+    $before = Get-ExistingDeliveryRecord -Directory $OutputDirectory
+    $auditSources = $validatedAuditSources
+    foreach ($input in @($auditSources.java, $auditSources.cpp, $auditSources.proto))
+    {
+        if (Test-IsSameOrDescendant -Root $transactionRoot -Candidate $input)
+        {
+            throw "Audit input must not be inside its private transaction root: $input"
+        }
+    }
+
+    $newRecord = [ordered] @{
+        present = $true
+        mcp = [ordered] @{
+            name = "vibris-mcp.exe"
+            length = [long] $receipt.artifacts.mcp.length
+            sha256 = [string] $receipt.artifacts.mcp.sha256
+        }
+        iris = [ordered] @{
+            name = Split-Path -Leaf $PatchedIrisJar
+            length = [long] $receipt.artifacts.iris.length
+            sha256 = [string] $receipt.artifacts.iris.sha256
+        }
+    }
+    $auditRecord = [ordered] @{
+        java = [ordered] @{
+            name = "vibris-protocol-java.jar"
+            length = [long] $receipt.artifacts.java_descriptor.length
+            sha256 = [string] $receipt.artifacts.java_descriptor.sha256
+        }
+        cpp = [ordered] @{
+            name = "vibris-descriptor-dump.exe"
+            length = [long] $receipt.artifacts.cpp_descriptor.length
+            sha256 = [string] $receipt.artifacts.cpp_descriptor.sha256
+        }
+        proto = [ordered] @{
+            name = "vibris_control.proto"
+            length = [long] $receipt.artifacts.proto.length
+            sha256 = [string] $receipt.artifacts.proto.sha256
+        }
+    }
+    $manifest = [ordered] @{
+        schema_version = 1
+        transaction_id = [guid]::NewGuid().ToString()
+        target_path = $OutputDirectory
+        target_sha256 = $targetKey
+        previous = $before
+        new = $newRecord
+        audit = $auditRecord
+    }
+    Write-AtomicText -Path $statePath -Text "PREPARING"
+    Write-AtomicText -Path $manifestPath -Text ($manifest | ConvertTo-Json -Depth 8)
+
+    [void] (New-Item -ItemType Directory -Path $nextDirectory)
+    [void] (New-Item -ItemType Directory -Path $auditDirectory)
+    [void] (Assert-NoReparseComponents -Path $nextDirectory -Label "Next snapshot" -RequireExisting)
+    [void] (Assert-NoReparseComponents -Path $auditDirectory -Label "Audit snapshot" -RequireExisting)
+
+    $copies = @(
+        [pscustomobject] @{
+            source = $McpExe
+            target = Join-Path $nextDirectory "vibris-mcp.exe"
+            record = $newRecord.mcp
+        },
+        [pscustomobject] @{ source = $PatchedIrisJar; target = Join-Path $nextDirectory `
+            (Split-Path -Leaf $PatchedIrisJar); record = $newRecord.iris },
+        [pscustomobject] @{ source = $auditSources.java; target = Join-Path $auditDirectory `
+            "vibris-protocol-java.jar"; record = $auditRecord.java },
+        [pscustomobject] @{ source = $auditSources.cpp; target = Join-Path $auditDirectory `
+            "vibris-descriptor-dump.exe"; record = $auditRecord.cpp },
+        [pscustomobject] @{ source = $auditSources.proto; target = Join-Path $auditDirectory `
+            "vibris_control.proto"; record = $auditRecord.proto })
+    foreach ($copy in $copies)
+    {
+        $beforeItem = Get-Item -LiteralPath $copy.source -Force
+        $beforeHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $copy.source).Hash
+        if ($beforeItem.Length -ne [long] $copy.record.length -or
+            $beforeHash -cne [string] $copy.record.sha256)
+        {
+            throw "Input does not match its build receipt before immutable snapshot: $($copy.source)"
+        }
+        Copy-Item -LiteralPath $copy.source -Destination $copy.target
+        $snapshotItem = Get-Item -LiteralPath $copy.target -Force
+        $snapshotHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $copy.target).Hash
+        $afterItem = Get-Item -LiteralPath $copy.source -Force
+        $afterHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $copy.source).Hash
+        if ($snapshotItem.Length -ne [long] $copy.record.length -or
+            $afterItem.Length -ne [long] $copy.record.length -or
+            $snapshotHash -cne [string] $copy.record.sha256 -or
+            $afterHash -cne [string] $copy.record.sha256)
+        {
+            throw "Input changed while creating immutable snapshot: $($copy.source)"
+        }
+        [void] (Resolve-OrdinaryFile -Path $copy.target -Label "Immutable transaction snapshot")
+    }
+
+    foreach ($copy in $copies)
+    {
+        $immutableHandles.Add((Open-ImmutableReadHandle -Path $copy.target))
+    }
+    Assert-DeliveryMatches -Directory $nextDirectory -Record $newRecord -Label "Immutable next snapshot"
+
+    $auditOutput = @(& (Join-Path $repoRoot "integration-tests\scripts\source-package-audit.ps1") `
+        -McpExe (Join-Path $nextDirectory "vibris-mcp.exe") `
+        -PatchedIrisJar (Join-Path $nextDirectory ([string] $newRecord.iris.name)) `
+        -DeliveryDirectory $nextDirectory `
+        -JavaDescriptor (Join-Path $auditDirectory "vibris-protocol-java.jar") `
+        -CppDescriptorDump (Join-Path $auditDirectory "vibris-descriptor-dump.exe") `
+        -ProtoPath (Join-Path $auditDirectory "vibris_control.proto") `
+        -CallerHoldsDeliveryLock)
+    foreach ($handle in $immutableHandles) { $handle.Dispose() }
+    $immutableHandles.Clear()
+    Assert-DeliveryMatches -Directory $nextDirectory -Record $newRecord -Label "Audited next snapshot"
+    Assert-RecordMatches -Path (Join-Path $auditDirectory "vibris-protocol-java.jar") `
+        -Record $auditRecord.java -Label "Audited Java protocol snapshot"
+    Assert-RecordMatches -Path (Join-Path $auditDirectory "vibris-descriptor-dump.exe") `
+        -Record $auditRecord.cpp -Label "Audited C++ descriptor snapshot"
+    Assert-RecordMatches -Path (Join-Path $auditDirectory "vibris_control.proto") `
+        -Record $auditRecord.proto -Label "Audited protocol schema snapshot"
+    Assert-RecordMatches -Path $BuildReceipt -Record $receiptRecord -Label "Build receipt"
+    Assert-BuildSessionLockActive -Path $sessionLockPath
+    Assert-ReceiptSourceCurrent -Receipt $receipt -VibrisRoot $receiptVibrisRoot `
+        -IrisRoot $receiptIrisRoot
+    Assert-ReceiptArtifact -Record $receipt.artifacts.mcp -ExpectedPath $McpExe `
+        -Label "MCP build provenance" -ProducedAfterUtc $phaseTimes.native.started `
+        -ProducedBeforeUtc $phaseTimes.native.completed
+    Assert-ReceiptArtifact -Record $receipt.artifacts.iris -ExpectedPath $PatchedIrisJar `
+        -Label "Iris build provenance" -ProducedAfterUtc $phaseTimes.iris.started `
+        -ProducedBeforeUtc $phaseTimes.iris.completed
+    Assert-ReceiptArtifact -Record $receipt.artifacts.java_descriptor `
+        -ExpectedPath $auditSources.java -Label "Java descriptor provenance" `
+        -ProducedAfterUtc $phaseTimes.protocol.started -ProducedBeforeUtc $phaseTimes.protocol.completed
+    Assert-ReceiptArtifact -Record $receipt.artifacts.cpp_descriptor `
+        -ExpectedPath $auditSources.cpp -Label "C++ descriptor provenance" `
+        -ProducedAfterUtc $phaseTimes.native.started -ProducedBeforeUtc $phaseTimes.native.completed
+    Assert-ReceiptArtifact -Record $receipt.artifacts.proto `
+        -ExpectedPath $auditSources.proto -Label "Protocol schema provenance"
+    Write-AtomicText -Path $statePath -Text "PREPARED"
+
+    Write-AtomicText -Path $statePath -Text "OLD_MOVE_INTENT"
+    if ([bool] $before.present)
+    {
+        [System.IO.Directory]::Move($OutputDirectory, $previousDirectory)
+        Assert-DeliveryMatches -Directory $previousDirectory -Record $before -Label "Rollback snapshot"
+    }
+    Write-AtomicText -Path $statePath -Text "OLD_MOVED"
+
+    Write-AtomicText -Path $statePath -Text "PUBLISH_INTENT"
+    [System.IO.Directory]::Move($nextDirectory, $OutputDirectory)
+    Write-AtomicText -Path $statePath -Text "PUBLISHED"
+    Assert-DeliveryMatches -Directory $OutputDirectory -Record $newRecord -Label "Published delivery"
+    Write-AtomicText -Path $statePath -Text "COMMITTED"
+    $committed = $true
+
+    foreach ($handle in $immutableHandles) { $handle.Dispose() }
+    $immutableHandles.Clear()
+    try
+    {
+        if ([bool] $before.present)
+        {
+            Remove-ExactFlatDirectory -Path $previousDirectory `
+                -AllowedNames @(Get-DeliveryRecordNames -Record $before) `
+                -Label "Retired rollback"
+        }
+        Remove-ExactFlatDirectory -Path $auditDirectory `
+            -AllowedNames @("vibris-protocol-java.jar", "vibris-descriptor-dump.exe", "vibris_control.proto") `
+            -Label "Retired audit snapshot"
+        Remove-ExactFlatDirectory -Path $failedDirectory `
+            -AllowedNames @([string] $newRecord.mcp.name, [string] $newRecord.iris.name) `
+            -Label "Retired failed snapshot"
+        Remove-TerminalTransaction -Root $transactionRoot `
+            -Manifest $manifestPath -State $statePath -TerminalState "CLEANUP_COMPLETE" `
+            -Failure $TestCleanupFailure
+    }
+    catch
+    {
+        $cleanupPending = $true
+        Write-Warning "Committed delivery cleanup remains pending: $($_.Exception.Message)"
+    }
+
+    Write-Output ($auditOutput | Where-Object { $_ -like "PASS *" })
+    Write-Output ("PASS delivery_files=2 output=$OutputDirectory " +
+        "mcp_sha256=$($newRecord.mcp.sha256) iris_sha256=$($newRecord.iris.sha256) " +
+        "target_sha256=$targetKey cleanup_pending=$($cleanupPending.ToString().ToLowerInvariant())")
+}
+catch
+{
+    $primaryFailure = $_
+    if (-not $committed -and -not $cleanupOnly -and $null -ne $manifest)
+    {
+        try
+        {
+            foreach ($handle in $immutableHandles) { $handle.Dispose() }
+            $immutableHandles.Clear()
+            if ([bool] $manifest.previous.present -and (Test-Path -LiteralPath $previousDirectory))
+            {
+                Assert-DeliveryMatches -Directory $previousDirectory -Record $manifest.previous `
+                    -Label "Failure rollback"
+                if (Test-Path -LiteralPath $OutputDirectory)
+                {
+                    if (-not (Test-DeliveryMatches -Directory $OutputDirectory -Record $manifest.new))
+                    {
+                        throw "Failure recovery found an unknown target."
+                    }
+                    if (Test-Path -LiteralPath $failedDirectory)
+                    {
+                        throw "Failure recovery target already exists: $failedDirectory"
+                    }
+                    [System.IO.Directory]::Move($OutputDirectory, $failedDirectory)
+                }
+                [System.IO.Directory]::Move($previousDirectory, $OutputDirectory)
+                Assert-DeliveryMatches -Directory $OutputDirectory -Record $manifest.previous `
+                    -Label "Failure-restored last-good delivery"
+            }
+            elseif ([bool] $manifest.previous.present)
+            {
+                Assert-DeliveryMatches -Directory $OutputDirectory -Record $manifest.previous `
+                    -Label "Unchanged last-good delivery"
+            }
+            elseif (Test-Path -LiteralPath $OutputDirectory)
+            {
+                Assert-DeliveryMatches -Directory $OutputDirectory -Record $manifest.new `
+                    -Label "Failed first publication"
+                if (Test-Path -LiteralPath $failedDirectory)
+                {
+                    throw "Failure recovery target already exists: $failedDirectory"
+                }
+                [System.IO.Directory]::Move($OutputDirectory, $failedDirectory)
+            }
+
+            Remove-ExactFlatDirectory -Path $nextDirectory `
+                -AllowedNames @([string] $manifest.new.mcp.name, [string] $manifest.new.iris.name) `
+                -Label "Failed next snapshot"
+            Remove-ExactFlatDirectory -Path $auditDirectory `
+                -AllowedNames @("vibris-protocol-java.jar", "vibris-descriptor-dump.exe", "vibris_control.proto") `
+                -Label "Failed audit snapshot"
+            Remove-ExactFlatDirectory -Path $failedDirectory `
+                -AllowedNames @([string] $manifest.new.mcp.name, [string] $manifest.new.iris.name) `
+                -Label "Failed published snapshot"
+            $cleanupOnly = $true
+            Remove-TerminalTransaction -Root $transactionRoot `
+                -Manifest $manifestPath -State $statePath `
+                -TerminalState "ABORT_CLEANUP_COMPLETE" -Failure $TestCleanupFailure
+            $cleanupOnly = $false
+        }
+        catch
+        {
+            throw [System.AggregateException]::new(
+                "Delivery publication and last-good recovery both failed.",
+                @($primaryFailure.Exception, $_.Exception))
+        }
+    }
+    throw $primaryFailure
+}
+finally
+{
+    foreach ($handle in $immutableHandles) { $handle.Dispose() }
+    $immutableHandles.Clear()
+    if ($null -ne $deliveryLock)
+    {
+        $deliveryLock.Dispose()
+        $deliveryLock = $null
+    }
+}
