@@ -144,7 +144,7 @@ Json definition(const char* name, const char* description, Json input_schema, bo
 }
 
 Json build_definitions() {
-    const auto empty = closed_object({});
+    const auto empty = closed_object(Json::object());
     const auto metric_frames = bounded_integer(1, 10'000);
     const auto configure = closed_object(
         {{"save_id", {{"type", "string"}, {"minLength", 1}}},

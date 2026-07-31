@@ -139,6 +139,20 @@ void atomic_action_schemas_reject_invalid_arguments() {
     require(dispatches == 2, "Invalid debug arguments reached dispatch.");
 }
 
+void empty_tool_schemas_declare_object_properties() {
+    ToolRegistry registry;
+    const std::set<std::string> empty_schema_tools{
+        "vibris_get_config", "vibris_get_status"};
+    for (const auto& definition : registry.definitions()) {
+        const auto name = definition.at("name").get<std::string>();
+        if (!empty_schema_tools.contains(name)) continue;
+
+        const auto& properties = definition.at("inputSchema").at("properties");
+        require(properties.is_object(), "Empty tool schema serialized properties as null.");
+        require(properties.empty(), "Empty tool schema unexpectedly declared properties.");
+    }
+}
+
 void profile_schema_requires_bounded_future_frames() {
     std::size_t dispatches = 0;
     ToolRegistry registry([&](std::string_view name, const Json& arguments) {
@@ -181,6 +195,7 @@ int main() {
     try {
         schema_rejects_before_dispatch();
         registry_has_exactly_the_supported_tools();
+        empty_tool_schemas_declare_object_properties();
         atomic_action_schemas_reject_invalid_arguments();
         profile_schema_requires_bounded_future_frames();
         registry_declares_accurate_tool_annotations();
