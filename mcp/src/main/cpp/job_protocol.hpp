@@ -1,6 +1,6 @@
 #pragma once
 
-#include "config_store.hpp"
+#include "session_config.hpp"
 #include "tool_registry.hpp"
 #include "vibris_control.pb.h"
 

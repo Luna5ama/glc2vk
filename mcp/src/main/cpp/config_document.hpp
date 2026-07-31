@@ -1,6 +1,6 @@
 #pragma once
 
-#include "config_store.hpp"
+#include "session_config.hpp"
 
 #include <string>
 #include <string_view>
@@ -13,6 +13,7 @@ enum class ConfigDocumentKind {
 };
 
 void validate_config(const SessionConfig& config, bool workspace_required = true);
+[[nodiscard]] bool is_uuid(std::string_view value);
 [[nodiscard]] SessionConfig parse_config(std::string_view text, ConfigDocumentKind kind);
 [[nodiscard]] std::string serialize_config(const SessionConfig& config);
 [[nodiscard]] std::string generate_uuid();

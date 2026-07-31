@@ -9,7 +9,6 @@
 namespace vibris::mcp {
 
 inline constexpr std::string_view kInvalidWorktreeCode = "INVALID_WORKTREE";
-inline constexpr std::string_view kWorktreeAlreadyOwnedCode = "WORKTREE_ALREADY_OWNED";
 inline constexpr std::string_view kInvalidConfigCode = "INVALID_CONFIG";
 inline constexpr std::string_view kConfigIoErrorCode = "CONFIG_IO_ERROR";
 inline constexpr std::string_view kRequestTooLargeCode = "REQUEST_TOO_LARGE";

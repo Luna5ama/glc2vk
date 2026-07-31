@@ -48,7 +48,11 @@ WorkspaceBinding resolve_workspace(std::optional<std::filesystem::path> workspac
             root = parent;
         }
     }
-    return {root, root / ".codex" / "vibris-session.json"};
+    return {
+        root,
+        root / ".codex" / "vibris-workspace.json",
+        root / ".codex" / "vibris-session.json",
+    };
 }
 
 } // namespace vibris::mcp

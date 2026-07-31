@@ -9,14 +9,14 @@
 #include <utility>
 
 #include "config_document.hpp"
-#include "config_store.hpp"
+#include "session_config.hpp"
 #include "source_handler.hpp"
 #include "result_mapper.hpp"
 #include "scene_context_resolver.hpp"
 #include "state_error.hpp"
 #include "synchronous_job_runner.hpp"
 #include "workspace_binding.hpp"
-#include "worktree_lock.hpp"
+#include "workspace_identity_store.hpp"
 
 namespace vibris::mcp {
 namespace {
@@ -48,11 +48,10 @@ class McpBackend::Impl final {
 public:
     Impl(std::optional<std::filesystem::path> workspace_root, std::string server_address)
         : binding_(resolve_workspace(std::move(workspace_root))),
-          lock_(WorktreeLock::acquire(binding_.root)),
-          store_(binding_.config_path),
+          workspace_id_(
+              WorkspaceIdentityStore(binding_.identity_path, binding_.legacy_config_path).load_or_create()),
           server_address_(std::move(server_address)),
           process_id_(detail::generate_uuid()),
-          config_(store_.load()),
           source_handler_(binding_.root) {}
 
     ToolOutcome dispatch(std::string_view name, const Json& arguments) {
@@ -102,7 +101,7 @@ private:
 
     ToolOutcome get_config() const {
         Json result{{"configured", config_.has_value()}, {"worktree_root", binding_.root.string()}};
-        result["workspace_id"] = config_ ? Json(config_->workspace_id) : Json(nullptr);
+        result["workspace_id"] = workspace_id_;
         result["config"] = config_ ? config_json(*config_) : Json(nullptr);
         return result;
     }
@@ -142,8 +141,10 @@ private:
                     return ToolFailure{"INVALID_PRESET", "The Vibris server rejected the scene context.", false,
                                        ResultMapper::validation(response)};
                 }
-                config_ = store_.save_json(arguments.dump());
-                release_client();
+                auto config = detail::parse_config(arguments.dump(), detail::ConfigDocumentKind::configure_request);
+                config.workspace_id = workspace_id_;
+                detail::validate_config(config);
+                config_ = std::move(config);
                 return config_json(*config_);
             });
     }
@@ -157,6 +158,7 @@ private:
                 result["ready"] = mapped.value("ready", false);
                 if (mapped.contains("errors")) result["errors"] = mapped["errors"];
                 result["configured"] = config_.has_value();
+                result["workspace_id"] = workspace_id_;
                 result["worktree_root"] = binding_.root.string();
                 return result;
             });
@@ -209,7 +211,7 @@ private:
         if (!grpc_) {
             grpc_ = std::make_unique<GrpcClient>(GrpcClientOptions{
                 .target = server_address_,
-                .workspace_id = config_ ? config_->workspace_id : process_id_,
+                .workspace_id = workspace_id_,
                 .mcp_version = "0.1.0",
                 .process_instance_uuid = process_id_,
                 .pending_request_limit = pending_limit,
@@ -232,8 +234,7 @@ private:
     }
 
     WorkspaceBinding binding_;
-    WorktreeLock lock_;
-    ConfigStore store_;
+    std::string workspace_id_;
     std::string server_address_;
     std::string process_id_;
     std::optional<SessionConfig> config_;

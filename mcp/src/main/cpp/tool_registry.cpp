@@ -155,11 +155,12 @@ Json build_definitions() {
          {"default_warmup_frames", bounded_integer(0, std::numeric_limits<std::uint32_t>::max())}},
         {"save_id", "dimension_id", "time_preset_id", "camera_preset_id", "fov", "default_warmup_frames"});
     Json definitions = Json::array({
-        definition("vibris_get_config", "Read this worktree's persisted Vibris configuration.", empty, true),
+        definition("vibris_get_config", "Read this MCP process's scene configuration and durable worktree ID.",
+                   empty, true),
         definition("vibris_list_presets", "List valid Minecraft scene presets, optionally filtered by text.",
                    closed_object({{"filter", {{"type", "string"}, {"minLength", 1}}}}), true),
-        definition("vibris_configure", "Validate and persist this worktree's Vibris scene configuration.", configure,
-                   false),
+        definition("vibris_configure", "Validate and set this MCP process's scene configuration until it exits.",
+                   configure, false),
         definition("vibris_get_status", "Read MCP, server, runtime, queue, resource, and artifact status.", empty,
                    true),
         definition("vibris_profile",

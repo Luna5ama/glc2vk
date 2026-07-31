@@ -1,6 +1,6 @@
 #pragma once
 
-#include "config_store.hpp"
+#include "session_config.hpp"
 #include "grpc_client.hpp"
 #include "source_handler.hpp"
 #include "tool_registry.hpp"

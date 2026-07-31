@@ -20,20 +20,6 @@ using Json = nlohmann::json;
     throw StateError(kInvalidConfigCode, "Config JSON is malformed or does not match schema version 1.");
 }
 
-bool is_uuid(std::string_view value) {
-    if (value.size() != 36) {
-        return false;
-    }
-    for (std::size_t index = 0; index < value.size(); ++index) {
-        const auto character = value[index];
-        const auto separator = index == 8 || index == 13 || index == 18 || index == 23;
-        if (separator ? character != '-' : !std::isxdigit(static_cast<unsigned char>(character))) {
-            return false;
-        }
-    }
-    return true;
-}
-
 void validate_string(std::string_view value) {
     if (value.empty() || value.find('\0') != std::string_view::npos) {
         invalid_config();
@@ -61,6 +47,20 @@ std::uint32_t required_unsigned(const Json& document, std::string_view key) {
 }
 
 } // namespace
+
+bool is_uuid(std::string_view value) {
+    if (value.size() != 36) {
+        return false;
+    }
+    for (std::size_t index = 0; index < value.size(); ++index) {
+        const auto character = value[index];
+        const auto separator = index == 8 || index == 13 || index == 18 || index == 23;
+        if (separator ? character != '-' : !std::isxdigit(static_cast<unsigned char>(character))) {
+            return false;
+        }
+    }
+    return true;
+}
 
 void validate_config(const SessionConfig& config, bool workspace_required) {
     if (config.schema_version != 1 || config.shader_directory != "shaders" || !std::isfinite(config.fov) ||

@@ -1,6 +1,6 @@
 #include "tool_argument_policy.hpp"
 
-#include "config_store.hpp"
+#include "session_config.hpp"
 
 #include <algorithm>
 #include <cstddef>

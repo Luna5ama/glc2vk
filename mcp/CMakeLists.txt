@@ -103,7 +103,7 @@ target_link_libraries(vibris-control-client PRIVATE vibris_control_protocol nloh
 
 add_library(vibris_mcp_core STATIC
     src/main/cpp/config_document.cpp
-    src/main/cpp/config_store.cpp
+    src/main/cpp/workspace_identity_store.cpp
     src/main/cpp/commit_extractor.cpp
     src/main/cpp/git_repository.cpp
     src/main/cpp/grpc_client.cpp
@@ -124,8 +124,7 @@ add_library(vibris_mcp_core STATIC
     src/main/cpp/tool_argument_policy.cpp
     src/main/cpp/tool_registry.cpp
     src/main/cpp/workspace_copier.cpp
-    src/main/cpp/workspace_binding.cpp
-    src/main/cpp/worktree_lock.cpp)
+    src/main/cpp/workspace_binding.cpp)
 target_include_directories(vibris_mcp_core PUBLIC src/main/cpp)
 target_link_libraries(vibris_mcp_core PUBLIC
     vibris_control_protocol
@@ -220,10 +219,23 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/../integration-tests/fixtures/mcp/happy-core-tools.jsonl")
 
     foreach(scenario
-            ConfigValidAtomicRoundTrip
-            SameWorktreeMutex
-            MalformedConfigPreservesLastGood
-            OversizeJsonRejected)
+            WorkspaceIdentityConcurrentFirstUse
+            WorkspaceIdentityDeterministicPublication
+            WorkspaceIdentityIoFailuresCleanup
+            WorkspaceIdentityMalformedWinner
+            WorkspaceIdentityRetriesOnlyPublicationLoser
+            WorkspaceIdentityBlocksTempSubstitution
+            WorkspaceIdentityPreservesCreateCollision
+            WorkspaceIdentityLegacyMigration
+            WorkspaceIdentityRejectsDuplicateKeys
+            WorkspaceIdentityEnforcesJsonDepth
+            WorkspaceIdentityClassifiesNonregularState
+            WorkspaceIdentityRejectsReparseState
+            WorkspaceIdentityMapsAccessErrors
+            WorkspaceIdentityRejectsActiveWriter
+            SameWorktreeBackendsCoexist
+            ProcessLocalSceneConfiguration
+            ToolMetadataIsProcessLocal)
         add_test(NAME ${scenario} COMMAND vibris-state-tests ${scenario})
     endforeach()
 
