@@ -3,13 +3,13 @@
 Vibris exposes one native MCP executable for shader testing. `vibris-mcp.exe` speaks newline-delimited MCP JSON-RPC
 on stdin/stdout and connects to the Vibris server embedded in Iris over loopback gRPC. Iris owns Minecraft, shader
 reloads, render-thread work, and capture resources; the MCP owns worktree configuration, immutable source preparation,
-recipe expansion, the worktree lock, and synchronous tool results.
+recipe expansion, and synchronous tool results.
 
 ```text
 Codex or another MCP client
-        | stdio MCP
+        | stdio MCP; process cwd is inside the shader worktree
         v
-vibris-mcp.exe --workspace-root <git-worktree>
+vibris-mcp.exe --server-address 127.0.0.1:50051
         | protobuf over loopback gRPC
         v
 patched Iris JAR -> Vibris core -> render-thread host adapter
@@ -18,9 +18,9 @@ patched Iris JAR -> Vibris core -> render-thread host adapter
 vibris/pending/<source UUID>      vibris/artifacts/<workspace UUID>/<request UUID>
 ```
 
-There is one MCP process per Git worktree and one shared Iris process. A named mutex prevents two MCP processes from
-owning the same worktree. Jobs from multiple worktrees are scheduled fairly, but each job is non-interruptible and only
-one job touches Minecraft at a time.
+Each Codex task may run its own MCP process, including several processes discovered from the same Git worktree. All MCP
+processes submit to one shared Iris process. Iris schedules work round-robin by durable workspace ID, but each job is
+non-interruptible and only one job touches Minecraft at a time.
 
 ## Build
 
@@ -47,6 +47,16 @@ Set-Location I:\code\Iris
 
 The release MCP is `mcp/out/build/Release/vibris-mcp.exe`. The patched Iris artifact is the single
 `Iris/build/libs/iris-fabric-*-local.jar`.
+
+Build a verified two-file delivery with both repository roots explicit:
+
+```powershell
+Set-Location I:\code\vibris
+.\tools\build-delivery.ps1 -VibrisRoot I:\code\vibris -IrisRoot I:\code\Iris
+```
+
+The delivery build rebuilds the native MCP and patched Iris JAR before publishing them to `build\delivery`; it does not
+package stale pre-existing artifacts.
 
 For the native lifetime gate, install Clang with its Windows sanitizer runtime and run:
 
@@ -97,25 +107,33 @@ Only `127.0.0.1` listen addresses are accepted. Relative paths are resolved from
 or any configured directory is missing or not writable, the loopback listener still starts in `NOT_READY` state.
 `vibris_get_status` then returns `SERVER_NOT_READY` with the explicit startup reason.
 
-Start the packaged Iris client first, then configure the MCP client with:
-
-```text
-I:\code\vibris\mcp\out\build\Release\vibris-mcp.exe
-    --workspace-root I:\code\shaderpack-worktree
-    --server-address 127.0.0.1:50051
-```
-
-For Codex, add the native executable to `config.toml`; TOML literal strings keep Windows paths readable:
+Start the packaged Iris client first. For normal Codex use, track this file as `.codex/config.toml` in each trusted
+shader repository. TOML literal strings keep Windows paths readable:
 
 ```toml
 [mcp_servers.vibris]
 command = 'I:\code\vibris\build\delivery\vibris-mcp.exe'
 args = [
-  '--workspace-root',
-  'I:\code\shaderpack-worktree',
   '--server-address',
   '127.0.0.1:50051',
 ]
+```
+
+Codex loads a trusted project's `.codex/config.toml` as project-scoped configuration. Do not set the MCP `cwd` field:
+the process inherits the Codex task cwd, and Vibris searches upward from that nested directory to the containing Git
+worktree. A linked worktree checks out the same tracked project configuration and discovers its own worktree root from
+that task cwd. This keeps one config portable across ordinary and linked worktrees without embedding shader-repository
+paths.
+
+Putting the same table in global `~/.codex/config.toml` is supported, but it makes Vibris appear in Codex tasks for
+unrelated Git repositories too. Prefer the tracked project file when only shader repositories should expose the server.
+
+For CI or a manual shell launch outside the worktree, retain the explicit override:
+
+```powershell
+I:\code\vibris\build\delivery\vibris-mcp.exe `
+  --workspace-root I:\code\shaderpack-worktree `
+  --server-address 127.0.0.1:50051
 ```
 
 `--workspace-root` must be a real Git worktree containing a `shaders` directory. If it is omitted, the MCP searches
@@ -127,30 +145,41 @@ runtime's visible windows without activating them and fails the probe if Iris re
 packaged-client runs do not steal focus from the desktop.
 
 Closing MCP stdin performs an orderly shutdown: pending calls are resolved, the gRPC completion queue closes, its worker
-thread joins, prepared sources still owned by the MCP are removed, and the worktree mutex is released.
+thread joins, and prepared sources still owned by the MCP are removed.
 
 ## Worktree configuration
 
-`vibris_configure` validates a scene against the live Iris preset catalog and atomically writes
-`.codex/vibris-session.json` in the worktree. The managed schema is:
+On first use, the MCP atomically creates `.codex/vibris-workspace.json` with the durable identity shared by concurrent
+MCP processes for that one worktree:
 
 ```json
 {
   "schema_version": 1,
-  "workspace_id": "c58a84bf-f6ee-4d53-9b31-7af03dfaf500",
-  "shader_directory": "shaders",
-  "save_id": "vibris-automation-world",
-  "dimension_id": "minecraft:overworld",
-  "time_preset_id": "rooftop",
-  "camera_preset_id": "rooftop",
-  "fov": 70.0,
-  "default_warmup_frames": 32
+  "workspace_id": "c58a84bf-f6ee-4d53-9b31-7af03dfaf500"
 }
 ```
 
-The MCP creates `workspace_id`, fixes `shader_directory` to `shaders`, and preserves both fields on later configuration
-updates. The user-facing configure call supplies only the remaining six scene fields. Configuration is isolated per
-worktree and survives MCP restarts.
+A valid legacy `.codex/vibris-session.json` contributes only its schema-v1 UUID when this identity is first created; the
+legacy file is not rewritten and its old scene fields are not loaded. Invalid legacy content is ignored for migration
+and a new UUID is generated.
+
+Both generated state files belong in the shader repository's `.gitignore`:
+
+```gitignore
+.codex/vibris-workspace.json
+.codex/vibris-session.json
+```
+
+Do not ignore `.codex/config.toml`; it is the tracked project configuration that linked worktrees inherit.
+
+Scene configuration is process-local. Every new MCP process starts with `configured=false` and `config=null`, even when
+the durable workspace ID already exists, so every Codex task must call `vibris_configure` before submitting jobs.
+Concurrent processes discovered from the same worktree share the durable ID but can keep different scenes and prepared
+sources without cross-talk. Closing one process does not invalidate another process's queued or active work.
+
+Each successful `vibris_configure` is validated against live Iris presets. Iris also records the last validated context
+in its game directory through `ConfiguredContextStore`; that single global value is only the next Iris-startup default,
+not persisted MCP task configuration. Runtime jobs still carry the calling process's scene.
 
 Iris reads its preset catalog from `<gameDir>/config/vibris/presets.json`. Use `vibris_list_presets` before configuring
 when a preset identifier is not known. Each schema-v2 entry is a complete scene instead of a cross-product of separate
@@ -367,12 +396,16 @@ The default artifact quota is 3 GiB. Before reserving a new job, the manager evi
 reservation fits. A single job larger than the quota fails; completed results remain protected until reported to the MCP
 or until the unreported-result timeout expires. `vibris_get_status` exposes both used and cap bytes.
 
+Queue capacity and artifact quota are global to the one Iris runtime. Round-robin scheduling prevents one workspace ID
+from taking consecutive turns while other workspace IDs are ready, but all workspaces still share `max_global_queue`
+and the artifact quota. A noisy repository can therefore consume shared admission or storage capacity; use
+`vibris_get_status`, bounded captures, and retryable `QUEUE_FULL` handling rather than assuming per-repository limits.
+
 ## Troubleshooting
 
 | Code or symptom | Meaning and action |
 |-----------------|--------------------|
 | `INVALID_WORKTREE` | Pass an existing Git worktree, not a repository subdirectory or ordinary folder. |
-| `WORKTREE_ALREADY_OWNED` | Close the other MCP for that worktree or wait for its stdin-driven shutdown. |
 | `NOT_CONFIGURED` | Call `vibris_configure` successfully before running a job. |
 | `INVALID_PRESET` | Refresh `vibris_list_presets`; one configured scene identifier is not accepted by Iris. |
 | `SERVER_OFFLINE` / `SERVER_NOT_READY` | Start packaged Iris, load the test world, and verify the loopback address. |
@@ -393,8 +426,26 @@ tracks process identity and only cleans up its owned run.
 From `I:\code\vibris`:
 
 ```powershell
+# Rebuild and publish the explicit delivery used by Codex
+.\tools\build-delivery.ps1 -VibrisRoot I:\code\vibris -IrisRoot I:\code\Iris
+
 # Fast source/package boundary check
 .\integration-tests\scripts\source-package-audit.ps1
+
+# Native cwd discovery: concurrent same-root processes plus an independent repository
+.\integration-tests\scripts\worktree-concurrency-probe.ps1 `
+  -Exe .\mcp\out\build\Release\vibris-mcp.exe `
+  -WorkspaceRoot .\.omo\tmp\ulw-v1-g002-c002\worktree `
+  -MalformedConfig .\integration-tests\fixtures\mcp\config-oversize.json
+
+# Packaged same-worktree isolation: two MCP tasks and one Iris runtime
+.\integration-tests\scripts\same-worktree-acceptance.ps1 `
+  -DeliveryRoot .\build\delivery -TimeoutSeconds 600
+
+# Packaged linked-worktree plus independent-repository acceptance
+.\integration-tests\scripts\final-acceptance.ps1 -Mode Green `
+  -WorktreeCount 3 -JobsPerWorktree 2 -MinecraftCount 1 `
+  -DeliveryRoot .\build\delivery -TimeoutSeconds 600
 
 # Short process/status baseline
 .\integration-tests\scripts\soak.ps1 -Iterations 10 -SourceBytes 0 `
