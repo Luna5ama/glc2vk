@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "expected_execution_order": ["A1", "B1", "C1", "A2", "B2", "C2"],
   "preset_catalog": {
     "schema_version": 2,
@@ -51,6 +51,7 @@
   "clients": [
     {
       "label": "A",
+      "repository": "repository-1",
       "configure": {
         "save_id": "vibris-automation-world",
         "dimension_id": "minecraft:overworld",
@@ -68,12 +69,13 @@
         "camera": {"x": 0.5, "y": 96.0, "z": 0.5, "yaw": 180.0, "pitch": 15.0}
       },
       "jobs": [
-        {"id": "A1", "message_id": 101, "warmup_frames": 600},
-        {"id": "A2", "message_id": 102, "warmup_frames": 120}
+        {"id": "A1", "message_id": 101, "warmup_frames": 600, "source_marker": "#define VIBRIS_ACCEPTANCE_JOB_A1 1"},
+        {"id": "A2", "message_id": 102, "warmup_frames": 120, "source_marker": "#define VIBRIS_ACCEPTANCE_JOB_A2 1"}
       ]
     },
     {
       "label": "B",
+      "repository": "repository-1",
       "configure": {
         "save_id": "vibris-automation-world",
         "dimension_id": "minecraft:the_nether",
@@ -91,12 +93,13 @@
         "camera": {"x": 0.5, "y": 80.0, "z": 0.5, "yaw": 90.0, "pitch": 5.0}
       },
       "jobs": [
-        {"id": "B1", "message_id": 201, "warmup_frames": 120},
-        {"id": "B2", "message_id": 202, "warmup_frames": 2}
+        {"id": "B1", "message_id": 201, "warmup_frames": 120, "source_marker": "#define VIBRIS_ACCEPTANCE_JOB_B1 1"},
+        {"id": "B2", "message_id": 202, "warmup_frames": 120, "source_marker": "#define VIBRIS_ACCEPTANCE_JOB_B2 1"}
       ]
     },
     {
       "label": "C",
+      "repository": "repository-2",
       "configure": {
         "save_id": "vibris-automation-world",
         "dimension_id": "minecraft:the_end",
@@ -114,8 +117,8 @@
         "camera": {"x": 0.5, "y": 96.0, "z": 0.5, "yaw": -90.0, "pitch": -10.0}
       },
       "jobs": [
-        {"id": "C1", "message_id": 301, "warmup_frames": 120},
-        {"id": "C2", "message_id": 302, "warmup_frames": 2}
+        {"id": "C1", "message_id": 301, "warmup_frames": 120, "source_marker": "#define VIBRIS_ACCEPTANCE_JOB_C1 1"},
+        {"id": "C2", "message_id": 302, "warmup_frames": 120, "source_marker": "#define VIBRIS_ACCEPTANCE_JOB_C2 1"}
       ]
     }
   ]
