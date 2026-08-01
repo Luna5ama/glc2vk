@@ -88,6 +88,90 @@ function Assert-CoreArtifact
     }
 }
 
+function Resolve-CoreJavaExecutable
+{
+    $java = $null
+    if (-not [string]::IsNullOrWhiteSpace($env:JAVA_HOME))
+    {
+        try
+        {
+            $candidate = Join-Path $env:JAVA_HOME "bin\java.exe"
+            if (Test-Path -LiteralPath $candidate -PathType Leaf)
+            {
+                $java = (Get-Item -LiteralPath $candidate -ErrorAction Stop).FullName
+            }
+        }
+        catch
+        {
+            $java = $null
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($java))
+    {
+        $command = Get-Command java.exe -CommandType Application -ErrorAction Stop |
+            Select-Object -First 1
+        if ($null -eq $command -or [string]::IsNullOrWhiteSpace([string] $command.Source))
+        {
+            throw "java.exe did not resolve to an application."
+        }
+        $java = (Get-Item -LiteralPath $command.Source -ErrorAction Stop).FullName
+    }
+    return $java
+}
+
+function Start-CoreGradleWrapper
+{
+    param(
+        [Parameter(Mandatory)] [string] $IrisRoot,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $GradleArguments
+    )
+
+    $root = Get-Item -LiteralPath ([System.IO.Path]::GetFullPath($IrisRoot)) -ErrorAction Stop
+    if (-not $root.PSIsContainer)
+    {
+        throw "IrisRoot is not a directory: $IrisRoot"
+    }
+    $wrapperJar = Join-Path $root.FullName "gradle\wrapper\gradle-wrapper.jar"
+    Assert-CoreArtifact -Path $wrapperJar -Label "Iris Gradle wrapper"
+
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = Resolve-CoreJavaExecutable
+    $startInfo.WorkingDirectory = $root.FullName
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in @(
+        "-Xmx64m",
+        "-Xms64m",
+        "-Dorg.gradle.appname=gradlew",
+        "-classpath",
+        $wrapperJar,
+        "org.gradle.wrapper.GradleWrapperMain"
+    ) + $GradleArguments)
+    {
+        [void] $startInfo.ArgumentList.Add([string] $argument)
+    }
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try
+    {
+        [void] $process.Start()
+    }
+    catch
+    {
+        $process.Dispose()
+        throw
+    }
+    return [pscustomobject] @{
+        Process = $process
+        Created = $process.StartTime.ToUniversalTime().ToString("O")
+        Stdout = $process.StandardOutput.ReadToEndAsync()
+        Stderr = $process.StandardError.ReadToEndAsync()
+    }
+}
+
 function Assert-CoreCriterionRoot
 {
     param(

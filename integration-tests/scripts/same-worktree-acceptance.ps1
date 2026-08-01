@@ -174,25 +174,8 @@ gradle.projectsEvaluated {
         "-PautomationPatchedJar=$PatchedJar", "-PautomationGameDir=$($Scope.GameDir)",
         "-PautomationRunId=$($Scope.RunId)", "-PautomationScenario=g008-c002"
     )
-    $command = (ConvertTo-CoreArgument (Join-Path $script:IrisRoot "gradlew.bat")) + " " +
-        [string]::Join(" ", @($arguments | ForEach-Object { ConvertTo-CoreArgument $_ }))
-    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = Join-Path ([Environment]::GetFolderPath("System")) "cmd.exe"
-    $startInfo.WorkingDirectory = $script:IrisRoot
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
-    $startInfo.Arguments = "/d /s /c `"$command`""
-    $wrapper = [System.Diagnostics.Process]::new()
-    $wrapper.StartInfo = $startInfo
-    [void] $wrapper.Start()
-    $Scope.Wrapper = [pscustomobject] @{
-        Process = $wrapper
-        Created = $wrapper.StartTime.ToUniversalTime().ToString("O")
-        Stdout = $wrapper.StandardOutput.ReadToEndAsync()
-        Stderr = $wrapper.StandardError.ReadToEndAsync()
-    }
+    $Scope.Wrapper = Start-CoreGradleWrapper -IrisRoot $script:IrisRoot `
+        -GradleArguments $arguments
     Wait-IrisOwnedRuntimeProcess -Scope $Scope -TimeoutSeconds $TimeoutSeconds
     Start-IrisWindowGuard -Scope $Scope
     $receipt = Wait-IrisReceipt -Scope $Scope -TimeoutSeconds $TimeoutSeconds
