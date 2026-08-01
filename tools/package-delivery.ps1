@@ -8,11 +8,165 @@ param(
     [ValidateSet("None", "ManifestLocked", "StateLocked", "RootRemoval")]
     [string] $TestCleanupFailure = "None",
     [Parameter(DontShow)] [string] $TestBeforeRecordReady,
-    [Parameter(DontShow)] [string] $TestBeforeRecordAck
+    [Parameter(DontShow)] [string] $TestBeforeRecordAck,
+    [Parameter(DontShow)] [string] $TestAfterAuditReady,
+    [Parameter(DontShow)] [string] $TestAfterAuditAck,
+    [Parameter(DontShow)] [ValidateRange(-1, 1)] [int] $TestHardLinkFailureAfter = -1,
+    [Parameter(DontShow)] [switch] $TestPublishIdentityMismatch,
+    [Parameter(DontShow)] [switch] $TestPublishExtraHardLink
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if (-not ("Vibris.DeliveryFileIdentity" -as [type]))
+{
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
+
+namespace Vibris
+{
+    public static class DeliveryFileIdentity
+    {
+        private const int FileIdInfo = 18;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct FileId128
+        {
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
+            public byte[] Identifier;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct FileIdInformation
+        {
+            public ulong VolumeSerialNumber;
+            public FileId128 FileId;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct FileStandardInformation
+        {
+            public long AllocationSize;
+            public long EndOfFile;
+            public uint NumberOfLinks;
+            public byte DeletePending;
+            public byte Directory;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CreateHardLinkW(
+            string newFileName,
+            string existingFileName,
+            IntPtr securityAttributes);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetFileInformationByHandleEx(
+            SafeFileHandle file,
+            int informationClass,
+            out FileIdInformation information,
+            uint bufferSize);
+
+        [DllImport("kernel32.dll", EntryPoint = "GetFileInformationByHandleEx", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetFileStandardInformation(
+            SafeFileHandle file,
+            int informationClass,
+            out FileStandardInformation information,
+            uint bufferSize);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetVolumePathNameW(
+            string fileName,
+            StringBuilder volumePathName,
+            uint bufferLength);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetVolumeInformationW(
+            string rootPathName,
+            StringBuilder volumeNameBuffer,
+            uint volumeNameSize,
+            out uint volumeSerialNumber,
+            out uint maximumComponentLength,
+            out uint fileSystemFlags,
+            StringBuilder fileSystemNameBuffer,
+            uint fileSystemNameSize);
+
+        public static void CreateHardLink(string newFileName, string existingFileName)
+        {
+            RequireNtfs(existingFileName);
+            if (!CreateHardLinkW(newFileName, existingFileName, IntPtr.Zero))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+        }
+
+        private static void RequireNtfs(string path)
+        {
+            var volumePath = new StringBuilder(1024);
+            if (!GetVolumePathNameW(path, volumePath, (uint)volumePath.Capacity))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            var volumeName = new StringBuilder(1024);
+            var fileSystemName = new StringBuilder(1024);
+            uint serial;
+            uint maximumComponentLength;
+            uint flags;
+            if (!GetVolumeInformationW(
+                volumePath.ToString(),
+                volumeName,
+                (uint)volumeName.Capacity,
+                out serial,
+                out maximumComponentLength,
+                out flags,
+                fileSystemName,
+                (uint)fileSystemName.Capacity))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            if (!string.Equals(fileSystemName.ToString(), "NTFS", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new NotSupportedException(
+                    "Identity-bound delivery publication requires NTFS; found " +
+                    fileSystemName + ".");
+            }
+        }
+
+        public static string GetIdentity(SafeFileHandle file)
+        {
+            FileIdInformation information;
+            uint size = (uint)Marshal.SizeOf<FileIdInformation>();
+            if (!GetFileInformationByHandleEx(file, FileIdInfo, out information, size))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            return information.VolumeSerialNumber.ToString("X16") + ":" +
+                BitConverter.ToString(information.FileId.Identifier).Replace("-", "");
+        }
+
+        public static uint GetLinkCount(SafeFileHandle file)
+        {
+            FileStandardInformation information;
+            uint size = (uint)Marshal.SizeOf<FileStandardInformation>();
+            if (!GetFileStandardInformation(file, 1, out information, size))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            return information.NumberOfLinks;
+        }
+    }
+}
+'@
+}
 
 function ConvertTo-NormalizedPath
 {
@@ -367,13 +521,35 @@ function Remove-ExactFlatDirectory
     Remove-Item -LiteralPath $Path -Recurse -Force
 }
 
+function Move-OrdinaryDirectoryAside
+{
+    param(
+        [Parameter(Mandatory)] [string] $Source,
+        [Parameter(Mandatory)] [string] $Destination,
+        [Parameter(Mandatory)] [string] $Label
+    )
+
+    [void] (Assert-NoReparseComponents -Path $Source -Label $Label -RequireExisting)
+    $item = Get-Item -LiteralPath $Source -Force
+    if (-not $item.PSIsContainer -or
+        $item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+    {
+        throw "$Label is not an ordinary directory: $Source"
+    }
+    if (Test-Path -LiteralPath $Destination)
+    {
+        throw "$Label destination already exists: $Destination"
+    }
+    [System.IO.Directory]::Move($Source, $Destination)
+}
+
 function Assert-TransactionRootShape
 {
     param([Parameter(Mandatory)] [string] $Path)
 
     $allowed = @(
         "manifest.json", "manifest.json.next", "state.txt", "state.txt.next",
-        "next", "audit", "previous", "failed")
+        "next", "publish", "audit", "previous", "failed")
     foreach ($entry in @(Get-ChildItem -LiteralPath $Path -Force))
     {
         if ($allowed -cnotcontains $entry.Name -or
@@ -506,6 +682,69 @@ function Open-ImmutableReadHandle
         [System.IO.FileMode]::Open,
         [System.IO.FileAccess]::Read,
         [System.IO.FileShare]::Read)
+}
+
+function Get-OpenFileIdentity
+{
+    param([Parameter(Mandatory)] [System.IO.FileStream] $Handle)
+
+    return [Vibris.DeliveryFileIdentity]::GetIdentity($Handle.SafeFileHandle)
+}
+
+function Get-OpenFileLinkCount
+{
+    param([Parameter(Mandatory)] [System.IO.FileStream] $Handle)
+
+    return [uint32] [Vibris.DeliveryFileIdentity]::GetLinkCount($Handle.SafeFileHandle)
+}
+
+function New-VerifiedHardLink
+{
+    param(
+        [Parameter(Mandatory)] [string] $Source,
+        [Parameter(Mandatory)] [string] $Target,
+        [Parameter(Mandatory)] [object] $Record,
+        [Parameter(Mandatory)] [string] $ExpectedIdentity,
+        [Parameter(Mandatory)] [string] $Label
+    )
+
+    $sourceFile = Resolve-OrdinaryFile -Path $Source -Label "$Label source"
+    if (Test-Path -LiteralPath $Target)
+    {
+        throw "$Label target already exists: $Target"
+    }
+    $targetParent = Split-Path -Parent $Target
+    [void] (Assert-NoReparseComponents -Path $targetParent `
+        -Label "$Label parent" -RequireExisting)
+    try
+    {
+        [Vibris.DeliveryFileIdentity]::CreateHardLink($Target, $sourceFile)
+    }
+    catch
+    {
+        throw "$Label requires a same-volume hard link and has no copy fallback: $($_.Exception.Message)"
+    }
+
+    $targetHandle = $null
+    try
+    {
+        $targetFile = Resolve-OrdinaryFile -Path $Target -Label "$Label target"
+        $targetHandle = Open-ImmutableReadHandle -Path $targetFile
+        $targetIdentity = Get-OpenFileIdentity -Handle $targetHandle
+        if ($targetIdentity -cne $ExpectedIdentity)
+        {
+            throw "$Label did not preserve the audited file identity."
+        }
+        if ((Get-OpenFileLinkCount -Handle $targetHandle) -ne 2)
+        {
+            throw "$Label has an invalid link count; expected 2."
+        }
+        Assert-RecordMatches -Path $targetFile -Record $Record -Label $Label
+    }
+    finally
+    {
+        if ($null -ne $targetHandle) { $targetHandle.Dispose() }
+    }
 }
 
 function Invoke-GitText
@@ -831,6 +1070,40 @@ if ($testBeforeRecord)
     }
 }
 
+$testAfterAudit = [bool] $TestAfterAuditReady -or [bool] $TestAfterAuditAck
+if ($testAfterAudit)
+{
+    if (-not $TestAfterAuditReady -or -not $TestAfterAuditAck)
+    {
+        throw "Both after-audit test hook paths are required."
+    }
+    $testHookRoot = ConvertTo-NormalizedPath -Path (Join-Path $buildRoot ".delivery-test-hooks")
+    [void] (Assert-NoReparseComponents -Path $testHookRoot `
+        -Label "After-audit test hook root" -RequireExisting)
+    $TestAfterAuditReady = ConvertTo-NormalizedPath -Path $TestAfterAuditReady
+    $TestAfterAuditAck = ConvertTo-NormalizedPath -Path $TestAfterAuditAck
+    $testHookSession = Split-Path -Parent $TestAfterAuditReady
+    $testHookSessionId = [guid]::Empty
+    if (-not [string]::Equals($testHookSession, (Split-Path -Parent $TestAfterAuditAck),
+            [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not [guid]::TryParseExact(
+            (Split-Path -Leaf $testHookSession), "D", [ref] $testHookSessionId) -or
+        (Split-Path -Leaf $TestAfterAuditReady) -cne "after-audit-ready.txt" -or
+        (Split-Path -Leaf $TestAfterAuditAck) -cne "after-audit-ack.txt")
+    {
+        throw "After-audit test hooks must use one GUID session with after-audit-ready.txt and after-audit-ack.txt."
+    }
+    [void] (Assert-ContainedPath -Root $testHookRoot -Candidate $testHookSession `
+        -Label "After-audit test hook session")
+    [void] (Assert-NoReparseComponents -Path $testHookSession `
+        -Label "After-audit test hook session" -RequireExisting)
+    if ((Test-Path -LiteralPath $TestAfterAuditReady) -or
+        (Test-Path -LiteralPath $TestAfterAuditAck))
+    {
+        throw "After-audit test hook files already exist."
+    }
+}
+
 if ((Test-IsSameOrDescendant -Root $OutputDirectory -Candidate $McpExe) -or
     (Test-IsSameOrDescendant -Root $OutputDirectory -Candidate $PatchedIrisJar) -or
     (Test-IsSameOrDescendant -Root $OutputDirectory -Candidate $BuildReceipt) -or
@@ -868,6 +1141,7 @@ foreach ($input in @($McpExe, $PatchedIrisJar, $BuildReceipt, $sessionLockPath))
 $manifestPath = Join-Path $transactionRoot "manifest.json"
 $statePath = Join-Path $transactionRoot "state.txt"
 $nextDirectory = Join-Path $transactionRoot "next"
+$publishDirectory = Join-Path $transactionRoot "publish"
 $auditDirectory = Join-Path $transactionRoot "audit"
 $previousDirectory = Join-Path $transactionRoot "previous"
 $failedDirectory = Join-Path $transactionRoot "failed"
@@ -875,10 +1149,14 @@ $lockPath = Join-Path $buildRoot ".delivery.lock"
 [void] (Assert-NoReparseComponents -Path $lockPath -Label "Delivery lock")
 $deliveryLock = $null
 $immutableHandles = [System.Collections.Generic.List[System.IDisposable]]::new()
+$publishSources = [System.Collections.Generic.List[object]]::new()
+$publishedHandles = [System.Collections.Generic.List[System.IDisposable]]::new()
 $committed = $false
 $cleanupOnly = $false
 $cleanupPending = $false
 $manifest = $null
+$testExtraLinkPath = $null
+$recoveryFailure = $null
 
 try
 {
@@ -928,6 +1206,9 @@ try
             Remove-ExactFlatDirectory -Path $nextDirectory `
                 -AllowedNames @([string] $manifest.new.mcp.name, [string] $manifest.new.iris.name) `
                 -Label "Committed next snapshot"
+            Remove-ExactFlatDirectory -Path $publishDirectory `
+                -AllowedNames @([string] $manifest.new.mcp.name, [string] $manifest.new.iris.name) `
+                -Label "Committed publish snapshot"
             Remove-ExactFlatDirectory -Path $auditDirectory `
                 -AllowedNames @("vibris-protocol-java.jar", "vibris-descriptor-dump.exe", "vibris_control.proto") `
                 -Label "Committed audit snapshot"
@@ -947,6 +1228,9 @@ try
             Remove-ExactFlatDirectory -Path $nextDirectory `
                 -AllowedNames @([string] $manifest.new.mcp.name, [string] $manifest.new.iris.name) `
                 -Label "Aborted terminal next snapshot"
+            Remove-ExactFlatDirectory -Path $publishDirectory `
+                -AllowedNames @([string] $manifest.new.mcp.name, [string] $manifest.new.iris.name) `
+                -Label "Aborted terminal publish snapshot"
             Remove-ExactFlatDirectory -Path $auditDirectory `
                 -AllowedNames @("vibris-protocol-java.jar", "vibris-descriptor-dump.exe", "vibris_control.proto") `
                 -Label "Aborted terminal audit snapshot"
@@ -979,15 +1263,8 @@ try
                         -Label "Recoverable rollback"
                     if (Test-Path -LiteralPath $OutputDirectory)
                     {
-                        if (-not (Test-DeliveryMatches -Directory $OutputDirectory -Record $manifest.new))
-                        {
-                            throw "Recovery found an unknown current delivery; refusing replacement."
-                        }
-                        if (Test-Path -LiteralPath $failedDirectory)
-                        {
-                            throw "Recovery failed directory already exists: $failedDirectory"
-                        }
-                        [System.IO.Directory]::Move($OutputDirectory, $failedDirectory)
+                        Move-OrdinaryDirectoryAside -Source $OutputDirectory `
+                            -Destination $failedDirectory -Label "Recoverable current delivery"
                     }
                     [System.IO.Directory]::Move($previousDirectory, $OutputDirectory)
                     Assert-DeliveryMatches -Directory $OutputDirectory -Record $manifest.previous `
@@ -1000,14 +1277,86 @@ try
             }
             elseif (Test-Path -LiteralPath $OutputDirectory)
             {
-                if ($state -ceq "PREPARING" -or
-                    -not (Test-DeliveryMatches -Directory $OutputDirectory -Record $manifest.new))
+                try
                 {
-                    throw "First-publication recovery found an unknown target."
+                    if ($state -cnotin @("PUBLISH_INTENT", "PUBLISHED"))
+                    {
+                        throw "First-publication recovery lacks a published identity handoff."
+                    }
+                    Assert-DeliveryMatches -Directory $nextDirectory -Record $manifest.new `
+                        -Label "First-publication audited snapshot"
+                    Assert-DeliveryMatches -Directory $OutputDirectory -Record $manifest.new `
+                        -Label "First-publication recovery output"
+                    $recoveryFiles = @(
+                        [pscustomobject] @{
+                            name = [string] $manifest.new.mcp.name
+                            record = $manifest.new.mcp
+                        },
+                        [pscustomobject] @{
+                            name = [string] $manifest.new.iris.name
+                            record = $manifest.new.iris
+                        })
+                    foreach ($file in $recoveryFiles)
+                    {
+                        $snapshotPath = Join-Path $nextDirectory ([string] $file.name)
+                        $outputPath = Join-Path $OutputDirectory ([string] $file.name)
+                        $snapshotHandle = Open-ImmutableReadHandle -Path $snapshotPath
+                        $immutableHandles.Add($snapshotHandle)
+                        $outputHandle = Open-ImmutableReadHandle -Path $outputPath
+                        $publishedHandles.Add($outputHandle)
+                        if ((Get-OpenFileIdentity -Handle $snapshotHandle) -cne
+                            (Get-OpenFileIdentity -Handle $outputHandle))
+                        {
+                            throw "First-publication recovery output identity differs from its audited snapshot: $outputPath"
+                        }
+                        if ((Get-OpenFileLinkCount -Handle $snapshotHandle) -ne 2 -or
+                            (Get-OpenFileLinkCount -Handle $outputHandle) -ne 2)
+                        {
+                            throw "First-publication recovery identity has an invalid link count: $outputPath"
+                        }
+                    }
+                    Assert-DeliveryMatches -Directory $nextDirectory -Record $manifest.new `
+                        -Label "Held first-publication audited snapshot"
+                    Assert-DeliveryMatches -Directory $OutputDirectory -Record $manifest.new `
+                        -Label "Held first-publication recovery output"
+
+                    foreach ($handle in $immutableHandles) { $handle.Dispose() }
+                    $immutableHandles.Clear()
+                    Remove-ExactFlatDirectory -Path $nextDirectory `
+                        -AllowedNames @(
+                            [string] $manifest.new.mcp.name,
+                            [string] $manifest.new.iris.name) `
+                        -Label "Retired first-publication audited snapshot"
+                    for ($index = 0; $index -lt $recoveryFiles.Count; ++$index)
+                    {
+                        $file = $recoveryFiles[$index]
+                        $outputPath = Join-Path $OutputDirectory ([string] $file.name)
+                        if ((Get-OpenFileLinkCount -Handle $publishedHandles[$index]) -ne 1)
+                        {
+                            throw "First-publication recovery output has an invalid committed link count: $outputPath"
+                        }
+                        Assert-RecordMatches -Path $outputPath -Record $file.record `
+                            -Label "Committed first-publication recovery output"
+                    }
+                    Write-AtomicText -Path $statePath -Text "COMMITTED"
+                    $state = "COMMITTED"
+                    $committed = $true
                 }
-                Write-AtomicText -Path $statePath -Text "COMMITTED"
-                $state = "COMMITTED"
-                $committed = $true
+                catch
+                {
+                    $recoveryFailure = $_
+                    foreach ($handle in $publishedHandles) { $handle.Dispose() }
+                    $publishedHandles.Clear()
+                    foreach ($handle in $immutableHandles) { $handle.Dispose() }
+                    $immutableHandles.Clear()
+                    if (Test-Path -LiteralPath $OutputDirectory)
+                    {
+                        Move-OrdinaryDirectoryAside -Source $OutputDirectory `
+                            -Destination $failedDirectory -Label "Failed first publication recovery"
+                    }
+                }
+                foreach ($handle in $publishedHandles) { $handle.Dispose() }
+                $publishedHandles.Clear()
             }
 
             if ($state -cne "COMMITTED")
@@ -1015,6 +1364,9 @@ try
                 Remove-ExactFlatDirectory -Path $nextDirectory `
                     -AllowedNames @([string] $manifest.new.mcp.name, [string] $manifest.new.iris.name) `
                     -Label "Aborted next snapshot"
+                Remove-ExactFlatDirectory -Path $publishDirectory `
+                    -AllowedNames @([string] $manifest.new.mcp.name, [string] $manifest.new.iris.name) `
+                    -Label "Aborted publish snapshot"
                 Remove-ExactFlatDirectory -Path $auditDirectory `
                     -AllowedNames @("vibris-protocol-java.jar", "vibris-descriptor-dump.exe", "vibris_control.proto") `
                     -Label "Aborted audit snapshot"
@@ -1025,7 +1377,14 @@ try
                 Remove-TerminalTransaction -Root $transactionRoot `
                     -Manifest $manifestPath -State $statePath `
                     -TerminalState "ABORT_CLEANUP_COMPLETE" -Failure $TestCleanupFailure
-                Write-Output "RECOVERED last_good_delivery=$OutputDirectory"
+                if ($null -ne $recoveryFailure)
+                {
+                    Write-Output "RECOVERED rejected_first_delivery=$OutputDirectory"
+                }
+                else
+                {
+                    Write-Output "RECOVERED last_good_delivery=$OutputDirectory"
+                }
                 $cleanupOnly = $false
             }
             else
@@ -1033,6 +1392,9 @@ try
                 Remove-ExactFlatDirectory -Path $nextDirectory `
                     -AllowedNames @([string] $manifest.new.mcp.name, [string] $manifest.new.iris.name) `
                     -Label "Recovered committed next snapshot"
+                Remove-ExactFlatDirectory -Path $publishDirectory `
+                    -AllowedNames @([string] $manifest.new.mcp.name, [string] $manifest.new.iris.name) `
+                    -Label "Recovered committed publish snapshot"
                 Remove-ExactFlatDirectory -Path $auditDirectory `
                     -AllowedNames @("vibris-protocol-java.jar", "vibris-descriptor-dump.exe", "vibris_control.proto") `
                     -Label "Recovered committed audit snapshot"
@@ -1048,6 +1410,7 @@ try
         $manifest = $null
         $committed = $false
         $cleanupOnly = $false
+        if ($null -ne $recoveryFailure) { throw $recoveryFailure }
     }
     else
     {
@@ -1086,6 +1449,9 @@ try
             }
             Remove-ExactFlatDirectory -Path $nextDirectory -AllowedNames @(
                 "vibris-mcp.exe", (Split-Path -Leaf $PatchedIrisJar)) -Label "Uncommitted next snapshot"
+            Remove-ExactFlatDirectory -Path $publishDirectory -AllowedNames @(
+                "vibris-mcp.exe", (Split-Path -Leaf $PatchedIrisJar)) `
+                -Label "Uncommitted publish snapshot"
             Remove-ExactFlatDirectory -Path $auditDirectory -AllowedNames @(
                 "vibris-protocol-java.jar", "vibris-descriptor-dump.exe", "vibris_control.proto") `
                 -Label "Uncommitted audit snapshot"
@@ -1219,7 +1585,21 @@ try
 
     foreach ($copy in $copies)
     {
-        $immutableHandles.Add((Open-ImmutableReadHandle -Path $copy.target))
+        $handle = Open-ImmutableReadHandle -Path $copy.target
+        $immutableHandles.Add($handle)
+        if (Test-IsSameOrDescendant -Root $nextDirectory -Candidate $copy.target)
+        {
+            if ((Get-OpenFileLinkCount -Handle $handle) -ne 1)
+            {
+                throw "Immutable next snapshot has an invalid initial link count: $($copy.target)"
+            }
+            $publishSources.Add([pscustomobject] @{
+                source = $copy.target
+                name = Split-Path -Leaf $copy.target
+                record = $copy.record
+                identity = Get-OpenFileIdentity -Handle $handle
+            })
+        }
     }
     Assert-DeliveryMatches -Directory $nextDirectory -Record $newRecord -Label "Immutable next snapshot"
 
@@ -1231,8 +1611,25 @@ try
         -CppDescriptorDump (Join-Path $auditDirectory "vibris-descriptor-dump.exe") `
         -ProtoPath (Join-Path $auditDirectory "vibris_control.proto") `
         -CallerHoldsDeliveryLock)
-    foreach ($handle in $immutableHandles) { $handle.Dispose() }
-    $immutableHandles.Clear()
+    if ($testAfterAudit)
+    {
+        Write-AtomicText -Path $TestAfterAuditReady -Text "READY"
+        $deadline = [datetime]::UtcNow.AddSeconds(20)
+        while (-not (Test-Path -LiteralPath $TestAfterAuditAck -PathType Leaf))
+        {
+            if ([datetime]::UtcNow -ge $deadline)
+            {
+                throw "Timed out waiting for after-audit replacement acknowledgement."
+            }
+            Start-Sleep -Milliseconds 1
+        }
+        [void] (Assert-NoReparseComponents -Path $TestAfterAuditAck `
+            -Label "After-audit test acknowledgement" -RequireExisting)
+        if ((Get-Content -Raw -LiteralPath $TestAfterAuditAck).Trim() -cne "ATTEMPTED")
+        {
+            throw "After-audit replacement acknowledgement is invalid."
+        }
+    }
     Assert-DeliveryMatches -Directory $nextDirectory -Record $newRecord -Label "Audited next snapshot"
     Assert-RecordMatches -Path (Join-Path $auditDirectory "vibris-protocol-java.jar") `
         -Record $auditRecord.java -Label "Audited Java protocol snapshot"
@@ -1260,6 +1657,49 @@ try
         -ExpectedPath $auditSources.proto -Label "Protocol schema provenance"
     Write-AtomicText -Path $statePath -Text "PREPARED"
 
+    [void] (New-Item -ItemType Directory -Path $publishDirectory)
+    [void] (Assert-NoReparseComponents -Path $publishDirectory `
+        -Label "Publish snapshot" -RequireExisting)
+    $hardLinkCount = 0
+    foreach ($source in $publishSources)
+    {
+        if ($TestHardLinkFailureAfter -eq $hardLinkCount)
+        {
+            throw "Injected hard-link publication failure after $hardLinkCount links."
+        }
+        New-VerifiedHardLink -Source ([string] $source.source) `
+            -Target (Join-Path $publishDirectory ([string] $source.name)) `
+            -Record $source.record -ExpectedIdentity ([string] $source.identity) `
+            -Label "Publish hard link"
+        ++$hardLinkCount
+    }
+    if ($TestPublishExtraHardLink)
+    {
+        $testExtraLinkPath = Join-Path $publishDirectory ".test-extra-hard-link"
+        [Vibris.DeliveryFileIdentity]::CreateHardLink(
+            $testExtraLinkPath,
+            (Join-Path $publishDirectory ([string] $newRecord.mcp.name)))
+    }
+    foreach ($source in $publishSources)
+    {
+        $linkCountProbe = $null
+        try
+        {
+            $linkCountProbe = Open-ImmutableReadHandle -Path (
+                Join-Path $publishDirectory ([string] $source.name))
+            if ((Get-OpenFileLinkCount -Handle $linkCountProbe) -ne 2)
+            {
+                throw "Publish hard link has an invalid link count; expected 2."
+            }
+        }
+        finally
+        {
+            if ($null -ne $linkCountProbe) { $linkCountProbe.Dispose() }
+        }
+    }
+    Assert-DeliveryMatches -Directory $publishDirectory -Record $newRecord `
+        -Label "Identity-bound publish snapshot"
+
     Write-AtomicText -Path $statePath -Text "OLD_MOVE_INTENT"
     if ([bool] $before.present)
     {
@@ -1269,14 +1709,67 @@ try
     Write-AtomicText -Path $statePath -Text "OLD_MOVED"
 
     Write-AtomicText -Path $statePath -Text "PUBLISH_INTENT"
-    [System.IO.Directory]::Move($nextDirectory, $OutputDirectory)
+    [System.IO.Directory]::Move($publishDirectory, $OutputDirectory)
     Write-AtomicText -Path $statePath -Text "PUBLISHED"
+
+    if ($TestPublishIdentityMismatch)
+    {
+        $mismatchPath = Join-Path $OutputDirectory ([string] $newRecord.iris.name)
+        Remove-Item -LiteralPath $mismatchPath -Force
+        [System.IO.File]::WriteAllText($mismatchPath, "INJECTED_IDENTITY_MISMATCH")
+    }
+
+    foreach ($source in $publishSources)
+    {
+        $publishedPath = Join-Path $OutputDirectory ([string] $source.name)
+        $publishedHandle = Open-ImmutableReadHandle -Path $publishedPath
+        $publishedHandles.Add($publishedHandle)
+        if ((Get-OpenFileIdentity -Handle $publishedHandle) -cne [string] $source.identity)
+        {
+            throw "Published delivery file identity differs from its audited snapshot: $publishedPath"
+        }
+        if ((Get-OpenFileLinkCount -Handle $publishedHandle) -ne 2)
+        {
+            throw "Published delivery file has an invalid pre-retirement link count: $publishedPath"
+        }
+    }
     Assert-DeliveryMatches -Directory $OutputDirectory -Record $newRecord -Label "Published delivery"
-    Write-AtomicText -Path $statePath -Text "COMMITTED"
-    $committed = $true
 
     foreach ($handle in $immutableHandles) { $handle.Dispose() }
     $immutableHandles.Clear()
+    Remove-ExactFlatDirectory -Path $nextDirectory `
+        -AllowedNames @([string] $newRecord.mcp.name, [string] $newRecord.iris.name) `
+        -Label "Retired audited next snapshot"
+
+    foreach ($source in $publishSources)
+    {
+        $publishedPath = Join-Path $OutputDirectory ([string] $source.name)
+        $identityProbe = $null
+        try
+        {
+            $identityProbe = Open-ImmutableReadHandle -Path $publishedPath
+            if ((Get-OpenFileIdentity -Handle $identityProbe) -cne [string] $source.identity)
+            {
+                throw "Published delivery path no longer names its audited file identity: $publishedPath"
+            }
+            if ((Get-OpenFileLinkCount -Handle $identityProbe) -ne 1 -or
+                (Get-OpenFileLinkCount -Handle $publishedHandles[$publishSources.IndexOf($source)]) -ne 1)
+            {
+                throw "Published delivery file has an invalid committed link count: $publishedPath"
+            }
+            Assert-RecordMatches -Path $publishedPath -Record $source.record `
+                -Label "Committed identity-bound delivery"
+        }
+        finally
+        {
+            if ($null -ne $identityProbe) { $identityProbe.Dispose() }
+        }
+    }
+    Write-AtomicText -Path $statePath -Text "COMMITTED"
+    $committed = $true
+
+    foreach ($handle in $publishedHandles) { $handle.Dispose() }
+    $publishedHandles.Clear()
     try
     {
         if ([bool] $before.present)
@@ -1304,7 +1797,8 @@ try
     Write-Output ($auditOutput | Where-Object { $_ -like "PASS *" })
     Write-Output ("PASS delivery_files=2 output=$OutputDirectory " +
         "mcp_sha256=$($newRecord.mcp.sha256) iris_sha256=$($newRecord.iris.sha256) " +
-        "target_sha256=$targetKey cleanup_pending=$($cleanupPending.ToString().ToLowerInvariant())")
+        "target_sha256=$targetKey identity_bound=true hard_link_publish=true " +
+        "cleanup_pending=$($cleanupPending.ToString().ToLowerInvariant())")
 }
 catch
 {
@@ -1313,23 +1807,26 @@ catch
     {
         try
         {
+            foreach ($handle in $publishedHandles) { $handle.Dispose() }
+            $publishedHandles.Clear()
             foreach ($handle in $immutableHandles) { $handle.Dispose() }
             $immutableHandles.Clear()
+            if ($TestPublishExtraHardLink -and
+                $testExtraLinkPath -and
+                (Test-Path -LiteralPath $testExtraLinkPath -PathType Leaf))
+            {
+                [void] (Resolve-OrdinaryFile -Path $testExtraLinkPath `
+                    -Label "Injected extra hard link")
+                Remove-Item -LiteralPath $testExtraLinkPath -Force
+            }
             if ([bool] $manifest.previous.present -and (Test-Path -LiteralPath $previousDirectory))
             {
                 Assert-DeliveryMatches -Directory $previousDirectory -Record $manifest.previous `
                     -Label "Failure rollback"
                 if (Test-Path -LiteralPath $OutputDirectory)
                 {
-                    if (-not (Test-DeliveryMatches -Directory $OutputDirectory -Record $manifest.new))
-                    {
-                        throw "Failure recovery found an unknown target."
-                    }
-                    if (Test-Path -LiteralPath $failedDirectory)
-                    {
-                        throw "Failure recovery target already exists: $failedDirectory"
-                    }
-                    [System.IO.Directory]::Move($OutputDirectory, $failedDirectory)
+                    Move-OrdinaryDirectoryAside -Source $OutputDirectory `
+                        -Destination $failedDirectory -Label "Failure current delivery"
                 }
                 [System.IO.Directory]::Move($previousDirectory, $OutputDirectory)
                 Assert-DeliveryMatches -Directory $OutputDirectory -Record $manifest.previous `
@@ -1342,18 +1839,16 @@ catch
             }
             elseif (Test-Path -LiteralPath $OutputDirectory)
             {
-                Assert-DeliveryMatches -Directory $OutputDirectory -Record $manifest.new `
-                    -Label "Failed first publication"
-                if (Test-Path -LiteralPath $failedDirectory)
-                {
-                    throw "Failure recovery target already exists: $failedDirectory"
-                }
-                [System.IO.Directory]::Move($OutputDirectory, $failedDirectory)
+                Move-OrdinaryDirectoryAside -Source $OutputDirectory `
+                    -Destination $failedDirectory -Label "Failed first publication"
             }
 
             Remove-ExactFlatDirectory -Path $nextDirectory `
                 -AllowedNames @([string] $manifest.new.mcp.name, [string] $manifest.new.iris.name) `
                 -Label "Failed next snapshot"
+            Remove-ExactFlatDirectory -Path $publishDirectory `
+                -AllowedNames @([string] $manifest.new.mcp.name, [string] $manifest.new.iris.name) `
+                -Label "Failed publish snapshot"
             Remove-ExactFlatDirectory -Path $auditDirectory `
                 -AllowedNames @("vibris-protocol-java.jar", "vibris-descriptor-dump.exe", "vibris_control.proto") `
                 -Label "Failed audit snapshot"
@@ -1377,6 +1872,8 @@ catch
 }
 finally
 {
+    foreach ($handle in $publishedHandles) { $handle.Dispose() }
+    $publishedHandles.Clear()
     foreach ($handle in $immutableHandles) { $handle.Dispose() }
     $immutableHandles.Clear()
     if ($null -ne $deliveryLock)

@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string] $VibrisRoot = (Join-Path $PSScriptRoot "..\.."),
-    [string] $IrisRoot = (Join-Path $PSScriptRoot "..\..\..\Iris")
+    [string] $IrisRoot = (Join-Path $PSScriptRoot "..\..\..\Iris"),
+    [Parameter(DontShow)] [switch] $FirstPublicationRecoveryOnly
 )
 
 Set-StrictMode -Version Latest
@@ -42,6 +43,8 @@ $raceRoot = $null
 $replacementJob = $null
 $preRecordJob = $null
 $preRecordHookSession = $null
+$postAuditJob = $null
+$postAuditHookSession = $null
 $metadataRoots = [System.Collections.Generic.List[string]]::new()
 $activeReceiptSessions = [System.Collections.Generic.List[object]]::new()
 $probeVibrisSource = $null
@@ -82,6 +85,28 @@ function Get-Record
     }
 }
 
+function Get-ProbeFileIdentityState
+{
+    param([Parameter(Mandatory)] [string] $Path)
+
+    $handle = [System.IO.File]::Open(
+        $Path,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read,
+        [System.IO.FileShare]::Read)
+    try
+    {
+        return [pscustomobject] @{
+            identity = [Vibris.DeliveryFileIdentity]::GetIdentity($handle.SafeFileHandle)
+            links = [Vibris.DeliveryFileIdentity]::GetLinkCount($handle.SafeFileHandle)
+        }
+    }
+    finally
+    {
+        $handle.Dispose()
+    }
+}
+
 function Assert-ExactDelivery
 {
     param(
@@ -118,7 +143,12 @@ function Invoke-Package
         [string] $ReceiptMcp,
         [string] $ReceiptJar,
         [string] $BeforeRecordReady,
-        [string] $BeforeRecordAck
+        [string] $BeforeRecordAck,
+        [string] $AfterAuditReady,
+        [string] $AfterAuditAck,
+        [ValidateRange(-1, 1)] [int] $HardLinkFailureAfter = -1,
+        [switch] $PublishIdentityMismatch,
+        [switch] $PublishExtraHardLink
     )
 
     if (-not $ReceiptMcp) { $ReceiptMcp = $Mcp }
@@ -131,7 +161,12 @@ function Invoke-Package
             -BuildReceipt $session.receipt -OutputDirectory $Target `
             -TestCleanupFailure $CleanupFailure `
             -TestBeforeRecordReady $BeforeRecordReady `
-            -TestBeforeRecordAck $BeforeRecordAck 3>&1)
+            -TestBeforeRecordAck $BeforeRecordAck `
+            -TestAfterAuditReady $AfterAuditReady `
+            -TestAfterAuditAck $AfterAuditAck `
+            -TestHardLinkFailureAfter $HardLinkFailureAfter `
+            -TestPublishIdentityMismatch:$PublishIdentityMismatch `
+            -TestPublishExtraHardLink:$PublishExtraHardLink 3>&1)
     }
     finally
     {
@@ -519,12 +554,181 @@ try
     $transactionRoot = Join-Path $buildRoot ".delivery-transactions\$targetKey"
     if ($firstText -notmatch "target_sha256=$targetKey" -or
         $firstText -notmatch "loom_generated_metadata=true" -or
+        $firstText -notmatch "identity_bound=true" -or
+        $firstText -notmatch "hard_link_publish=true" -or
         $targetKey.Length -ne 64)
     {
         throw "Canonical full target key was not reported."
     }
     Assert-ExactDelivery -Directory $output -McpHash $mcpHash -JarName $jarName -JarHash $jarHash
     $log.Add("PASS scenario=immutable-snapshot-publish target_sha256=$targetKey files=2")
+
+    $divergentRecoveryAccepted = [System.Collections.Generic.List[string]]::new()
+    foreach ($recoveryState in @("PUBLISH_INTENT", "PUBLISHED"))
+    {
+        foreach ($identityMode in @("same", "divergent"))
+        {
+            $recoveryName = "$($recoveryState.ToLowerInvariant())-$identityMode"
+            $recoveryOutput = Join-Path $scope "first-recovery-$recoveryName-delivery"
+            $recoveryKey = Get-TargetKey -Path $recoveryOutput
+            $recoveryRoot = Join-Path $buildRoot ".delivery-transactions\$recoveryKey"
+            $metadataRoots.Add($recoveryRoot)
+            $recoveryNext = Join-Path $recoveryRoot "next"
+            [void] (New-Item -ItemType Directory -Path $recoveryNext)
+            [void] (New-Item -ItemType Directory -Path $recoveryOutput)
+            Copy-Item -LiteralPath $releaseMcp -Destination $recoveryNext
+            Copy-Item -LiteralPath $patchedJar -Destination $recoveryNext
+
+            foreach ($name in @("vibris-mcp.exe", $jarName))
+            {
+                $snapshotPath = Join-Path $recoveryNext $name
+                $outputPath = Join-Path $recoveryOutput $name
+                if ($identityMode -ceq "same")
+                {
+                    [Vibris.DeliveryFileIdentity]::CreateHardLink($outputPath, $snapshotPath)
+                }
+                else
+                {
+                    Copy-Item -LiteralPath $snapshotPath -Destination $outputPath
+                }
+                $snapshotState = Get-ProbeFileIdentityState -Path $snapshotPath
+                $outputState = Get-ProbeFileIdentityState -Path $outputPath
+                $identitiesEqual = $snapshotState.identity -ceq $outputState.identity
+                if (($identityMode -ceq "same" -and
+                        (-not $identitiesEqual -or $snapshotState.links -ne 2 -or
+                            $outputState.links -ne 2)) -or
+                    ($identityMode -ceq "divergent" -and $identitiesEqual))
+                {
+                    throw "Invalid first-publication recovery identity fixture: $recoveryName/$name"
+                }
+            }
+
+            $recoveryRecord = [ordered] @{
+                present = $true
+                mcp = Get-Record -Path (Join-Path $recoveryNext "vibris-mcp.exe") `
+                    -Name "vibris-mcp.exe"
+                iris = Get-Record -Path (Join-Path $recoveryNext $jarName) -Name $jarName
+            }
+            $recoveryManifest = [ordered] @{
+                schema_version = 1
+                transaction_id = [guid]::NewGuid().ToString()
+                target_path = [System.IO.Path]::GetFullPath($recoveryOutput).TrimEnd('\', '/')
+                target_sha256 = $recoveryKey
+                previous = [ordered] @{ present = $false }
+                new = $recoveryRecord
+                audit = [ordered] @{}
+            }
+            [System.IO.File]::WriteAllText(
+                (Join-Path $recoveryRoot "manifest.json"),
+                ($recoveryManifest | ConvertTo-Json -Depth 8))
+            [System.IO.File]::WriteAllText(
+                (Join-Path $recoveryRoot "state.txt"), $recoveryState)
+
+            $recoveryFailure = $null
+            $recoveryResult = @()
+            try
+            {
+                $recoveryResult = @(Invoke-Package -Mcp $releaseMcp -Jar $patchedJar `
+                    -Target $recoveryOutput)
+            }
+            catch
+            {
+                $recoveryFailure = $_
+            }
+
+            if ($identityMode -ceq "same")
+            {
+                if ($null -ne $recoveryFailure) { throw $recoveryFailure }
+                Assert-ExactDelivery -Directory $recoveryOutput -McpHash $mcpHash `
+                    -JarName $jarName -JarHash $jarHash
+                if (($recoveryResult -join "`n") -notmatch "RECOVERED first_delivery=")
+                {
+                    throw "Same-identity first-publication recovery did not use the recovery path: $recoveryState"
+                }
+                $log.Add("PASS scenario=first-publication-$($recoveryState.ToLowerInvariant())-" +
+                    "same-identity-recovery committed=true")
+                continue
+            }
+
+            if ($null -eq $recoveryFailure)
+            {
+                $divergentRecoveryAccepted.Add($recoveryState)
+                continue
+            }
+            if ($recoveryFailure.Exception.Message -notmatch
+                "First-publication recovery output identity differs from its audited snapshot")
+            {
+                throw $recoveryFailure
+            }
+            if ((Test-Path -LiteralPath $recoveryOutput) -or
+                (Test-Path -LiteralPath $recoveryRoot))
+            {
+                throw "Divergent first-publication recovery retained owned state: $recoveryState"
+            }
+            [void] (Invoke-Package -Mcp $releaseMcp -Jar $patchedJar -Target $recoveryOutput)
+            Assert-ExactDelivery -Directory $recoveryOutput -McpHash $mcpHash `
+                -JarName $jarName -JarHash $jarHash
+            $log.Add("PASS scenario=first-publication-$($recoveryState.ToLowerInvariant())-" +
+                "identity-divergence rejected=true delivery_absent_before_retry=true " +
+                "retry_succeeded=true")
+        }
+    }
+    if ($divergentRecoveryAccepted.Count -ne 0)
+    {
+        throw "First-publication identity-divergence was committed in states: " +
+            ($divergentRecoveryAccepted -join ",")
+    }
+    if ($FirstPublicationRecoveryOnly)
+    {
+        $log.Add("PASS scenario=focused-first-publication-recovery")
+        $log | Write-Output
+        return
+    }
+
+    foreach ($hardLinkFailureAfter in @(0, 1))
+    {
+        Assert-ExpectedFailure -Scenario "hard-link-failure-after-$hardLinkFailureAfter" `
+            -Pattern "Injected hard-link publication failure" -Action {
+                Invoke-Package -Mcp $releaseMcp -Jar $patchedJar -Target $output `
+                    -HardLinkFailureAfter $hardLinkFailureAfter | Out-Null
+            }
+        Assert-ExactDelivery -Directory $output -McpHash $mcpHash `
+            -JarName $jarName -JarHash $jarHash
+        if (Test-Path -LiteralPath $transactionRoot)
+        {
+            throw "Hard-link failure retained a private transaction root after $hardLinkFailureAfter links."
+        }
+        $log.Add("PASS scenario=hard-link-failure-after-$hardLinkFailureAfter " +
+            "copy_fallback=false last_good_preserved=true")
+    }
+
+    Assert-ExpectedFailure -Scenario "published-identity-mismatch" `
+        -Pattern "identity differs from its audited snapshot" -Action {
+            Invoke-Package -Mcp $releaseMcp -Jar $patchedJar -Target $output `
+                -PublishIdentityMismatch | Out-Null
+        }
+    Assert-ExactDelivery -Directory $output -McpHash $mcpHash `
+        -JarName $jarName -JarHash $jarHash
+    if (Test-Path -LiteralPath $transactionRoot)
+    {
+        throw "Published identity mismatch retained a private transaction root."
+    }
+    $log.Add("PASS scenario=published-identity-mismatch-detected " +
+        "last_good_preserved=true transient_untrusted_path_detected=true")
+
+    Assert-ExpectedFailure -Scenario "published-link-count-mismatch" `
+        -Pattern "invalid link count" -Action {
+            Invoke-Package -Mcp $releaseMcp -Jar $patchedJar -Target $output `
+                -PublishExtraHardLink | Out-Null
+        }
+    Assert-ExactDelivery -Directory $output -McpHash $mcpHash `
+        -JarName $jarName -JarHash $jarHash
+    if (Test-Path -LiteralPath $transactionRoot)
+    {
+        throw "Published link-count mismatch retained a private transaction root."
+    }
+    $log.Add("PASS scenario=published-link-count-mismatch-detected " +
+        "last_good_preserved=true bounded_cleanup=true")
 
     Assert-ExpectedFailure -Scenario "missing-build-receipt" -Pattern "BuildReceipt" -Action {
         & $packageScript -McpExe $releaseMcp -PatchedIrisJar $patchedJar `
@@ -885,6 +1089,194 @@ try
         $preRecordHookSession = $null
     }
 
+    $postAuditHookSession = Join-Path $testHooksRoot ([guid]::NewGuid().ToString("D"))
+    [void] (New-Item -ItemType Directory -Path $postAuditHookSession)
+    $postAuditReady = Join-Path $postAuditHookSession "after-audit-ready.txt"
+    $postAuditAck = Join-Path $postAuditHookSession "after-audit-ack.txt"
+    $postAuditStagedJar = Join-Path $transactionRoot "next\$jarName"
+    $postAuditJob = Start-Job -ScriptBlock {
+        param($Ready, $Ack, $Replacement, $StagedJar)
+        $deadline = [datetime]::UtcNow.AddSeconds(20)
+        while (-not (Test-Path -LiteralPath $Ready -PathType Leaf))
+        {
+            if ([datetime]::UtcNow -ge $deadline)
+            {
+                throw "Timed out waiting for after-audit replacement trigger."
+            }
+            Start-Sleep -Milliseconds 1
+        }
+        $attempts = 0
+        $blocked = 0
+        $missing = 0
+        $replacements = 0
+        $stressDeadline = [datetime]::UtcNow.AddSeconds(3)
+        try
+        {
+            while ([datetime]::UtcNow -lt $stressDeadline)
+            {
+                ++$attempts
+                try
+                {
+                    Copy-Item -LiteralPath $Replacement -Destination $StagedJar `
+                        -Force -ErrorAction Stop
+                    ++$replacements
+                    break
+                }
+                catch
+                {
+                    if (Test-Path -LiteralPath $StagedJar) { ++$blocked } else { ++$missing }
+                }
+                if (-not (Test-Path -LiteralPath $Ack))
+                {
+                    [System.IO.File]::WriteAllText($Ack, "ATTEMPTED")
+                }
+                Start-Sleep -Milliseconds 1
+            }
+        }
+        finally
+        {
+            if (-not (Test-Path -LiteralPath $Ack))
+            {
+                [System.IO.File]::WriteAllText($Ack, "ATTEMPTED")
+            }
+        }
+        Write-Output ("STRESS attempts=$attempts blocked=$blocked " +
+            "missing=$missing replacements=$replacements")
+    } -ArgumentList $postAuditReady, $postAuditAck, $preRecordReplacement, $postAuditStagedJar
+    try
+    {
+        $postAuditPackageFailure = $null
+        try
+        {
+            Invoke-Package -Mcp $releaseMcp -Jar $patchedJar -Target $output `
+                -AfterAuditReady $postAuditReady -AfterAuditAck $postAuditAck | Out-Null
+        }
+        catch
+        {
+            $postAuditPackageFailure = $_
+        }
+        [void] (Wait-Job -Job $postAuditJob -Timeout 25)
+        $postAuditOutput = @(Receive-Job -Job $postAuditJob -ErrorAction Stop)
+        Remove-Job -Job $postAuditJob -Force
+        $postAuditJob = $null
+        $postAuditStress = @($postAuditOutput | Where-Object { $_ -match '^STRESS ' })
+        if ($postAuditStress.Count -ne 1 -or
+            $postAuditStress[0] -notmatch 'attempts=([1-9][0-9]*)' -or
+            $postAuditStress[0] -notmatch 'replacements=0$')
+        {
+            Assert-ExactDelivery -Directory $output -McpHash $mcpHash `
+                -JarName $jarName -JarHash $jarHash
+            throw "Post-audit replacement stress was not fully blocked: $($postAuditOutput -join '; ')"
+        }
+        if ($null -ne $postAuditPackageFailure) { throw $postAuditPackageFailure }
+        Assert-ExactDelivery -Directory $output -McpHash $mcpHash `
+            -JarName $jarName -JarHash $jarHash
+        $log.Add("PASS scenario=post-audit-replacement-stress-blocked " +
+            "$($postAuditStress[0]) " +
+            "audit_bytes_published=true last_good_preserved=true")
+    }
+    finally
+    {
+        if ($null -ne $postAuditJob)
+        {
+            if ($postAuditJob.State -in @("Running", "NotStarted")) { Stop-Job -Job $postAuditJob }
+            Remove-Job -Job $postAuditJob -Force
+            $postAuditJob = $null
+        }
+        Remove-OwnedDirectory -Path $postAuditHookSession -Root $testHooksRoot
+        $postAuditHookSession = $null
+    }
+
+    foreach ($parallelRound in 1..3)
+    {
+        $parallelJobs = [System.Collections.Generic.List[object]]::new()
+        $parallelSessions = [System.Collections.Generic.List[object]]::new()
+        $parallelTargets = [System.Collections.Generic.List[string]]::new()
+        try
+        {
+            foreach ($parallelLane in 1..3)
+            {
+                $parallelTarget = Join-Path $scope "parallel-$parallelRound-$parallelLane-delivery"
+                $metadataRoots.Add((Join-Path $buildRoot (
+                    ".delivery-transactions\" + (Get-TargetKey -Path $parallelTarget))))
+                $parallelSession = New-ProbeBuildSession `
+                    -Mcp $releaseMcp -Jar $patchedJar -Mutation "None"
+                $parallelSessions.Add($parallelSession)
+                $parallelTargets.Add($parallelTarget)
+                $parallelJobs.Add((Start-Job -ScriptBlock {
+                    param($Lane, $PackageScript, $Mcp, $Jar, $Receipt, $Target)
+                    try
+                    {
+                        $packageOutput = @(& $PackageScript `
+                            -McpExe $Mcp -PatchedIrisJar $Jar `
+                            -BuildReceipt $Receipt -OutputDirectory $Target 3>&1)
+                        [pscustomobject] @{
+                            lane = $Lane
+                            status = "PASS"
+                            text = $packageOutput -join "`n"
+                        }
+                    }
+                    catch
+                    {
+                        [pscustomobject] @{
+                            lane = $Lane
+                            status = "FAIL"
+                            text = $_.Exception.Message
+                        }
+                    }
+                } -ArgumentList $parallelLane, $packageScript, $releaseMcp, $patchedJar,
+                    $parallelSession.receipt, $parallelTarget))
+            }
+            [void] (Wait-Job -Job @($parallelJobs) -Timeout 90)
+            if (@($parallelJobs | Where-Object State -in @("Running", "NotStarted")).Count -ne 0)
+            {
+                throw "Parallel package round timed out: $parallelRound"
+            }
+            $parallelResults = @($parallelJobs | ForEach-Object {
+                Receive-Job -Job $_ -ErrorAction Stop
+            })
+            $parallelPasses = @($parallelResults | Where-Object status -ceq "PASS")
+            $parallelFailures = @($parallelResults | Where-Object status -ceq "FAIL")
+            if ($parallelPasses.Count -lt 1 -or
+                @($parallelPasses | Where-Object { $_.text -notmatch "identity_bound=true" }).Count -ne 0 -or
+                @($parallelFailures | Where-Object { $_.text -notmatch "already running" }).Count -ne 0)
+            {
+                throw "Parallel package round returned an unexpected result: " +
+                    ($parallelResults | ConvertTo-Json -Compress)
+            }
+        }
+        finally
+        {
+            foreach ($parallelJob in @($parallelJobs))
+            {
+                if ($parallelJob.State -in @("Running", "NotStarted"))
+                {
+                    Stop-Job -Job $parallelJob
+                }
+                Remove-Job -Job $parallelJob -Force
+            }
+            foreach ($parallelSession in @($parallelSessions))
+            {
+                Remove-ProbeBuildSession -Session $parallelSession
+            }
+        }
+
+        foreach ($parallelLane in 1..3)
+        {
+            $parallelTarget = $parallelTargets[$parallelLane - 1]
+            if (-not (Test-Path -LiteralPath $parallelTarget))
+            {
+                Invoke-Package -Mcp $releaseMcp -Jar $patchedJar `
+                    -Target $parallelTarget | Out-Null
+            }
+            Assert-ExactDelivery -Directory $parallelTarget -McpHash $mcpHash `
+                -JarName $jarName -JarHash $jarHash
+        }
+        $log.Add("PASS scenario=parallel-packagers round=$parallelRound " +
+            "attempts=3 initial_passes=$($parallelPasses.Count) " +
+            "bounded_lock_failures=$($parallelFailures.Count) retries_converged=true")
+    }
+
     $raceInputRoot = Join-Path $scope "race-inputs"
     [void] (New-Item -ItemType Directory -Path $raceInputRoot)
     $raceMcp = Join-Path $raceInputRoot "vibris-mcp.exe"
@@ -1008,6 +1400,12 @@ try
         $metadataRoot = Join-Path $buildRoot ".delivery-transactions\$metadataKey"
         $metadataRoots.Add($metadataRoot)
         [void] (New-Item -ItemType Directory -Path $metadataRoot)
+        $metadataPublish = Join-Path $metadataRoot "publish"
+        [void] (New-Item -ItemType Directory -Path $metadataPublish)
+        Copy-Item -LiteralPath (Join-Path $metadataOutput "vibris-mcp.exe") `
+            -Destination $metadataPublish
+        Copy-Item -LiteralPath (Join-Path $metadataOutput $jarName) `
+            -Destination $metadataPublish
         $metadataManifest = [ordered] @{
             schema_version = 1
             transaction_id = [guid]::NewGuid().ToString()
@@ -1043,7 +1441,7 @@ try
         {
             throw "Cleanup interruption lost its irreversible terminal state."
         }
-        if (@("previous", "next", "audit", "failed" | Where-Object {
+        if (@("previous", "next", "publish", "audit", "failed" | Where-Object {
             Test-Path -LiteralPath (Join-Path $metadataRoot $_)
         }).Count -ne 0)
         {
@@ -1085,6 +1483,13 @@ try
         $abortRoot = Join-Path $buildRoot ".delivery-transactions\$abortKey"
         $metadataRoots.Add($abortRoot)
         [void] (New-Item -ItemType Directory -Path $abortRoot)
+        if ($abortState -cne "PUBLISHED")
+        {
+            $abortPublish = Join-Path $abortRoot "publish"
+            [void] (New-Item -ItemType Directory -Path $abortPublish)
+            Copy-Item -LiteralPath $releaseMcp -Destination $abortPublish
+            Copy-Item -LiteralPath $patchedJar -Destination $abortPublish
+        }
         $abortPrevious = Join-Path $abortRoot "previous"
         if ($abortState -in @("OLD_MOVED", "PUBLISH_INTENT"))
         {
@@ -1131,7 +1536,7 @@ try
         {
             throw "Aborted cleanup did not retain its terminal state: $abortState"
         }
-        if (@("previous", "next", "audit", "failed" | Where-Object {
+        if (@("previous", "next", "publish", "audit", "failed" | Where-Object {
             Test-Path -LiteralPath (Join-Path $abortRoot $_)
         }).Count -ne 0)
         {
@@ -1175,7 +1580,7 @@ try
     {
         throw "Failure-path cleanup did not retain only its abort terminal state."
     }
-    if (@("previous", "next", "audit", "failed" | Where-Object {
+    if (@("previous", "next", "publish", "audit", "failed" | Where-Object {
         Test-Path -LiteralPath (Join-Path $failureCleanupRoot $_)
     }).Count -ne 0)
     {
@@ -1337,6 +1742,17 @@ finally
     {
         Remove-OwnedDirectory -Path $preRecordHookSession -Root $testHooksRoot
         $preRecordHookSession = $null
+    }
+    if ($null -ne $postAuditJob)
+    {
+        if ($postAuditJob.State -in @("Running", "NotStarted")) { Stop-Job -Job $postAuditJob }
+        Remove-Job -Job $postAuditJob -Force
+        $postAuditJob = $null
+    }
+    if ($postAuditHookSession)
+    {
+        Remove-OwnedDirectory -Path $postAuditHookSession -Root $testHooksRoot
+        $postAuditHookSession = $null
     }
     if ($null -ne $replacementJob)
     {
