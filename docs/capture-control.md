@@ -214,9 +214,9 @@ content item and matching structured content.
 
 | Tool | Arguments | Result |
 |------|-----------|--------|
-| `vibris_get_config` | empty object | configured flag, worktree root, workspace ID, persisted config |
+| `vibris_get_config` | empty object | configured flag, worktree root, workspace ID, process-local scene config |
 | `vibris_list_presets` | optional non-empty `filter` | matching live preset catalog entries |
-| `vibris_configure` | save, dimension, time, camera, FOV, default warmup frames | validated persisted config |
+| `vibris_configure` | save, dimension, time, camera, FOV, default warmup frames | validated process-local scene config |
 | `vibris_get_status` | empty object | server/runtime state, queue, resources, pending/artifact roots and quota |
 | `vibris_profile` | source/config, optional warmup, required frame count | direct future-frame GPU timing aggregates |
 | `vibris_run_recipe` | one recipe form below | synchronous terminal job result and artifact metadata |
