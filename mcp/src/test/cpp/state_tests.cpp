@@ -1,5 +1,6 @@
 #include "backend_state_fixture.hpp"
 #include "config_document.hpp"
+#include "git_executable_resolver.hpp"
 #include "mcp_backend.hpp"
 #include "state_error.hpp"
 #include "tool_registry.hpp"
@@ -8,10 +9,12 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <Windows.h>
+#include <process.h>
 
 #include <array>
 #include <atomic>
 #include <barrier>
+#include <cerrno>
 #include <chrono>
 #include <exception>
 #include <filesystem>
@@ -36,6 +39,8 @@ using vibris::mcp::WorkspaceIdentityStore;
 
 namespace {
 
+void initialize_git_repository(const fs::path& repository);
+
 class TempDirectory final {
 public:
     explicit TempDirectory(std::string_view label)
@@ -43,6 +48,13 @@ public:
             ("vibris-state-" + std::string(label) + "-" +
                 std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
         fs::create_directories(path_);
+        try {
+            initialize_git_repository(path_);
+        } catch (...) {
+            std::error_code ignored;
+            fs::remove_all(path_, ignored);
+            throw;
+        }
     }
 
     TempDirectory(const TempDirectory&) = delete;
@@ -60,6 +72,21 @@ public:
 private:
     fs::path path_;
 };
+
+void initialize_git_repository(const fs::path& repository) {
+    const auto executable = vibris::mcp::resolve_git_executable();
+    const auto repository_argument = repository.wstring();
+    const std::array<const wchar_t*, 6> arguments {
+        L"git", L"init", L"--quiet", L"--", repository_argument.c_str(), nullptr};
+
+    errno = 0;
+    const auto result = _wspawnv(_P_WAIT, executable.c_str(), arguments.data());
+    if (result != 0) {
+        throw std::runtime_error(
+            "Real Git worktree fixture initialization failed with exit " + std::to_string(result) +
+            " and errno " + std::to_string(errno) + ".");
+    }
+}
 
 struct ErrorSnapshot final {
     std::string code;
