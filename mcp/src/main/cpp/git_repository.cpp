@@ -37,30 +37,51 @@ struct PipePair final {
     }
 };
 
-PipePair make_pipe() {
+PipePair make_pipe(const DWORD buffer_size) {
     SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
     PipePair pipe;
-    if (!CreatePipe(&pipe.read, &pipe.write, &security, 0) ||
+    if (!CreatePipe(&pipe.read, &pipe.write, &security, buffer_size) ||
         !SetHandleInformation(pipe.read, HANDLE_FLAG_INHERIT, 0)) {
         throw StateError("INTERNAL_ERROR", "Unable to create a Git process pipe.", true);
     }
     return pipe;
 }
 
-void drain_diagnostic(Handle pipe, std::string& output) noexcept {
-    if (pipe == nullptr) return;
+enum class DiagnosticDrainResult {
+    complete,
+    budget_exhausted,
+    deadline,
+    failed,
+};
+
+DiagnosticDrainResult drain_diagnostic(Handle pipe, std::string& output,
+    const std::chrono::steady_clock::time_point deadline) noexcept {
+    if (pipe == nullptr) return DiagnosticDrainResult::complete;
     std::array<char, 4096> buffer{};
-    for (;;) {
+    std::size_t budget = 64 * 1024;
+    while (budget != 0) {
+        if (std::chrono::steady_clock::now() >= deadline) return DiagnosticDrainResult::deadline;
         DWORD available = 0;
-        if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr) || available == 0) return;
-        const auto requested = (std::min)(available, static_cast<DWORD>(buffer.size()));
+        if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr)) {
+            return GetLastError() == ERROR_BROKEN_PIPE ?
+                DiagnosticDrainResult::complete : DiagnosticDrainResult::failed;
+        }
+        if (available == 0) return DiagnosticDrainResult::complete;
+        const auto requested = (std::min)({available, static_cast<DWORD>(buffer.size()),
+            static_cast<DWORD>(budget)});
         DWORD read = 0;
-        if (!ReadFile(pipe, buffer.data(), requested, &read, nullptr) || read == 0) return;
+        if (!ReadFile(pipe, buffer.data(), requested, &read, nullptr)) {
+            return GetLastError() == ERROR_BROKEN_PIPE ?
+                DiagnosticDrainResult::complete : DiagnosticDrainResult::failed;
+        }
+        if (read == 0) return DiagnosticDrainResult::complete;
+        budget -= read;
         if (output.size() < kGitMaxDiagnosticBytes) {
             output.append(buffer.data(), (std::min)(static_cast<std::size_t>(read),
                 kGitMaxDiagnosticBytes - output.size()));
         }
     }
+    return DiagnosticDrainResult::budget_exhausted;
 }
 
 bool is_full_sha(std::string_view value) {
@@ -80,6 +101,9 @@ GitArchivePipe::GitArchivePipe(GitArchivePipe&& other) noexcept
       stdout_read_(std::exchange(other.stdout_read_, nullptr)),
       stderr_read_(std::exchange(other.stderr_read_, nullptr)),
       deadline_(other.deadline_), stderr_text_(std::move(other.stderr_text_)),
+      captured_output_(std::move(other.captured_output_)),
+      captured_offset_(std::exchange(other.captured_offset_, 0)),
+      exit_code_(other.exit_code_), captured_(std::exchange(other.captured_, false)),
       waited_(std::exchange(other.waited_, true)) {
 }
 
@@ -91,6 +115,10 @@ GitArchivePipe& GitArchivePipe::operator=(GitArchivePipe&& other) noexcept {
         stderr_read_ = std::exchange(other.stderr_read_, nullptr);
         deadline_ = other.deadline_;
         stderr_text_ = std::move(other.stderr_text_);
+        captured_output_ = std::move(other.captured_output_);
+        captured_offset_ = std::exchange(other.captured_offset_, 0);
+        exit_code_ = other.exit_code_;
+        captured_ = std::exchange(other.captured_, false);
         waited_ = std::exchange(other.waited_, true);
     }
     return *this;
@@ -110,9 +138,24 @@ void GitArchivePipe::timeout() {
 }
 
 std::size_t GitArchivePipe::read(std::span<std::byte> buffer) {
+    if (captured_) {
+        const auto remaining = captured_output_.size() - captured_offset_;
+        const auto count = (std::min)(buffer.size(), remaining);
+        if (count != 0) {
+            std::ranges::copy_n(captured_output_.data() + captured_offset_, count, buffer.data());
+            captured_offset_ += count;
+        }
+        return count;
+    }
     if (stdout_read_ == nullptr || buffer.empty()) return 0;
     for (;;) {
-        drain_diagnostic(static_cast<Handle>(stderr_read_), stderr_text_);
+        if (std::chrono::steady_clock::now() >= deadline_) timeout();
+        const auto diagnostic = drain_diagnostic(
+            static_cast<Handle>(stderr_read_), stderr_text_, deadline_);
+        if (diagnostic == DiagnosticDrainResult::deadline) timeout();
+        if (diagnostic == DiagnosticDrainResult::failed) {
+            throw StateError("INTERNAL_ERROR", "Unable to read Git diagnostics.", true);
+        }
         DWORD available = 0;
         if (!PeekNamedPipe(static_cast<Handle>(stdout_read_), nullptr, 0, nullptr, &available, nullptr)) {
             if (GetLastError() == ERROR_BROKEN_PIPE) {
@@ -132,7 +175,7 @@ std::size_t GitArchivePipe::read(std::span<std::byte> buffer) {
                 }
                 throw StateError("INTERNAL_ERROR", "Unable to read the Git archive pipe.", true);
             }
-            if (read != 0) deadline_ = std::chrono::steady_clock::now() + kGitOperationTimeout;
+            if (std::chrono::steady_clock::now() >= deadline_) timeout();
             return read;
         }
         if (WaitForSingleObject(static_cast<Handle>(process_), 0) == WAIT_OBJECT_0) {
@@ -145,10 +188,16 @@ std::size_t GitArchivePipe::read(std::span<std::byte> buffer) {
 }
 
 int GitArchivePipe::wait() {
-    if (process_ == nullptr) return 0;
+    if (process_ == nullptr) return exit_code_;
     std::array<std::byte, 4096> discard{};
     while (WaitForSingleObject(static_cast<Handle>(process_), 0) != WAIT_OBJECT_0) {
-        drain_diagnostic(static_cast<Handle>(stderr_read_), stderr_text_);
+        if (std::chrono::steady_clock::now() >= deadline_) timeout();
+        const auto diagnostic = drain_diagnostic(
+            static_cast<Handle>(stderr_read_), stderr_text_, deadline_);
+        if (diagnostic == DiagnosticDrainResult::deadline) timeout();
+        if (diagnostic == DiagnosticDrainResult::failed) {
+            throw StateError("INTERNAL_ERROR", "Unable to read Git diagnostics.", true);
+        }
         if (stdout_read_ != nullptr) {
             DWORD available = 0;
             if (PeekNamedPipe(static_cast<Handle>(stdout_read_), nullptr, 0, nullptr, &available, nullptr) &&
@@ -156,13 +205,12 @@ int GitArchivePipe::wait() {
                 DWORD read = 0;
                 static_cast<void>(ReadFile(static_cast<Handle>(stdout_read_), discard.data(),
                     (std::min)(available, static_cast<DWORD>(discard.size())), &read, nullptr));
-                if (read != 0) deadline_ = std::chrono::steady_clock::now() + kGitOperationTimeout;
             }
         }
         if (std::chrono::steady_clock::now() >= deadline_) timeout();
         static_cast<void>(WaitForSingleObject(static_cast<Handle>(process_), kGitPollMilliseconds));
     }
-    drain_diagnostic(static_cast<Handle>(stderr_read_), stderr_text_);
+    static_cast<void>(drain_diagnostic(static_cast<Handle>(stderr_read_), stderr_text_, deadline_));
     DWORD exit_code = 0;
     if (!GetExitCodeProcess(static_cast<Handle>(process_), &exit_code)) {
         throw StateError("INTERNAL_ERROR", "Unable to read the Git exit status.", true);
@@ -171,7 +219,23 @@ int GitArchivePipe::wait() {
     close_handle(stderr_read_);
     close_handle(process_);
     waited_ = true;
-    return static_cast<int>(exit_code);
+    exit_code_ = static_cast<int>(exit_code);
+    return exit_code_;
+}
+
+void GitArchivePipe::capture_output(const std::size_t max_bytes,
+    const std::string_view overflow_code, const std::string_view overflow_message) {
+    std::vector<std::byte> buffer(1024 * 1024);
+    for (auto count = read(buffer); count != 0; count = read(buffer)) {
+        if (count > max_bytes - (std::min)(captured_output_.size(), max_bytes)) {
+            close();
+            throw StateError(std::string(overflow_code), std::string(overflow_message));
+        }
+        captured_output_.insert(captured_output_.end(), buffer.begin(), buffer.begin() + count);
+    }
+    exit_code_ = wait();
+    captured_ = true;
+    captured_offset_ = 0;
 }
 
 void GitArchivePipe::close() noexcept {
@@ -185,9 +249,11 @@ void GitArchivePipe::close() noexcept {
 }
 
 GitArchivePipe GitRepository::launch_git(
-    const std::vector<std::wstring>& arguments, const std::filesystem::path& requested_executable) {
-    auto stdout_pipe = make_pipe();
-    auto stderr_pipe = make_pipe();
+    const std::vector<std::wstring>& arguments, const std::filesystem::path& requested_executable,
+    const std::size_t max_stdout_bytes, const std::string_view overflow_code,
+    const std::string_view overflow_message) {
+    auto stdout_pipe = make_pipe(1024 * 1024);
+    auto stderr_pipe = make_pipe(64 * 1024);
     const auto executable = requested_executable.empty() ? resolve_git_executable() : requested_executable;
     auto resolved = arguments;
     resolved.front() = executable.wstring();
@@ -214,6 +280,7 @@ GitArchivePipe GitRepository::launch_git(
     startup.lpAttributeList = attribute_list;
     PROCESS_INFORMATION process{};
     auto environment = sanitized_git_environment();
+    const auto deadline = std::chrono::steady_clock::now() + kGitOperationTimeout;
     const BOOL created = CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, TRUE,
         EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
         environment.data(), nullptr, &startup.StartupInfo, &process);
@@ -224,10 +291,12 @@ GitArchivePipe GitRepository::launch_git(
     stdout_pipe.write = nullptr;
     CloseHandle(stderr_pipe.write);
     stderr_pipe.write = nullptr;
-    const auto deadline = std::chrono::steady_clock::now() + kGitOperationTimeout;
     auto result = GitArchivePipe(process.hProcess, stdout_pipe.read, stderr_pipe.read, deadline);
     stdout_pipe.read = nullptr;
     stderr_pipe.read = nullptr;
+    if (max_stdout_bytes != 0) {
+        result.capture_output(max_stdout_bytes, overflow_code, overflow_message);
+    }
     return result;
 }
 
@@ -238,7 +307,8 @@ GitRepository::GitRepository(std::filesystem::path repository)
 std::string GitRepository::resolve_commit(std::string_view revision) const {
     if (revision.empty()) throw StateError("COMMIT_NOT_FOUND", "Commit revision is empty.");
     auto process = launch_git({L"git", L"-C", repository_.wstring(), L"rev-parse", L"--verify",
-        L"--end-of-options", std::filesystem::path(std::string(revision) + "^{commit}").wstring()});
+        L"--end-of-options", std::filesystem::path(std::string(revision) + "^{commit}").wstring()}, {},
+        8192, "COMMIT_NOT_FOUND", "Git revision output exceeded its limit.");
     std::array<std::byte, 4096> buffer{};
     std::string output;
     for (std::size_t read = process.read(buffer); read != 0; read = process.read(buffer)) {
@@ -255,12 +325,14 @@ std::string GitRepository::resolve_commit(std::string_view revision) const {
     return output;
 }
 
-GitArchivePipe GitRepository::open_shader_archive(std::string_view full_sha) const {
+GitArchivePipe GitRepository::open_shader_archive(
+    std::string_view full_sha, const std::size_t max_archive_bytes) const {
     if (!is_full_sha(full_sha)) {
         throw StateError("COMMIT_NOT_FOUND", "Commit archive requires a full commit SHA.");
     }
     return launch_git({L"git", L"-C", repository_.wstring(), L"archive", L"--format=tar",
-        std::filesystem::path(full_sha).wstring(), L"shaders"});
+        std::filesystem::path(full_sha).wstring(), L"shaders"}, {}, max_archive_bytes,
+        "SOURCE_TOO_LARGE", "Commit archive exceeded its bounded capture size.");
 }
 
 }

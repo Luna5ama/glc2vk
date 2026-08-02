@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace vibris::mcp {
@@ -23,6 +24,9 @@ struct GitRepositorySecurityAccess final {
     static GitArchivePipe launch(const std::filesystem::path& executable,
         const std::vector<std::wstring>& arguments) {
         return GitRepository::launch_git(arguments, executable);
+    }
+    static std::size_t diagnostic_size(const GitArchivePipe& pipe) {
+        return pipe.stderr_text_.size();
     }
 };
 
@@ -195,6 +199,28 @@ int run_decoy() {
     std::ofstream(fs::path(marker)) << GetCurrentProcessId() << '\n';
     const auto mode = optional_environment_variable(L"VIBRIS_GIT_DECOY_MODE");
     if (mode && *mode == L"hang") Sleep(INFINITE);
+    const auto finish = std::chrono::steady_clock::now() + std::chrono::seconds(9);
+    if (mode && *mode == L"drip-stdout") {
+        constexpr char byte = 'x';
+        while (std::chrono::steady_clock::now() < finish) {
+            DWORD written = 0;
+            static_cast<void>(WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), &byte, 1, &written, nullptr));
+            Sleep(250);
+        }
+    }
+    if (mode && *mode == L"flood-stderr") {
+        std::vector<std::jthread> writers;
+        for (int index = 0; index < 8; ++index) {
+            writers.emplace_back([finish] {
+                std::vector<char> bytes(4 * 1024 * 1024, 'e');
+                while (std::chrono::steady_clock::now() < finish) {
+                    DWORD written = 0;
+                    if (!WriteFile(GetStdHandle(STD_ERROR_HANDLE), bytes.data(),
+                            static_cast<DWORD>(bytes.size()), &written, nullptr)) break;
+                }
+            });
+        }
+    }
     return 73;
 }
 
@@ -269,7 +295,7 @@ void poisoned_git_environment_is_ignored() {
     if (repository.resolve_commit("HEAD") != expected) {
         throw std::runtime_error("Poisoned GIT_DIR redirected commit resolution.");
     }
-    auto archive = repository.open_shader_archive(expected);
+    auto archive = repository.open_shader_archive(expected, 1024 * 1024);
     std::array<std::byte, 4096> buffer{};
     std::size_t total = 0;
     for (auto count = archive.read(buffer); count != 0; count = archive.read(buffer)) total += count;
@@ -286,7 +312,7 @@ bool process_running(DWORD process_id) {
     return result == WAIT_TIMEOUT;
 }
 
-void hanging_git_is_bounded_and_reaped() {
+void git_deadline_is_total_and_reaped(std::wstring_view mode, bool expect_diagnostic) {
     TempDirectory temporary;
     const auto fake_git = temporary.path() / L"git.exe";
     const auto marker = temporary.path() / L"git.pid";
@@ -295,14 +321,17 @@ void hanging_git_is_bounded_and_reaped() {
     }
     ProcessStateGuard restore;
     SetEnvironmentVariableW(L"VIBRIS_GIT_DECOY_MARKER", marker.c_str());
-    SetEnvironmentVariableW(L"VIBRIS_GIT_DECOY_MODE", L"hang");
+    SetEnvironmentVariableW(L"VIBRIS_GIT_DECOY_MODE", std::wstring(mode).c_str());
     const auto started = std::chrono::steady_clock::now();
     bool timed_out = false;
+    std::optional<vibris::mcp::GitArchivePipe> child;
     try {
-        auto child = vibris::mcp::GitRepositorySecurityAccess::launch(
-            fake_git, {L"git", L"rev-parse", L"HEAD"});
-        std::array<std::byte, 1> byte{};
-        static_cast<void>(child.read(byte));
+        child.emplace(vibris::mcp::GitRepositorySecurityAccess::launch(
+            fake_git, {L"git", L"rev-parse", L"HEAD"}));
+        std::array<std::byte, 4096> bytes{};
+        while (child->read(bytes) != 0) {
+        }
+        static_cast<void>(child->wait());
     } catch (const vibris::mcp::StateError& error) {
         timed_out = std::string(error.what()).find("five-second deadline") != std::string::npos;
     }
@@ -310,22 +339,39 @@ void hanging_git_is_bounded_and_reaped() {
     std::ifstream input(marker);
     DWORD child_pid = 0;
     input >> child_pid;
+    const auto diagnostic_size = child ?
+        vibris::mcp::GitRepositorySecurityAccess::diagnostic_size(*child) : 0;
     if (!timed_out || child_pid == 0 || process_running(child_pid) ||
+        (expect_diagnostic ? diagnostic_size == 0 || diagnostic_size > 32768 : diagnostic_size != 0) ||
         elapsed < std::chrono::milliseconds(4500) || elapsed > std::chrono::milliseconds(7500)) {
-        throw std::runtime_error("Hanging Git was not bounded and reaped by exact owned process handle.");
+        throw std::runtime_error("Git stream exceeded the total deadline or leaked its owned child.");
     }
+    std::wcout << L"PASS mode=" << mode
+              << L" elapsed_ms="
+              << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
+              << L" diagnostic_bytes=" << diagnostic_size << L" residual=false\n";
 }
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     try {
         if (_wcsicmp(module_path().filename().c_str(), L"git.exe") == 0) {
             return run_decoy();
         }
+        if (argc == 2) {
+            const std::string_view scenario(argv[1]);
+            if (scenario == "hang") git_deadline_is_total_and_reaped(L"hang", false);
+            else if (scenario == "drip-stdout") git_deadline_is_total_and_reaped(L"drip-stdout", false);
+            else if (scenario == "flood-stderr") git_deadline_is_total_and_reaped(L"flood-stderr", true);
+            else throw std::runtime_error("Unknown Git security scenario.");
+            return 0;
+        }
         reject_working_directory_git();
         poisoned_git_environment_is_ignored();
-        hanging_git_is_bounded_and_reaped();
+        git_deadline_is_total_and_reaped(L"hang", false);
+        git_deadline_is_total_and_reaped(L"drip-stdout", false);
+        git_deadline_is_total_and_reaped(L"flood-stderr", true);
         std::cout << "PASS git repository trust, environment isolation, deadline, and owned cleanup\n";
         return 0;
     } catch (const std::exception& error) {

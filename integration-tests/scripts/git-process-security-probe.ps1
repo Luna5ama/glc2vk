@@ -7,6 +7,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "..\..\tools\git-process.ps1")
+. (Join-Path $PSScriptRoot "stdio-job-probe-common.ps1")
 
 $root = [System.IO.Path]::GetFullPath($Repository)
 $fixture = [System.IO.Path]::GetFullPath($NativeSecurityFixture)
@@ -52,6 +53,13 @@ try
     {
         throw "NUL-delimited Git inventory did not preserve a Unicode metacharacter filename."
     }
+    $fixtureRoot = [string] @(Invoke-G007Git -WorkspaceRoot $metacharRepo `
+        -GitArguments @("rev-parse", "--path-format=absolute", "--show-toplevel"))[0]
+    if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals(
+            [System.IO.Path]::GetFullPath($fixtureRoot), [System.IO.Path]::GetFullPath($metacharRepo)))
+    {
+        throw "G007 Git fixture did not remain bound under function/PATH/GIT_* spoofing."
+    }
 
     $hangingGit = Join-Path $temporary "git.exe"
     Copy-Item -LiteralPath $fixture -Destination $hangingGit
@@ -81,7 +89,7 @@ try
     {
         throw "Owned hanging Git child remains after timeout: $ownedPid"
     }
-    Write-Output ("PASS trusted_git=$trusted head=$head nul_path=true metachar_repo=true " +
+    Write-Output ("PASS trusted_git=$trusted head=$head g007_spoof_safe=true nul_path=true metachar_repo=true " +
         "timeout_ms=$($timer.ElapsedMilliseconds) owned_pid=$ownedPid residual=false")
 }
 finally

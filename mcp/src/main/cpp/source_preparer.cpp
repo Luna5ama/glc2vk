@@ -6,6 +6,7 @@
 #include "state_error.hpp"
 
 #include <system_error>
+#include <limits>
 #include <utility>
 
 namespace vibris::mcp {
@@ -15,9 +16,20 @@ namespace fs = std::filesystem;
 
 constexpr std::string_view kChangedCode = "SOURCE_CHANGED_DURING_SNAPSHOT";
 constexpr std::string_view kInternalErrorCode = "INTERNAL_ERROR";
+constexpr std::uint64_t kArchiveBaseOverhead = 1024 * 1024;
+constexpr std::uint64_t kArchivePerFileOverhead = 4096;
 
 [[noreturn]] void throw_internal(std::string message) {
     throw StateError(kInternalErrorCode, std::move(message));
+}
+
+std::size_t archive_capture_limit(const SourceLimits& limits) {
+    const auto file_overhead = static_cast<std::uint64_t>(limits.max_files) * kArchivePerFileOverhead;
+    if (limits.max_total_bytes > std::numeric_limits<std::size_t>::max() - kArchiveBaseOverhead ||
+        file_overhead > std::numeric_limits<std::size_t>::max() - kArchiveBaseOverhead - limits.max_total_bytes) {
+        throw_internal("Server source limits exceed the supported archive capture size.");
+    }
+    return static_cast<std::size_t>(limits.max_total_bytes + file_overhead + kArchiveBaseOverhead);
 }
 
 class StagingDirectory final {
@@ -164,7 +176,8 @@ PreparedSource SourcePreparer::prepare_commit(std::string_view revision) const {
     auto destination = create_destination(pending_root_);
     CommitExtractor extractor(SourcePathPolicy{}, limits_);
     const auto archive_stats = extractor.extract(
-        repository.open_shader_archive(resolved_revision), destination.staging.path());
+        repository.open_shader_archive(resolved_revision, archive_capture_limit(limits_)),
+        destination.staging.path());
     const auto metadata = enumerate_workspace_tree(destination.staging.path(), limits_);
     if (metadata.file_count != archive_stats.extracted_file_count ||
         metadata.total_bytes != archive_stats.extracted_total_bytes) {

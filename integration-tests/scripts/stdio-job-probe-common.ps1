@@ -2,6 +2,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "iris-probe-common.ps1")
+. (Join-Path $PSScriptRoot "..\..\tools\git-process.ps1")
 
 function Resolve-G007PatchedJar
 {
@@ -36,32 +37,9 @@ function Invoke-G007Git
         [Parameter(Mandatory)] [string[]] $GitArguments
     )
 
-    $start = [System.Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = "git.exe"
-    $arguments = @("-C", $WorkspaceRoot) + $GitArguments
-    $start.Arguments = [string]::Join(" ", @($arguments | ForEach-Object { ConvertTo-CoreArgument $_ }))
-    $start.UseShellExecute = $false
-    $start.CreateNoWindow = $true
-    $start.RedirectStandardOutput = $true
-    $start.RedirectStandardError = $true
-    $process = [System.Diagnostics.Process]::new()
-    $process.StartInfo = $start
-    [void] $process.Start()
-    $stdout = $process.StandardOutput.ReadToEndAsync()
-    $stderr = $process.StandardError.ReadToEndAsync()
-    if (-not $process.WaitForExit(60000))
-    {
-        Stop-Process -Id $process.Id -Force
-        throw "git $([string]::Join(' ', $GitArguments)) timed out."
-    }
-    $process.WaitForExit()
-    $exitCode = $process.ExitCode
-    $process.Dispose()
-    if ($exitCode -ne 0)
-    {
-        throw "git $([string]::Join(' ', $GitArguments)) failed: $($stderr.Result)"
-    }
-    return @($stdout.Result -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $text = Invoke-TrustedGitText -Root $WorkspaceRoot -Arguments $GitArguments `
+        -Label "G007 Git $([string]::Join(' ', $GitArguments))"
+    return @($text -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 }
 
 function Initialize-G007Workspace

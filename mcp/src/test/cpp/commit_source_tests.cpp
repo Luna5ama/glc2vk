@@ -260,11 +260,11 @@ void commit_archive_streaming_50_mib() {
     const SourceLimits limits{.max_total_bytes = 51 * kMiB, .max_files = 8};
     CommitExtractor extractor(SourcePathPolicy{}, limits);
 
-    // When: the resolved commit archive pipe is extracted directly into staging.
-    auto archive = repository.open_shader_archive(archived_sha);
+    // When: Git completes a bounded archive capture before extraction consumes it.
+    auto archive = repository.open_shader_archive(archived_sha, 52 * kMiB);
     const auto stats = extractor.extract(std::move(archive), staging);
 
-    // Then: extraction is direct, bounded, prefix-free, and leaves the worktree untouched.
+    // Then: extraction is bounded, prefix-free, tar-file-free, and leaves the worktree untouched.
     require(fs::file_size(staging / "payload.bin") == 50 * kMiB, "The 50 MiB payload was not extracted.");
     require(read_text(staging / "marker.glsl") == "archived", "The requested commit was not extracted.");
     require(stats.largest_read_bytes > 0 && stats.largest_read_bytes <= kMiB, "Archive reads exceeded 1 MiB.");
