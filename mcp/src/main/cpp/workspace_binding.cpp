@@ -1,6 +1,6 @@
 #include "workspace_binding.hpp"
 
-#include "git_executable_resolver.hpp"
+#include "git_process.hpp"
 #include "state_error.hpp"
 
 #include <array>
@@ -17,9 +17,6 @@ namespace {
 
 namespace fs = std::filesystem;
 
-constexpr auto kGitOperationTimeout = std::chrono::seconds(5);
-constexpr DWORD kGitPollMilliseconds = 10;
-constexpr DWORD kGitTerminationWaitMilliseconds = 1000;
 constexpr std::size_t kGitMaxOutput = 32768;
 
 class UniqueHandle final {
@@ -114,16 +111,6 @@ PipeDrainResult drain_available_pipe_output(
     }
 }
 
-bool terminate_and_reap_owned_process(const HANDLE process) {
-    const auto initial_wait = WaitForSingleObject(process, 0);
-    if (initial_wait == WAIT_OBJECT_0) return true;
-    if (initial_wait == WAIT_FAILED) return false;
-    if (!TerminateProcess(process, ERROR_TIMEOUT)) {
-        return WaitForSingleObject(process, 0) == WAIT_OBJECT_0;
-    }
-    return WaitForSingleObject(process, kGitTerminationWaitMilliseconds) == WAIT_OBJECT_0;
-}
-
 fs::path canonical_directory(const fs::path& path) {
     std::error_code error;
     const auto canonical = fs::canonical(path, error);
@@ -137,49 +124,6 @@ bool has_git_marker(const fs::path& directory) {
     std::error_code error;
     const auto status = fs::status(directory / ".git", error);
     return !error && (fs::is_directory(status) || fs::is_regular_file(status));
-}
-
-std::wstring quote_argument(std::wstring_view argument) {
-    if (!argument.empty() && argument.find_first_of(L" \t\"") == std::wstring_view::npos) {
-        return std::wstring(argument);
-    }
-    std::wstring quoted(1, L'"');
-    std::size_t backslashes = 0;
-    for (const wchar_t character : argument) {
-        if (character == L'\\') {
-            ++backslashes;
-        } else if (character == L'"') {
-            quoted.append(backslashes * 2 + 1, L'\\');
-            quoted.push_back(L'"');
-            backslashes = 0;
-        } else {
-            quoted.append(backslashes, L'\\');
-            quoted.push_back(character);
-            backslashes = 0;
-        }
-    }
-    quoted.append(backslashes * 2, L'\\');
-    quoted.push_back(L'"');
-    return quoted;
-}
-
-std::vector<wchar_t> git_environment() {
-    std::vector<wchar_t> filtered;
-    auto* environment = GetEnvironmentStringsW();
-    if (environment == nullptr) return filtered;
-    for (auto* entry = environment; *entry != L'\0'; entry += std::wcslen(entry) + 1) {
-        const std::wstring_view value(entry);
-        const auto separator = value.find(L'=');
-        const bool git_override = separator != std::wstring_view::npos && separator >= 4 &&
-            _wcsnicmp(value.data(), L"GIT_", 4) == 0;
-        if (!git_override) {
-            filtered.insert(filtered.end(), value.begin(), value.end());
-            filtered.push_back(L'\0');
-        }
-    }
-    FreeEnvironmentStringsW(environment);
-    filtered.push_back(L'\0');
-    return filtered;
 }
 
 bool git_toplevel(const fs::path& root, std::string& output) {
@@ -198,7 +142,7 @@ bool git_toplevel(const fs::path& root, std::string& output) {
     std::wstring command;
     for (const auto& argument : arguments) {
         if (!command.empty()) command.push_back(L' ');
-        command += quote_argument(argument);
+        command += quote_git_argument(argument);
     }
     if (command.size() >= 32767) return false;
 
@@ -228,8 +172,8 @@ bool git_toplevel(const fs::path& root, std::string& output) {
     startup.StartupInfo.hStdError = pipe_write.get();
     startup.lpAttributeList = attributes.get();
     PROCESS_INFORMATION process{};
-    auto environment = git_environment();
-    const BOOL created = !environment.empty() && CreateProcessW(
+    auto environment = sanitized_git_environment();
+    const BOOL created = CreateProcessW(
         git_executable.c_str(), command.data(), nullptr, nullptr, TRUE,
         EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
         environment.data(), nullptr, &startup.StartupInfo, &process);
@@ -264,7 +208,7 @@ bool git_toplevel(const fs::path& root, std::string& output) {
     }
 
     if (!completed) {
-        static_cast<void>(terminate_and_reap_owned_process(process_handle.get()));
+        static_cast<void>(terminate_and_reap_git(process_handle.get()));
         output.clear();
         return false;
     }

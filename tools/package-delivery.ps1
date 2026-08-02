@@ -18,6 +18,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "git-process.ps1")
 
 if (-not ("Vibris.DeliveryFileIdentity" -as [type]))
 {
@@ -755,9 +756,7 @@ function Invoke-GitText
         [Parameter(Mandatory)] [string] $Label
     )
 
-    $text = (& git -C $Root @Arguments 2>$null | Out-String)
-    if ($LASTEXITCODE -ne 0) { throw "$Label failed for $Root" }
-    return $text.Replace("`r`n", "`n").TrimEnd("`n")
+    return Invoke-TrustedGitText -Root $Root -Arguments $Arguments -Label $Label
 }
 
 function Get-RepositorySourceState
@@ -780,9 +779,9 @@ function Get-RepositorySourceState
     $submodules = Invoke-GitText -Root $root -Arguments @(
         "submodule", "status", "--recursive") -Label "Git submodule state"
     $untrackedText = Invoke-GitText -Root $root -Arguments @(
-        "ls-files", "--others", "--exclude-standard") -Label "Git untracked source list"
+        "ls-files", "-z", "--others", "--exclude-standard") -Label "Git untracked source list"
     $untracked = [System.Collections.Generic.List[object]]::new()
-    foreach ($relative in @($untrackedText -split "`n" | Where-Object { $_.Length -ne 0 } |
+    foreach ($relative in @($untrackedText -split [char] 0 | Where-Object { $_.Length -ne 0 } |
         Sort-Object -CaseSensitive))
     {
         $path = Join-Path $root $relative
@@ -1013,11 +1012,15 @@ $validatedAuditSources = [ordered] @{
 }
 $buildScript = Resolve-OrdinaryFile -Path (Join-Path $repoRoot "tools\build-delivery.ps1") `
     -Label "Delivery build script"
+$gitProcessScript = Resolve-OrdinaryFile -Path (Join-Path $repoRoot "tools\git-process.ps1") `
+    -Label "Git process script"
 $packageScript = Resolve-OrdinaryFile -Path $PSCommandPath -Label "Delivery package script"
 Assert-ReceiptSourceCurrent -Receipt $receipt -VibrisRoot $receiptVibrisRoot `
     -IrisRoot $receiptIrisRoot
 Assert-ReceiptArtifact -Record $receipt.scripts.build -ExpectedPath $buildScript `
     -Label "Build script provenance"
+Assert-ReceiptArtifact -Record $receipt.scripts.git_process -ExpectedPath $gitProcessScript `
+    -Label "Git process script provenance"
 Assert-ReceiptArtifact -Record $receipt.scripts.package -ExpectedPath $packageScript `
     -Label "Package script provenance"
 Assert-ReceiptArtifact -Record $receipt.artifacts.mcp -ExpectedPath $McpExe `

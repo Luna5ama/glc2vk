@@ -129,7 +129,8 @@ target_include_directories(vibris_mcp_core PUBLIC src/main/cpp)
 target_link_libraries(vibris_mcp_core PUBLIC
     vibris_control_protocol
     LibArchive::LibArchive
-    nlohmann_json::nlohmann_json)
+    nlohmann_json::nlohmann_json
+    Advapi32)
 
 add_executable(vibris-mcp src/main/cpp/main.cpp)
 target_link_libraries(vibris-mcp PRIVATE vibris_mcp_core)
@@ -263,6 +264,14 @@ if(BUILD_TESTING)
     endforeach()
 
     add_test(NAME WorkspaceLocalGitExecutableIgnored COMMAND vibris-git-repository-security-tests)
+    find_program(VIBRIS_PWSH_EXECUTABLE pwsh.exe REQUIRED)
+    add_test(
+        NAME GitProcessSecurityProbe
+        COMMAND "${VIBRIS_PWSH_EXECUTABLE}" -NoLogo -NoProfile -File
+            "${CMAKE_CURRENT_SOURCE_DIR}/../integration-tests/scripts/git-process-security-probe.ps1"
+            -Repository "${CMAKE_CURRENT_SOURCE_DIR}/.."
+            -NativeSecurityFixture "$<TARGET_FILE:vibris-git-repository-security-tests>")
+    set_tests_properties(GitProcessSecurityProbe PROPERTIES TIMEOUT 10)
 
     add_test(
         NAME AsyncGrpcReconnectAndBoundedRegistry

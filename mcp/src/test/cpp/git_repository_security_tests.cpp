@@ -1,17 +1,32 @@
 #include "git_repository.hpp"
+#include "state_error.hpp"
 
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace vibris::mcp {
+
+struct GitRepositorySecurityAccess final {
+    static GitArchivePipe launch(const std::filesystem::path& executable,
+        const std::vector<std::wstring>& arguments) {
+        return GitRepository::launch_git(arguments, executable);
+    }
+};
+
+}
 
 namespace {
 
@@ -27,6 +42,18 @@ std::wstring environment_variable(const wchar_t* name) {
     if (copied == 0 || copied >= size) {
         throw std::runtime_error("Unable to read an environment variable.");
     }
+    value.resize(copied);
+    return value;
+}
+
+std::optional<std::wstring> optional_environment_variable(const wchar_t* name) {
+    SetLastError(ERROR_SUCCESS);
+    const DWORD size = GetEnvironmentVariableW(name, nullptr, 0);
+    if (size == 0 && GetLastError() == ERROR_ENVVAR_NOT_FOUND) return std::nullopt;
+    if (size == 0) throw std::runtime_error("Unable to size an environment variable.");
+    std::wstring value(size, L'\0');
+    const DWORD copied = GetEnvironmentVariableW(name, value.data(), size);
+    if (copied == 0 || copied >= size) throw std::runtime_error("Unable to read an environment variable.");
     value.resize(copied);
     return value;
 }
@@ -142,21 +169,32 @@ private:
 
 class ProcessStateGuard final {
 public:
-    ProcessStateGuard() : directory_(fs::current_path()), path_(environment_variable(L"PATH")) {}
+    ProcessStateGuard()
+        : directory_(fs::current_path()), path_(environment_variable(L"PATH")),
+          git_dir_(optional_environment_variable(L"GIT_DIR")),
+          git_work_tree_(optional_environment_variable(L"GIT_WORK_TREE")) {
+    }
     ~ProcessStateGuard() {
         SetCurrentDirectoryW(directory_.c_str());
         SetEnvironmentVariableW(L"PATH", path_.c_str());
+        SetEnvironmentVariableW(L"GIT_DIR", git_dir_ ? git_dir_->c_str() : nullptr);
+        SetEnvironmentVariableW(L"GIT_WORK_TREE", git_work_tree_ ? git_work_tree_->c_str() : nullptr);
         SetEnvironmentVariableW(L"VIBRIS_GIT_DECOY_MARKER", nullptr);
+        SetEnvironmentVariableW(L"VIBRIS_GIT_DECOY_MODE", nullptr);
     }
 
 private:
     fs::path directory_;
     std::wstring path_;
+    std::optional<std::wstring> git_dir_;
+    std::optional<std::wstring> git_work_tree_;
 };
 
 int run_decoy() {
     const auto marker = environment_variable(L"VIBRIS_GIT_DECOY_MARKER");
-    std::ofstream(fs::path(marker)).put('1');
+    std::ofstream(fs::path(marker)) << GetCurrentProcessId() << '\n';
+    const auto mode = optional_environment_variable(L"VIBRIS_GIT_DECOY_MODE");
+    if (mode && *mode == L"hang") Sleep(INFINITE);
     return 73;
 }
 
@@ -203,6 +241,81 @@ void reject_working_directory_git() {
     }
 }
 
+std::string initialize_repository(const fs::path& git, const fs::path& repository, const char* payload) {
+    fs::create_directories(repository / L"shaders");
+    std::ofstream(repository / L"shaders" / L"payload.glsl") << payload;
+    run_git(git, {L"init", L"--quiet", repository.wstring()});
+    run_git(git, {L"-C", repository.wstring(), L"add", L"--", L"shaders/payload.glsl"});
+    run_git(git, {L"-C", repository.wstring(), L"-c", L"user.name=Vibris Test", L"-c",
+        L"user.email=vibris@example.invalid", L"commit", L"--quiet", L"-m", L"initial"});
+    const auto head = read_trimmed(repository / L".git" / L"HEAD");
+    if (!head.starts_with("ref: ")) throw std::runtime_error("Test repository HEAD is not symbolic.");
+    return read_trimmed(repository / L".git" / fs::path(head.substr(5)));
+}
+
+void poisoned_git_environment_is_ignored() {
+    const auto git = trusted_git_from_path();
+    TempDirectory temporary;
+    const auto first = temporary.path() / L"first";
+    const auto second = temporary.path() / L"second";
+    const auto expected = initialize_repository(git, first, "first\n");
+    const auto other = initialize_repository(git, second, "second\n");
+    if (expected == other) throw std::runtime_error("Poison fixture repositories have the same commit.");
+
+    ProcessStateGuard restore;
+    SetEnvironmentVariableW(L"GIT_DIR", (second / L".git").c_str());
+    SetEnvironmentVariableW(L"GIT_WORK_TREE", second.c_str());
+    vibris::mcp::GitRepository repository(first);
+    if (repository.resolve_commit("HEAD") != expected) {
+        throw std::runtime_error("Poisoned GIT_DIR redirected commit resolution.");
+    }
+    auto archive = repository.open_shader_archive(expected);
+    std::array<std::byte, 4096> buffer{};
+    std::size_t total = 0;
+    for (auto count = archive.read(buffer); count != 0; count = archive.read(buffer)) total += count;
+    if (archive.wait() != 0 || total == 0) {
+        throw std::runtime_error("Poisoned GIT_DIR redirected archive production.");
+    }
+}
+
+bool process_running(DWORD process_id) {
+    const auto process = OpenProcess(SYNCHRONIZE, FALSE, process_id);
+    if (process == nullptr) return false;
+    const auto result = WaitForSingleObject(process, 0);
+    CloseHandle(process);
+    return result == WAIT_TIMEOUT;
+}
+
+void hanging_git_is_bounded_and_reaped() {
+    TempDirectory temporary;
+    const auto fake_git = temporary.path() / L"git.exe";
+    const auto marker = temporary.path() / L"git.pid";
+    if (!CopyFileW(module_path().c_str(), fake_git.c_str(), FALSE)) {
+        throw std::runtime_error("Unable to copy the hanging Git fixture.");
+    }
+    ProcessStateGuard restore;
+    SetEnvironmentVariableW(L"VIBRIS_GIT_DECOY_MARKER", marker.c_str());
+    SetEnvironmentVariableW(L"VIBRIS_GIT_DECOY_MODE", L"hang");
+    const auto started = std::chrono::steady_clock::now();
+    bool timed_out = false;
+    try {
+        auto child = vibris::mcp::GitRepositorySecurityAccess::launch(
+            fake_git, {L"git", L"rev-parse", L"HEAD"});
+        std::array<std::byte, 1> byte{};
+        static_cast<void>(child.read(byte));
+    } catch (const vibris::mcp::StateError& error) {
+        timed_out = std::string(error.what()).find("five-second deadline") != std::string::npos;
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    std::ifstream input(marker);
+    DWORD child_pid = 0;
+    input >> child_pid;
+    if (!timed_out || child_pid == 0 || process_running(child_pid) ||
+        elapsed < std::chrono::milliseconds(4500) || elapsed > std::chrono::milliseconds(7500)) {
+        throw std::runtime_error("Hanging Git was not bounded and reaped by exact owned process handle.");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -211,7 +324,9 @@ int main() {
             return run_decoy();
         }
         reject_working_directory_git();
-        std::cout << "PASS git repository ignores working-directory git.exe\n";
+        poisoned_git_environment_is_ignored();
+        hanging_git_is_bounded_and_reaped();
+        std::cout << "PASS git repository trust, environment isolation, deadline, and owned cleanup\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "FAIL " << error.what() << '\n';

@@ -374,7 +374,7 @@ void malformed_and_nonworktree_gitdir_targets_are_rejected() {
         [&] { static_cast<void>(resolve_workspace(bare_repository.path())); }, "BareRepositoryMarker");
 }
 
-void delayed_git_is_bounded_and_reaped() {
+void path_spoofed_git_is_ignored() {
     TempDirectory fixture;
     const auto repository = fixture.path() / "repository";
     initialize_repository(repository);
@@ -391,19 +391,11 @@ void delayed_git_is_bounded_and_reaped() {
     EnvironmentVariableGuard pid_file_guard(kDelayedGitPidFileVariable, pid_file.wstring());
 
     const auto started = std::chrono::steady_clock::now();
-    require_invalid_worktree(
-        [&] { static_cast<void>(resolve_workspace(repository)); }, "DelayedGitTimeout");
+    const auto binding = resolve_workspace(repository);
     const auto elapsed = std::chrono::steady_clock::now() - started;
-
-    std::ifstream pid_stream(pid_file);
-    DWORD child_pid = 0;
-    pid_stream >> child_pid;
-    require(child_pid != 0, "DelayedGitFixture: owned child did not publish its process id.");
-    const auto child_running = process_is_running(child_pid);
-    require(elapsed < std::chrono::milliseconds(7500) && !child_running,
-        "DelayedGitTimeout: elapsed_ms=" +
-            std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()) +
-            " child_running=" + std::to_string(child_running) + ".");
+    require_path_equal(binding.root, repository, "PathSpoofedGitIgnored");
+    require(elapsed < std::chrono::milliseconds(2500) && !fs::exists(pid_file),
+        "PathSpoofedGitIgnored: decoy executable ran or trusted Git was unexpectedly slow.");
 }
 
 void cwd_outside_any_worktree_is_rejected() {
@@ -433,7 +425,7 @@ int main() {
         malformed_roots_are_rejected();
         fake_git_markers_are_rejected();
         malformed_and_nonworktree_gitdir_targets_are_rejected();
-        delayed_git_is_bounded_and_reaped();
+        path_spoofed_git_is_ignored();
         cwd_outside_any_worktree_is_rejected();
         std::cout << "PASS WorktreeDiscovery\n";
         return 0;

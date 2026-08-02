@@ -15,6 +15,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "iris-probe-common.ps1")
+. (Join-Path $PSScriptRoot "..\..\tools\git-process.ps1")
 
 function Assert-AuditPatternAbsent
 {
@@ -276,11 +277,9 @@ try
         -Pattern '(?i)LD_PRELOAD[^\r\n]*renderdoc|[/\\][^\s"'']*renderdoc' `
         -Label "Iris RenderDoc path"
 
-    $trackedMainPaths = @(& git -C $script:VibrisRoot ls-files -- "*/src/main/**")
-    if ($LASTEXITCODE -ne 0)
-    {
-        throw "Failed to enumerate tracked Vibris production sources."
-    }
+    $trackedMainText = Invoke-TrustedGitText -Root $script:VibrisRoot -Arguments @(
+        "ls-files", "-z", "--", "*/src/main/**") -Label "Tracked production source enumeration"
+    $trackedMainPaths = @($trackedMainText -split [char] 0 | Where-Object { $_.Length -ne 0 })
     $trackedMainFiles = @($trackedMainPaths | ForEach-Object {
         $path = Join-Path $script:VibrisRoot $_
         if (Test-Path -LiteralPath $path -PathType Leaf) { Get-Item -LiteralPath $path }

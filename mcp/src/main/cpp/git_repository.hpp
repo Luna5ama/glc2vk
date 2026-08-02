@@ -1,8 +1,8 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
-#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -11,42 +11,30 @@
 
 namespace vibris::mcp {
 
+struct GitRepositorySecurityAccess;
+
 class GitArchivePipe final {
 public:
     GitArchivePipe(const GitArchivePipe&) = delete;
     GitArchivePipe& operator=(const GitArchivePipe&) = delete;
-    GitArchivePipe(GitArchivePipe&& other) noexcept
-        : process_(std::exchange(other.process_, nullptr)),
-          stdout_read_(std::exchange(other.stdout_read_, nullptr)),
-          stderr_drain_(std::move(other.stderr_drain_)),
-          waited_(std::exchange(other.waited_, true)) {
-    }
-    GitArchivePipe& operator=(GitArchivePipe&& other) noexcept {
-        if (this != &other) {
-            close();
-            process_ = std::exchange(other.process_, nullptr);
-            stdout_read_ = std::exchange(other.stdout_read_, nullptr);
-            stderr_drain_ = std::move(other.stderr_drain_);
-            waited_ = std::exchange(other.waited_, true);
-        }
-        return *this;
-    }
-    ~GitArchivePipe() {
-        close();
-    }
+    GitArchivePipe(GitArchivePipe&& other) noexcept;
+    GitArchivePipe& operator=(GitArchivePipe&& other) noexcept;
+    ~GitArchivePipe();
 
     [[nodiscard]] std::size_t read(std::span<std::byte> buffer);
     [[nodiscard]] int wait();
 
 private:
-    struct StderrDrain;
-
-    GitArchivePipe(void* process, void* stdout_read, std::shared_ptr<StderrDrain> stderr_drain) noexcept;
+    GitArchivePipe(void* process, void* stdout_read, void* stderr_read,
+        std::chrono::steady_clock::time_point deadline) noexcept;
     void close() noexcept;
+    void timeout();
 
     void* process_ = nullptr;
     void* stdout_read_ = nullptr;
-    std::shared_ptr<StderrDrain> stderr_drain_;
+    void* stderr_read_ = nullptr;
+    std::chrono::steady_clock::time_point deadline_{};
+    std::string stderr_text_;
     bool waited_ = false;
 
     friend class GitRepository;
@@ -60,9 +48,11 @@ public:
     [[nodiscard]] GitArchivePipe open_shader_archive(std::string_view full_sha) const;
 
 private:
-    static GitArchivePipe launch_git(const std::vector<std::wstring>& arguments);
+    static GitArchivePipe launch_git(const std::vector<std::wstring>& arguments,
+        const std::filesystem::path& executable = {});
 
     std::filesystem::path repository_;
+    friend struct GitRepositorySecurityAccess;
 };
 
-} // namespace vibris::mcp
+}

@@ -11,6 +11,7 @@ $ErrorActionPreference = "Stop"
 $ownedProcesses = [System.Collections.Generic.List[object]]::new()
 $ownedPids = [System.Collections.Generic.List[int]]::new()
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
+. (Join-Path $repoRoot "tools\git-process.ps1")
 $criterionRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot ".omo\tmp\ulw-v1-g002-c002"))
 $repoA = [System.IO.Path]::GetFullPath($WorkspaceRoot)
 $expectedRepoA = [System.IO.Path]::GetFullPath((Join-Path $criterionRoot "worktree"))
@@ -51,6 +52,7 @@ function Start-Mcp
     [void] $process.Start()
     $owned = [pscustomobject]@{
         Process = $process
+        StartTimeUtc = $process.StartTime.ToUniversalTime()
         Stderr = $process.StandardError.ReadToEndAsync()
         WorkingDirectory = $WorkingDirectory
         Arguments = $startInfo.Arguments
@@ -245,11 +247,8 @@ function Initialize-GitRepository
     param([string] $Path)
 
     [void] (New-Item -ItemType Directory -Path $Path -Force)
-    & git.exe -C $Path init --quiet
-    if ($LASTEXITCODE -ne 0)
-    {
-        throw "git init failed for $Path."
-    }
+    [void] (Invoke-TrustedGitText -Root $Path -Arguments @("init", "--quiet") `
+        -Label "Git fixture initialization")
 }
 
 function Get-IdentityBytes
@@ -419,7 +418,11 @@ finally
     {
         if (-not $owned.Process.HasExited)
         {
-            Stop-Process -Id $owned.Process.Id -Force
+            if ($owned.Process.StartTime.ToUniversalTime() -ne $owned.StartTimeUtc)
+            {
+                throw "Owned MCP process identity changed before cleanup: $($owned.Process.Id)"
+            }
+            $owned.Process.Kill($true)
             [void] $owned.Process.WaitForExit(2000)
             $forcedStops++
         }

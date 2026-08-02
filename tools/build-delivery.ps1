@@ -14,6 +14,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "git-process.ps1")
 
 function Resolve-RepositoryRoot
 {
@@ -35,11 +36,8 @@ function Resolve-RepositoryRoot
             throw "$Label is missing required marker '$marker': $fullPath"
         }
     }
-    $gitRoot = (& git -C $fullPath rev-parse --show-toplevel 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0)
-    {
-        throw "$Label is not a Git worktree: $fullPath`n$gitRoot"
-    }
+    $gitRoot = Invoke-TrustedGitText -Root $fullPath -Arguments @(
+        "rev-parse", "--path-format=absolute", "--show-toplevel") -Label "$Label Git worktree probe"
     $gitRoot = [System.IO.Path]::GetFullPath($gitRoot)
     if (-not [string]::Equals($gitRoot, $fullPath, [System.StringComparison]::OrdinalIgnoreCase))
     {
@@ -123,9 +121,7 @@ function Invoke-GitText
         [Parameter(Mandatory)] [string] $Label
     )
 
-    $text = (& git -C $Root @Arguments 2>$null | Out-String)
-    if ($LASTEXITCODE -ne 0) { throw "$Label failed for $Root" }
-    return $text.Replace("`r`n", "`n").TrimEnd("`n")
+    return Invoke-TrustedGitText -Root $Root -Arguments $Arguments -Label $Label
 }
 
 function Get-RepositorySourceState
@@ -138,9 +134,9 @@ function Get-RepositorySourceState
     $submodules = Invoke-GitText -Root $Root -Arguments @(
         "submodule", "status", "--recursive") -Label "Git submodule state"
     $untrackedText = Invoke-GitText -Root $Root -Arguments @(
-        "ls-files", "--others", "--exclude-standard") -Label "Git untracked source list"
+        "ls-files", "-z", "--others", "--exclude-standard") -Label "Git untracked source list"
     $untracked = [System.Collections.Generic.List[object]]::new()
-    foreach ($relative in @($untrackedText -split "`n" | Where-Object { $_.Length -ne 0 } |
+    foreach ($relative in @($untrackedText -split [char] 0 | Where-Object { $_.Length -ne 0 } |
         Sort-Object -CaseSensitive))
     {
         $path = Join-Path $Root $relative
@@ -216,6 +212,7 @@ $VibrisRoot = Resolve-RepositoryRoot -Path $VibrisRoot -Label "VibrisRoot" -Mark
     "gradlew.bat",
     "mcp\CMakePresets.json",
     "proto\vibris_control.proto",
+    "tools\git-process.ps1",
     "tools\package-delivery.ps1",
     "integration-tests\scripts\protocol-descriptor-smoke.ps1")
 $IrisRoot = Resolve-RepositoryRoot -Path $IrisRoot -Label "IrisRoot" -Markers @(
@@ -388,6 +385,7 @@ try
         }
         scripts = [ordered] @{
             build = Get-BuildArtifactRecord -Path $PSCommandPath
+            git_process = Get-BuildArtifactRecord -Path (Join-Path $VibrisRoot "tools\git-process.ps1")
             package = Get-BuildArtifactRecord -Path $packageScript
         }
         artifacts = [ordered] @{
