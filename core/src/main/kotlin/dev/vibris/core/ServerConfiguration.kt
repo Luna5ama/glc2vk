@@ -148,6 +148,11 @@ internal data class ServerConfiguration(
         }
 
         private fun requireWritableDirectory(path: Path, field: String) {
+            try {
+                OwnedPathIdentity.createDirectoriesSafely(path)
+            } catch (exception: IOException) {
+                throw IllegalArgumentException("$field is missing or not writable", exception)
+            }
             require(
                 Files.isDirectory(path, NOFOLLOW_LINKS) &&
                     !Files.isSymbolicLink(path),

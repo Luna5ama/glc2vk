@@ -89,24 +89,22 @@ class VibrisBootstrapTest {
     }
 
     @Test
-    void missingConfiguredRootUsesConfiguredAddressAndReportsReason() throws Exception {
+    void missingConfiguredRootsAreCreatedBeforeStartup() throws Exception {
         Path pending = temp.resolve("missing-pending");
-        Path artifacts = Files.createDirectory(temp.resolve("configured-artifacts"));
-        Path shaderpack = Files.createDirectory(temp.resolve("configured-shaderpack"));
+        Path artifacts = temp.resolve("missing-artifacts");
+        Path shaderpack = temp.resolve("missing-shaderpack");
         writeServerConfig(temp, pending, artifacts, shaderpack, 50123);
         RuntimeTestAdapter runtime = new RuntimeTestAdapter();
-        AtomicReference<BindableService> captured = new AtomicReference<>();
 
         VibrisBootstrap bootstrap = VibrisBootstrap.start(temp, runtime, (address, service) -> {
             assertEquals(new InetSocketAddress("127.0.0.1", 50123), address);
-            captured.set(service);
             return new TestListener();
         });
 
-        assertFalse(bootstrap.ready());
-        GetStatusResponse status = status(captured.get());
-        assertEquals(ErrorCode.SERVER_NOT_READY, status.getErrors(0).getCode());
-        assertTrue(status.getErrors(0).getMessage().contains("pending_shaders_root"));
+        assertTrue(bootstrap.ready());
+        assertTrue(Files.isDirectory(pending, NOFOLLOW_LINKS));
+        assertTrue(Files.isDirectory(artifacts, NOFOLLOW_LINKS));
+        assertTrue(Files.isDirectory(shaderpack, NOFOLLOW_LINKS));
         bootstrap.close();
     }
 
@@ -131,7 +129,7 @@ class VibrisBootstrapTest {
         try (ServerSocket reservation = new ServerSocket(0)) {
             port = reservation.getLocalPort();
         }
-        Path pending = temp.resolve("offline-ram-root");
+        Path pending = Files.createFile(temp.resolve("not-a-directory"));
         Path artifacts = Files.createDirectory(temp.resolve("grpc-artifacts"));
         Path shaderpack = Files.createDirectory(temp.resolve("grpc-shaderpack"));
         writeServerConfig(temp, pending, artifacts, shaderpack, port);
