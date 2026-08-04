@@ -24,8 +24,8 @@ non-interruptible and only one job touches Minecraft at a time.
 
 ## Build
 
-Requirements are Java 21, CMake 3.25+, Visual Studio 2022, vcpkg, and the sibling `Iris` checkout. Set `VCPKG_ROOT`
-before configuring the native build.
+Requirements are Windows, Java 21 for the shared JVM modules, Java 24 for the replay modules, CMake 3.25+, Visual
+Studio 2022, vcpkg, and the sibling `Iris` checkout. Set `VCPKG_ROOT` before configuring the native build.
 
 All handwritten JVM production implementations are Kotlin. The native MCP remains C++; Java emitted by protobuf is
 generated under `build` and is not handwritten production source.
@@ -250,10 +250,22 @@ not need a separate wait or a prior snapshot.
 `vibris_profile` is the high-level performance workflow. It snapshots the selected workspace or commit, activates and
 reloads that source with the optional shader config, resets temporal state, waits `warmup_frames` (or the configured
 default), and then measures exactly the next required `frames`. It returns the same `avg`, `p5`, `p50`, and `p95`
-aggregates as the `get_gpu_metrics` action. Repeat the tool with different config objects for a controlled settings matrix;
-the scene preset remains fixed by `vibris_configure`. This direct in-game path replaces project-local wrappers for
-routine profiling. Compute capture and external replay/Nsight analysis remain separate diagnostic workflows and are
-not used by `vibris_profile`.
+aggregates as the `get_gpu_metrics` action. Repeat the tool with different config objects for a controlled settings
+matrix; the scene preset remains fixed by `vibris_configure`, which must succeed before profiling. The result also
+includes the requested `frames` and effective `warmup_frames`. This direct in-game path replaces project-local wrappers
+for routine profiling. Compute capture and external replay/Nsight analysis remain separate diagnostic workflows and are not used by
+`vibris_profile`.
+
+Example request:
+
+```json
+{
+  "source": {"kind": "workspace"},
+  "config": {"SETTING_GI_SPATIAL_REUSE_COUNT": 14},
+  "warmup_frames": 32,
+  "frames": 120
+}
+```
 
 Debug dumps use the running Minecraft instance and execute on its client thread. Optional compute-capture paths are
 resolved inside the game directory; paths escaping it are rejected.
