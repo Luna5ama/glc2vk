@@ -2,6 +2,7 @@
 #include "config_document.hpp"
 #include "git_executable_resolver.hpp"
 #include "mcp_backend.hpp"
+#include "mcp_stdio_server.hpp"
 #include "state_error.hpp"
 #include "tool_registry.hpp"
 #include "workspace_identity_store.hpp"
@@ -23,6 +24,7 @@
 #include <iterator>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -1019,8 +1021,34 @@ void tool_metadata_is_process_local() {
     require(matched == 2, "Scene tool metadata definitions were not found.");
 }
 
+void resource_lists_are_empty() {
+    TempDirectory temp("empty-resource-lists");
+    fs::create_directories(temp.path() / ".git");
+
+    McpBackend backend(temp.path(), "127.0.0.1:50051");
+    const vibris::mcp::ToolRegistry tools(
+        [&backend](std::string_view name, const vibris::mcp::Json& arguments) {
+            return backend.dispatch(name, arguments);
+        });
+    std::istringstream input(
+        R"({"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}})" "\n"
+        R"({"jsonrpc":"2.0","id":2,"method":"resources/templates/list","params":{}})" "\n");
+    std::ostringstream output;
+
+    require(vibris::mcp::McpStdioServer(input, output, tools).run() == 0, "Resource listing server failed.");
+    std::istringstream responses(output.str());
+    std::string line;
+    require(static_cast<bool>(std::getline(responses, line)), "resources/list returned no response.");
+    const auto resources = vibris::mcp::Json::parse(line);
+    require(resources.at("result").at("resources").empty(), "resources/list must return an empty resource array.");
+    require(static_cast<bool>(std::getline(responses, line)), "resources/templates/list returned no response.");
+    const auto templates = vibris::mcp::Json::parse(line);
+    require(templates.at("result").at("resourceTemplates").empty(),
+            "resources/templates/list must return an empty resource template array.");
+}
+
 using TestCase = std::pair<std::string_view, void (*)()>;
-constexpr std::array<TestCase, 17> test_cases {{
+constexpr std::array<TestCase, 18> test_cases {{
     {"WorkspaceIdentityConcurrentFirstUse", workspace_identity_concurrent_first_use},
     {"WorkspaceIdentityDeterministicPublication", workspace_identity_deterministic_publication},
     {"WorkspaceIdentityIoFailuresCleanup", workspace_identity_io_failures_cleanup},
@@ -1038,6 +1066,7 @@ constexpr std::array<TestCase, 17> test_cases {{
     {"SameWorktreeBackendsCoexist", same_worktree_backends_coexist},
     {"ProcessLocalSceneConfiguration", process_local_scene_configuration},
     {"ToolMetadataIsProcessLocal", tool_metadata_is_process_local},
+    {"ResourceListsAreEmpty", resource_lists_are_empty},
 }};
 
 } // namespace

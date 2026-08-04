@@ -138,8 +138,28 @@ void McpStdioServer::handle_line(std::string_view line) {
         }
         write(result_response(id,
                               {{"protocolVersion", std::string(protocol_version)},
-                               {"capabilities", {{"tools", {{"listChanged", false}}}}},
+                               {"capabilities",
+                                {{"resources", {{"listChanged", false}, {"subscribe", false}}},
+                                 {"tools", {{"listChanged", false}}}}},
                                {"serverInfo", {{"name", "vibris-mcp"}, {"version", "0.1.0"}}}}));
+        return;
+    }
+
+    if (method == "resources/list") {
+        if (!valid_params(request)) {
+            write(error_response(id, -32602, "Invalid params"));
+            return;
+        }
+        write(result_response(id, {{"resources", Json::array()}}));
+        return;
+    }
+
+    if (method == "resources/templates/list") {
+        if (!valid_params(request)) {
+            write(error_response(id, -32602, "Invalid params"));
+            return;
+        }
+        write(result_response(id, {{"resourceTemplates", Json::array()}}));
         return;
     }
 
