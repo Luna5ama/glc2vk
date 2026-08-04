@@ -130,6 +130,18 @@ internal class SourceRegistry @JvmOverloads constructor(
     }
 
     @Synchronized
+    fun retryActivation(activation: Activation) {
+        retryActivation(activation.next)
+    }
+
+    @Synchronized
+    fun retryActivation(lease: Lease) {
+        val before = lease.record.state()
+        lease.record.retryActivation()
+        record(lease, before, lease.record.state())
+    }
+
+    @Synchronized
     fun failActivation(lease: Lease) {
         val before = lease.record.state()
         lease.record.failed()
@@ -146,6 +158,9 @@ internal class SourceRegistry @JvmOverloads constructor(
 
     @Synchronized
     fun activeUuid(): String = activeSource?.uuid ?: ""
+
+    @Synchronized
+    fun isActive(lease: Lease): Boolean = activeSource === lease && lease.record.active()
 
     fun cleanup(leases: List<Lease>) {
         release(leases, false)

@@ -2,7 +2,6 @@ package dev.vibris.api
 
 sealed interface RuntimeAction {
     data object CaptureStatus : RuntimeAction
-    data class ReloadShader(val config: Map<String, String>?) : RuntimeAction
     data class CapturePass(val pass: String, val path: String?) : RuntimeAction
     data class CaptureMulti(val type: String, val path: String?) : RuntimeAction
     data object ShaderStatus : RuntimeAction

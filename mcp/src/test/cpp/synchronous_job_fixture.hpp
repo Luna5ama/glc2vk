@@ -52,7 +52,7 @@ private:
                 : fs::path{};
             const bool execution_matches = job.has_actions() &&
                 job.actions().actions_size() == (expected_actions_ ? 2 : 4) &&
-                job.actions().actions(0).has_activate_source() &&
+                job.actions().actions(0).has_load_shader() &&
                 (!expected_actions_ || job.actions().actions(1).has_get_shader_status());
             valid_submit_.store(!source_path.empty() && execution_matches &&
                 job.context().weather_preset_id() == "clear" &&

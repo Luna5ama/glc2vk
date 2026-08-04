@@ -6,9 +6,7 @@ import dev.vibris.protocol.v1.CaptureMulti
 import dev.vibris.protocol.v1.CapturePass
 import dev.vibris.protocol.v1.DumpTexture
 import dev.vibris.protocol.v1.GetGpuMetrics
-import dev.vibris.protocol.v1.ReloadShader
 import dev.vibris.protocol.v1.ScheduleScreenshot
-import dev.vibris.protocol.v1.ShaderConfig
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
@@ -33,22 +31,6 @@ class RuntimeActionProtocolTest {
                 .build(),
         )
         assertEquals(RuntimeAction.DumpTexture("colortex0", null, true), texture)
-
-        val reload = RuntimeActionProtocol.toApi(
-            Action.newBuilder()
-                .setReloadShader(
-                    ReloadShader.newBuilder().setConfig(
-                        ShaderConfig.newBuilder().putValues("SETTING_SAMPLE_COUNT", "32"),
-                    ),
-                )
-                .build(),
-        )
-        assertEquals(RuntimeAction.ReloadShader(mapOf("SETTING_SAMPLE_COUNT" to "32")), reload)
-
-        val reloadWithoutConfig = RuntimeActionProtocol.toApi(
-            Action.newBuilder().setReloadShader(ReloadShader.getDefaultInstance()).build(),
-        )
-        assertEquals(RuntimeAction.ReloadShader(null), reloadWithoutConfig)
 
         val metrics = RuntimeActionProtocol.toApi(
             Action.newBuilder()

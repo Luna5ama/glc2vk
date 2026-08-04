@@ -176,9 +176,9 @@ function Assert-ToolList
         "vibris_list_presets",
         "vibris_configure",
         "vibris_get_status",
-        "vibris_profile",
         "vibris_run_recipe",
-        "vibris_run_actions"
+        "vibris_run_actions",
+        "vibris_run_matrix"
     )
     if ([string]::Join("`n", $actual) -cne [string]::Join("`n", $expected))
     {

@@ -61,6 +61,41 @@ internal open class ArtifactJobTransaction internal constructor(
     fun commit(): ArtifactManager.CommittedJob = commit(null)
 
     @Synchronized
+    fun checkpoint(): Checkpoint {
+        requireActive()
+        return Checkpoint(java.util.Set.copyOf(artifactNames), artifactBytes, writeFailed)
+    }
+
+    @Synchronized
+    @Throws(IOException::class)
+    fun rollback(checkpoint: Checkpoint) {
+        requireActive()
+        var failure: IOException? = null
+        for (stream in java.util.List.copyOf(openStreams)) {
+            if (canonical(stream.name()) in checkpoint.artifactNames) continue
+            try {
+                stream.close()
+            } catch (exception: IOException) {
+                failure = appendFailure(failure, exception)
+            }
+        }
+        val created = artifacts.entries.filter { canonical(it.key) !in checkpoint.artifactNames }
+        for ((name, artifact) in created) {
+            try {
+                ArtifactFiles.verifiedSize(artifact.path, artifact.identity, artifact.bytes)
+                Files.delete(artifact.path)
+                artifacts.remove(name)
+                artifactNames.remove(canonical(name))
+            } catch (exception: IOException) {
+                failure = appendFailure(failure, exception)
+            }
+        }
+        if (failure != null) throw failure
+        artifactBytes = checkpoint.artifactBytes
+        writeFailed = checkpoint.writeFailed
+    }
+
+    @Synchronized
     @Throws(IOException::class)
     fun commit(expectedArtifacts: Set<String?>?): ArtifactManager.CommittedJob {
         requireActive()
@@ -275,6 +310,12 @@ internal open class ArtifactJobTransaction internal constructor(
         val identity: ArtifactFiles.RegularFileIdentity,
     )
 
+    data class Checkpoint internal constructor(
+        internal val artifactNames: Set<String>,
+        internal val artifactBytes: Long,
+        internal val writeFailed: Boolean,
+    )
+
     private enum class State {
         ACTIVE,
         FINALIZING,
@@ -286,5 +327,11 @@ internal open class ArtifactJobTransaction internal constructor(
         const val MANIFEST = "manifest.json"
 
         fun canonical(name: String): String = name.lowercase(Locale.ROOT)
+
+        private fun appendFailure(original: IOException?, additional: IOException): IOException {
+            if (original == null) return additional
+            original.addSuppressed(additional)
+            return original
+        }
     }
 }

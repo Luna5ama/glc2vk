@@ -4,8 +4,10 @@
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 namespace vibris::mcp {
@@ -49,18 +51,46 @@ void scene(const SessionConfig& config, const proto::SceneContext& scene_context
     timeouts->set_total_timeout_ms(total_timeout_ms);
 }
 
-void shader_config(const Json& arguments, proto::SubmitJob& job) {
-    if (!arguments.contains("config")) return;
-    auto* config = job.mutable_shader_config();
-    for (const auto& [key, value] : arguments.at("config").items()) {
-        (*config->mutable_values())[key] = config_value(value);
+void scale_timeouts(proto::SubmitJob& job) {
+    std::uint64_t rendered_frames = 0;
+    for (const auto& action : job.actions().actions()) {
+        if (action.has_wait_frames()) rendered_frames += action.wait_frames().frame_count();
+        else if (action.has_get_gpu_metrics()) rendered_frames += action.get_gpu_metrics().frames();
+        else if (action.has_schedule_screenshot()) rendered_frames += action.schedule_screenshot().frames();
+    }
+    constexpr std::uint64_t setup_ms = 60'000;
+    constexpr std::uint64_t ms_per_frame = 1'000;
+    const auto measured_ms = rendered_frames > (std::numeric_limits<std::uint64_t>::max() - setup_ms) / ms_per_frame
+        ? std::numeric_limits<std::uint64_t>::max()
+        : setup_ms + rendered_frames * ms_per_frame;
+    const auto execution = std::max(execution_timeout_ms, measured_ms);
+    job.mutable_timeouts()->set_execution_timeout_ms(execution);
+    job.mutable_timeouts()->set_total_timeout_ms(
+        execution > std::numeric_limits<std::uint64_t>::max() - queue_timeout_ms
+            ? std::numeric_limits<std::uint64_t>::max()
+            : execution + queue_timeout_ms);
+}
+
+void config_values(const Json& values, proto::ShaderConfig& config) {
+    for (const auto& [key, value] : values.items()) {
+        (*config.mutable_values())[key] = config_value(value);
     }
 }
 
-void shader_config(const Json& arguments, proto::ShaderConfig& config) {
-    if (!arguments.contains("config")) return;
-    for (const auto& [key, value] : arguments.at("config").items()) {
-        (*config.mutable_values())[key] = config_value(value);
+void recipe_config(const Json& arguments, proto::SubmitJob& job) {
+    auto* named = job.add_shader_configs();
+    named->set_id("config");
+    if (arguments.contains("config")) config_values(arguments.at("config"), *named->mutable_config());
+    else named->set_preserve(true);
+}
+
+void named_configs(const Json& arguments, proto::SubmitJob& job) {
+    if (!arguments.contains("configs")) return;
+    for (const auto& input : arguments.at("configs")) {
+        auto* named = job.add_shader_configs();
+        named->set_id(input.at("id").get<std::string>());
+        if (input.contains("values")) config_values(input.at("values"), *named->mutable_config());
+        else named->set_preserve(true);
     }
 }
 
@@ -68,8 +98,14 @@ proto::Action* add_action(proto::ActionSequence& sequence) {
     return sequence.add_actions();
 }
 
-void activate(proto::ActionSequence& sequence, const proto::PreparedSourceRef& source) {
-    add_action(sequence)->mutable_activate_source()->set_source_uuid(source.uuid());
+void load(proto::ActionSequence& sequence, const proto::PreparedSourceRef& source,
+    std::string source_id, std::string config_id, std::string case_id, bool continue_on_failure = false) {
+    auto* action = add_action(sequence)->mutable_load_shader();
+    action->set_source_uuid(source.uuid());
+    action->set_source_id(std::move(source_id));
+    action->set_config_id(std::move(config_id));
+    action->set_case_id(std::move(case_id));
+    action->set_continue_on_failure(continue_on_failure);
 }
 
 void reset(proto::ActionSequence& sequence) {
@@ -83,7 +119,7 @@ void wait(proto::ActionSequence& sequence, std::uint32_t frames) {
 void reload_recipe(const Json& arguments, const SessionConfig& config,
     std::span<const proto::PreparedSourceRef> sources, proto::ActionSequence& sequence) {
     require_sources(sources, 1);
-    activate(sequence, sources.front());
+    load(sequence, sources.front(), "source", "config", "source--config");
     reset(sequence);
     wait(sequence, arguments.value("warmup_frames", config.default_warmup_frames));
     auto* capture = add_action(sequence)->mutable_capture_screenshot();
@@ -94,7 +130,7 @@ void reload_recipe(const Json& arguments, const SessionConfig& config,
 void debug_recipe(const Json& arguments, const SessionConfig& config,
     std::span<const proto::PreparedSourceRef> sources, proto::ActionSequence& sequence) {
     require_sources(sources, 1);
-    activate(sequence, sources.front());
+    load(sequence, sources.front(), "source", "config", "source--config");
     reset(sequence);
     wait(sequence, arguments.value("warmup_frames", config.default_warmup_frames));
     if (arguments.value("screenshot", false)) {
@@ -144,14 +180,14 @@ void ab_recipe(const Json& arguments, const SessionConfig& config,
     std::span<const proto::PreparedSourceRef> sources, proto::ActionSequence& sequence) {
     require_sources(sources, 2);
     const auto warmup = arguments.value("warmup_frames", config.default_warmup_frames);
-    activate(sequence, sources[0]);
+    load(sequence, sources[0], "a", "config", "a--config");
     reset(sequence);
     wait(sequence, warmup);
     std::size_t index = 0;
     for (const auto& capture : arguments.at("captures")) {
         add_ab_capture(sequence, capture, "a-" + std::to_string(index++));
     }
-    activate(sequence, sources[1]);
+    load(sequence, sources[1], "b", "config", "b--config");
     reset(sequence);
     wait(sequence, warmup);
     index = 0;
@@ -165,21 +201,57 @@ void ab_recipe(const Json& arguments, const SessionConfig& config,
     compare->set_candidate_label(arguments.at("b").at("label").get<std::string>());
 }
 
+void profile_recipe(const Json& arguments, const SessionConfig& config,
+    std::span<const proto::PreparedSourceRef> sources, proto::ActionSequence& sequence) {
+    require_sources(sources, 1);
+    load(sequence, sources.front(), "source", "config", "source--config");
+    reset(sequence);
+    wait(sequence, arguments.value("warmup_frames", config.default_warmup_frames));
+    add_action(sequence)->mutable_get_gpu_metrics()->set_frames(arguments.at("frames").get<std::uint32_t>());
+}
+
+void matrix(const Json& arguments, std::span<const proto::PreparedSourceRef> prepared,
+    const Json& template_actions, proto::SubmitJob& job);
+
 void recipe(const Json& arguments, const SessionConfig& config,
     std::span<const proto::PreparedSourceRef> sources, proto::SubmitJob& job) {
     const auto kind = arguments.at("recipe").get<std::string>();
+    if (kind != "profile_matrix") recipe_config(arguments, job);
+    if (kind == "profile") return profile_recipe(arguments, config, sources, *job.mutable_actions());
+    if (kind == "profile_matrix") {
+        Json template_actions = Json::array({{{"type", "reset_temporal_state"}}});
+        const auto warmup = arguments.value("warmup_frames", config.default_warmup_frames);
+        if (warmup != 0) template_actions.push_back({{"type", "wait_frames"}, {"frames", warmup}});
+        template_actions.push_back({{"type", "get_gpu_metrics"}, {"frames", arguments.at("frames")}});
+        return matrix(arguments, sources, template_actions, job);
+    }
     if (kind == "reload_and_capture") return reload_recipe(arguments, config, sources, *job.mutable_actions());
     if (kind == "capture_debug_bundle") return debug_recipe(arguments, config, sources, *job.mutable_actions());
     if (kind == "ab_compare") return ab_recipe(arguments, config, sources, *job.mutable_actions());
     throw std::invalid_argument("unsupported recipe");
 }
 
-void actions(const Json& arguments, std::span<const proto::PreparedSourceRef> sources, proto::SubmitJob& job) {
-    if (sources.size() > 1) throw std::invalid_argument("custom actions accept at most one prepared source");
-    auto* sequence = job.mutable_actions();
-    if (!sources.empty()) activate(*sequence, sources.front());
-    for (const auto& input : arguments.at("actions")) {
-        auto* action = sequence->add_actions();
+using SourceMap = std::unordered_map<std::string, const proto::PreparedSourceRef*>;
+
+SourceMap source_map(const Json& arguments, std::span<const proto::PreparedSourceRef> sources) {
+    if (!arguments.contains("sources")) {
+        if (!sources.empty()) throw std::invalid_argument("prepared sources have no named declarations");
+        return {};
+    }
+    if (arguments.at("sources").size() != sources.size()) {
+        throw std::invalid_argument("prepared source count does not match named declarations");
+    }
+    SourceMap result;
+    for (std::size_t index = 0; index < sources.size(); ++index) {
+        result.emplace(arguments.at("sources")[index].at("id").get<std::string>(), &sources[index]);
+    }
+    return result;
+}
+
+void append_actions(const Json& inputs, const SourceMap& sources, proto::ActionSequence& sequence,
+    std::string_view artifact_prefix = {}) {
+    for (const auto& input : inputs) {
+        auto* action = sequence.add_actions();
         const auto type = input.at("type").get<std::string>();
         if (type == "reset_temporal_state") {
             action->mutable_reset_temporal_state();
@@ -188,21 +260,28 @@ void actions(const Json& arguments, std::span<const proto::PreparedSourceRef> so
         } else if (type == "capture_screenshot") {
             auto* value = action->mutable_capture_screenshot();
             value->set_format(format(input.value("format", std::string("png"))));
-            value->set_artifact_name(input.value("artifact_name", std::string{}));
+            value->set_artifact_name(std::string(artifact_prefix) +
+                input.value("artifact_name", std::string("screenshot")));
         } else if (type == "capture_texture") {
             auto* value = action->mutable_capture_texture();
             value->set_logical_name(input.at("name").get<std::string>());
             value->set_format(format(input.at("format").get<std::string>()));
-            value->set_artifact_name(input.at("artifact_name").get<std::string>());
+            value->set_artifact_name(std::string(artifact_prefix) + input.at("artifact_name").get<std::string>());
         } else if (type == "capture_buffer") {
             auto* value = action->mutable_capture_buffer();
             value->set_logical_name(input.at("name").get<std::string>());
             value->set_format(format(input.at("format").get<std::string>()));
-            value->set_artifact_name(input.at("artifact_name").get<std::string>());
+            value->set_artifact_name(std::string(artifact_prefix) + input.at("artifact_name").get<std::string>());
         } else if (type == "get_capture_status") action->mutable_get_capture_status();
-        else if (type == "reload_shader") {
-            auto* reload = action->mutable_reload_shader();
-            if (input.contains("config")) shader_config(input, *reload->mutable_config());
+        else if (type == "load_shader") {
+            const auto source_id = input.at("source").get<std::string>();
+            const auto source = sources.find(source_id);
+            if (source == sources.end()) throw std::invalid_argument("load action references an unknown source");
+            auto* load_action = action->mutable_load_shader();
+            load_action->set_source_uuid(source->second->uuid());
+            load_action->set_source_id(source_id);
+            load_action->set_config_id(input.at("config").get<std::string>());
+            load_action->set_case_id(source_id + "--" + load_action->config_id());
         } else if (type == "capture_pass") {
             auto* value = action->mutable_capture_pass();
             value->set_pass(input.at("pass").get<std::string>());
@@ -230,6 +309,34 @@ void actions(const Json& arguments, std::span<const proto::PreparedSourceRef> so
         } else if (type == "list_patched_shaders") action->mutable_list_patched_shaders();
         else throw std::invalid_argument("unsupported action type");
     }
+}
+
+void actions(const Json& arguments, std::span<const proto::PreparedSourceRef> prepared, proto::SubmitJob& job) {
+    named_configs(arguments, job);
+    const auto sources = source_map(arguments, prepared);
+    append_actions(arguments.at("actions"), sources, *job.mutable_actions());
+}
+
+void matrix(const Json& arguments, std::span<const proto::PreparedSourceRef> prepared,
+    const Json& template_actions, proto::SubmitJob& job) {
+    named_configs(arguments, job);
+    const auto sources = source_map(arguments, prepared);
+    auto& sequence = *job.mutable_actions();
+    for (const auto& source_value : arguments.at("matrix").at("sources")) {
+        const auto source_id = source_value.get<std::string>();
+        const auto source = sources.find(source_id);
+        if (source == sources.end()) throw std::invalid_argument("matrix references an unknown source");
+        for (const auto& config_value : arguments.at("matrix").at("configs")) {
+            const auto config_id = config_value.get<std::string>();
+            const auto case_id = source_id + "--" + config_id;
+            load(sequence, *source->second, source_id, config_id, case_id, true);
+            append_actions(template_actions, sources, sequence, case_id + "--");
+        }
+    }
+}
+
+void matrix(const Json& arguments, std::span<const proto::PreparedSourceRef> prepared, proto::SubmitJob& job) {
+    matrix(arguments, prepared, arguments.at("actions"), job);
 }
 
 void require_absolute(std::string_view value, std::string_view field, bool optional = false) {
@@ -340,11 +447,12 @@ proto::ClientMessage JobProtocol::request(std::string_view tool_name, const Json
     auto* job = message.mutable_submit_job();
     job->set_request_id(std::move(request_id));
     scene(config, context, *job);
-    shader_config(arguments, *job);
     for (const auto& source : sources) job->add_sources()->CopyFrom(source);
     if (tool_name == "vibris_run_recipe") recipe(arguments, config, sources, *job);
     else if (tool_name == "vibris_run_actions") actions(arguments, sources, *job);
+    else if (tool_name == "vibris_run_matrix") matrix(arguments, sources, *job);
     else throw std::invalid_argument("unsupported job tool");
+    scale_timeouts(*job);
     return message;
 }
 

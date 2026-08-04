@@ -60,8 +60,7 @@ public:
             if (name == "vibris_list_presets") return list_presets(arguments);
             if (name == "vibris_configure") return configure(arguments);
             if (name == "vibris_get_status") return get_status();
-            if (name == "vibris_profile") return profile(arguments);
-            if (name == "vibris_run_recipe" || name == "vibris_run_actions") {
+            if (name == "vibris_run_recipe" || name == "vibris_run_actions" || name == "vibris_run_matrix") {
                 return run_job(name, arguments);
             }
             return ToolFailure{"INTERNAL_ERROR", "The validated tool was not dispatched.", false};
@@ -162,30 +161,6 @@ private:
                 result["worktree_root"] = binding_.root.string();
                 return result;
             });
-    }
-
-    ToolOutcome profile(const Json& arguments) {
-        Json setup{{"actions", Json::array({{{"type", "reset_temporal_state"}}})}};
-        setup["source"] = arguments.value("source", Json{{"kind", "workspace"}});
-        if (arguments.contains("config")) setup["config"] = arguments["config"];
-        const auto warmup = arguments.value(
-            "warmup_frames", config_ ? config_->default_warmup_frames : std::uint32_t{0});
-        if (warmup != 0) {
-            setup["actions"].push_back({{"type", "wait_frames"}, {"frames", warmup}});
-        }
-        setup["actions"].push_back({{"type", "get_gpu_metrics"}, {"frames", arguments.at("frames")}});
-        auto measured = run_job("vibris_run_actions", setup);
-        if (auto* job = std::get_if<Json>(&measured)) {
-            for (const auto& action : job->at("action_results")) {
-                if (action.at("kind") != "get_gpu_metrics") continue;
-                auto result = action.at("result");
-                result["frames"] = arguments.at("frames");
-                result["warmup_frames"] = warmup;
-                return result;
-            }
-            throw std::logic_error("GPU metrics action result is missing");
-        }
-        return measured;
     }
 
     ToolOutcome run_job(std::string_view name, const Json& arguments) {

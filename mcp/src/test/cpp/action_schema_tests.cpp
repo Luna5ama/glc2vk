@@ -63,7 +63,7 @@ void registry_has_exactly_the_supported_tools() {
     }
     const std::set<std::string> expected{
         "vibris_get_config", "vibris_list_presets", "vibris_configure",
-        "vibris_get_status", "vibris_profile", "vibris_run_recipe", "vibris_run_actions"};
+        "vibris_get_status", "vibris_run_recipe", "vibris_run_actions", "vibris_run_matrix"};
     require(registry.definitions().size() == expected.size() && names == expected,
         "Tool registry added a duplicate, atomic, submit, poll, or wait tool.");
     const std::array forbidden_tools{
@@ -122,11 +122,13 @@ void atomic_action_schemas_reject_invalid_arguments() {
                 registry.invoke("vibris_run_actions", {{"actions", Json::array({
                     {{"type", "dump_texture"}, {"name", "colortex0"}, {"raw", true}}})}})),
         "Texture dump rejected a valid logical name.");
-    require(std::holds_alternative<Json>(
-                registry.invoke("vibris_run_actions", {{"actions", Json::array({
-                    {{"type", "reload_shader"},
-                     {"config", {{"SETTING_SAMPLE_COUNT", 32}, {"SETTING_CLOUDS", false}}}}})}})),
-        "Shader reload rejected scalar config values.");
+    require(std::holds_alternative<Json>(registry.invoke("vibris_run_actions", {
+        {"sources", Json::array({{{"id", "candidate"}, {"kind", "workspace"}}})},
+        {"configs", Json::array({{{"id", "quality"},
+            {"values", {{"SETTING_SAMPLE_COUNT", 32}, {"SETTING_CLOUDS", false}}}}})},
+        {"actions", Json::array({{{"type", "load_shader"},
+            {"source", "candidate"}, {"config", "quality"}}})},
+    })), "Shader load rejected named source and config references.");
     require(std::holds_alternative<InvocationError>(
                 registry.invoke("vibris_run_actions", {{"actions", Json::array({
                     {{"type", "reload_shader"},
@@ -153,27 +155,57 @@ void empty_tool_schemas_declare_object_properties() {
     }
 }
 
-void profile_schema_requires_bounded_future_frames() {
+void profile_recipe_requires_bounded_future_frames() {
     std::size_t dispatches = 0;
     ToolRegistry registry([&](std::string_view name, const Json& arguments) {
         ++dispatches;
-        require(name == "vibris_profile", "Profile schema dispatched the wrong tool.");
+        require(name == "vibris_run_recipe", "Profile recipe dispatched the wrong tool.");
         require(arguments.at("frames") == 64, "Profile schema changed the frame count.");
         return Json{{"accepted", true}};
     });
-    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_profile", Json::object())),
+    require(std::holds_alternative<InvocationError>(registry.invoke(
+        "vibris_run_recipe", {{"recipe", "profile"}})),
         "Profile accepted a missing frame count.");
-    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_profile", {{"frames", 0}})),
+    require(std::holds_alternative<InvocationError>(registry.invoke(
+        "vibris_run_recipe", {{"recipe", "profile"}, {"frames", 0}})),
         "Profile accepted zero frames.");
-    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_profile", {{"frames", 10'001}})),
+    require(std::holds_alternative<InvocationError>(registry.invoke(
+        "vibris_run_recipe", {{"recipe", "profile"}, {"frames", 10'001}})),
         "Profile accepted too many frames.");
-    require(std::holds_alternative<Json>(registry.invoke("vibris_profile", {
+    require(std::holds_alternative<Json>(registry.invoke("vibris_run_recipe", {
+        {"recipe", "profile"},
         {"source", {{"kind", "workspace"}}},
         {"config", {{"SETTING_PARALLAX_MODE", 0}}},
         {"warmup_frames", 32},
         {"frames", 64},
     })), "Profile rejected a valid direct runtime measurement.");
     require(dispatches == 1, "Invalid profile arguments reached dispatch.");
+}
+
+void matrix_schema_requires_named_sources_configs_and_axes() {
+    std::size_t dispatches = 0;
+    ToolRegistry registry([&](std::string_view name, const Json&) {
+        ++dispatches;
+        require(name == "vibris_run_matrix", "Matrix schema dispatched the wrong tool.");
+        return Json{{"accepted", true}};
+    });
+    const Json valid{
+        {"sources", Json::array({{{"id", "base"}, {"kind", "commit"}, {"revision", "HEAD~1"}},
+                                 {{"id", "candidate"}, {"kind", "workspace"}}})},
+        {"configs", Json::array({{{"id", "steep"}, {"values", {{"SETTING_PARALLAX_MODE", 1}}}},
+                                 {{"id", "spline"}, {"values", {{"SETTING_PARALLAX_MODE", 4}}}}})},
+        {"matrix", {{"sources", Json::array({"base", "candidate"})},
+                    {"configs", Json::array({"steep", "spline"})}}},
+        {"actions", Json::array({{{"type", "get_gpu_metrics"}, {"frames", 64}}})},
+    };
+    require(std::holds_alternative<Json>(registry.invoke("vibris_run_matrix", valid)),
+        "Valid source/config matrix was rejected.");
+    Json missing_configs = valid;
+    missing_configs.erase("configs");
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_run_matrix", missing_configs)),
+        "Matrix accepted missing named configs.");
+    require(dispatches == 1, "Invalid matrix arguments reached dispatch.");
 }
 
 void registry_declares_accurate_tool_annotations() {
@@ -197,7 +229,8 @@ int main() {
         registry_has_exactly_the_supported_tools();
         empty_tool_schemas_declare_object_properties();
         atomic_action_schemas_reject_invalid_arguments();
-        profile_schema_requires_bounded_future_frames();
+        profile_recipe_requires_bounded_future_frames();
+        matrix_schema_requires_named_sources_configs_and_axes();
         registry_declares_accurate_tool_annotations();
         std::cout << "PASS ActionSchemaRejectsForbiddenAndDuplicateTools\n";
         return 0;

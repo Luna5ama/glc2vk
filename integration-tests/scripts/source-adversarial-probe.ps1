@@ -149,7 +149,7 @@ try
 
     $traversal = Invoke-ProbeMcpTool -Process $mcp.Process -Id "commit-traversal" `
         -Name "vibris_run_actions" -Arguments @{
-            source = @{ kind = "commit"; revision = $Revision }
+            sources = @(@{ id = "source"; kind = "commit"; revision = $Revision })
             actions = @()
         } -TimeoutSeconds $TimeoutSeconds
     Assert-SourceProbeError -Response $traversal -ExpectedCode "SOURCE_CONTAINS_REPARSE_POINT"
@@ -157,7 +157,7 @@ try
 
     $noShaders = Invoke-ProbeMcpTool -Process $mcp.Process -Id "commit-no-shaders" `
         -Name "vibris_run_actions" -Arguments @{
-            source = @{ kind = "commit"; revision = "refs/tags/no-shaders" }
+            sources = @(@{ id = "source"; kind = "commit"; revision = "refs/tags/no-shaders" })
             actions = @()
         } -TimeoutSeconds $TimeoutSeconds
     Assert-SourceProbeError -Response $noShaders -ExpectedCode "COMMIT_HAS_NO_SHADERS"
@@ -165,7 +165,7 @@ try
 
     $deviceName = Invoke-ProbeMcpTool -Process $mcp.Process -Id "commit-device-name" `
         -Name "vibris_run_actions" -Arguments @{
-            source = @{ kind = "commit"; revision = "refs/tags/device-name" }
+            sources = @(@{ id = "source"; kind = "commit"; revision = "refs/tags/device-name" })
             actions = @()
         } -TimeoutSeconds $TimeoutSeconds
     Assert-SourceProbeError -Response $deviceName -ExpectedCode "SOURCE_CONTAINS_REPARSE_POINT"
@@ -182,7 +182,7 @@ try
     }
     $reparse = Invoke-ProbeMcpTool -Process $mcp.Process -Id "workspace-reparse" `
         -Name "vibris_run_actions" -Arguments @{
-            source = @{ kind = "workspace" }
+            sources = @(@{ id = "source"; kind = "workspace" })
             actions = @()
         } -TimeoutSeconds $TimeoutSeconds
     Assert-SourceProbeError -Response $reparse -ExpectedCode "SOURCE_CONTAINS_REPARSE_POINT"
@@ -213,7 +213,7 @@ try
     }
     $mutated = Invoke-ProbeMcpTool -Process $mcp.Process -Id "workspace-mutates-twice" `
         -Name "vibris_run_actions" -Arguments @{
-            source = @{ kind = "workspace" }
+            sources = @(@{ id = "source"; kind = "workspace" })
             actions = @()
         } -TimeoutSeconds $TimeoutSeconds -Poll $poll
     Assert-SourceProbeError -Response $mutated -ExpectedCode "SOURCE_CHANGED_DURING_SNAPSHOT"

@@ -75,12 +75,7 @@ class VibrisCoreEngine internal constructor(
         var candidates: List<SourceRegistry.Candidate> = emptyList()
         var validationFailure: SourceRegistry.Failure? = null
         try {
-            val sourceCount = submission.actions.actionsList
-                .filter { it.hasActivateSource() }
-                .map { it.activateSource.sourceUuid.lowercase() }
-                .toSet()
-                .size
-            candidates = sources.validate(submission.sourcesList, sourceCount)
+            candidates = sources.validate(submission.sourcesList, submission.sourcesCount)
         } catch (failure: SourceRegistry.Failure) {
             validationFailure = failure
         }

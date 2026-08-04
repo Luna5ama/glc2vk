@@ -36,6 +36,81 @@ ToolFailure transport_failure(const grpc::Status& status) {
     return {"SERVER_OFFLINE", std::move(message), true};
 }
 
+Json profile_result(const Json& job, const Json& arguments, const SessionConfig& config) {
+    for (const auto& action : job.at("action_results")) {
+        if (action.at("kind") != "get_gpu_metrics") continue;
+        auto result = action.at("result");
+        result["frames"] = arguments.at("frames");
+        result["warmup_frames"] = arguments.value("warmup_frames", config.default_warmup_frames);
+        return result;
+    }
+    throw std::logic_error("GPU metrics action result is missing");
+}
+
+bool failed_action(const Json& action) {
+    const auto& result = action.at("result");
+    return result.is_object() && result.contains("success") && result.at("success").is_boolean() &&
+        !result.at("success").get<bool>();
+}
+
+Json matrix_result(Json job, const Json& arguments, const SessionConfig& config, bool profile) {
+    const auto warmup = arguments.value("warmup_frames", config.default_warmup_frames);
+    const std::size_t template_size = profile ? (warmup == 0 ? 2 : 3) : arguments.at("actions").size();
+    const std::size_t case_size = template_size + 1;
+    Json cases = Json::array();
+    std::size_t case_index = 0;
+    std::size_t failures = 0;
+    for (const auto& source : arguments.at("matrix").at("sources")) {
+        for (const auto& shader_config : arguments.at("matrix").at("configs")) {
+            const auto source_id = source.get<std::string>();
+            const auto config_id = shader_config.get<std::string>();
+            const auto case_id = source_id + "--" + config_id;
+            const auto first = case_index * case_size;
+            const auto last = first + case_size;
+            Json results = Json::array();
+            Json metrics = nullptr;
+            Json error = nullptr;
+            for (const auto& action : job.at("action_results")) {
+                const auto index = action.at("action_index").get<std::size_t>();
+                if (index < first || index >= last) continue;
+                auto mapped = action;
+                mapped["action_index"] = index - first;
+                if (failed_action(action) && error.is_null()) error = action.at("result");
+                if (action.at("kind") == "get_gpu_metrics") metrics = action.at("result");
+                results.push_back(std::move(mapped));
+            }
+            Json case_artifacts = Json::array();
+            for (const auto& artifact : job.at("artifacts")) {
+                if (artifact.at("file_name").get_ref<const std::string&>().starts_with(case_id + "--")) {
+                    case_artifacts.push_back(artifact);
+                }
+            }
+            const bool failed = !error.is_null();
+            if (failed) ++failures;
+            Json item{{"id", case_id},
+                      {"source", source_id},
+                      {"config", config_id},
+                      {"status", failed ? "failed" : "passed"},
+                      {"error", std::move(error)},
+                      {"action_results", std::move(results)},
+                      {"artifacts", std::move(case_artifacts)}};
+            if (profile) {
+                item["metrics"] = std::move(metrics);
+                item["frames"] = arguments.at("frames");
+                item["warmup_frames"] = warmup;
+            }
+            cases.push_back(std::move(item));
+            ++case_index;
+        }
+    }
+    job["kind"] = profile ? "profile_matrix" : "matrix";
+    job["status"] = failures == 0 ? "completed" : "completed_with_failures";
+    job["passed"] = case_index - failures;
+    job["failed"] = failures;
+    job["cases"] = std::move(cases);
+    return job;
+}
+
 }
 
 SynchronousJobRunner::SynchronousJobRunner(
@@ -92,16 +167,16 @@ ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& ar
         if (!status.ok()) return transport_failure(status);
         if (!terminal) throw std::logic_error("gRPC completed without a terminal job message");
         auto outcome = JobProtocol::terminal(*terminal);
-        if (tool_name == "vibris_run_actions" && arguments.contains("source") &&
-            std::holds_alternative<Json>(outcome)) {
-            for (auto& result : std::get<Json>(outcome).at("action_results")) {
-                const auto protocol_index = result.at("action_index").get<std::uint32_t>();
-                if (protocol_index == 0) throw std::logic_error("runtime action result refers to source overlay");
-                result["action_index"] = protocol_index - 1;
-            }
-        }
         if (tool_name == "vibris_run_recipe" && std::holds_alternative<Json>(outcome)) {
-            std::get<Json>(outcome)["kind"] = arguments.at("recipe");
+            const auto recipe = arguments.at("recipe").get<std::string>();
+            if (recipe == "profile") return profile_result(std::get<Json>(outcome), arguments, config_);
+            if (recipe == "profile_matrix") {
+                return matrix_result(std::get<Json>(outcome), arguments, config_, true);
+            }
+            std::get<Json>(outcome)["kind"] = recipe;
+        }
+        if (tool_name == "vibris_run_matrix" && std::holds_alternative<Json>(outcome)) {
+            return matrix_result(std::get<Json>(outcome), arguments, config_, false);
         }
         return outcome;
     } catch (...) {

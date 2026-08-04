@@ -152,7 +152,10 @@ try
         jsonrpc = "2.0"; id = 12; method = "tools/call"
         params = [ordered] @{
             name = "vibris_run_actions"
-            arguments = [ordered] @{ source = [ordered] @{ kind = "workspace" }; actions = @() }
+            arguments = [ordered] @{
+                sources = @([ordered] @{ id = "workspace"; kind = "workspace" })
+                actions = @()
+            }
         }
     }
     $competitorEntry = Start-G007Mcp -Exe $exePath -WorkspaceRoot $competitor `

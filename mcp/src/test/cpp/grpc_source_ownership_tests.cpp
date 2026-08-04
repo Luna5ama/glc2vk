@@ -72,7 +72,7 @@ fs::path prepare_bound(
     const WorkspaceFixture& fixture,
     const proto::ServerHello& hello,
     std::string_view request_id) {
-    const Json arguments{{"source", {{"kind", "workspace"}}}};
+    const Json arguments{{"sources", Json::array({{{"id", "source"}, {"kind", "workspace"}}})}};
     handler.prepare("vibris_run_actions", arguments, hello);
     const auto paths = prepared_paths(handler.bind_latest(std::string(request_id)), fixture);
     require(paths.size() == 1, "Ownership fixture did not prepare exactly one source.");

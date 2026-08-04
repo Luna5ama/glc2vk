@@ -188,7 +188,7 @@ function Assert-SoakToolSurface
     $actual = @($response.result.tools | ForEach-Object { $_.name })
     $expected = @(
         "vibris_get_config", "vibris_list_presets", "vibris_configure",
-        "vibris_get_status", "vibris_profile", "vibris_run_recipe", "vibris_run_actions"
+        "vibris_get_status", "vibris_run_recipe", "vibris_run_actions", "vibris_run_matrix"
     )
     if ([string]::Join("`n", $actual) -cne [string]::Join("`n", $expected) -or
         @($actual | Select-Object -Unique).Count -ne $expected.Count)

@@ -47,6 +47,11 @@ class SourceRecord(
     }
 
     @Synchronized
+    fun retryActivation() {
+        transition(SourceState.QUEUED)
+    }
+
+    @Synchronized
     fun failed() {
         transition(SourceState.FAILED)
     }
@@ -72,6 +77,8 @@ class SourceRecord(
         activeValue = false
         if (referencesValue == 0) {
             transition(SourceState.RECLAIMABLE)
+        } else {
+            transition(SourceState.QUEUED)
         }
     }
 
@@ -108,10 +115,12 @@ class SourceRecord(
                     next == SourceState.RECLAIMABLE
             SourceState.ACTIVATING ->
                 next == SourceState.ACTIVE ||
+                    next == SourceState.QUEUED ||
                     next == SourceState.FAILED ||
                     next == SourceState.RECLAIMABLE
             SourceState.ACTIVE ->
                 next == SourceState.RELEASED_ACTIVE ||
+                    next == SourceState.QUEUED ||
                     next == SourceState.RECLAIMABLE
             SourceState.RELEASED_ACTIVE, SourceState.FAILED -> next == SourceState.RECLAIMABLE
             SourceState.RECLAIMABLE -> next == SourceState.DELETING

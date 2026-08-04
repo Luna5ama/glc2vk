@@ -218,9 +218,9 @@ content item and matching structured content.
 | `vibris_list_presets` | optional non-empty `filter` | matching live preset catalog entries |
 | `vibris_configure` | save, dimension, time, camera, FOV, default warmup frames | validated process-local scene config |
 | `vibris_get_status` | empty object | server/runtime state, queue, resources, pending/artifact roots and quota |
-| `vibris_profile` | source/config, optional warmup, required frame count | direct future-frame GPU timing aggregates |
 | `vibris_run_recipe` | one recipe form below | synchronous terminal job result and artifact metadata |
-| `vibris_run_actions` | optional source plus up to 64 actions | synchronous terminal job result and artifact metadata |
+| `vibris_run_actions` | named sources/configs plus up to 64 actions | synchronous terminal job result and artifact metadata |
+| `vibris_run_matrix` | named sources/configs, selected axes, and an action template | per-case results with recorded failures |
 
 All low-level capture and shader-debug operations are variants in the `actions` array of `vibris_run_actions`; none is
 advertised as a separate MCP tool. One invocation becomes one `SubmitJob`, and result-bearing actions are returned in
@@ -231,35 +231,34 @@ execution order through `action_results` with their action index, kind, and JSON
 | `reset_temporal_state`, `wait_frames` | control temporal history and rendered-frame waits |
 | `capture_screenshot`, `capture_texture`, `capture_buffer` | write same-frame managed artifacts |
 | `get_capture_status`, `capture_pass`, `capture_multi` | inspect or queue compute captures |
-| `reload_shader`, `get_shader_status`, `get_shader_errors` | reload and inspect the active shader pack |
+| `load_shader`, `get_shader_status`, `get_shader_errors` | load a named source/config pair and inspect it |
 | `schedule_screenshot`, `get_screenshot_result` | schedule and locate an asynchronous host screenshot |
 | `get_gpu_metrics` | measure GPU pass timings over its next required `frames` |
 | `list_ssbos`, `dump_ssbo` | inspect or dump SSBOs by binding index |
 | `list_textures`, `dump_texture` | inspect or dump textures by logical name or OpenGL ID |
 | `list_patched_shaders` | inspect patched shader debug files |
 
-Server discovery reports the complete runtime surface only as `supported_job_actions`. Recipes and profiling are
-MCP-only overlays: each expands to an action sequence before gRPC submission, while Minecraft only decodes and executes
-atomic actions.
+Server discovery reports the complete runtime surface only as `supported_job_actions`. Recipes and matrices are
+MCP overlays that expand to action sequences before gRPC submission.
 
 The `get_gpu_metrics` action requires `{"type":"get_gpu_metrics","frames":N}` with `1 <= N <= 10000`. Measurement
 starts when that action executes, timestamps exactly the next `N` rendered frames, and completes when the final requested
 frame has been collected. Its result contains only aggregate timing fields (`avg`, `p5`, `p50`, and `p95`); callers do
 not need a separate wait or a prior snapshot.
 
-`vibris_profile` is the high-level performance workflow. It snapshots the selected workspace or commit, activates and
+The `profile` recipe is the high-level performance workflow. It snapshots the selected workspace or commit, activates and
 reloads that source with the optional shader config, resets temporal state, waits `warmup_frames` (or the configured
 default), and then measures exactly the next required `frames`. It returns the same `avg`, `p5`, `p50`, and `p95`
-aggregates as the `get_gpu_metrics` action. Repeat the tool with different config objects for a controlled settings
-matrix; the scene preset remains fixed by `vibris_configure`, which must succeed before profiling. The result also
+aggregates as the `get_gpu_metrics` action. The `profile_matrix` recipe profiles a selected source/config Cartesian
+product under the same scene preset. The result also
 includes the requested `frames` and effective `warmup_frames`. This direct in-game path replaces project-local wrappers
-for routine profiling. Compute capture and external replay/Nsight analysis remain separate diagnostic workflows and are not used by
-`vibris_profile`.
+for routine profiling. Compute capture and external replay/Nsight analysis remain separate diagnostic workflows.
 
 Example request:
 
 ```json
 {
+  "recipe": "profile",
   "source": {"kind": "workspace"},
   "config": {"SETTING_GI_SPATIAL_REUSE_COUNT": 14},
   "warmup_frames": 32,
@@ -272,22 +271,27 @@ resolved inside the game directory; paths escaping it are rejected.
 
 ### Shader config
 
-`vibris_profile`, `vibris_run_recipe`, and source-bearing `vibris_run_actions` calls accept an optional top-level
-`config` JSON object for source activation. A `reload_shader` action can instead carry its own `config`. Boolean, number,
-and printable ASCII string values are converted to Iris `KEY=VALUE` properties before the shader reload:
+Single-source recipes accept an optional top-level `config`. Action and matrix requests declare reusable named configs;
+`load_shader` references one config by ID. Boolean, number, and printable ASCII string values are converted to Iris
+`KEY=VALUE` properties before the shader load:
 
 ```json
 {
-  "config": {
-    "SETTING_CLOUDS_CU_WIND": false,
-    "SETTING_GI_SPATIAL_REUSE_COUNT": 14,
-    "TITLE_VERSION": 5
-  }
+  "configs": [{
+    "id": "quality",
+    "values": {
+      "SETTING_CLOUDS_CU_WIND": false,
+      "SETTING_GI_SPATIAL_REUSE_COUNT": 14,
+      "TITLE_VERSION": 5
+    }
+  }]
 }
 ```
 
-Omitting `config` preserves the current Iris options file. Passing an empty object writes an empty options file, so Iris
-uses the shader pack defaults. Option names and values are validated, and the encoded config is limited to 64 KiB.
+Single-source recipes preserve the current Iris options file when `config` is omitted. A named
+`{"id":"current","mode":"preserve"}` config has the same effect. Passing an empty `values` object writes an empty
+options file, so Iris uses shader-pack defaults. Option names and values are validated, and each encoded config is
+limited to 64 KiB.
 
 The runtime writes the properties file beside `pending_shaders_root`, at `../config/vibris.txt`, then links
 `.minecraft/shaderpacks/vibris.txt` to it. This keeps the frequently rewritten file on the same RAM disk as pending
@@ -299,7 +303,7 @@ arguments use a structured tool error rather than expanding the tool surface.
 
 ## Sources
 
-Recipe and action jobs accept either source form:
+Single-source recipes accept either source form:
 
 ```json
 {"kind":"workspace"}
@@ -315,11 +319,41 @@ gRPC carries only the prepared source UUID, origin, file count, and total byte c
 directory before accepting the job; source file contents are never embedded in protobuf messages. The active source is
 retained until the next activation, while stale or rejected sources are removed.
 
+Action and matrix requests use named declarations, so one immutable snapshot can be loaded with several configs:
+
+```json
+{
+  "sources": [
+    {"id":"base","kind":"commit","revision":"HEAD~1"},
+    {"id":"candidate","kind":"workspace"}
+  ],
+  "configs": [
+    {"id":"steep","values":{"SETTING_PARALLAX_MODE":1}},
+    {"id":"spline","values":{"SETTING_PARALLAX_MODE":4}}
+  ]
+}
+```
+
 ## Recipes
 
-Prefer `vibris_run_recipe` when one of the three standard jobs fits. Recipes exist only in the native MCP: it expands
+Recipes exist only in the native MCP: it expands
 each recipe into a bounded action sequence before submitting the job. The protobuf boundary and Minecraft runtime carry
 and execute action sequences only; no recipe enum or recipe decoder exists in the mod.
+
+### Profile
+
+```json
+{
+  "recipe": "profile",
+  "source": {"kind": "workspace"},
+  "config": {"SETTING_PARALLAX_MODE": 4},
+  "warmup_frames": 32,
+  "frames": 120
+}
+```
+
+`profile_matrix` accepts `sources`, `configs`, and `matrix` axes in the same form as `vibris_run_matrix`, then profiles
+every selected source/config combination. A failed combination is recorded and later combinations continue.
 
 ### Reload and capture
 
@@ -371,14 +405,16 @@ texture raw/PNG, and buffer BIN. The result includes comparison metrics and the 
 
 ## Custom actions
 
-Use `vibris_run_actions` when a recipe cannot express the sequence. The full action set is listed in the MCP table
-above. Same-frame artifacts use `capture_screenshot`, `capture_texture`, and `capture_buffer`; live debug resource dumps
+The full action set is listed in the MCP table above. Same-frame artifacts use `capture_screenshot`,
+`capture_texture`, and `capture_buffer`; live debug resource dumps
 use `dump_texture` and `dump_ssbo`, so their ownership and result semantics remain unambiguous.
 
 ```json
 {
+  "sources": [{"id":"candidate","kind":"workspace"}],
+  "configs": [{"id":"parallax","values":{"SETTING_PARALLAX_MODE":0}}],
   "actions": [
-    {"type": "reload_shader", "config": {"SETTING_PARALLAX_MODE": 0}},
+    {"type": "load_shader", "source": "candidate", "config": "parallax"},
     {"type": "get_shader_status"},
     {"type": "get_shader_errors"},
     {"type": "get_gpu_metrics", "frames": 120},
@@ -388,11 +424,18 @@ use `dump_texture` and `dump_ssbo`, so their ownership and result semantics rema
 }
 ```
 
-When `source` is present the MCP prepends its source activation; without it, the sequence operates on the current
-runtime. A/B recipes may also add internal source activations and a capture-comparison action. The configured scene is
-applied when a source is activated. Actions never expose shell execution, arbitrary source paths, or external process
+`load_shader` requires explicit source and config IDs. Sequences without `load_shader` operate on the current runtime.
+A/B recipes may also add an internal capture-comparison action. The configured scene is applied when a shader is
+loaded. Actions never expose shell execution, arbitrary source paths, or external process
 hooks. Managed artifact names are safe flat file-name segments, and optional compute-capture paths must stay within the
 game directory.
+
+## Matrix actions
+
+`vibris_run_matrix` executes one action template for the source-major Cartesian product selected by `matrix.sources`
+and `matrix.configs`. Each case begins with an internal `load_shader`; artifact names are prefixed with the case ID.
+Shader or action failures are returned on that case and execution continues with the next case. Transport, source
+preparation, cancellation, and server failures remain job-global.
 
 ## Results and artifacts
 

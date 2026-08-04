@@ -36,6 +36,34 @@ Json source_schema() {
                       {"kind", "revision"}),
     });
 }
+Json named_source_schema() {
+    return one_of({
+        closed_object({{"id", {{"type", "string"}, {"minLength", 1}}},
+                       {"kind", enum_string({"workspace"})}}, {"id", "kind"}),
+        closed_object({{"id", {{"type", "string"}, {"minLength", 1}}},
+                       {"kind", enum_string({"commit"})},
+                       {"revision", {{"type", "string"}, {"minLength", 1}}}},
+                      {"id", "kind", "revision"}),
+    });
+}
+Json named_config_schema() {
+    return one_of({
+        closed_object({{"id", {{"type", "string"}, {"minLength", 1}}},
+                       {"values", {{"type", "object"}}}}, {"id", "values"}),
+        closed_object({{"id", {{"type", "string"}, {"minLength", 1}}},
+                       {"mode", enum_string({"preserve"})}}, {"id", "mode"}),
+    });
+}
+Json named_sources_schema() {
+    return Json{{"type", "array"}, {"items", named_source_schema()}, {"minItems", 1}, {"maxItems", 16}};
+}
+Json named_configs_schema() {
+    return Json{{"type", "array"}, {"items", named_config_schema()}, {"minItems", 1}, {"maxItems", 64}};
+}
+Json matrix_axes_schema() {
+    return closed_object({{"sources", string_array(16)}, {"configs", string_array(64)}},
+                         {"sources", "configs"});
+}
 Json capture_schema() {
     return one_of({
         closed_object({{"type", enum_string({"screenshot"})},
@@ -59,8 +87,22 @@ Json source_variant_schema() {
 
 Json recipe_schema() {
     const auto frames = bounded_integer(0, std::numeric_limits<std::uint32_t>::max());
+    const auto metric_frames = bounded_integer(1, 10'000);
     const Json config{{"type", "object"}};
     return one_of({
+        closed_object({{"recipe", enum_string({"profile"})},
+                       {"source", source_schema()},
+                       {"config", config},
+                       {"warmup_frames", frames},
+                       {"frames", metric_frames}},
+                      {"recipe", "frames"}),
+        closed_object({{"recipe", enum_string({"profile_matrix"})},
+                       {"sources", named_sources_schema()},
+                       {"configs", named_configs_schema()},
+                       {"matrix", matrix_axes_schema()},
+                       {"warmup_frames", frames},
+                       {"frames", metric_frames}},
+                      {"recipe", "sources", "configs", "matrix", "frames"}),
         closed_object({{"recipe", enum_string({"reload_and_capture"})},
                        {"source", source_schema()},
                        {"config", config},
@@ -88,7 +130,6 @@ Json recipe_schema() {
 Json action_schema() {
     const Json artifact_name{{"type", "string"}, {"minLength", 1}};
     const Json resource_name{{"type", "string"}, {"minLength", 1}};
-    const Json config{{"type", "object"}};
     const auto frames = bounded_integer(1, 10'000);
     const auto index = bounded_integer(0, std::numeric_limits<std::uint32_t>::max());
     const auto empty_action = [](const char* type) {
@@ -114,7 +155,10 @@ Json action_schema() {
                        {"artifact_name", artifact_name}},
                       {"type", "name", "format", "artifact_name"}),
         empty_action("get_capture_status"),
-        closed_object({{"type", enum_string({"reload_shader"})}, {"config", config}}, {"type"}),
+        closed_object({{"type", enum_string({"load_shader"})},
+                       {"source", {{"type", "string"}, {"minLength", 1}}},
+                       {"config", {{"type", "string"}, {"minLength", 1}}}},
+                      {"type", "source", "config"}),
         closed_object({{"type", enum_string({"capture_pass"})},
                        {"pass", resource_name}, {"path", resource_name}}, {"type", "pass"}),
         closed_object({{"type", enum_string({"capture_multi"})},
@@ -145,7 +189,6 @@ Json definition(const char* name, const char* description, Json input_schema, bo
 
 Json build_definitions() {
     const auto empty = closed_object(Json::object());
-    const auto metric_frames = bounded_integer(1, 10'000);
     const auto configure = closed_object(
         {{"save_id", {{"type", "string"}, {"minLength", 1}}},
          {"dimension_id", {{"type", "string"}, {"minLength", 1}}},
@@ -163,28 +206,22 @@ Json build_definitions() {
                    configure, false),
         definition("vibris_get_status", "Read MCP, server, runtime, queue, resource, and artifact status.", empty,
                    true),
-        definition("vibris_profile",
-                   "Reload a workspace or commit snapshot, reset temporal state, warm it up, then measure exactly "
-                   "the next requested GPU frames. Prefer this direct runtime profile over capture/replay for shader "
-                   "performance comparisons.",
-                   closed_object({{"source", source_schema()},
-                                  {"config", {{"type", "object"}}},
-                                  {"warmup_frames", bounded_integer(0, std::numeric_limits<std::uint32_t>::max())},
-                                  {"frames", metric_frames}},
-                                 {"frames"}), false),
         definition("vibris_run_recipe",
-                   "Prefer this tool for standard shader tests. The MCP prepares immutable source data, submits one "
-                   "non-interruptible job, and waits synchronously for the final result. Use vibris_run_actions only "
-                   "when no existing recipe can express the request.",
+                   "Run a standard shader workflow and return its terminal result.",
                    recipe_schema(), false),
         definition("vibris_run_actions",
-                   "Universal atomic action sequence for shader reload, capture, diagnostics, screenshots, GPU "
-                   "metrics, SSBOs, textures, and patched shaders. An optional source is activated before the listed "
-                   "actions; all actions run as one non-interruptible job and return ordered action_results.",
-                   closed_object({{"source", source_schema()},
-                                  {"config", {{"type", "object"}}},
+                   "Run one ordered shader action sequence with explicitly named sources and configs.",
+                   closed_object({{"sources", named_sources_schema()},
+                                  {"configs", named_configs_schema()},
                                   {"actions", {{"type", "array"}, {"items", action_schema()}, {"maxItems", 64}}}},
                                  {"actions"}), false),
+        definition("vibris_run_matrix",
+                   "Run one action template for every selected source and config combination and return per-case results.",
+                   closed_object({{"sources", named_sources_schema()},
+                                  {"configs", named_configs_schema()},
+                                  {"matrix", matrix_axes_schema()},
+                                  {"actions", {{"type", "array"}, {"items", action_schema()}, {"maxItems", 64}}}},
+                                 {"sources", "configs", "matrix", "actions"}), false),
     });
     return definitions;
 }
@@ -229,6 +266,9 @@ std::optional<std::string> validate(const Json& value, const Json& schema, const
         }
     }
     if (value.is_array() && schema.contains("items")) {
+        if (schema.contains("minItems") && value.size() < schema["minItems"].get<std::size_t>()) {
+            return path + " has too few items";
+        }
         if (schema.contains("maxItems") && value.size() > schema["maxItems"].get<std::size_t>()) {
             return path + " has too many items";
         }

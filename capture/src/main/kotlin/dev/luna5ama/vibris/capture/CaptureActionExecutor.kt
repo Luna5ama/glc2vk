@@ -23,7 +23,6 @@ class CaptureActionExecutor(
 
     private fun executeImmediately(action: RuntimeAction) = when (action) {
         RuntimeAction.CaptureStatus -> captureStatus()
-        is RuntimeAction.ReloadShader -> shader.reload()
         is RuntimeAction.CapturePass -> queuePass(action)
         is RuntimeAction.CaptureMulti -> queueMulti(action)
         RuntimeAction.ShaderStatus -> shader.status()

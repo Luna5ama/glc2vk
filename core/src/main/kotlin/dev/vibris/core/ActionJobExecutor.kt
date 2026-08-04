@@ -11,6 +11,8 @@ import dev.vibris.protocol.v1.JobResultKind
 import dev.vibris.protocol.v1.JobStage
 import java.io.IOException
 import java.util.function.Consumer
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 internal class ActionJobExecutor(
     private val runtime: VibrisRuntimeAdapter,
@@ -20,59 +22,98 @@ internal class ActionJobExecutor(
 ) {
     @Throws(RuntimeJobExecutor.Failure::class)
     fun execute(job: CoreJob, progress: Consumer<JobStage>, deadline: Long): JobResult {
-        val first = job.submission.actions.actionsList.firstOrNull()
-        var reload = if (first != null && first.hasActivateSource()) {
-            activate(job, first.activateSource.sourceUuid, progress, deadline)
-        } else {
-            ReloadResult.success(emptyList())
-        }
-        val action = captures.prepareActions(job, runtime.getResourceCatalog(), reload.diagnostics)
+        var reload = ReloadResult.success(emptyList())
+        val action = captures.prepareActions(job, runtime.getResourceCatalog(), emptyList())
         val prepared = action.prepared
-        val diagnostics = ArrayList(reload.diagnostics)
+        val diagnostics = ArrayList<ReloadResult.Diagnostic>()
         val results = ArrayList<CaptureResult>()
+        val completedCapturePlans = ArrayList<dev.vibris.api.CapturePlan>()
         val actionResults = ArrayList<ActionResult>()
         var comparison: AbComparisonResult? = null
-        var firstActivation = true
+        var currentCase: dev.vibris.protocol.v1.LoadShader? = null
+        var caseFailed = false
         try {
             fun executeSteps() {
                 for (step in action.program.steps) {
-                    when (step.type) {
-                        CaptureProgramBuilder.ActionType.ACTIVATE -> {
-                            if (firstActivation) {
-                                firstActivation = false
-                            } else {
+                    if (step.type == CaptureProgramBuilder.ActionType.LOAD) {
+                        currentCase = step.loadShader!!
+                        caseFailed = false
+                    } else if (caseFailed) {
+                        continue
+                    }
+                    try {
+                        when (step.type) {
+                            CaptureProgramBuilder.ActionType.LOAD -> {
+                                val load = step.loadShader!!
+                                reload = load(job, load, progress, deadline)
+                                diagnostics.addAll(reload.diagnostics)
+                                prepared?.addDiagnostics(reload.diagnostics)
+                                actionResults.add(
+                                    actionResult(
+                                        step.actionIndex,
+                                        dev.vibris.protocol.v1.JobActionKind.JOB_ACTION_KIND_LOAD_SHADER,
+                                        load,
+                                        null,
+                                    ),
+                                )
+                            }
+                            CaptureProgramBuilder.ActionType.ACTIVATE -> {
                                 reload = activate(job, step.sourceUuid!!, progress, deadline)
                                 diagnostics.addAll(reload.diagnostics)
                                 prepared?.addDiagnostics(reload.diagnostics)
                             }
+                            CaptureProgramBuilder.ActionType.RESET -> owner.reset(job, progress, deadline)
+                            CaptureProgramBuilder.ActionType.WAIT ->
+                                owner.waitFrames(job, progress, deadline, step.frames)
+                            CaptureProgramBuilder.ActionType.CAPTURE -> {
+                                if (prepared == null) throw captureUnavailable()
+                                results.add(owner.capture(job, progress, deadline, prepared, step.capture!!))
+                                completedCapturePlans.add(step.capture)
+                            }
+                            CaptureProgramBuilder.ActionType.COMPARE -> {
+                                if (prepared == null) throw captureUnavailable()
+                                progress.accept(JobStage.JOB_STAGE_COMPARING)
+                                probe.event(job.requestId, "COMPARING")
+                                comparison = captures.compare(prepared, step.comparison!!)
+                            }
+                            CaptureProgramBuilder.ActionType.RUNTIME -> {
+                                val runtimeAction = step.runtimeAction!!
+                                val json = owner.await(
+                                    runtime.executeAction(RuntimeActionProtocol.toApi(runtimeAction)),
+                                    job,
+                                    deadline,
+                                )
+                                actionResults.add(
+                                    ActionResult.newBuilder()
+                                        .setActionIndex(step.actionIndex)
+                                        .setKind(RuntimeActionProtocol.kind(runtimeAction))
+                                        .setJson(json)
+                                        .build(),
+                                )
+                            }
                         }
-                        CaptureProgramBuilder.ActionType.RESET -> owner.reset(job, progress, deadline)
-                        CaptureProgramBuilder.ActionType.WAIT -> owner.waitFrames(job, progress, deadline, step.frames)
-                        CaptureProgramBuilder.ActionType.CAPTURE -> {
-                            if (prepared == null) throw captureUnavailable()
-                            results.add(owner.capture(job, progress, deadline, prepared, step.capture!!))
-                        }
-                        CaptureProgramBuilder.ActionType.COMPARE -> {
-                            if (prepared == null) throw captureUnavailable()
-                            progress.accept(JobStage.JOB_STAGE_COMPARING)
-                            probe.event(job.requestId, "COMPARING")
-                            comparison = captures.compare(prepared, step.comparison!!)
-                        }
-                        CaptureProgramBuilder.ActionType.RUNTIME -> {
-                            val action = step.runtimeAction!!
-                            val json = owner.await(
-                                runtime.executeAction(RuntimeActionProtocol.toApi(action)),
-                                job,
-                                deadline,
-                            )
-                            actionResults.add(
-                                ActionResult.newBuilder()
-                                    .setActionIndex(step.actionIndex)
-                                    .setKind(RuntimeActionProtocol.kind(action))
-                                    .setJson(json)
-                                    .build(),
-                            )
-                        }
+                    } catch (failure: RuntimeJobExecutor.Failure) {
+                        val load = currentCase
+                        if (load == null || !load.continueOnFailure) throw failure
+                        val input = job.submission.actions.getActions(step.actionIndex)
+                        actionResults.add(
+                            actionResult(
+                                step.actionIndex,
+                                RuntimeActionProtocol.kind(input),
+                                load,
+                                failure,
+                            ),
+                        )
+                        caseFailed = true
+                    } catch (exception: IllegalArgumentException) {
+                        val load = currentCase
+                        if (load == null || !load.continueOnFailure) throw exception
+                        val input = job.submission.actions.getActions(step.actionIndex)
+                        val failure = RuntimeJobExecutor.Failure(ErrorCode.INTERNAL_ERROR, exception.message)
+                        actionResults.add(
+                            actionResult(step.actionIndex, RuntimeActionProtocol.kind(input), load, failure),
+                        )
+                        caseFailed = true
                     }
                 }
             }
@@ -89,7 +130,7 @@ internal class ActionJobExecutor(
                 probe.event(job.requestId, "WRITING_ARTIFACTS")
                 progress.accept(JobStage.JOB_STAGE_FINALIZING)
                 probe.event(job.requestId, "FINALIZING")
-                return captures.commit(job, prepared, results, comparison).toBuilder()
+                return captures.commit(job, prepared, completedCapturePlans, results, comparison).toBuilder()
                     .addAllActionResults(actionResults)
                     .build()
             }
@@ -113,6 +154,44 @@ internal class ActionJobExecutor(
         val reload = owner.activateSource(job, source, progress, deadline)
         owner.applyContext(job, progress, deadline)
         return reload
+    }
+
+    private fun load(
+        job: CoreJob,
+        load: dev.vibris.protocol.v1.LoadShader,
+        progress: Consumer<JobStage>,
+        deadline: Long,
+    ): ReloadResult {
+        val source = job.sources.firstOrNull { it.uuid().equals(load.sourceUuid, ignoreCase = true) }
+            ?: throw RuntimeJobExecutor.Failure(
+                ErrorCode.INVALID_SOURCE_UUID,
+                "Load action references an unprepared source.",
+            )
+        return owner.loadShader(job, source, load.configId, progress, deadline)
+    }
+
+    private fun actionResult(
+        actionIndex: Int,
+        kind: dev.vibris.protocol.v1.JobActionKind,
+        load: dev.vibris.protocol.v1.LoadShader,
+        failure: RuntimeJobExecutor.Failure?,
+    ): ActionResult {
+        val payload = buildJsonObject {
+            put("success", failure == null)
+            put("case_id", load.caseId)
+            put("source", load.sourceId)
+            put("config", load.configId)
+            if (failure != null) {
+                put("error_code", failure.code.name.removePrefix("ERROR_CODE_"))
+                put("message", failure.message ?: "Action failed.")
+                failure.artifacts.firstOrNull()?.path?.takeIf { it.isNotBlank() }?.let { put("log_path", it) }
+            }
+        }
+        return ActionResult.newBuilder()
+            .setActionIndex(actionIndex)
+            .setKind(kind)
+            .setJson(payload.toString())
+            .build()
     }
 
     private fun captureUnavailable() = RuntimeJobExecutor.Failure(

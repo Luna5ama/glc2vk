@@ -26,6 +26,9 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     final List<String> events = new ArrayList<>();
     final ArrayDeque<ReloadResult> reloads = new ArrayDeque<>();
     final ArrayDeque<String> actionResponses = new ArrayDeque<>();
+    final ArrayDeque<RuntimeException> captureFailures = new ArrayDeque<>();
+    final ArrayDeque<RuntimeException> captureFailuresAfterWrite = new ArrayDeque<>();
+    final ArrayDeque<Map<String, byte[]>> captureFileBatches = new ArrayDeque<>();
     RuntimeStatus status = new RuntimeStatus(true, "save", "minecraft:overworld", "");
     TemporalResetResult reset = new TemporalResetResult(true);
     ResourceCatalog catalog = ResourceCatalog.empty();
@@ -100,12 +103,19 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
         CancellationToken cancellation
     ) {
         events.add("capture");
+        if (!captureFailures.isEmpty()) {
+            return CompletableFuture.failedFuture(captureFailures.removeFirst());
+        }
         try {
             cancellation.throwIfCancellationRequested();
-            for (Map.Entry<String, byte[]> file : captureFiles.entrySet()) {
+            Map<String, byte[]> files = captureFileBatches.isEmpty() ? captureFiles : captureFileBatches.removeFirst();
+            for (Map.Entry<String, byte[]> file : files.entrySet()) {
                 try (var output = sink.open(file.getKey())) {
                     output.write(file.getValue());
                 }
+            }
+            if (!captureFailuresAfterWrite.isEmpty()) {
+                return CompletableFuture.failedFuture(captureFailuresAfterWrite.removeFirst());
             }
             return CompletableFuture.completedFuture(captureResult);
         } catch (java.io.IOException | RuntimeException exception) {

@@ -59,7 +59,6 @@ class ServerDescriptorTest {
                 JobActionKind.JOB_ACTION_KIND_ACTIVATE_SOURCE,
                 JobActionKind.JOB_ACTION_KIND_COMPARE_CAPTURES,
                 JobActionKind.JOB_ACTION_KIND_GET_CAPTURE_STATUS,
-                JobActionKind.JOB_ACTION_KIND_RELOAD_SHADER,
                 JobActionKind.JOB_ACTION_KIND_CAPTURE_PASS,
                 JobActionKind.JOB_ACTION_KIND_CAPTURE_MULTI,
                 JobActionKind.JOB_ACTION_KIND_GET_SHADER_STATUS,
@@ -71,7 +70,8 @@ class ServerDescriptorTest {
                 JobActionKind.JOB_ACTION_KIND_DUMP_SSBO,
                 JobActionKind.JOB_ACTION_KIND_LIST_TEXTURES,
                 JobActionKind.JOB_ACTION_KIND_DUMP_TEXTURE,
-                JobActionKind.JOB_ACTION_KIND_LIST_PATCHED_SHADERS),
+                JobActionKind.JOB_ACTION_KIND_LIST_PATCHED_SHADERS,
+                JobActionKind.JOB_ACTION_KIND_LOAD_SHADER),
             hello.getSupportedJobActionsList());
         assertIterableEquals(
             java.util.List.of(
@@ -82,7 +82,7 @@ class ServerDescriptorTest {
                 Capability.CAPABILITY_ARTIFACT_METADATA),
             hello.getCapabilitiesList());
         assertTrue(hello.getStatus().getSupportedJobActionsList()
-            .contains(JobActionKind.JOB_ACTION_KIND_RELOAD_SHADER));
+            .contains(JobActionKind.JOB_ACTION_KIND_LOAD_SHADER));
         engine.close();
     }
 }

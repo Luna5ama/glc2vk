@@ -284,7 +284,7 @@ function Invoke-MatrixCopyKill
             method = "tools/call"
             params = @{
                 name = "vibris_run_actions"
-                arguments = @{ source = @{ kind = "workspace" }; actions = @() }
+                arguments = @{ sources = @(@{ id = "workspace"; kind = "workspace" }); actions = @() }
             }
         }
         $response = $mcp.Process.StandardOutput.ReadLineAsync()

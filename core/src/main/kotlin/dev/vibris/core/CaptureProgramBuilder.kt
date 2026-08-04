@@ -19,29 +19,54 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
         val group = ArrayList<CapturePlan.Target>()
         val artifactNames = HashSet<String>()
         var estimatedBytes = 0L
+        var groupActionIndex = -1
         var captureCount = 0
         var comparisons = 0
+        fun flushGroup() {
+            estimatedBytes = flush(
+                group,
+                steps,
+                catalog,
+                artifactNames,
+                estimatedBytes,
+                groupActionIndex,
+            )
+            groupActionIndex = -1
+        }
         for ((actionIndex, action) in job.submission.actions.actionsList.withIndex()) {
             when {
+                action.hasLoadShader() -> {
+                    flushGroup()
+                    val load = action.loadShader
+                    if (
+                        load.sourceUuid.isBlank() || load.sourceId.isBlank() || load.configId.isBlank() ||
+                        load.caseId.isBlank()
+                    ) {
+                        throw invalid("Shader load references are incomplete.")
+                    }
+                    steps.add(ActionStep.load(actionIndex, load))
+                }
                 action.hasActivateSource() -> {
-                    estimatedBytes = flush(group, steps, catalog, artifactNames, estimatedBytes)
+                    flushGroup()
                     val uuid = action.activateSource.sourceUuid
                     if (uuid.isBlank()) throw invalid("Source UUID is missing.")
-                    steps.add(ActionStep.activate(uuid))
+                    steps.add(ActionStep.activate(actionIndex, uuid))
                 }
                 action.hasResetTemporalState() -> {
-                    estimatedBytes = flush(group, steps, catalog, artifactNames, estimatedBytes)
-                    steps.add(ActionStep.reset())
+                    flushGroup()
+                    steps.add(ActionStep.reset(actionIndex))
                 }
                 action.hasWaitFrames() -> {
-                    estimatedBytes = flush(group, steps, catalog, artifactNames, estimatedBytes)
+                    flushGroup()
                     if (action.waitFrames.frameCount <= 0) throw invalid("Frame count must be positive.")
-                    steps.add(ActionStep.waitFrames(action.waitFrames.frameCount))
+                    steps.add(ActionStep.waitFrames(actionIndex, action.waitFrames.frameCount))
                 }
-                action.hasCaptureScreenshot() || action.hasCaptureTexture() || action.hasCaptureBuffer() ->
+                action.hasCaptureScreenshot() || action.hasCaptureTexture() || action.hasCaptureBuffer() -> {
+                    if (group.isEmpty()) groupActionIndex = actionIndex
                     CapturePlanBuilder.addAction(group, action, catalog)
+                }
                 action.hasCompareCaptures() -> {
-                    estimatedBytes = flush(group, steps, catalog, artifactNames, estimatedBytes)
+                    flushGroup()
                     captureCount = steps.count { it.type == ActionType.CAPTURE }
                     val compare = action.compareCaptures
                     if (
@@ -54,6 +79,7 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                     }
                     steps.add(
                         ActionStep.compare(
+                            actionIndex,
                             Comparison(
                                 compare.baselineCaptureIndex,
                                 compare.candidateCaptureIndex,
@@ -64,14 +90,14 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                     )
                 }
                 RuntimeActionProtocol.isRuntime(action) -> {
-                    estimatedBytes = flush(group, steps, catalog, artifactNames, estimatedBytes)
+                    flushGroup()
                     steps.add(ActionStep.runtime(actionIndex, action))
                 }
                 else -> throw invalid("Action is not supported.")
             }
         }
-        estimatedBytes = flush(group, steps, catalog, artifactNames, estimatedBytes)
-        val firstActivation = steps.indexOfFirst { it.type == ActionType.ACTIVATE }
+        flushGroup()
+        val firstActivation = steps.indexOfFirst { it.type == ActionType.ACTIVATE || it.type == ActionType.LOAD }
         if (firstActivation > 0) {
             throw invalid("Source activation must be the first action.")
         }
@@ -79,6 +105,7 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
     }
 
     enum class ActionType {
+        LOAD,
         ACTIVATE,
         RESET,
         WAIT,
@@ -96,16 +123,23 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
         val comparison: Comparison?,
         val actionIndex: Int,
         val runtimeAction: dev.vibris.protocol.v1.Action?,
+        val loadShader: dev.vibris.protocol.v1.LoadShader?,
     ) {
         companion object {
-            fun activate(uuid: String) = ActionStep(ActionType.ACTIVATE, uuid, 0, null, null, -1, null)
-            fun reset() = ActionStep(ActionType.RESET, null, 0, null, null, -1, null)
-            fun waitFrames(frames: Int) = ActionStep(ActionType.WAIT, null, frames, null, null, -1, null)
-            fun capture(capture: CapturePlan) = ActionStep(ActionType.CAPTURE, null, 0, capture, null, -1, null)
-            fun compare(comparison: Comparison) =
-                ActionStep(ActionType.COMPARE, null, 0, null, comparison, -1, null)
+            fun load(actionIndex: Int, load: dev.vibris.protocol.v1.LoadShader) =
+                ActionStep(ActionType.LOAD, null, 0, null, null, actionIndex, null, load)
+            fun activate(actionIndex: Int, uuid: String) =
+                ActionStep(ActionType.ACTIVATE, uuid, 0, null, null, actionIndex, null, null)
+            fun reset(actionIndex: Int) =
+                ActionStep(ActionType.RESET, null, 0, null, null, actionIndex, null, null)
+            fun waitFrames(actionIndex: Int, frames: Int) =
+                ActionStep(ActionType.WAIT, null, frames, null, null, actionIndex, null, null)
+            fun capture(actionIndex: Int, capture: CapturePlan) =
+                ActionStep(ActionType.CAPTURE, null, 0, capture, null, actionIndex, null, null)
+            fun compare(actionIndex: Int, comparison: Comparison) =
+                ActionStep(ActionType.COMPARE, null, 0, null, comparison, actionIndex, null, null)
             fun runtime(actionIndex: Int, action: dev.vibris.protocol.v1.Action) =
-                ActionStep(ActionType.RUNTIME, null, 0, null, null, actionIndex, action)
+                ActionStep(ActionType.RUNTIME, null, 0, null, null, actionIndex, action, null)
         }
     }
 
@@ -130,6 +164,7 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
             catalog: ResourceCatalog,
             artifactNames: MutableSet<String>,
             estimatedBytes: Long,
+            actionIndex: Int,
         ): Long {
             if (group.isEmpty()) return estimatedBytes
             val planned = CapturePlanBuilder.plan(java.util.List.copyOf(group), catalog)
@@ -143,7 +178,7 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                 }
             }
             group.clear()
-            steps.add(ActionStep.capture(planned.capture))
+            steps.add(ActionStep.capture(actionIndex, planned.capture))
             return try {
                 Math.addExact(estimatedBytes, planned.estimatedBytes)
             } catch (_: ArithmeticException) {

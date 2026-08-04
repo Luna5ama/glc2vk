@@ -10,7 +10,6 @@ import dev.vibris.protocol.v1.JobActionKind
 internal object RuntimeActionProtocol {
     fun isRuntime(action: Action): Boolean = when (action.actionCase) {
         Action.ActionCase.GET_CAPTURE_STATUS,
-        Action.ActionCase.RELOAD_SHADER,
         Action.ActionCase.CAPTURE_PASS,
         Action.ActionCase.CAPTURE_MULTI,
         Action.ActionCase.GET_SHADER_STATUS,
@@ -29,9 +28,6 @@ internal object RuntimeActionProtocol {
 
     fun toApi(action: Action): RuntimeAction = when (action.actionCase) {
         Action.ActionCase.GET_CAPTURE_STATUS -> RuntimeAction.CaptureStatus
-        Action.ActionCase.RELOAD_SHADER -> RuntimeAction.ReloadShader(
-            if (action.reloadShader.hasConfig()) action.reloadShader.config.valuesMap else null,
-        )
         Action.ActionCase.CAPTURE_PASS -> action.capturePass.let { command ->
             RuntimeAction.CapturePass(
                 command.pass.requireText("pass"),
@@ -67,8 +63,14 @@ internal object RuntimeActionProtocol {
     }
 
     fun kind(action: Action): JobActionKind = when (action.actionCase) {
+        Action.ActionCase.RESET_TEMPORAL_STATE -> JobActionKind.JOB_ACTION_KIND_RESET_TEMPORAL_STATE
+        Action.ActionCase.WAIT_FRAMES -> JobActionKind.JOB_ACTION_KIND_WAIT_FRAMES
+        Action.ActionCase.CAPTURE_SCREENSHOT -> JobActionKind.JOB_ACTION_KIND_CAPTURE_SCREENSHOT
+        Action.ActionCase.CAPTURE_TEXTURE -> JobActionKind.JOB_ACTION_KIND_CAPTURE_TEXTURE
+        Action.ActionCase.CAPTURE_BUFFER -> JobActionKind.JOB_ACTION_KIND_CAPTURE_BUFFER
+        Action.ActionCase.ACTIVATE_SOURCE -> JobActionKind.JOB_ACTION_KIND_ACTIVATE_SOURCE
+        Action.ActionCase.COMPARE_CAPTURES -> JobActionKind.JOB_ACTION_KIND_COMPARE_CAPTURES
         Action.ActionCase.GET_CAPTURE_STATUS -> JobActionKind.JOB_ACTION_KIND_GET_CAPTURE_STATUS
-        Action.ActionCase.RELOAD_SHADER -> JobActionKind.JOB_ACTION_KIND_RELOAD_SHADER
         Action.ActionCase.CAPTURE_PASS -> JobActionKind.JOB_ACTION_KIND_CAPTURE_PASS
         Action.ActionCase.CAPTURE_MULTI -> JobActionKind.JOB_ACTION_KIND_CAPTURE_MULTI
         Action.ActionCase.GET_SHADER_STATUS -> JobActionKind.JOB_ACTION_KIND_GET_SHADER_STATUS
@@ -81,7 +83,8 @@ internal object RuntimeActionProtocol {
         Action.ActionCase.LIST_TEXTURES -> JobActionKind.JOB_ACTION_KIND_LIST_TEXTURES
         Action.ActionCase.DUMP_TEXTURE -> JobActionKind.JOB_ACTION_KIND_DUMP_TEXTURE
         Action.ActionCase.LIST_PATCHED_SHADERS -> JobActionKind.JOB_ACTION_KIND_LIST_PATCHED_SHADERS
-        else -> throw IllegalArgumentException("Action is not a runtime action")
+        Action.ActionCase.LOAD_SHADER -> JobActionKind.JOB_ACTION_KIND_LOAD_SHADER
+        else -> throw IllegalArgumentException("Action kind is unsupported")
     }
 
     private fun CapturePass.pathOrNull(): String? =

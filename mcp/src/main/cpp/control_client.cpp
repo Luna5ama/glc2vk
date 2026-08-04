@@ -124,7 +124,14 @@ proto::ClientMessage make_submit(const Json& command, const Options& options) {
         source->mutable_origin()->mutable_workspace()->set_display_name(options.workspace_id);
     }
     if (job->sources().empty()) throw std::invalid_argument("submit requires a prepared source");
-    job->mutable_actions()->add_actions()->mutable_activate_source()->set_source_uuid(job->sources(0).uuid());
+    auto* config = job->add_shader_configs();
+    config->set_id("config");
+    config->set_preserve(true);
+    auto* load = job->mutable_actions()->add_actions()->mutable_load_shader();
+    load->set_source_uuid(job->sources(0).uuid());
+    load->set_source_id("source");
+    load->set_config_id("config");
+    load->set_case_id("source--config");
     if (command.contains("actions")) {
         for (const auto& action : command.at("actions")) add_action(action, job->mutable_actions());
     } else if (command.contains("wait_frames")) {

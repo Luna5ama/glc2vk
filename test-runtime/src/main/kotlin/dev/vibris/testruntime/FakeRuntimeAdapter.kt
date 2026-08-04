@@ -115,7 +115,6 @@ class FakeRuntimeAdapter : VibrisRuntimeAdapter {
     override fun executeAction(action: RuntimeAction): CompletionStage<String> = immediate {
         when (action) {
             RuntimeAction.CaptureStatus -> "{\"pending\":false,\"active\":false,\"saving\":false}"
-            is RuntimeAction.ReloadShader -> "{\"success\":true}"
             is RuntimeAction.CapturePass -> "{\"ok\":true,\"path\":\"capture-pass\"}"
             is RuntimeAction.CaptureMulti -> "{\"ok\":true,\"path\":\"capture-multi\"}"
             RuntimeAction.ShaderStatus -> "{\"loaded\":true,\"pack\":\"vibris\"}"

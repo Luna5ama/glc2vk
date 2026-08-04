@@ -265,10 +265,17 @@ message SubmitJob {
     ActionSequence actions = 6;
     JobTimeouts timeouts = 7;
     ShaderConfig shader_config = 8;
+    repeated NamedShaderConfig shader_configs = 9;
 }
 
 message ShaderConfig {
     map<string, string> values = 1;
+}
+
+message NamedShaderConfig {
+    string id = 1;
+    ShaderConfig config = 2;
+    bool preserve = 3;
 }
 
 message ActionSequence {
@@ -276,6 +283,7 @@ message ActionSequence {
 }
 
 message Action {
+    reserved 21;
     oneof action {
         ResetTemporalState reset_temporal_state = 1;
         WaitFrames wait_frames = 2;
@@ -285,7 +293,6 @@ message Action {
         ActivateSource activate_source = 6;
         CompareCaptures compare_captures = 7;
         EmptyAction get_capture_status = 20;
-        ReloadShader reload_shader = 21;
         CapturePass capture_pass = 22;
         CaptureMulti capture_multi = 23;
         EmptyAction get_shader_status = 24;
@@ -298,10 +305,12 @@ message Action {
         EmptyAction list_textures = 31;
         DumpTexture dump_texture = 32;
         EmptyAction list_patched_shaders = 33;
+        LoadShader load_shader = 34;
     }
 }
 
 enum JobActionKind {
+    reserved 21;
     JOB_ACTION_KIND_UNSPECIFIED = 0;
     JOB_ACTION_KIND_RESET_TEMPORAL_STATE = 1;
     JOB_ACTION_KIND_WAIT_FRAMES = 2;
@@ -311,7 +320,6 @@ enum JobActionKind {
     JOB_ACTION_KIND_ACTIVATE_SOURCE = 6;
     JOB_ACTION_KIND_COMPARE_CAPTURES = 7;
     JOB_ACTION_KIND_GET_CAPTURE_STATUS = 20;
-    JOB_ACTION_KIND_RELOAD_SHADER = 21;
     JOB_ACTION_KIND_CAPTURE_PASS = 22;
     JOB_ACTION_KIND_CAPTURE_MULTI = 23;
     JOB_ACTION_KIND_GET_SHADER_STATUS = 24;
@@ -324,6 +332,7 @@ enum JobActionKind {
     JOB_ACTION_KIND_LIST_TEXTURES = 31;
     JOB_ACTION_KIND_DUMP_TEXTURE = 32;
     JOB_ACTION_KIND_LIST_PATCHED_SHADERS = 33;
+    JOB_ACTION_KIND_LOAD_SHADER = 34;
 }
 
 message ActivateSource {
@@ -568,8 +577,12 @@ enum ScalarType {
 
 message EmptyAction {}
 
-message ReloadShader {
-    ShaderConfig config = 1;
+message LoadShader {
+    string source_uuid = 1;
+    string source_id = 2;
+    string config_id = 3;
+    string case_id = 4;
+    bool continue_on_failure = 5;
 }
 
 message CapturePass {

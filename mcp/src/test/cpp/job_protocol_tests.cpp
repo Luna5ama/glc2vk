@@ -168,8 +168,8 @@ void request_mapping() {
             job.context().fov() == 72.5,
         "Full matched preset context was not copied with the configured FOV override.");
     require(job.has_actions() && job.actions().actions_size() == 4 &&
-            job.actions().actions(0).has_activate_source() &&
-            job.actions().actions(0).activate_source().source_uuid() == sources.front().uuid() &&
+            job.actions().actions(0).has_load_shader() &&
+            job.actions().actions(0).load_shader().source_uuid() == sources.front().uuid() &&
             job.actions().actions(1).has_reset_temporal_state() &&
             job.actions().actions(2).wait_frames().frame_count() == 19 &&
             job.actions().actions(3).capture_screenshot().format() == proto::ARTIFACT_FORMAT_PNG,
@@ -177,9 +177,9 @@ void request_mapping() {
     require(job.timeouts().queue_timeout_ms() == 60'000 && job.timeouts().execution_timeout_ms() == 120'000 &&
             job.timeouts().total_timeout_ms() == 180'000,
         "SubmitJob timeout defaults were not mapped exactly.");
-    require(job.has_shader_config() &&
-                job.shader_config().values().at("SETTING_SAMPLE_COUNT") == "32" &&
-                job.shader_config().values().at("SETTING_CLOUDS") == "false",
+    require(job.shader_configs_size() == 1 && job.shader_configs(0).id() == "config" &&
+                job.shader_configs(0).config().values().at("SETTING_SAMPLE_COUNT") == "32" &&
+                job.shader_configs(0).config().values().at("SETTING_CLOUDS") == "false",
         "Shader config was not copied into SubmitJob.");
 }
 
@@ -192,7 +192,7 @@ void remaining_execution_mappings() {
         config(), context, one_source, "request-debug");
     const auto& debug_actions = debug.submit_job().actions();
     require(debug_actions.actions_size() == 6 &&
-            debug_actions.actions(0).activate_source().source_uuid() == one_source.front().uuid() &&
+            debug_actions.actions(0).load_shader().source_uuid() == one_source.front().uuid() &&
             debug_actions.actions(2).wait_frames().frame_count() == 5 &&
             debug_actions.actions(3).capture_screenshot().artifact_name() == "screenshot" &&
             debug_actions.actions(4).capture_texture().logical_name() == "colortex5" &&
@@ -211,28 +211,32 @@ void remaining_execution_mappings() {
         config(), context, two_sources, "request-ab");
     const auto& ab_actions = ab.submit_job().actions();
     require(ab_actions.actions_size() == 13 &&
-            ab_actions.actions(0).activate_source().source_uuid() == two_sources[0].uuid() &&
+            ab_actions.actions(0).load_shader().source_uuid() == two_sources[0].uuid() &&
             ab_actions.actions(3).capture_screenshot().format() == proto::ARTIFACT_FORMAT_PNG &&
             ab_actions.actions(4).capture_texture().format() == proto::ARTIFACT_FORMAT_PNG &&
             ab_actions.actions(5).capture_buffer().format() == proto::ARTIFACT_FORMAT_BIN &&
-            ab_actions.actions(6).activate_source().source_uuid() == two_sources[1].uuid() &&
+            ab_actions.actions(6).load_shader().source_uuid() == two_sources[1].uuid() &&
             ab_actions.actions(12).compare_captures().baseline_label() == "baseline" &&
             ab_actions.actions(12).compare_captures().candidate_label() == "candidate",
         "ab_compare was not expanded into runtime actions.");
 
-    const Json action_arguments{{"actions", Json::array({
-        {{"type", "reset_temporal_state"}},
-        {{"type", "wait_frames"}, {"frames", 3}},
-        {{"type", "capture_screenshot"}, {"artifact_name", "beauty"}},
-        {{"type", "capture_texture"}, {"name", "colortex5"}, {"format", "raw"},
-         {"artifact_name", "texture"}},
-        {{"type", "capture_buffer"}, {"name", "debugSsbo"}, {"format", "bin"},
-         {"artifact_name", "buffer"}},
-    })}};
+    const Json action_arguments{
+        {"sources", Json::array({{{"id", "candidate"}, {"kind", "workspace"}}})},
+        {"configs", Json::array({{{"id", "quality"}, {"values", Json::object()}}})},
+        {"actions", Json::array({
+            {{"type", "load_shader"}, {"source", "candidate"}, {"config", "quality"}},
+            {{"type", "reset_temporal_state"}},
+            {{"type", "wait_frames"}, {"frames", 3}},
+            {{"type", "capture_screenshot"}, {"artifact_name", "beauty"}},
+            {{"type", "capture_texture"}, {"name", "colortex5"}, {"format", "raw"},
+             {"artifact_name", "texture"}},
+            {{"type", "capture_buffer"}, {"name", "debugSsbo"}, {"format", "bin"},
+             {"artifact_name", "buffer"}},
+        })}};
     const auto actions = JobProtocol::request(
         "vibris_run_actions", action_arguments, config(), context, one_source, "request-actions");
     const auto& sequence = actions.submit_job().actions();
-    require(sequence.actions_size() == 6 && sequence.actions(0).has_activate_source() &&
+    require(sequence.actions_size() == 6 && sequence.actions(0).has_load_shader() &&
             sequence.actions(1).has_reset_temporal_state() &&
             sequence.actions(2).wait_frames().frame_count() == 3 &&
             sequence.actions(3).capture_screenshot().format() == proto::ARTIFACT_FORMAT_PNG &&
@@ -264,13 +268,11 @@ void default_settings_disambiguates_scene_presets() {
 }
 
 void empty_actions_mapping() {
-    const std::vector sources{source("22222222-2222-4222-8222-222222222222")};
     const auto context = SceneContextResolver::resolve(config(), presets());
     const auto message = JobProtocol::request(
-        "vibris_run_actions", {{"actions", Json::array()}}, config(), context, sources, "request-empty");
-    require(message.submit_job().has_actions() && message.submit_job().actions().actions_size() == 1 &&
-            message.submit_job().actions().actions(0).has_activate_source(),
-        "Empty public actions did not retain the MCP source-activation overlay.");
+        "vibris_run_actions", {{"actions", Json::array()}}, config(), context, {}, "request-empty");
+    require(message.submit_job().has_actions() && message.submit_job().actions().actions().empty(),
+        "Empty public actions gained an implicit source load.");
 }
 
 void progress_does_not_consume_terminal() {
@@ -333,9 +335,9 @@ void synchronous_submit_case(std::string_view tool_name, const Json& arguments, 
         "Synchronous runner returned before or lost the terminal result.");
     if (actions) {
         require(result.at("action_results").size() == 1 &&
-                result.at("action_results").at(0).at("action_index") == 0 &&
+                result.at("action_results").at(0).at("action_index") == 1 &&
                 result.at("action_results").at(0).at("kind") == "get_shader_status",
-            "MCP source activation leaked into the public action result index.");
+            "Explicit shader load changed the public action result index.");
     }
     require(server.valid_submit() && server.submit_jobs() == 1 && server.terminal_writes() == 1,
         "Synchronous runner did not submit one complete job and consume exactly one terminal.");
@@ -346,8 +348,43 @@ void synchronous_submit_case(std::string_view tool_name, const Json& arguments, 
 void synchronous_submit_waits_for_terminal() {
     synchronous_submit_case("vibris_run_recipe", {{"recipe", "reload_and_capture"}}, false);
     synchronous_submit_case("vibris_run_actions",
-        {{"source", {{"kind", "workspace"}}},
-         {"actions", Json::array({{{"type", "get_shader_status"}}})}}, true);
+        {{"sources", Json::array({{{"id", "source"}, {"kind", "workspace"}}})},
+         {"configs", Json::array({{{"id", "config"}, {"mode", "preserve"}}})},
+         {"actions", Json::array({{{"type", "load_shader"}, {"source", "source"}, {"config", "config"}},
+                                  {{"type", "get_shader_status"}}})}}, true);
+}
+
+void matrix_expands_named_source_config_product() {
+    const auto context = SceneContextResolver::resolve(config(), presets());
+    const std::vector prepared{
+        source("66666666-6666-4666-8666-666666666666"),
+        source("77777777-7777-4777-8777-777777777777"),
+    };
+    const Json arguments{
+        {"sources", Json::array({{{"id", "base"}, {"kind", "commit"}, {"revision", "HEAD~1"}},
+                                 {{"id", "candidate"}, {"kind", "workspace"}}})},
+        {"configs", Json::array({{{"id", "steep"}, {"values", {{"SETTING_PARALLAX_MODE", 1}}}},
+                                 {{"id", "spline"}, {"values", {{"SETTING_PARALLAX_MODE", 4}}}}})},
+        {"matrix", {{"sources", Json::array({"base", "candidate"})},
+                    {"configs", Json::array({"steep", "spline"})}}},
+        {"actions", Json::array({{{"type", "reset_temporal_state"}},
+                                  {{"type", "get_gpu_metrics"}, {"frames", 64}}})},
+    };
+
+    const auto message = JobProtocol::request(
+        "vibris_run_matrix", arguments, config(), context, prepared, "request-matrix");
+    const auto& job = message.submit_job();
+
+    require(job.sources_size() == 2 && job.shader_configs_size() == 2 &&
+            job.actions().actions_size() == 12,
+        "Matrix did not keep two sources/configs or expand four cases.");
+    require(job.actions().actions(0).load_shader().source_id() == "base" &&
+            job.actions().actions(0).load_shader().config_id() == "steep" &&
+            job.actions().actions(0).load_shader().continue_on_failure() &&
+            job.actions().actions(3).load_shader().config_id() == "spline" &&
+            job.actions().actions(6).load_shader().source_id() == "candidate" &&
+            job.actions().actions(9).load_shader().case_id() == "candidate--spline",
+        "Matrix expansion order or load references changed.");
 }
 
 void source_free_runtime_actions_mapping() {
@@ -661,6 +698,7 @@ int main() {
     try {
         request_mapping();
         remaining_execution_mappings();
+        matrix_expands_named_source_config_product();
         incomplete_preset_rejected();
         default_settings_disambiguates_scene_presets();
         empty_actions_mapping();

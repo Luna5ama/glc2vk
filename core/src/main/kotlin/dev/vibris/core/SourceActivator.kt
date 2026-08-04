@@ -18,7 +18,8 @@ internal class SourceActivator(
             activation = sources.beginActivation(next)
             link.switchTo(next) { requireOwned(next) }
         } catch (failure: SourceRegistry.Failure) {
-            throw fail(next, ErrorCode.SOURCE_ACTIVATION_FAILED, failure.message, true, failure)
+            sources.failActivation(next)
+            throw Failure(ErrorCode.SOURCE_ACTIVATION_FAILED, failure.message, failure)
         } catch (failure: ShaderLink.Failure) {
             throw fail(next, ErrorCode.SYMLINK_SWITCH_FAILED, failure.message, failure.stable(), failure)
         }
@@ -45,6 +46,7 @@ internal class SourceActivator(
             } else {
                 link.switchTo(previous) { requireOwned(previous) }
             }
+            sources.retryActivation(activation.state)
             true
         } catch (_: ShaderLink.Failure) {
             ready = false
@@ -88,6 +90,9 @@ internal class SourceActivator(
     }
 
     @Synchronized
+    fun isActive(source: SourceRegistry.Lease): Boolean = sources.isActive(source)
+
+    @Synchronized
     override fun close() {
         if (closed) {
             return
@@ -117,7 +122,11 @@ internal class SourceActivator(
         stable: Boolean,
         cause: Exception,
     ): Failure {
-        sources.failActivation(source)
+        if (stable) {
+            sources.retryActivation(source)
+        } else {
+            sources.failActivation(source)
+        }
         if (!stable) {
             ready = false
         }

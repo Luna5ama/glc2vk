@@ -14,8 +14,11 @@ import dev.vibris.protocol.v1.ErrorCode;
 import dev.vibris.protocol.v1.EmptyAction;
 import dev.vibris.protocol.v1.GetGpuMetrics;
 import dev.vibris.protocol.v1.JobActionKind;
+import dev.vibris.protocol.v1.LoadShader;
+import dev.vibris.protocol.v1.NamedShaderConfig;
 import dev.vibris.protocol.v1.PreparedSourceRef;
 import dev.vibris.protocol.v1.SceneContext;
+import dev.vibris.protocol.v1.ShaderConfig;
 import dev.vibris.protocol.v1.SubmitJob;
 import dev.vibris.protocol.v1.WaitFrames;
 import org.junit.jupiter.api.Test;
@@ -182,6 +185,37 @@ class RuntimeJobExecutorCaptureTest {
                 .map(result -> result.getJson()).toList());
     }
 
+    @Test
+    void failedMatrixCaptureDoesNotDiscardLaterCaseArtifacts() throws Exception {
+        Fixture fixture = new Fixture();
+        ResourceCatalog.ResourceDescriptor screenshot = resource(
+            "final", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 91, 16);
+        fixture.runtime.catalog = new ResourceCatalog(List.of(screenshot));
+        fixture.runtime.captureResult = new CaptureResult(91, Map.of("case-b--screenshot", screenshot));
+        fixture.runtime.captureFailuresAfterWrite.add(new IllegalStateException("first case failed"));
+        fixture.runtime.captureFileBatches.add(Map.of("case-a--screenshot.png", new byte[]{9}));
+        fixture.runtime.captureFileBatches.add(Map.of("case-b--screenshot.png", new byte[]{1, 2, 3}));
+        ActionSequence actions = ActionSequence.newBuilder()
+            .addActions(load(fixture.source, "config-a", "case-a"))
+            .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
+                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setArtifactName("case-a--screenshot")))
+            .addActions(load(fixture.source, "config-b", "case-b"))
+            .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
+                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setArtifactName("case-b--screenshot")))
+            .build();
+
+        TerminalResult terminal = fixture.executor.execute(fixture.matrixJob(actions), ignored -> {});
+
+        var result = terminal.completed().getResult();
+        assertTrue(result.getActionResultsList().stream()
+            .anyMatch(action -> action.getJson().contains("\"case_id\":\"case-a\"") &&
+                action.getJson().contains("\"success\":false")));
+        assertTrue(result.getArtifactsList().stream()
+            .anyMatch(artifact -> artifact.getFileName().equals("case-b--screenshot.png")));
+        assertFalse(result.getArtifactsList().stream()
+            .anyMatch(artifact -> artifact.getFileName().equals("case-a--screenshot.png")));
+    }
+
     private static ActionSequence bundleActions() {
         return ActionSequence.newBuilder()
             .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(2)))
@@ -234,6 +268,21 @@ class RuntimeJobExecutorCaptureTest {
             return job;
         }
 
+        CoreJob matrixJob(ActionSequence actions) {
+            SubmitJob submission = SubmitJob.newBuilder().setRequestId("matrix").setWorkspaceId("workspace")
+                .setContext(SceneContext.newBuilder().setSaveId("save")
+                    .setDimensionId("minecraft:overworld").setFov(70.0))
+                .addShaderConfigs(NamedShaderConfig.newBuilder().setId("config-a")
+                    .setConfig(ShaderConfig.newBuilder().putValues("MODE", "a")))
+                .addShaderConfigs(NamedShaderConfig.newBuilder().setId("config-b")
+                    .setConfig(ShaderConfig.newBuilder().putValues("MODE", "b")))
+                .setActions(actions)
+                .build();
+            CoreJob job = new CoreJob(submission, "message", null);
+            job.initialize(List.of(source));
+            return job;
+        }
+
         private SourceRegistry.Lease source() {
             try {
                 String uuid = UUID.randomUUID().toString();
@@ -248,6 +297,12 @@ class RuntimeJobExecutorCaptureTest {
                 throw new IllegalStateException(exception);
             }
         }
+    }
+
+    private static Action.Builder load(SourceRegistry.Lease source, String config, String caseId) {
+        return Action.newBuilder().setLoadShader(LoadShader.newBuilder()
+            .setSourceUuid(source.uuid()).setSourceId("source").setConfigId(config)
+            .setCaseId(caseId).setContinueOnFailure(true));
     }
 
     private static final class RecordingLink implements ShaderLink {

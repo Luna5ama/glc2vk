@@ -7,6 +7,8 @@ import dev.vibris.protocol.v1.ActionSequence;
 import dev.vibris.protocol.v1.ActivateSource;
 import dev.vibris.protocol.v1.ErrorCode;
 import dev.vibris.protocol.v1.JobStage;
+import dev.vibris.protocol.v1.LoadShader;
+import dev.vibris.protocol.v1.NamedShaderConfig;
 import dev.vibris.protocol.v1.PreparedSourceRef;
 import dev.vibris.protocol.v1.SceneContext;
 import dev.vibris.protocol.v1.ShaderConfig;
@@ -133,6 +135,48 @@ class RuntimeJobExecutorTest {
     }
 
     @Test
+    void matrixLoadFailureIsRecordedAndLaterCasesContinue() throws Exception {
+        Fixture fixture = new Fixture();
+        Source sourceA = fixture.source("A");
+        Source sourceB = fixture.source("B");
+        fixture.runtime.reloads.add(ReloadResult.failurePreservingActiveState(List.of(error("bad config"))));
+        fixture.runtime.reloads.add(ReloadResult.success(List.of()));
+        fixture.runtime.reloads.add(ReloadResult.success(List.of()));
+        SubmitJob submission = SubmitJob.newBuilder()
+            .setRequestId("matrix-request")
+            .setWorkspaceId("workspace")
+            .setContext(SceneContext.newBuilder().setSaveId("save")
+                .setDimensionId("minecraft:overworld").setFov(70.0))
+            .addShaderConfigs(NamedShaderConfig.newBuilder().setId("bad")
+                .setConfig(ShaderConfig.newBuilder().putValues("SETTING_SAMPLE_COUNT", "0")))
+            .addShaderConfigs(NamedShaderConfig.newBuilder().setId("good")
+                .setConfig(ShaderConfig.newBuilder().putValues("SETTING_SAMPLE_COUNT", "32")))
+            .setActions(ActionSequence.newBuilder()
+                .addActions(load(sourceA, "source-a", "bad", "source-a--bad", true))
+                .addActions(load(sourceA, "source-a", "good", "source-a--good", true))
+                .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(2)))
+                .addActions(load(sourceB, "source-b", "good", "source-b--good", true))
+                .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(2))))
+            .build();
+        CoreJob job = new CoreJob(submission, "message", null);
+        job.initialize(List.of(sourceA.lease, sourceB.lease));
+
+        TerminalResult terminal = fixture.executor.execute(job, ignored -> {});
+
+        assertEquals(List.of(
+            "link:A", "reload", "detach",
+            "link:A", "reload", "context", "frames",
+            "link:B", "reload", "context", "frames"), fixture.runtime.events);
+        var actionResults = terminal.completed().getResult().getActionResultsList();
+        assertEquals(3, actionResults.size());
+        assertTrue(actionResults.get(0).getJson().contains("\"success\":false"));
+        assertTrue(actionResults.get(0).getJson().contains("SHADER_COMPILE_FAILED"));
+        assertTrue(actionResults.get(1).getJson().contains("\"success\":true"));
+        assertTrue(actionResults.get(2).getJson().contains("source-b--good"));
+        assertEquals(sourceB.uuid, fixture.registry.activeUuid());
+    }
+
+    @Test
     void actionRejectsMismatchedPreparedSourceUuidBeforeActivation() throws Exception {
         Fixture fixture = new Fixture();
         Source source = fixture.source("A");
@@ -168,6 +212,23 @@ class RuntimeJobExecutorTest {
         RuntimeJobExecutor.Failure failure = assertThrows(
             RuntimeJobExecutor.Failure.class, () -> fixture.executor.execute(job(source.lease), ignored -> {}));
         fixture.activator.release(List.of(source.lease));
+
+        assertEquals(ErrorCode.SOURCE_ACTIVATION_FAILED, failure.code);
+        assertTrue(Files.isRegularFile(source.path.resolve("sentinel.txt")));
+        assertTrue(fixture.activator.ready());
+    }
+
+    @Test
+    void sourceIdentityChangedBeforeActivationIsReportedWithoutInvalidRetry() throws Exception {
+        Fixture fixture = new Fixture();
+        Source source = fixture.source("A");
+        Path replacement = pending.resolve("replacement-before-activation");
+        Files.move(source.path, replacement);
+        Files.createDirectory(source.path);
+        Files.writeString(source.path.resolve("sentinel.txt"), "external");
+
+        RuntimeJobExecutor.Failure failure = assertThrows(
+            RuntimeJobExecutor.Failure.class, () -> fixture.executor.execute(job(source.lease), ignored -> {}));
 
         assertEquals(ErrorCode.SOURCE_ACTIVATION_FAILED, failure.code);
         assertTrue(Files.isRegularFile(source.path.resolve("sentinel.txt")));
@@ -216,6 +277,21 @@ class RuntimeJobExecutorTest {
         CoreJob job = new CoreJob(submission, "message", null);
         job.initialize(List.of(source));
         return job;
+    }
+
+    private static Action.Builder load(
+        Source source,
+        String sourceId,
+        String configId,
+        String caseId,
+        boolean continueOnFailure
+    ) {
+        return Action.newBuilder().setLoadShader(LoadShader.newBuilder()
+            .setSourceUuid(source.uuid)
+            .setSourceId(sourceId)
+            .setConfigId(configId)
+            .setCaseId(caseId)
+            .setContinueOnFailure(continueOnFailure));
     }
 
     private static ReloadResult.Diagnostic error(String marker) {

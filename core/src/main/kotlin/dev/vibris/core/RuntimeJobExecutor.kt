@@ -11,6 +11,7 @@ import dev.vibris.protocol.v1.ArtifactMetadata
 import dev.vibris.protocol.v1.ErrorCode
 import dev.vibris.protocol.v1.JobCompleted
 import dev.vibris.protocol.v1.JobStage
+import java.io.IOException
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.TimeUnit
 import java.util.function.Consumer
@@ -91,6 +92,44 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         source: SourceRegistry.Lease,
         progress: Consumer<JobStage>,
         deadline: Long,
+    ): ReloadResult = activateSource(
+        job,
+        source,
+        if (job.submission.hasShaderConfig()) job.submission.shaderConfig.valuesMap else null,
+        progress,
+        deadline,
+    )
+
+    @Throws(Failure::class)
+    fun loadShader(
+        job: CoreJob,
+        source: SourceRegistry.Lease,
+        configId: String,
+        progress: Consumer<JobStage>,
+        deadline: Long,
+    ): ReloadResult {
+        val matches = job.submission.shaderConfigsList.filter { it.id == configId }
+        if (matches.size != 1) {
+            throw Failure(ErrorCode.NOT_CONFIGURED, "Load action references an unknown shader config.")
+        }
+        val named = matches.single()
+        val config = if (named.preserve) null else named.config.valuesMap
+        val reload = if (activator.isActive(source)) {
+            reloadActiveSource(job, config, progress, deadline)
+        } else {
+            activateSource(job, source, config, progress, deadline)
+        }
+        applyContext(job, progress, deadline)
+        return reload
+    }
+
+    @Throws(Failure::class)
+    private fun activateSource(
+        job: CoreJob,
+        source: SourceRegistry.Lease,
+        config: Map<String, String>?,
+        progress: Consumer<JobStage>,
+        deadline: Long,
     ): ReloadResult {
         progress.accept(JobStage.JOB_STAGE_ACTIVATING_SOURCE)
         probe.event(job.requestId, "ACTIVATING_SOURCE")
@@ -103,14 +142,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         var successful: ReloadResult? = null
         var activeStatePreserved = false
         try {
-            progress.accept(JobStage.JOB_STAGE_RELOADING_SHADERS)
-            probe.event(job.requestId, "RELOADING_SHADERS")
-            val config = if (job.submission.hasShaderConfig()) job.submission.shaderConfig.valuesMap else null
-            val reload: ReloadResult = await(
-                runtime.reloadVibrisShaderpack(config, job.cancellation.token()),
-                job,
-                deadline,
-            )
+            val reload = reload(job, config, progress, deadline)
             if (!reload.successful) {
                 activeStatePreserved = reload.activeStatePreserved
                 throw ShaderReloadFailure.create(shaderLogs, job, reload)
@@ -131,8 +163,39 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         if (restored && activation.previous() != null && !activeStatePreserved && !reloadPreviousSource()) {
             activator.markNotReady()
         }
-        activator.fail(activation)
+        if (!restored) {
+            activator.fail(activation)
+        }
         throw original
+    }
+
+    @Throws(Failure::class)
+    private fun reloadActiveSource(
+        job: CoreJob,
+        config: Map<String, String>?,
+        progress: Consumer<JobStage>,
+        deadline: Long,
+    ): ReloadResult {
+        val reload = reload(job, config, progress, deadline)
+        if (!reload.successful) {
+            if (!reload.activeStatePreserved && !reloadPreviousSource()) {
+                activator.markNotReady()
+            }
+            throw ShaderReloadFailure.create(shaderLogs, job, reload)
+        }
+        return reload
+    }
+
+    @Throws(Failure::class)
+    private fun reload(
+        job: CoreJob,
+        config: Map<String, String>?,
+        progress: Consumer<JobStage>,
+        deadline: Long,
+    ): ReloadResult {
+        progress.accept(JobStage.JOB_STAGE_RELOADING_SHADERS)
+        probe.event(job.requestId, "RELOADING_SHADERS")
+        return await(runtime.reloadVibrisShaderpack(config, job.cancellation.token()), job, deadline)
     }
 
     @Throws(Failure::class)
@@ -145,7 +208,18 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     ): CaptureResult {
         progress.accept(JobStage.JOB_STAGE_CAPTURING)
         probe.event(job.requestId, "CAPTURING")
-        return awaitCapture(runtime.capture(plan, prepared.sink(), job.cancellation.token()), job, deadline)
+        val checkpoint = prepared.checkpoint()
+        try {
+            return awaitCapture(runtime.capture(plan, prepared.sink(), job.cancellation.token()), job, deadline)
+        } catch (failure: Failure) {
+            try {
+                prepared.rollback(checkpoint)
+            } catch (rollbackFailure: IOException) {
+                rollbackFailure.addSuppressed(failure)
+                throw CaptureJobExecutor.failure(rollbackFailure)
+            }
+            throw failure
+        }
     }
 
     @Throws(Failure::class)

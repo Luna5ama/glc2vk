@@ -71,12 +71,21 @@ internal class CaptureJobExecutor(
         prepared: Prepared,
         captured: List<CaptureResult>,
         comparison: AbComparisonResult?,
+    ): JobResult = commit(job, prepared, prepared.plans, captured, comparison)
+
+    @Throws(RuntimeJobExecutor.Failure::class)
+    fun commit(
+        job: CoreJob,
+        prepared: Prepared,
+        plans: List<CapturePlan>,
+        captured: List<CaptureResult>,
+        comparison: AbComparisonResult?,
     ): JobResult {
         try {
             prepared.writeShaderLog()
             return protocol.commit(
                 job,
-                prepared.plans,
+                plans,
                 captured,
                 prepared.transaction,
                 prepared.diagnostics,
@@ -117,6 +126,13 @@ internal class CaptureJobExecutor(
         fun plan(): CapturePlan = plans.first()
 
         fun sink(): ArtifactManager.JobTransaction = transaction
+
+        fun checkpoint(): ArtifactJobTransaction.Checkpoint = transaction.checkpoint()
+
+        @Throws(IOException::class)
+        fun rollback(checkpoint: ArtifactJobTransaction.Checkpoint) {
+            transaction.rollback(checkpoint)
+        }
 
         fun addDiagnostics(additional: List<ReloadResult.Diagnostic>) {
             check(!shaderLogWritten) { "Shader log has already been finalized." }

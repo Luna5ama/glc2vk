@@ -47,7 +47,14 @@ void SourceHandler::prepare(
     SourcePreparer preparer(
         workspace_root_, std::filesystem::path(server.pending_shaders_root()), server_limits(server));
     std::list<PreparedSource> prepared;
-    if (tool_name == "vibris_run_recipe" && arguments.value("recipe", std::string{}) == "ab_compare") {
+    const auto recipe = arguments.value("recipe", std::string{});
+    if (tool_name == "vibris_run_matrix" ||
+        (tool_name == "vibris_run_recipe" && recipe == "profile_matrix") ||
+        (tool_name == "vibris_run_actions" && arguments.contains("sources"))) {
+        for (const auto& source : arguments.at("sources")) {
+            prepare_one(preparer, &source, prepared);
+        }
+    } else if (tool_name == "vibris_run_recipe" && recipe == "ab_compare") {
         prepare_one(preparer, &arguments.at("a").at("source"), prepared);
         prepare_one(preparer, &arguments.at("b").at("source"), prepared);
     } else {
