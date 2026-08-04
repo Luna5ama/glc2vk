@@ -2,6 +2,12 @@
 
 Vibris captures OpenGL compute workloads for portable replay on OpenGL or Vulkan, with MCP-based capture and shader debugging for Minecraft shaderpack development.
 
+## Attribution
+
+Portions of Vibris are derived from [Viewfinder](https://github.com/xirreal/viewfinder), Copyright 2026 xirreal,
+and are used under the MIT License. The full attribution and license text are included in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 ## Components
 
 - `common`: capture format, I/O, replay options, and shader-source resolution

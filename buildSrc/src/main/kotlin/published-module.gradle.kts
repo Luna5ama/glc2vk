@@ -23,7 +23,7 @@ publishing {
 val extraJarEntries by configurations.registering
 
 dependencies {
-    extraJarEntries(rootProject.files("LICENSE"))
+    extraJarEntries(rootProject.files("LICENSE", "THIRD_PARTY_NOTICES.md"))
 }
 
 tasks {
