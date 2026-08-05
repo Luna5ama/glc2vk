@@ -146,6 +146,7 @@ fun main(args: Array<String>) {
 
         var featureChain: NValue<out VkStruct<*>> = physicalDeviceFeatures
             .append(this,VkPhysicalDeviceSynchronization2Features)
+            .append(this,VkPhysicalDeviceDynamicRenderingFeatures)
             .append(this,VkPhysicalDeviceShaderAtomicInt64Features)
 
 

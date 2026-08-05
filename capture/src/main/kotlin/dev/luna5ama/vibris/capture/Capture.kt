@@ -787,7 +787,7 @@ private fun CaptureContext.captureBuffers(
     }
 }
 
-private fun CaptureContext.captureShaderProgramResources(
+internal fun CaptureContext.captureShaderProgramResources(
     shaderInfo: ShaderInfo,
     resourceManager: ShaderProgramResourceManager
 ): PassInfo {
@@ -830,6 +830,10 @@ private fun saveShader(
     if (legacyName) {
         outputPath.resolve("shader.$extension").writeText(shaderInfo.originalSource)
     }
+
+    // Graphics captures currently replay through OpenGL. Keep the patched GLSL for future
+    // Vulkan support, but do not make a valid OpenGL draw capture depend on Vulkan compilation.
+    if (stage != ShaderStage.ComputeShader) return
 
     val exitCode = ProcessBuilder()
         .command(
@@ -928,7 +932,15 @@ fun endGlCapture(): Thread {
                 saveShader(
                     outputPath = outputPath,
                     shaderInfo = shaderInfo,
-                    stage = ShaderStage.ComputeShader,
+                    stage = when (shaderInfo.stage) {
+                        "vertex" -> ShaderStage.VertexShader
+                        "tesc" -> ShaderStage.TessCtrlShader
+                        "tese" -> ShaderStage.TessEvalShader
+                        "geometry" -> ShaderStage.GeometryShader
+                        "fragment" -> ShaderStage.FragmentShader
+                        "compute" -> ShaderStage.ComputeShader
+                        else -> error("Unsupported shader stage ${shaderInfo.stage}")
+                    },
                     shaderIndex = index,
                     legacyName = index == 0
                 )
@@ -950,6 +962,71 @@ fun captureGlDispatchCompute(
 fun captureGlDispatchComputeIndirect(shaderInfo: ShaderInfo, indirect: Long) {
     activeCaptureContext?.recordDispatchComputeIndirect(shaderInfo, indirect)
     glDispatchComputeIndirect(indirect)
+}
+
+fun captureGlDrawArrays(mode: Int, first: Int, count: Int, instanceCount: Int) {
+    val program = GraphicsProgramRegistry.find(glGetInteger(GL_CURRENT_PROGRAM))
+    if (program != null) activeCaptureContext?.recordDrawArrays(program, mode, first, count, instanceCount)
+    if (instanceCount == 1) {
+        org.lwjgl.opengl.GL11C.glDrawArrays(mode, first, count)
+    } else {
+        org.lwjgl.opengl.GL31C.glDrawArraysInstanced(mode, first, count, instanceCount)
+    }
+}
+
+fun captureGlDrawElements(
+    mode: Int,
+    count: Int,
+    indexType: Int,
+    indexOffset: Long,
+    baseVertex: Int,
+    instanceCount: Int,
+) {
+    val program = GraphicsProgramRegistry.find(glGetInteger(GL_CURRENT_PROGRAM))
+    if (program != null) {
+        activeCaptureContext?.recordDrawElements(program, mode, count, indexType, indexOffset, baseVertex, instanceCount)
+    }
+    when {
+        instanceCount > 1 && baseVertex != 0 ->
+            org.lwjgl.opengl.GL32C.glDrawElementsInstancedBaseVertex(
+                mode,
+                count,
+                indexType,
+                indexOffset,
+                instanceCount,
+                baseVertex,
+            )
+        instanceCount > 1 ->
+            org.lwjgl.opengl.GL31C.glDrawElementsInstanced(mode, count, indexType, indexOffset, instanceCount)
+        baseVertex != 0 ->
+            org.lwjgl.opengl.GL32C.glDrawElementsBaseVertex(mode, count, indexType, indexOffset, baseVertex)
+        else -> org.lwjgl.opengl.GL11C.glDrawElements(mode, count, indexType, indexOffset)
+    }
+}
+
+fun captureGlMultiDrawElementsBaseVertex(
+    mode: Int,
+    countsAddress: Long,
+    indexType: Int,
+    offsetsAddress: Long,
+    drawCount: Int,
+    baseVerticesAddress: Long,
+) {
+    val program = GraphicsProgramRegistry.find(glGetInteger(GL_CURRENT_PROGRAM))
+    if (program != null && activeCaptureContext != null) {
+        val counts = MemoryUtil.memIntBuffer(countsAddress, drawCount).let { List(drawCount, it::get) }
+        val offsets = MemoryUtil.memPointerBuffer(offsetsAddress, drawCount).let { List(drawCount, it::get) }
+        val baseVertices = MemoryUtil.memIntBuffer(baseVerticesAddress, drawCount).let { List(drawCount, it::get) }
+        activeCaptureContext?.recordMultiDrawElements(program, mode, counts, indexType, offsets, baseVertices)
+    }
+    org.lwjgl.opengl.GL32C.nglMultiDrawElementsBaseVertex(
+        mode,
+        countsAddress,
+        indexType,
+        offsetsAddress,
+        drawCount,
+        baseVerticesAddress,
+    )
 }
 
 @Suppress("LocalVariableName")

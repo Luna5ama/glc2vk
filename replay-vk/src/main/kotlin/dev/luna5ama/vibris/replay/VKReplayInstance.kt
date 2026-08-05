@@ -2,6 +2,9 @@ package dev.luna5ama.vibris.replay
 
 import dev.luna5ama.vibris.common.CaptureData
 import dev.luna5ama.vibris.common.Command
+import dev.luna5ama.vibris.common.FramebufferAttachment
+import dev.luna5ama.vibris.common.GraphicsPassInfo
+import dev.luna5ama.vibris.common.PassInfo
 import it.unimi.dsi.fastutil.longs.LongArrayList
 import net.echonolix.caelum.*
 import net.echonolix.caelum.vulkan.*
@@ -49,15 +52,18 @@ class VKReplayInstance(
     val resource: VKReplayResource
     private val replayCommands = captureData.metadata.commandsForReplay()
     private val replayPassCommands = replayCommands.filterIsInstance<Command.PassCommand>()
+    private val replayGraphicsCommands = replayCommands.filterIsInstance<Command.GraphicsCommand>()
     private val shaderCompiler = VKReplayShaderCompiler(captureData, captureDir, shaderOverridePath, shaderPasses)
     private val pipelineInfos: List<ComputePipelineInfo>
+    private val graphicsPipelineInfos: List<GraphicsPipelineInfo>
 
     init {
         MemoryStack {
             MemoryStack {
-                val extra = maxOf(4u, replayPassCommands.size.toUInt())
+                val resourceCommandCount = replayPassCommands.size + replayGraphicsCommands.size
+                val extra = maxOf(4u, resourceCommandCount.toUInt())
                 val createInfo = VkDescriptorPoolCreateInfo.allocate {
-                    maxSets = maxOf(4u, replayPassCommands.size.toUInt() * 3u)
+                    maxSets = maxOf(4u, resourceCommandCount.toUInt() * 3u)
                     val poolSizes = VkDescriptorPoolSize.allocate(4L)
                     poolSizes[0L].apply {
                         type = VkDescriptorType.UNIFORM_BUFFER
@@ -189,6 +195,7 @@ class VKReplayInstance(
 
             MemoryStack {
                 pipelineInfos = replayPassCommands.map { makeComputePipeline(it) }
+                graphicsPipelineInfos = replayGraphicsCommands.map { makeGraphicsPipeline(it) }
             }
         }
     }
@@ -495,7 +502,7 @@ class VKReplayInstance(
                 for (mip in imageMetadata.levelDataSizes.indices) {
                     copyRegions[mip.toLong()].apply {
                         srcSubresource {
-                            aspectMask = VkImageAspectFlags.COLOR
+                            aspectMask = imageMetadata.dataType.toAspectFlags()
                             mipLevel = mip.toUInt()
                             baseArrayLayer = 0u
                             layerCount = imageMetadata.arrayLayers.toUInt()
@@ -507,7 +514,7 @@ class VKReplayInstance(
                         }
 
                         dstSubresource {
-                            aspectMask = VkImageAspectFlags.COLOR
+                            aspectMask = imageMetadata.dataType.toAspectFlags()
                             mipLevel = mip.toUInt()
                             baseArrayLayer = 0u
                             layerCount = imageMetadata.arrayLayers.toUInt()
@@ -569,6 +576,7 @@ class VKReplayInstance(
             cmdBuffers[1].cmdBeginDebugUtilsLabelEXT(replayLabel.ptr())
 
             var pipelineIndex = 0
+            var graphicsPipelineIndex = 0
             replayCommands.forEach { command ->
                 when (command) {
                     is Command.PushDebugLabelCommand -> {
@@ -625,6 +633,23 @@ class VKReplayInstance(
                             cmdBuffers[1].cmdPipelineBarrier2(dependencyInfo.ptr())
                         }
                     }
+
+                    is Command.GraphicsCommand -> {
+                        executeGraphics(command, graphicsPipelineInfos[graphicsPipelineIndex++])
+                        MemoryStack {
+                            val memoryBarrier = VkMemoryBarrier2.allocate(1L)
+                            memoryBarrier[0].apply {
+                                srcStageMask = VkPipelineStageFlags2.ALL_GRAPHICS
+                                srcAccessMask = VkAccessFlags2.MEMORY_WRITE
+                                dstStageMask = VkPipelineStageFlags2.ALL_COMMANDS
+                                dstAccessMask = VkAccessFlags2.MEMORY_READ + VkAccessFlags2.MEMORY_WRITE
+                            }
+                            val dependencyInfo = VkDependencyInfo.allocate {
+                                memoryBarriers(memoryBarrier)
+                            }
+                            cmdBuffers[1].cmdPipelineBarrier2(dependencyInfo.ptr())
+                        }
+                    }
                 }
             }
             cmdBuffers[1].cmdEndDebugUtilsLabelEXT()
@@ -654,11 +679,13 @@ class VKReplayInstance(
         device.destroyFence(inFlightFence, null)
 
         device.destroySemaphore(imageAvailableSemaphore, null)
+        device.destroySemaphore(copyFinishedSemaphore, null)
         device.destroySemaphore(renderFinishedSemaphore, null)
 
         device.destroyCommandPool(commandPool, null)
 
         pipelineInfos.forEach { it.destroy(device) }
+        graphicsPipelineInfos.forEach { it.destroy(device) }
         resource.destroy()
         arena.close()
     }
@@ -693,21 +720,43 @@ class VKReplayInstance(
         }
     }
 
+    private data class GraphicsPipelineInfo(
+        val shaderModules: List<VkShaderModule>,
+        val descriptorInfo: DescriptorInfo,
+        val pipelineLayout: VkPipelineLayout,
+        val pipeline: VkPipeline,
+        val vertexBufferIndices: List<Int>,
+    ) {
+        fun destroy(device: VkDevice) {
+            device.destroyPipeline(pipeline, null)
+            device.destroyPipelineLayout(pipelineLayout, null)
+            shaderModules.forEach { device.destroyShaderModule(it, null) }
+            descriptorInfo.destroy(device)
+        }
+    }
+
+    private data class VertexBindingKey(val bufferIndex: Int, val stride: Int, val divisor: Int)
+
 
     context(_: MemoryStack)
     @OptIn(UnsafeAPI::class)
-    private fun makeDescriptors(command: Command.PassCommand): DescriptorInfo = MemoryStack {
-        val samplerBindings = command.passInfo.samplerBindings
-        val imageBindings = command.passInfo.imageBindings
-        val storageBufferBindings = command.passInfo.storageBufferBindings
-        val uniformBufferBindings = command.passInfo.uniformBufferBindings
+    private fun makeDescriptors(passInfo: PassInfo): DescriptorInfo = MemoryStack {
+        val samplerBindings = passInfo.samplerBindings
+        val imageBindings = passInfo.imageBindings
+        val storageBufferBindings = passInfo.storageBufferBindings
+        val uniformBufferBindings = passInfo.uniformBufferBindings
 
         val samplers = samplerBindings.map {
             val samplerInfo = it.samplerInfo
+            val imageFormatName = captureData.metadata.images[it.imageIndex].format.name
+            val integerFormat = imageFormatName.contains("_UINT") || imageFormatName.contains("_SINT")
             val samplerCreateInfo = VkSamplerCreateInfo.allocate {
-                magFilter = VkFilter.fromNativeData(samplerInfo.minFilter.value)
-                minFilter = VkFilter.fromNativeData(samplerInfo.magFilter.value)
-                mipmapMode = VkSamplerMipmapMode.fromNativeData(samplerInfo.mipmapMode.value)
+                magFilter = if (integerFormat) VkFilter.NEAREST
+                else VkFilter.fromNativeData(samplerInfo.magFilter.value)
+                minFilter = if (integerFormat) VkFilter.NEAREST
+                else VkFilter.fromNativeData(samplerInfo.minFilter.value)
+                mipmapMode = if (integerFormat) VkSamplerMipmapMode.NEAREST
+                else VkSamplerMipmapMode.fromNativeData(samplerInfo.mipmapMode.value)
                 addressModeU = VkSamplerAddressMode.fromNativeData(samplerInfo.addressModeU.value)
                 addressModeV = VkSamplerAddressMode.fromNativeData(samplerInfo.addressModeV.value)
                 addressModeW = VkSamplerAddressMode.fromNativeData(samplerInfo.addressModeW.value)
@@ -909,7 +958,7 @@ class VKReplayInstance(
             device.createShaderModule(createInfo.ptr(), null).getOrThrow()
         }
 
-        val descriptors = makeDescriptors(command)
+        val descriptors = makeDescriptors(command.passInfo)
         val pipelineLayout = MemoryStack {
             val createInfo = VkPipelineLayoutCreateInfo.allocate {
                 setLayouts(VkDescriptorSetLayout.arrayOf(*descriptors.descriptorSetLayouts.toTypedArray()))
@@ -944,5 +993,344 @@ class VKReplayInstance(
             pipelineLayout,
             pipeline
         )
+    }
+
+    context(_: MemoryStack)
+    @OptIn(UnsafeAPI::class)
+    private fun makeGraphicsPipeline(command: Command.GraphicsCommand): GraphicsPipelineInfo = MemoryStack {
+        val info = command.graphicsInfo
+        val compiledProgram = shaderCompiler.graphicsProgram(command)
+        val compiledShaders = compiledProgram.shaders
+        require(compiledShaders.none { it.stage == "tesc" || it.stage == "tese" }) {
+            "Tessellated graphics captures require patch vertex state, which is not captured yet"
+        }
+        val shaderModules = compiledShaders.map { compiled ->
+            compiled.path.useMapped { spvData ->
+                val createInfo = VkShaderModuleCreateInfo.allocate {
+                    codeSize = spvData.count
+                    pCode = reinterpret_cast(spvData.ptr())
+                }
+                device.createShaderModule(createInfo.ptr(), null).getOrThrow()
+            }
+        }
+        val shaderStages = VkPipelineShaderStageCreateInfo.allocate(compiledShaders.size.toLong())
+        compiledShaders.forEachIndexed { index, compiled ->
+            shaderStages[index.toLong()].apply {
+                stage = shaderStage(compiled.stage)
+                module = shaderModules[index]
+                pName = "main".c_str()
+            }
+        }
+
+        val bindingKeys = info.vertexAttributes
+            .map { VertexBindingKey(it.bufferIndex, it.stride, it.divisor) }
+            .distinct()
+        val vertexBindings = VkVertexInputBindingDescription.allocate(bindingKeys.size.toLong())
+        bindingKeys.forEachIndexed { index, key ->
+            require(key.divisor in 0..1) { "Vertex divisor ${key.divisor} requires VK_EXT_vertex_attribute_divisor" }
+            vertexBindings[index.toLong()].apply {
+                binding = index.toUInt()
+                stride = key.stride.toUInt()
+                inputRate = if (key.divisor == 0) VkVertexInputRate.VERTEX else VkVertexInputRate.INSTANCE
+            }
+        }
+        val vertexAttributes = VkVertexInputAttributeDescription.allocate(info.vertexAttributes.size.toLong())
+        info.vertexAttributes.forEachIndexed { index, attribute ->
+            vertexAttributes[index.toLong()].apply {
+                location = attribute.location.toUInt()
+                binding = bindingKeys.indexOf(VertexBindingKey(attribute.bufferIndex, attribute.stride, attribute.divisor)).toUInt()
+                format = vertexFormat(attribute)
+                require(attribute.offset in 0..UInt.MAX_VALUE.toLong()) { "Vertex attribute offset is too large" }
+                offset = attribute.offset.toUInt()
+            }
+        }
+        val vertexInput = VkPipelineVertexInputStateCreateInfo.allocate {
+            vertexBindingDescriptions(vertexBindings)
+            vertexAttributeDescriptions(vertexAttributes)
+        }
+        val inputAssembly = VkPipelineInputAssemblyStateCreateInfo.allocate {
+            topology = primitiveTopology(graphicsMode(command))
+            primitiveRestartEnable = VK_FALSE
+        }
+
+        val viewportValues = info.state.viewport
+        require(viewportValues.size == 4) { "Captured viewport must have four values" }
+        val viewports = VkViewport.allocate(1L)
+        viewports[0].apply {
+            x = viewportValues[0].toFloat()
+            y = viewportValues[1].toFloat()
+            width = viewportValues[2].toFloat()
+            height = viewportValues[3].toFloat()
+            minDepth = 0f
+            maxDepth = 1f
+        }
+        val attachmentExtent = attachmentExtent(info)
+        val scissors = VkRect2D.allocate(1L)
+        scissors[0].apply {
+            val captured = info.state.scissor
+            val scissor = if (info.state.scissorEnabled && captured.size == 4) captured
+            else listOf(0, 0, attachmentExtent.first, attachmentExtent.second)
+            offset {
+                x = scissor[0]
+                y = scissor[1]
+            }
+            extent {
+                width = scissor[2].toUInt()
+                height = scissor[3].toUInt()
+            }
+        }
+        val viewportState = VkPipelineViewportStateCreateInfo.allocate {
+            viewports(viewports)
+            scissors(scissors)
+        }
+        val rasterization = VkPipelineRasterizationStateCreateInfo.allocate {
+            depthClampEnable = VK_FALSE
+            rasterizerDiscardEnable = VK_FALSE
+            polygonMode = polygonMode(info.state.polygonMode)
+            cullMode = when {
+                !info.state.cullEnabled -> VkCullModeFlags.NONE
+                info.state.cullFace == 0x0404 -> VkCullModeFlags.FRONT
+                info.state.cullFace == 0x0405 -> VkCullModeFlags.BACK
+                info.state.cullFace == 0x0408 -> VkCullModeFlags.FRONT_AND_BACK
+                else -> throw UnsupportedOperationException(
+                    "Unsupported captured GL cull face 0x${info.state.cullFace.toString(16)}",
+                )
+            }
+            frontFace = frontFace(info.state.frontFace)
+            depthBiasEnable = if (info.state.polygonOffsetEnabled) VK_TRUE else VK_FALSE
+            depthBiasConstantFactor = info.state.polygonOffsetUnits
+            depthBiasClamp = 0f
+            depthBiasSlopeFactor = info.state.polygonOffsetFactor
+            lineWidth = info.state.lineWidth
+        }
+        val multisample = VkPipelineMultisampleStateCreateInfo.allocate {
+            rasterizationSamples = VkSampleCountFlags.`1_BIT`
+        }
+        val depthStencil = VkPipelineDepthStencilStateCreateInfo.allocate {
+            depthTestEnable = if (info.state.depthTest) VK_TRUE else VK_FALSE
+            depthWriteEnable = if (info.state.depthWrite) VK_TRUE else VK_FALSE
+            depthCompareOp = compareOp(info.state.depthFunction)
+            depthBoundsTestEnable = VK_FALSE
+            stencilTestEnable = VK_FALSE
+        }
+        val blendAttachments = VkPipelineColorBlendAttachmentState.allocate(info.state.blends.size.toLong())
+        info.state.blends.forEachIndexed { index, blend ->
+            blendAttachments[index.toLong()].apply {
+                blendEnable = if (blend.enabled) VK_TRUE else VK_FALSE
+                srcColorBlendFactor = blendFactor(blend.sourceRgb)
+                dstColorBlendFactor = blendFactor(blend.destinationRgb)
+                colorBlendOp = blendOp(blend.equationRgb)
+                srcAlphaBlendFactor = blendFactor(blend.sourceAlpha)
+                dstAlphaBlendFactor = blendFactor(blend.destinationAlpha)
+                alphaBlendOp = blendOp(blend.equationAlpha)
+                colorWriteMask = colorMask(blend.colorMask)
+            }
+        }
+        val colorBlend = VkPipelineColorBlendStateCreateInfo.allocate {
+            logicOpEnable = VK_FALSE
+            attachments(blendAttachments)
+            blendConstants = NFloat.arrayOf(*info.state.blendColor.toTypedArray()).ptr()
+        }
+
+        val descriptors = makeDescriptors(compiledProgram.resources)
+        val pipelineLayout = VkPipelineLayoutCreateInfo.allocate {
+            setLayouts(VkDescriptorSetLayout.arrayOf(*descriptors.descriptorSetLayouts.toTypedArray()))
+        }.let { device.createPipelineLayout(it.ptr(), null).getOrThrow() }
+
+        val colorFormats = colorAttachments(info).map { attachment ->
+            val metadata = captureData.metadata.images[attachment.imageIndex]
+            VkFormat.fromNativeData(metadata.format.value)
+        }
+        val depthAttachment = depthAttachment(info)
+        val stencilAttachment = stencilAttachment(info)
+        val rendering = VkPipelineRenderingCreateInfo.allocate {
+            colorAttachments(VkFormat.arrayOf(*colorFormats.toTypedArray()))
+            depthAttachmentFormat = depthAttachment?.let {
+                VkFormat.fromNativeData(captureData.metadata.images[it.imageIndex].format.value)
+            } ?: VkFormat.UNDEFINED
+            stencilAttachmentFormat = stencilAttachment?.let {
+                VkFormat.fromNativeData(captureData.metadata.images[it.imageIndex].format.value)
+            } ?: VkFormat.UNDEFINED
+        }
+        val pipelineCreateInfo = VkGraphicsPipelineCreateInfo.allocate {
+            pNext = rendering.ptr()
+            stages(shaderStages)
+            pVertexInputState = vertexInput.ptr()
+            pInputAssemblyState = inputAssembly.ptr()
+            pViewportState = viewportState.ptr()
+            pRasterizationState = rasterization.ptr()
+            pMultisampleState = multisample.ptr()
+            pDepthStencilState = depthStencil.ptr()
+            pColorBlendState = colorBlend.ptr()
+            layout = pipelineLayout
+        }
+        val pipeline = device.createGraphicsPipelines(
+            VkPipelineCache.fromNativeData(device, 0L),
+            1u,
+            pipelineCreateInfo.ptr(),
+            null,
+        ).getOrThrow()
+
+        GraphicsPipelineInfo(
+            shaderModules,
+            descriptors,
+            pipelineLayout,
+            pipeline,
+            bindingKeys.map(VertexBindingKey::bufferIndex),
+        )
+    }
+
+    context(_: MemoryStack)
+    private fun executeGraphics(command: Command.GraphicsCommand, pipelineInfo: GraphicsPipelineInfo) = MemoryStack {
+        val info = command.graphicsInfo
+        val colorAttachments = colorAttachments(info)
+        val colorInfos = VkRenderingAttachmentInfo.allocate(colorAttachments.size.toLong())
+        colorAttachments.forEachIndexed { index, attachment ->
+            colorInfos[index.toLong()].apply {
+                imageView = resource.attachmentImageView(attachment)
+                imageLayout = VkImageLayout.GENERAL
+                loadOp = VkAttachmentLoadOp.LOAD
+                storeOp = VkAttachmentStoreOp.STORE
+            }
+        }
+        fun renderingAttachment(attachment: FramebufferAttachment?): NValue<VkRenderingAttachmentInfo>? =
+            attachment?.let {
+                VkRenderingAttachmentInfo.allocate {
+                    imageView = resource.attachmentImageView(it)
+                    imageLayout = VkImageLayout.GENERAL
+                    loadOp = VkAttachmentLoadOp.LOAD
+                    storeOp = VkAttachmentStoreOp.STORE
+                }
+            }
+        val depthInfo = renderingAttachment(depthAttachment(info))
+        val stencilInfo = renderingAttachment(stencilAttachment(info))
+        val extent = attachmentExtent(info)
+        val renderingInfo = VkRenderingInfo.allocate {
+            renderArea {
+                offset {
+                    x = 0
+                    y = 0
+                }
+                extent {
+                    width = extent.first.toUInt()
+                    height = extent.second.toUInt()
+                }
+            }
+            layerCount = 1u
+            colorAttachments(colorInfos)
+            depthInfo?.let { pDepthAttachment = it.ptr() }
+            stencilInfo?.let { pStencilAttachment = it.ptr() }
+        }
+
+        cmdBuffers[1].cmdBeginRendering(renderingInfo.ptr())
+        cmdBuffers[1].cmdBindPipeline(VkPipelineBindPoint.GRAPHICS, pipelineInfo.pipeline)
+        val descriptorSets = VkDescriptorSet.arrayOf(*pipelineInfo.descriptorInfo.descriptorSets.toTypedArray())
+        cmdBuffers[1].cmdBindDescriptorSets(
+            VkPipelineBindPoint.GRAPHICS,
+            pipelineInfo.pipelineLayout,
+            0u,
+            pipelineInfo.descriptorInfo.descriptorSets.size.toUInt(),
+            descriptorSets.ptr(),
+            0u,
+            nullptr(),
+        )
+        if (pipelineInfo.vertexBufferIndices.isNotEmpty()) {
+            val buffers = VkBuffer.arrayOf(*pipelineInfo.vertexBufferIndices.map { resource.bufferList[it].gpu }.toTypedArray())
+            val offsets = NUInt64.arrayOf(*LongArray(pipelineInfo.vertexBufferIndices.size) { 0L }.map(Long::toULong).toTypedArray())
+            cmdBuffers[1].cmdBindVertexBuffers(0u, pipelineInfo.vertexBufferIndices.size.toUInt(), buffers.ptr(), offsets.ptr())
+        }
+
+        when (command) {
+            is Command.DrawArraysCommand -> cmdBuffers[1].cmdDraw(
+                command.count.toUInt(),
+                command.instanceCount.toUInt(),
+                command.first.toUInt(),
+                0u,
+            )
+            is Command.DrawElementsCommand -> {
+                val type = indexType(command.indexType)
+                val elementSize = indexElementSize(command.indexType)
+                require(command.indexOffset % elementSize == 0L) { "Index offset is not aligned to its element size" }
+                cmdBuffers[1].cmdBindIndexBuffer(resource.bufferList[command.indexBufferIndex].gpu, 0uL, type)
+                cmdBuffers[1].cmdDrawIndexed(
+                    command.count.toUInt(),
+                    command.instanceCount.toUInt(),
+                    (command.indexOffset / elementSize).toUInt(),
+                    command.baseVertex,
+                    0u,
+                )
+            }
+            is Command.MultiDrawElementsCommand -> {
+                val type = indexType(command.indexType)
+                val elementSize = indexElementSize(command.indexType)
+                cmdBuffers[1].cmdBindIndexBuffer(resource.bufferList[command.indexBufferIndex].gpu, 0uL, type)
+                command.counts.indices.forEach { index ->
+                    val offset = command.indexOffsets[index]
+                    require(offset % elementSize == 0L) { "Index offset is not aligned to its element size" }
+                    cmdBuffers[1].cmdDrawIndexed(
+                        command.counts[index].toUInt(),
+                        1u,
+                        (offset / elementSize).toUInt(),
+                        command.baseVertices[index],
+                        0u,
+                    )
+                }
+            }
+        }
+        cmdBuffers[1].cmdEndRendering()
+    }
+
+    private fun colorAttachments(info: GraphicsPassInfo): List<FramebufferAttachment> = info.drawBuffers.map { drawBuffer ->
+        info.framebufferAttachments.singleOrNull { it.attachment == drawBuffer }
+            ?: error("Captured draw buffer 0x${drawBuffer.toString(16)} has no framebuffer attachment")
+    }
+
+    private fun depthAttachment(info: GraphicsPassInfo): FramebufferAttachment? =
+        info.framebufferAttachments.firstOrNull { it.attachment == 0x8D00 || it.attachment == 0x821A }
+
+    private fun stencilAttachment(info: GraphicsPassInfo): FramebufferAttachment? =
+        info.framebufferAttachments.firstOrNull { it.attachment == 0x8D20 || it.attachment == 0x821A }
+
+    private fun attachmentExtent(info: GraphicsPassInfo): Pair<Int, Int> {
+        val attachments = info.framebufferAttachments
+        require(attachments.isNotEmpty()) { "Captured graphics command has no framebuffer attachments" }
+        val widths = attachments.map {
+            maxOf(1, captureData.metadata.images[it.imageIndex].width shr it.level)
+        }
+        val heights = attachments.map {
+            maxOf(1, captureData.metadata.images[it.imageIndex].height shr it.level)
+        }
+        return widths.min() to heights.min()
+    }
+
+    private fun shaderStage(stage: String): VkShaderStageFlags = when (stage) {
+        "vertex" -> VkShaderStageFlags.VERTEX
+        "tesc" -> VkShaderStageFlags.TESSELLATION_CONTROL
+        "tese" -> VkShaderStageFlags.TESSELLATION_EVALUATION
+        "geometry" -> VkShaderStageFlags.GEOMETRY
+        "fragment" -> VkShaderStageFlags.FRAGMENT
+        else -> error("Unsupported graphics shader stage $stage")
+    }
+
+    private fun colorMask(mask: Int): VkColorComponentFlags {
+        var flags = VkColorComponentFlags.NONE
+        if (mask and 1 != 0) flags += VkColorComponentFlags.R
+        if (mask and 2 != 0) flags += VkColorComponentFlags.G
+        if (mask and 4 != 0) flags += VkColorComponentFlags.B
+        if (mask and 8 != 0) flags += VkColorComponentFlags.A
+        return flags
+    }
+
+    private fun indexElementSize(type: Int): Long = when (type) {
+        0x1401 -> 1L
+        0x1403 -> 2L
+        0x1405 -> 4L
+        else -> throw UnsupportedOperationException("Unsupported captured GL index type 0x${type.toString(16)}")
+    }
+
+    private fun graphicsMode(command: Command.GraphicsCommand): Int = when (command) {
+        is Command.DrawArraysCommand -> command.mode
+        is Command.DrawElementsCommand -> command.mode
+        is Command.MultiDrawElementsCommand -> command.mode
     }
 }

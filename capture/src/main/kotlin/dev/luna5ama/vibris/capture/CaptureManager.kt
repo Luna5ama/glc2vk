@@ -1,5 +1,7 @@
 package dev.luna5ama.vibris.capture
 
+import dev.luna5ama.glwrapper.base.GL_CURRENT_PROGRAM
+import dev.luna5ama.glwrapper.base.glGetInteger
 import java.nio.file.Path
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -99,6 +101,61 @@ class CaptureManager {
         return true
     }
 
+    @Synchronized
+    fun drawArrays(mode: Int, first: Int, count: Int, instanceCount: Int): Boolean {
+        val session = matchingGraphicsSession() ?: return false
+        captureGlDrawArrays(mode, first, count, instanceCount)
+        finishSingle(session)
+        return true
+    }
+
+    @Synchronized
+    fun drawElements(
+        mode: Int,
+        count: Int,
+        indexType: Int,
+        indexOffset: Long,
+        baseVertex: Int,
+        instanceCount: Int,
+    ): Boolean {
+        val session = matchingGraphicsSession() ?: return false
+        captureGlDrawElements(mode, count, indexType, indexOffset, baseVertex, instanceCount)
+        finishSingle(session)
+        return true
+    }
+
+    @Synchronized
+    fun multiDrawElementsBaseVertex(
+        mode: Int,
+        countsAddress: Long,
+        indexType: Int,
+        offsetsAddress: Long,
+        drawCount: Int,
+        baseVerticesAddress: Long,
+    ): Boolean {
+        val session = matchingGraphicsSession() ?: return false
+        captureGlMultiDrawElementsBaseVertex(
+            mode,
+            countsAddress,
+            indexType,
+            offsetsAddress,
+            drawCount,
+            baseVerticesAddress,
+        )
+        finishSingle(session)
+        return true
+    }
+
+    private fun matchingGraphicsSession(): CaptureSession? {
+        val session = activeCapture ?: return null
+        val program = GraphicsProgramRegistry.find(glGetInteger(GL_CURRENT_PROGRAM)) ?: return null
+        return session.takeIf { it.matches(program.passName, program.programType) }
+    }
+
+    private fun finishSingle(session: CaptureSession) {
+        if (session.request.mode == CaptureMode.SINGLE) finishActiveCapture()
+    }
+
     private fun createShaderInfo(computeSource: String, passName: String, programType: String?): ShaderInfo {
         return ShaderSourceContext(computeSource)
             .setIdentity(passName, programType, "$passName.csh")
@@ -147,6 +204,11 @@ class CaptureManager {
                     passName
                 )
             }
+        }
+
+        fun matches(passName: String, programType: String?): Boolean = when (request.mode) {
+            CaptureMode.SINGLE -> request.passName == passName
+            CaptureMode.MULTI -> request.programType == programType
         }
     }
 

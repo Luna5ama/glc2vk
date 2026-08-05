@@ -2,6 +2,12 @@ package dev.luna5ama.vibris.replay
 
 import dev.luna5ama.glwrapper.base.GL_COMPILE_STATUS
 import dev.luna5ama.glwrapper.base.GL_COMPUTE_SHADER
+import dev.luna5ama.glwrapper.base.GL_FRAGMENT_SHADER
+import dev.luna5ama.glwrapper.base.GL_GEOMETRY_SHADER
+import dev.luna5ama.glwrapper.base.GL_TESS_CONTROL_SHADER
+import dev.luna5ama.glwrapper.base.GL_TESS_EVALUATION_SHADER
+import dev.luna5ama.glwrapper.base.GL_VERTEX_SHADER
+import dev.luna5ama.vibris.common.ResolvedShaderSource
 import dev.luna5ama.glwrapper.base.GL_INFO_LOG_LENGTH
 import dev.luna5ama.glwrapper.base.GL_LINK_STATUS
 import dev.luna5ama.glwrapper.base.glAttachShader
@@ -32,6 +38,39 @@ fun loadOpenGLComputeProgram(shaderPath: Path): Int {
 
 fun loadOpenGLComputeProgram(source: String, sourcePath: Path): Int {
     return compileComputeProgram(source.normalizeVulkanGlslForOpenGL(), sourcePath)
+}
+
+fun loadOpenGLGraphicsProgram(sources: List<Pair<String, ResolvedShaderSource>>): Int {
+    require(sources.any { it.first == "vertex" } && sources.any { it.first == "fragment" })
+    val shaders = sources.map { (stage, resolved) ->
+        val shader = glCreateShader(stage.toGlShaderType())
+        glShaderSource(shader, resolved.source)
+        glCompileShader(shader)
+        if (glGetShaderi(shader, GL_COMPILE_STATUS) == 0) {
+            val log = glGetShaderInfoLog(shader, glGetShaderi(shader, GL_INFO_LOG_LENGTH))
+            glDeleteShader(shader)
+            val dumpPath = dumpFailedShaderSource(resolved.source)
+            error("Failed to compile OpenGL replay $stage shader ${resolved.path}\n$log\nSource dumped to $dumpPath")
+        }
+        shader
+    }
+    val program = glCreateProgram()
+    shaders.forEach { glAttachShader(program, it) }
+    glLinkProgram(program)
+    if (glGetProgrami(program, GL_LINK_STATUS) == 0) {
+        val log = glGetProgramInfoLog(program, glGetProgrami(program, GL_INFO_LOG_LENGTH))
+        shaders.forEach {
+            glDetachShader(program, it)
+            glDeleteShader(it)
+        }
+        glDeleteProgram(program)
+        error("Failed to link OpenGL replay graphics program\n$log")
+    }
+    shaders.forEach {
+        glDetachShader(program, it)
+        glDeleteShader(it)
+    }
+    return program
 }
 
 fun String.normalizeVulkanGlslForOpenGL(): String {
@@ -92,4 +131,13 @@ private fun dumpFailedShaderSource(source: String): Path {
     val path = Files.createTempFile("vibris-replay-gl-", ".comp.glsl")
     path.writeText(source)
     return path
+}
+
+private fun String.toGlShaderType(): Int = when (this) {
+    "vertex" -> GL_VERTEX_SHADER
+    "tesc" -> GL_TESS_CONTROL_SHADER
+    "tese" -> GL_TESS_EVALUATION_SHADER
+    "geometry" -> GL_GEOMETRY_SHADER
+    "fragment" -> GL_FRAGMENT_SHADER
+    else -> error("Unsupported graphics shader stage: $this")
 }

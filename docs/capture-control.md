@@ -230,7 +230,7 @@ execution order through `action_results` with their action index, kind, and JSON
 |--------------|---------|
 | `reset_temporal_state`, `wait_frames` | control temporal history and rendered-frame waits |
 | `capture_screenshot`, `capture_texture`, `capture_buffer` | write same-frame managed artifacts |
-| `get_capture_status`, `capture_pass`, `capture_multi` | inspect or queue compute captures |
+| `get_capture_status`, `capture_pass`, `capture_multi` | inspect or queue compute and OpenGL raster draw captures; raster replay uses `vibris-replay-gl` |
 | `load_shader`, `get_shader_status`, `get_shader_errors` | load a named source/config pair and inspect it |
 | `schedule_screenshot`, `get_screenshot_result` | schedule and locate an asynchronous host screenshot |
 | `get_gpu_metrics` | measure GPU pass timings over its next required `frames` |

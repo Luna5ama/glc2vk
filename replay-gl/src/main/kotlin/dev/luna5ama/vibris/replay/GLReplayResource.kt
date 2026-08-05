@@ -30,12 +30,14 @@ class GLReplayResource(private val captureData: CaptureData) {
         }
     }
 
-    fun bind(command: Command.PassCommand) {
-        bindUniforms(command)
-        bindImages(command)
-        bindSamplers(command)
-        bindBuffers(command.passInfo.storageBufferBindings, GL_SHADER_STORAGE_BUFFER)
-        bindBuffers(command.passInfo.uniformBufferBindings, GL_UNIFORM_BUFFER)
+    fun bind(command: Command.PassCommand) = bind(command.passInfo)
+
+    fun bind(passInfo: PassInfo) {
+        bindUniforms(passInfo)
+        bindImages(passInfo)
+        bindSamplers(passInfo)
+        bindBuffers(passInfo.storageBufferBindings, GL_SHADER_STORAGE_BUFFER)
+        bindBuffers(passInfo.uniformBufferBindings, GL_UNIFORM_BUFFER)
     }
 
     fun bindDispatchIndirectBuffer(bufferIndex: Int) {
@@ -48,8 +50,8 @@ class GLReplayResource(private val captureData: CaptureData) {
         buffers.forEach { it.destroy() }
     }
 
-    private fun bindImages(command: Command.PassCommand) {
-        command.passInfo.imageBindings.forEach { binding ->
+    private fun bindImages(passInfo: PassInfo) {
+        passInfo.imageBindings.forEach { binding ->
             setOpaqueUniformUnit(binding.name, binding.binding)
             val image = textures[binding.imageIndex]
             val imageFormat = binding.format.toGLImageFormat()
@@ -66,8 +68,8 @@ class GLReplayResource(private val captureData: CaptureData) {
         }
     }
 
-    private fun bindSamplers(command: Command.PassCommand) {
-        command.passInfo.samplerBindings.forEach { binding ->
+    private fun bindSamplers(passInfo: PassInfo) {
+        passInfo.samplerBindings.forEach { binding ->
             setOpaqueUniformUnit(binding.name, binding.binding)
             val texture = textures[binding.imageIndex].texture
             texture.bindTextureUnit(binding.binding)
@@ -88,8 +90,8 @@ class GLReplayResource(private val captureData: CaptureData) {
         currentProgram = program
     }
 
-    private fun bindUniforms(command: Command.PassCommand) {
-        command.passInfo.defaultUniformBindings.forEach { uniform ->
+    private fun bindUniforms(passInfo: PassInfo) {
+        passInfo.defaultUniformBindings.forEach { uniform ->
             val location = glGetUniformLocation(currentProgram, uniform.name)
             if (location < 0) return@forEach
 
@@ -115,6 +117,10 @@ class GLReplayResource(private val captureData: CaptureData) {
             }
         }
     }
+
+    fun bufferId(index: Int): Int = buffers[index].buffer.id
+
+    fun textureId(index: Int): Int = textures[index].texture.id
 
     private fun bindBuffers(bindings: List<BufferBinding>, target: Int) {
         bindings.forEach { binding ->

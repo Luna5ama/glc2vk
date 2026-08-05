@@ -15,9 +15,20 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 import kotlin.concurrent.thread
-import kotlin.coroutines.Continuation
-import kotlin.coroutines.resume
 import kotlin.io.path.*
+
+internal class CaptureEntries<T> {
+    private val entries = ConcurrentHashMap<String, CompletableDeferred<T>>()
+
+    suspend fun await(name: String): T = entry(name).await()
+
+    fun complete(name: String, value: T) {
+        check(entry(name).complete(value)) { "Capture entry $name was completed more than once" }
+    }
+
+    private fun entry(name: String): CompletableDeferred<T> =
+        entries.computeIfAbsent(name) { CompletableDeferred() }
+}
 
 @Serializable
 data class PassInfo(
@@ -27,6 +38,71 @@ data class PassInfo(
     val storageBufferBindings: List<BufferBinding> = emptyList(),
     val uniformBufferBindings: List<BufferBinding> = emptyList(),
     val defaultUniformBindings: List<DefaultUniformBinding> = emptyList(),
+)
+
+@Serializable
+data class VertexAttribute(
+    val location: Int,
+    val name: String? = null,
+    val bufferIndex: Int,
+    val size: Int,
+    val type: Int,
+    val normalized: Boolean,
+    val integer: Boolean,
+    val long: Boolean,
+    val stride: Int,
+    val offset: Long,
+    val divisor: Int,
+)
+
+@Serializable
+data class FramebufferAttachment(
+    val attachment: Int,
+    val imageIndex: Int,
+    val level: Int = 0,
+    val layer: Int = -1,
+)
+
+@Serializable
+data class BlendState(
+    val enabled: Boolean,
+    val sourceRgb: Int,
+    val destinationRgb: Int,
+    val sourceAlpha: Int,
+    val destinationAlpha: Int,
+    val equationRgb: Int,
+    val equationAlpha: Int,
+    val colorMask: Int,
+)
+
+@Serializable
+data class GraphicsState(
+    val viewport: List<Int>,
+    val scissorEnabled: Boolean,
+    val scissor: List<Int>,
+    val depthTest: Boolean,
+    val depthFunction: Int,
+    val depthWrite: Boolean,
+    val cullEnabled: Boolean,
+    val cullFace: Int,
+    val frontFace: Int,
+    val polygonMode: Int,
+    val polygonOffsetEnabled: Boolean,
+    val polygonOffsetFactor: Float,
+    val polygonOffsetUnits: Float,
+    val lineWidth: Float,
+    val blends: List<BlendState>,
+    val blendColor: List<Float> = listOf(0f, 0f, 0f, 0f),
+)
+
+@Serializable
+data class GraphicsPassInfo(
+    val shaderIndices: List<Int>,
+    val resources: PassInfo,
+    val vertexAttributes: List<VertexAttribute>,
+    val framebufferAttachments: List<FramebufferAttachment>,
+    val drawBuffers: List<Int>,
+    val state: GraphicsState,
 )
 
 @Serializable
@@ -62,6 +138,46 @@ sealed class Command {
         val offset: Long,
         override val passInfo: PassInfo = PassInfo()
     ) : PassCommand()
+
+    @Serializable
+    sealed class GraphicsCommand : Command() {
+        abstract val graphicsInfo: GraphicsPassInfo
+    }
+
+    @Serializable
+    @SerialName("DrawArrays")
+    data class DrawArraysCommand(
+        val mode: Int,
+        val first: Int,
+        val count: Int,
+        val instanceCount: Int = 1,
+        override val graphicsInfo: GraphicsPassInfo,
+    ) : GraphicsCommand()
+
+    @Serializable
+    @SerialName("DrawElements")
+    data class DrawElementsCommand(
+        val mode: Int,
+        val count: Int,
+        val indexType: Int,
+        val indexOffset: Long,
+        val baseVertex: Int = 0,
+        val instanceCount: Int = 1,
+        val indexBufferIndex: Int,
+        override val graphicsInfo: GraphicsPassInfo,
+    ) : GraphicsCommand()
+
+    @Serializable
+    @SerialName("MultiDrawElements")
+    data class MultiDrawElementsCommand(
+        val mode: Int,
+        val counts: List<Int>,
+        val indexType: Int,
+        val indexOffsets: List<Long>,
+        val baseVertices: List<Int>,
+        val indexBufferIndex: Int,
+        override val graphicsInfo: GraphicsPassInfo,
+    ) : GraphicsCommand()
 }
 
 @Serializable
@@ -168,32 +284,38 @@ data class CaptureMetadata(
     fun commandsForReplay(): List<Command> = commands.normalizeExplicitDebugLabelCommands()
 
     fun allSamplerBindings(): List<SamplerBinding> = commandsForReplay().asSequence()
-        .filterIsInstance<Command.PassCommand>()
-        .flatMap { it.passInfo.samplerBindings }
+        .flatMap { it.resourceInfo() }
+        .flatMap { it.samplerBindings }
         .distinct()
         .toList()
 
     fun allImageBindings(): List<ImageBinding> = commandsForReplay().asSequence()
-        .filterIsInstance<Command.PassCommand>()
-        .flatMap { it.passInfo.imageBindings }
+        .flatMap { it.resourceInfo() }
+        .flatMap { it.imageBindings }
         .distinct()
         .toList()
 
     fun allStorageBufferBindings(): List<BufferBinding> = commandsForReplay().asSequence()
-        .filterIsInstance<Command.PassCommand>()
-        .flatMap { it.passInfo.storageBufferBindings }
+        .flatMap { it.resourceInfo() }
+        .flatMap { it.storageBufferBindings }
         .distinct()
         .toList()
 
     fun allUniformBufferBindings(): List<BufferBinding> = commandsForReplay().asSequence()
-        .filterIsInstance<Command.PassCommand>()
-        .flatMap { it.passInfo.uniformBufferBindings }
+        .flatMap { it.resourceInfo() }
+        .flatMap { it.uniformBufferBindings }
         .distinct()
         .toList()
 
     fun shaderMetadata(shaderIndex: Int): ShaderMetadata {
         return shaders.getOrNull(shaderIndex) ?: ShaderMetadata()
     }
+}
+
+private fun Command.resourceInfo(): Sequence<PassInfo> = when (this) {
+    is Command.PassCommand -> sequenceOf(passInfo)
+    is Command.GraphicsCommand -> sequenceOf(graphicsInfo.resources)
+    else -> emptySequence()
 }
 
 private fun List<Command>.normalizeExplicitDebugLabelCommands(): List<Command> {
@@ -301,20 +423,15 @@ class CaptureData(
                 Json.decodeFromString<CaptureMetadata>(metadataPath.readText())
             }
 
-            val imageDataBytes = ConcurrentHashMap<String, ByteBuffer>()
-            val bufferDataBytes = ConcurrentHashMap<String, ByteBuffer>()
-
-            val imageDataCallback = ConcurrentHashMap<String, Continuation<ByteBuffer>>()
-            val bufferDataCallback = ConcurrentHashMap<String, Continuation<ByteBuffer>>()
+            val imageEntries = CaptureEntries<ByteBuffer>()
+            val bufferEntries = CaptureEntries<ByteBuffer>()
 
             val imageData = async(Dispatchers.Default) {
                 metadata.await().images.mapIndexed { i, imageMeta ->
                     async {
                         val levels = imageMeta.levelDataSizes.indices.map { levelIndex ->
                             val key = "image_${i}_$levelIndex.bin"
-                            imageDataBytes[key] ?: suspendCancellableCoroutine {
-                                imageDataCallback[key] = it
-                            }
+                            imageEntries.await(key)
                         }
                         ImageData(levels.map { Arr.wrap(it) }, levels)
                     }
@@ -324,9 +441,7 @@ class CaptureData(
                 metadata.await().buffers.indices.map { i ->
                     async {
                         val key = "buffer_$i.bin"
-                        val raw = bufferDataBytes[key] ?: suspendCancellableCoroutine {
-                            bufferDataCallback[key] = it
-                        }
+                        val raw = bufferEntries.await(key)
                         BufferData(Arr.wrap(raw), raw)
                     }
                 }.awaitAll()
@@ -344,17 +459,17 @@ class CaptureData(
                 var entry = zipInput.nextEntry
                 while (entry != null) {
                     val byteBuffer = ByteBuffer.allocateDirect(entry.size.toInt())
-                    channel.read(byteBuffer)
+                    while (byteBuffer.hasRemaining()) {
+                        check(channel.read(byteBuffer) >= 0) { "Unexpected end of archive entry ${entry.name}" }
+                    }
                     byteBuffer.flip()
                     when {
                         entry.name.startsWith("image_") -> {
-                            imageDataBytes[entry.name] = byteBuffer
-                            imageDataCallback[entry.name]?.resume(byteBuffer)
+                            imageEntries.complete(entry.name, byteBuffer)
                         }
 
                         entry.name.startsWith("buffer_") -> {
-                            bufferDataBytes[entry.name] = byteBuffer
-                            bufferDataCallback[entry.name]?.resume(byteBuffer)
+                            bufferEntries.complete(entry.name, byteBuffer)
                         }
 
                         else -> error("Got unexpected file ${entry.name} in resource capture")

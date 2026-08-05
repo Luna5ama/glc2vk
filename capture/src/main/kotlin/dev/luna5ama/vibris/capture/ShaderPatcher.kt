@@ -57,7 +57,17 @@ data class ShaderInfo(
     data class Buffer(val name: String, val set: Int, val binding: Int)
 }
 
-class ShaderSourceContext(val originalSource: String) {
+class ShaderBindingAllocator {
+    private val counters = intArrayOf(0, 0, 0)
+    private val bindings = mutableMapOf<Pair<Int, String>, Int>()
+
+    fun binding(set: Int, name: String): Int = bindings.getOrPut(set to name) { counters[set]++ }
+}
+
+class ShaderSourceContext(
+    val originalSource: String,
+    private val bindingAllocator: ShaderBindingAllocator = ShaderBindingAllocator(),
+) {
     var modifiedSource: String = originalSource
     var passName: String? = null
     var programType: String? = null
@@ -73,8 +83,6 @@ class ShaderSourceContext(val originalSource: String) {
     // set 0 = sampler/image uniforms
     // set 1 = storage buffers
     // set 2 = uniform buffers
-    val bindingCounters = intArrayOf(0, 0, 0)
-
     val tokenCounts = modifiedSource.split(TOKEN_DELIMITER_REGEX)
         .groupingBy { it }
         .eachCount()
@@ -116,7 +124,7 @@ class ShaderSourceContext(val originalSource: String) {
         modifiedSource = SSBO_REGEX.replace(modifiedSource) {
             val (_, modifiers1, modifiers2, name) = it.destructured
             val set = 1
-            val binding = bindingCounters[set]++
+            val binding = bindingAllocator.binding(set, "ssbo:$name")
             val buffer = ShaderInfo.Buffer(name, set, binding)
             ssbos[name] = buffer
             buildString {
@@ -138,7 +146,7 @@ class ShaderSourceContext(val originalSource: String) {
         modifiedSource = UBO_REGEX.replace(modifiedSource) {
             val (_, modifiers1, modifiers2, name) = it.destructured
             val set = 2
-            val binding = bindingCounters[set]++
+            val binding = bindingAllocator.binding(set, "ubo:$name")
             val buffer = ShaderInfo.Buffer(name, set, binding)
             ubos[name] = buffer
             buildString {
@@ -158,7 +166,7 @@ class ShaderSourceContext(val originalSource: String) {
 
     private fun patchUniforms() {
         val setV = 2
-        val binding = bindingCounters[setV]++
+        val binding = bindingAllocator.binding(setV, "default:$stage")
         val buffer = ShaderInfo.Buffer("DefaultUniforms", setV, binding)
         ubos[buffer.name] = buffer
 
@@ -183,7 +191,7 @@ class ShaderSourceContext(val originalSource: String) {
 
                 is GLSLDataType.Opaque -> {
                     val set = 0
-                    val binding = bindingCounters[set]++
+                    val binding = bindingAllocator.binding(set, "uniform:$name")
                     val uniform = ShaderInfo.Uniform(name, type, set, binding)
                     uniforms[name] = uniform
 

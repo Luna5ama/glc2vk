@@ -1,6 +1,8 @@
 package dev.luna5ama.vibris.replay
 
 import dev.luna5ama.vibris.common.CaptureData
+import dev.luna5ama.vibris.common.Command
+import dev.luna5ama.vibris.common.FramebufferAttachment
 import dev.luna5ama.vibris.common.ImageMetadata
 import dev.luna5ama.vibris.common.ImageBinding
 import dev.luna5ama.vibris.common.SamplerBinding
@@ -35,6 +37,12 @@ class VKReplayResource(
     private val imageBindings: List<ImageBinding>
     private val samplerImageViewMap: Map<SamplerBinding, VkImageView>
     private val storageImageViewMap: Map<ImageBinding, VkImageView>
+    private val framebufferAttachments = captureData.metadata.commandsForReplay()
+        .filterIsInstance<Command.GraphicsCommand>()
+        .flatMap { it.graphicsInfo.framebufferAttachments }
+        .distinct()
+    private val attachmentImageViewList: List<VkImageView>
+    private val attachmentImageViewMap: Map<FramebufferAttachment, VkImageView>
 
     val imageDeviceMemory: DoubleData<VkDeviceMemory>?
     val bufferDeviceMemory: DoubleData<VkDeviceMemory>?
@@ -125,6 +133,8 @@ class VKReplayResource(
                                         VkBufferUsageFlags2.UNIFORM_TEXEL_BUFFER +
                                         VkBufferUsageFlags2.STORAGE_BUFFER +
                                         VkBufferUsageFlags2.UNIFORM_BUFFER +
+                                        VkBufferUsageFlags2.VERTEX_BUFFER +
+                                        VkBufferUsageFlags2.INDEX_BUFFER +
                                         VkBufferUsageFlags2.TRANSFER_DST +
                                         VkBufferUsageFlags2.INDIRECT_BUFFER
                             }
@@ -255,15 +265,26 @@ class VKReplayResource(
                     this.samples = VkSampleCountFlags.`1_BIT`
                 }
 
-                imageList = captureData.metadata.images.map {
+                val attachmentUsageByImage = framebufferAttachments.groupBy(FramebufferAttachment::imageIndex)
+                imageList = captureData.metadata.images.mapIndexed { imageIndex, metadata ->
                     MemoryStack {
                         val vkImageGPU = MemoryStack {
                             val createInfo = VkImageCreateInfo.allocate()
-                            createInfo.setFrom(it)
+                            createInfo.setFrom(metadata)
                             createInfo.flags = VkImageCreateFlags.MUTABLE_FORMAT
                             createInfo.tiling = VkImageTiling.OPTIMAL
                             createInfo.initialLayout = VkImageLayout.UNDEFINED
-                            createInfo.usage = VkImageUsageFlags.TRANSFER_DST + VkImageUsageFlags.STORAGE + VkImageUsageFlags.SAMPLED
+                            createInfo.usage = VkImageUsageFlags.TRANSFER_DST +
+                                VkImageUsageFlags.STORAGE + VkImageUsageFlags.SAMPLED +
+                                if (imageIndex in attachmentUsageByImage) {
+                                    when (metadata.dataType) {
+                                        dev.luna5ama.vibris.common.ImageDataType.COLOR ->
+                                            VkImageUsageFlags.COLOR_ATTACHMENT
+                                        else -> VkImageUsageFlags.DEPTH_STENCIL_ATTACHMENT
+                                    }
+                                } else {
+                                    VkImageUsageFlags.NONE
+                                }
 
                             val memReq = VkMemoryRequirements.allocate()
                             val vkImage = device.createImage(createInfo.ptr(), nullptr()).getOrThrow()
@@ -278,14 +299,14 @@ class VKReplayResource(
                             val debugNameInfo = VkDebugUtilsObjectNameInfoEXT.allocate {
                                 objectType = VkObjectType.IMAGE
                                 objectHandle = vkImage.value.toULong()
-                                pObjectName = it.name.c_str()
+                                pObjectName = metadata.name.c_str()
                             }
                             device.setDebugUtilsObjectNameEXT(debugNameInfo.ptr()).getOrThrow()
                             vkImage
                         }
                         val vkImageCPU = MemoryStack {
                             val createInfo = VkImageCreateInfo.allocate()
-                            createInfo.setFrom(it)
+                            createInfo.setFrom(metadata)
                             createInfo.tiling = VkImageTiling.OPTIMAL
                             createInfo.initialLayout = VkImageLayout.UNDEFINED
                             createInfo.usage = VkImageUsageFlags.TRANSFER_SRC + VkImageUsageFlags.TRANSFER_DST
@@ -303,7 +324,7 @@ class VKReplayResource(
                             val debugNameInfo = VkDebugUtilsObjectNameInfoEXT.allocate {
                                 objectType = VkObjectType.IMAGE
                                 objectHandle = vkImage.value.toULong()
-                                pObjectName = "${it.name}_Backup".c_str()
+                                pObjectName = "${metadata.name}_Backup".c_str()
                             }
                             device.setDebugUtilsObjectNameEXT(debugNameInfo.ptr()).getOrThrow()
                             vkImage
@@ -399,19 +420,48 @@ class VKReplayResource(
                 }
                 samplerImageViewMap = samplerBindings.zip(samplerImageViewList).toMap()
                 storageImageViewMap = imageBindings.zip(storageImageViewList).toMap()
+
+                attachmentImageViewList = framebufferAttachments.map { attachment ->
+                    val metadata = captureData.metadata.images[attachment.imageIndex]
+                    val createInfo = VkImageViewCreateInfo.allocate {
+                        image = imageList[attachment.imageIndex].gpu
+                        viewType = if (attachment.layer >= 0) VkImageViewType.`2D`
+                        else VkImageViewType.fromNativeData(metadata.viewType.value)
+                        format = VkFormat.fromNativeData(metadata.format.value)
+                        subresourceRange {
+                            aspectMask = metadata.dataType.toAspectFlags()
+                            baseMipLevel = attachment.level.toUInt()
+                            levelCount = 1u
+                            baseArrayLayer = maxOf(0, attachment.layer).toUInt()
+                            layerCount = if (attachment.layer >= 0) 1u else metadata.arrayLayers.toUInt()
+                        }
+                    }
+                    device.createImageView(createInfo.ptr(), nullptr()).getOrThrow()
+                }
+                attachmentImageViewMap = framebufferAttachments.zip(attachmentImageViewList).toMap()
             }
         }
     }
 
-    fun samplerImageView(binding: SamplerBinding): VkImageView = samplerImageViewMap.getValue(binding)
+    fun samplerImageView(binding: SamplerBinding): VkImageView = samplerImageViewMap[binding]
+        ?: samplerBindings.indexOfFirst { it.imageIndex == binding.imageIndex }
+            .takeIf { it >= 0 }
+            ?.let(samplerImageViewList::get)
+        ?: error("No captured sampler image view for ${binding.name} (image ${binding.imageIndex})")
 
     fun storageImageView(binding: ImageBinding): VkImageView = storageImageViewMap.getValue(binding)
+
+    fun attachmentImageView(attachment: FramebufferAttachment): VkImageView =
+        attachmentImageViewMap.getValue(attachment)
 
     fun destroy() {
         samplerImageViewList.forEach {
             device.destroyImageView(it, null)
         }
         storageImageViewList.forEach {
+            device.destroyImageView(it, null)
+        }
+        attachmentImageViewList.forEach {
             device.destroyImageView(it, null)
         }
         imageList.forEach {

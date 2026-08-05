@@ -24,6 +24,8 @@ dependencies {
     implementation(libs.caelum.core)
     implementation(libs.caelum.vulkan)
     implementation(libs.caelum.glfw.vulkan)
+
+    testImplementation(kotlin("test"))
 }
 
 tasks {

@@ -22,7 +22,7 @@ class ShaderSourceResolver(
     fun resolve(metadata: CaptureMetadata, shaderIndex: Int): ResolvedShaderSource {
         val override = shaderOverridePath
         if (override == null) {
-            return resolveCaptured(shaderIndex)
+            return resolveCaptured(metadata, shaderIndex)
         }
 
         if (override.isRegularFile()) {
@@ -34,12 +34,12 @@ class ShaderSourceResolver(
         val shaderMetadata = metadata.shaderMetadata(shaderIndex)
         val passName = shaderMetadata.passName
             ?: if (shaderPasses.isNotEmpty()) {
-                return resolveCaptured(shaderIndex)
+                return resolveCaptured(metadata, shaderIndex)
             } else {
                 error("Capture shader $shaderIndex has no passName metadata; cannot resolve from override directory $override")
             }
         if (shaderPasses.isNotEmpty() && passName !in shaderPasses) {
-            return resolveCaptured(shaderIndex)
+            return resolveCaptured(metadata, shaderIndex)
         }
 
         val root = override.resolve("shaders").takeIf { it.isDirectory() } ?: override
@@ -54,12 +54,13 @@ class ShaderSourceResolver(
         return ResolvedShaderSource(source, candidate, true)
     }
 
-    private fun resolveCaptured(shaderIndex: Int): ResolvedShaderSource {
-        val indexed = captureDir.resolve("shader_$shaderIndex.comp.glsl")
+    private fun resolveCaptured(metadata: CaptureMetadata, shaderIndex: Int): ResolvedShaderSource {
+        val extension = stageExtension(metadata.shaderMetadata(shaderIndex).stage)
+        val indexed = captureDir.resolve("shader_$shaderIndex.$extension.glsl")
         if (indexed.exists()) {
             return ResolvedShaderSource(indexed.readText(), indexed, false)
         }
-        val legacy = captureDir.resolve("shader.comp.glsl")
+        val legacy = captureDir.resolve("shader.$extension.glsl")
         check(legacy.exists()) { "Capture shader source does not exist: $indexed or $legacy" }
         return ResolvedShaderSource(legacy.readText(), legacy, false)
     }
@@ -80,13 +81,13 @@ class ShaderSourceResolver(
                 if (fileNameCandidate.exists()) return fileNameCandidate
             }
 
-        val direct = root.resolve("$passName.csh")
+        val direct = root.resolve("$passName.${sourceExtension(shaderMetadata.stage)}")
         if (direct.exists()) return direct
 
         Files.list(root).use { stream ->
             return stream
                 .filter { it.isRegularFile() }
-                .filter { it.name.matches(Regex("""(?:\d+_)?${Regex.escape(passName)}\.csh""")) }
+                .filter { it.name.matches(Regex("""(?:\d+_)?${Regex.escape(passName)}\.${sourceExtension(shaderMetadata.stage)}""")) }
                 .findFirst()
                 .orElse(null)
         }
@@ -130,4 +131,22 @@ class ShaderSourceResolver(
     companion object {
         private val INCLUDE_REGEX = Regex("""#include\s+"([^"]+)"""")
     }
+}
+
+private fun stageExtension(stage: String): String = when (stage) {
+    "vertex" -> "vert"
+    "tesc" -> "tesc"
+    "tese" -> "tese"
+    "geometry" -> "geom"
+    "fragment" -> "frag"
+    else -> "comp"
+}
+
+private fun sourceExtension(stage: String): String = when (stage) {
+    "vertex" -> "vsh"
+    "tesc" -> "tcs"
+    "tese" -> "tes"
+    "geometry" -> "gsh"
+    "fragment" -> "fsh"
+    else -> "csh"
 }
