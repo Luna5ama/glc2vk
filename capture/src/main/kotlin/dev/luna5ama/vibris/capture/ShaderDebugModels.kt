@@ -37,6 +37,51 @@ data class GpuTimingStats(
     val p50: Long,
 )
 
+data class GpuTimingProgram @JvmOverloads constructor(
+    val program: String,
+    val stage: String,
+    val sourceFile: String,
+    val defines: Map<String, String> = emptyMap(),
+    val dispatch: String? = null,
+) {
+    companion object {
+        @JvmStatic
+        @JvmOverloads
+        fun compute(
+            program: String,
+            sourceFile: String,
+            defines: Map<String, String> = emptyMap(),
+            dispatch: String? = null,
+        ) = GpuTimingProgram(program, "compute", sourceFile, defines, dispatch)
+    }
+}
+
+internal enum class GpuTimingScopeKind(val jsonName: String) {
+    FRAMEWORK_TOTAL("framework_total"),
+    COMPATIBILITY_AGGREGATE("compatibility_aggregate"),
+}
+
+internal data class GpuTimingScope(
+    val metric: String,
+    val kind: GpuTimingScopeKind,
+    val frameworkPass: String?,
+    val stage: String?,
+)
+
+internal data class GpuProgramTimingStats(
+    val metric: String,
+    val program: GpuTimingProgram,
+    val frameworkPass: String?,
+    val compatibilityMetric: String?,
+    val statistics: GpuTimingStats,
+)
+
+internal data class GpuTimingSnapshot(
+    val aggregateTimings: Map<String, GpuTimingStats>,
+    val aggregateScopes: List<GpuTimingScope>,
+    val programTimings: List<GpuProgramTimingStats>,
+)
+
 interface ShaderDebugHost {
     fun shaderPackName(): String?
 

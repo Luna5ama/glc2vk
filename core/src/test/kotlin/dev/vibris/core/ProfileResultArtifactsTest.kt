@@ -54,7 +54,36 @@ class ProfileResultArtifactsTest {
                 .setCaseId("dev--spawn")
                 .setKind(JobActionKind.JOB_ACTION_KIND_GET_GPU_METRICS)
                 .setJson(
-                    """{"gpuTimings":{"composite18_total":{"avg":7000000,"p50":6800000},"shadowcomp0":{"avg":120000}}}""",
+                    """
+                    {
+                      "gpuTimings": {
+                        "composite18_total": {"avg":7000000,"p50":6800000},
+                        "shadowcomp0": {"avg":120000}
+                      },
+                      "gpuTimingScopes": [
+                        {
+                          "metric":"composite18_total",
+                          "kind":"framework_total",
+                          "framework_pass":"composite18",
+                          "stage":null
+                        }
+                      ],
+                      "gpuProgramTimings": [
+                        {
+                          "metric":"begin3_a_compute",
+                          "kind":"program",
+                          "program":"begin3_a",
+                          "stage":"compute",
+                          "source":"GenerateSkyViewLUT.comp.glsl",
+                          "defines":{"SKY_VIEW_SAMPLES":"32"},
+                          "dispatch":"direct:120x68x1",
+                          "framework_pass":"begin3",
+                          "compatibility_metric":"begin3_compute",
+                          "statistics":{"avg":103381,"p95":110000}
+                        }
+                      ]
+                    }
+                    """.trimIndent(),
                 )
                 .build(),
         )
@@ -88,6 +117,14 @@ class ProfileResultArtifactsTest {
         assertEquals(7_000_000.0, composite.getValue("avg").jsonPrimitive.double)
         assertEquals(7_000.0, composite.getValue("avg_us").jsonPrimitive.double)
         assertEquals(7.0, composite.getValue("avg_ms").jsonPrimitive.double)
+        val program = case.getValue("metrics").jsonObject.getValue("gpuProgramTimings").jsonArray
+            .single().jsonObject
+        assertEquals("begin3_a", program.getValue("program").jsonPrimitive.content)
+        assertEquals("GenerateSkyViewLUT.comp.glsl", program.getValue("source").jsonPrimitive.content)
+        assertEquals(
+            103.381,
+            program.getValue("statistics").jsonObject.getValue("avg_us").jsonPrimitive.double,
+        )
         assertEquals("passed", case.getValue("status").jsonPrimitive.content)
         assertEquals("hash", case.getValue("provenance").jsonObject.getValue("case_hash").jsonPrimitive.content)
         assertEquals(2, document.getValue("attempt").jsonPrimitive.content.toInt())
@@ -103,10 +140,22 @@ class ProfileResultArtifactsTest {
         assertTrue(
             csv.startsWith(
                 "case_id,source_id,config_id,status,error_code,error_message,pass,statistic," +
-                    "value_ns,value_us,value_ms\n",
+                    "value_ns,value_us,value_ms,timing_kind,program,stage,source,defines,dispatch," +
+                    "framework_pass,compatibility_metric\n",
             ),
         )
-        assertTrue(csv.contains("dev--spawn,dev,spawn,passed,,,composite18_total,avg,7000000.0,7000.0,7.0"))
+        assertTrue(
+            csv.contains(
+                "dev--spawn,dev,spawn,passed,,,composite18_total,avg,7000000.0,7000.0,7.0," +
+                    "framework_total,,",
+            ),
+        )
+        assertTrue(
+            csv.contains(
+                "dev--spawn,dev,spawn,passed,,,begin3_a_compute,avg,103381.0,103.381,0.103381," +
+                    "program,begin3_a,compute,GenerateSkyViewLUT.comp.glsl",
+            ),
+        )
         assertTrue(Files.readString(Path.of(result.manifestPath)).contains(ProfileResultArtifacts.JSON_FILE))
         assertEquals(jsonPath.parent, csvPath.parent)
         assertTrue(manager.usedBytes() > Files.size(jsonPath) + Files.size(csvPath))
@@ -142,6 +191,80 @@ class ProfileResultArtifactsTest {
         assertEquals(512_000.0, average(cases.getValue("source--512").jsonObject))
         assertEquals(1_024_000.0, average(cases.getValue("source--1024").jsonObject))
         assertTrue(cases.values.all { it.jsonObject.getValue("status").jsonPrimitive.content == "passed" })
+    }
+
+    @Test
+    fun programOnlyTimingPayloadIsACompleteGpuSampleSet() {
+        val actionResults = listOf(
+            ActionResult.newBuilder()
+                .setActionIndex(0)
+                .setCaseId("dev--spawn")
+                .setKind(JobActionKind.JOB_ACTION_KIND_LOAD_SHADER)
+                .setJson("""{"success":true,"provenance":{"complete":true,"case_hash":"hash"}}""")
+                .build(),
+            ActionResult.newBuilder()
+                .setActionIndex(2)
+                .setCaseId("dev--spawn")
+                .setKind(JobActionKind.JOB_ACTION_KIND_GET_GPU_METRICS)
+                .setJson(
+                    """
+                    {
+                      "gpuTimings": {},
+                      "gpuProgramTimings": [{
+                        "metric":"begin3_a_compute",
+                        "kind":"program",
+                        "program":"begin3_a",
+                        "stage":"compute",
+                        "source":"GenerateSkyViewLUT.comp.glsl",
+                        "defines":{},
+                        "dispatch":null,
+                        "framework_pass":"begin3",
+                        "compatibility_metric":"begin3_compute",
+                        "statistics":{"avg":103381}
+                      }]
+                    }
+                    """.trimIndent(),
+                )
+                .build(),
+        )
+
+        val case = ProfileResultArtifacts.document(submission(), actionResults)
+            .getValue("cases").jsonArray.single().jsonObject
+
+        assertEquals("passed", case.getValue("status").jsonPrimitive.content)
+        assertEquals(
+            "GenerateSkyViewLUT.comp.glsl",
+            case.getValue("metrics").jsonObject.getValue("gpuProgramTimings").jsonArray
+                .single().jsonObject.getValue("source").jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun programTimingWithoutStatisticsIsIncomplete() {
+        val actionResults = listOf(
+            ActionResult.newBuilder()
+                .setActionIndex(2)
+                .setCaseId("dev--spawn")
+                .setKind(JobActionKind.JOB_ACTION_KIND_GET_GPU_METRICS)
+                .setJson(
+                    """
+                    {
+                      "gpuTimings": {},
+                      "gpuProgramTimings": [{"program":"begin3_a","statistics":{}}]
+                    }
+                    """.trimIndent(),
+                )
+                .build(),
+        )
+
+        val case = ProfileResultArtifacts.document(submission(), actionResults)
+            .getValue("cases").jsonArray.single().jsonObject
+
+        assertEquals("incomplete", case.getValue("status").jsonPrimitive.content)
+        assertEquals(
+            "NO_GPU_SAMPLES",
+            case.getValue("error").jsonObject.getValue("error_code").jsonPrimitive.content,
+        )
     }
 
     private fun multiCaseSubmission(): SubmitJob {

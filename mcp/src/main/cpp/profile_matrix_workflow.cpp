@@ -240,7 +240,14 @@ bool has_metrics(const Json& value) {
     const auto metrics = value.find("metrics");
     if (metrics == value.end() || !metrics->is_object()) return false;
     const auto timings = metrics->find("gpuTimings");
-    return timings != metrics->end() && timings->is_object() && !timings->empty();
+    if (timings != metrics->end() && timings->is_object() && !timings->empty()) return true;
+    const auto programs = metrics->find("gpuProgramTimings");
+    return programs != metrics->end() && programs->is_array() &&
+        std::any_of(programs->begin(), programs->end(), [](const Json& program) {
+            if (!program.is_object()) return false;
+            const auto statistics = program.find("statistics");
+            return statistics != program.end() && statistics->is_object() && !statistics->empty();
+        });
 }
 
 Json pending_case(const Json& spec, const Json& arguments, const std::uint32_t default_warmup) {

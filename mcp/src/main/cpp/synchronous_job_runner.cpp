@@ -159,7 +159,14 @@ bool failed_action(const Json& action) {
 bool has_gpu_samples(const Json& result) {
     if (!result.is_object()) return false;
     const auto timings = result.find("gpuTimings");
-    return timings != result.end() && timings->is_object() && !timings->empty();
+    if (timings != result.end() && timings->is_object() && !timings->empty()) return true;
+    const auto programs = result.find("gpuProgramTimings");
+    return programs != result.end() && programs->is_array() &&
+        std::any_of(programs->begin(), programs->end(), [](const Json& program) {
+            if (!program.is_object()) return false;
+            const auto statistics = program.find("statistics");
+            return statistics != program.end() && statistics->is_object() && !statistics->empty();
+        });
 }
 
 bool wildcard_match(std::string_view pattern, std::string_view value) {
@@ -194,6 +201,35 @@ bool selected_metric(const Json& arguments, std::string_view name) {
     return false;
 }
 
+bool selected_program_timing(const Json& arguments, const Json& timing) {
+    const auto filter = arguments.find("metric_filter");
+    if (filter == arguments.end()) return true;
+    constexpr std::array fields{
+        "metric", "program", "stage", "source", "dispatch", "framework_pass", "compatibility_metric",
+    };
+    for (const auto& pattern_value : *filter) {
+        const auto& pattern = pattern_value.get_ref<const std::string&>();
+        for (const auto* field : fields) {
+            const auto found = timing.find(field);
+            if (found != timing.end() && found->is_string() &&
+                wildcard_match(pattern, found->get_ref<const std::string&>())) {
+                return true;
+            }
+        }
+        const auto defines = timing.find("defines");
+        if (defines == timing.end() || !defines->is_object()) continue;
+        for (const auto& [name, value] : defines->items()) {
+            if (wildcard_match(pattern, name) ||
+                (value.is_string() &&
+                    (wildcard_match(pattern, value.get_ref<const std::string&>()) ||
+                        wildcard_match(pattern, name + "=" + value.get_ref<const std::string&>())))) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 bool selected_statistic(const Json& arguments, std::string_view name) {
     const auto filter = arguments.find("statistics");
     if (filter == arguments.end()) return true;
@@ -202,37 +238,62 @@ bool selected_statistic(const Json& arguments, std::string_view name) {
     });
 }
 
+Json filtered_statistics(const Json& statistics, const Json& arguments) {
+    Json result = Json::object();
+    for (const auto& [statistic, value] : statistics.items()) {
+        if (!selected_statistic(arguments, statistic)) continue;
+        result[statistic] = value;
+        if (!value.is_number()) continue;
+        const auto nanoseconds = value.get<double>();
+        for (const auto& unit : arguments.value("converted_units", Json::array())) {
+            const auto& name = unit.get_ref<const std::string&>();
+            if (name == "us") result[statistic + "_us"] = nanoseconds / 1'000.0;
+            if (name == "ms") result[statistic + "_ms"] = nanoseconds / 1'000'000.0;
+        }
+    }
+    return result;
+}
+
 Json filtered_metrics(const Json& metrics, const Json& arguments) {
     Json result = metrics;
     Json filtered_timings = Json::object();
-    for (const auto& [metric_name, statistics] : metrics.at("gpuTimings").items()) {
+    const auto timing_values = metrics.value("gpuTimings", Json::object());
+    for (const auto& [metric_name, statistics] : timing_values.items()) {
         if (!selected_metric(arguments, metric_name)) continue;
-        if (!statistics.is_object()) {
-            filtered_timings[metric_name] = statistics;
-            continue;
-        }
-        Json filtered_statistics = Json::object();
-        for (const auto& [statistic, value] : statistics.items()) {
-            if (!selected_statistic(arguments, statistic)) continue;
-            filtered_statistics[statistic] = value;
-            if (!value.is_number()) continue;
-            const auto nanoseconds = value.get<double>();
-            for (const auto& unit : arguments.value("converted_units", Json::array())) {
-                const auto& name = unit.get_ref<const std::string&>();
-                if (name == "us") filtered_statistics[statistic + "_us"] = nanoseconds / 1'000.0;
-                if (name == "ms") filtered_statistics[statistic + "_ms"] = nanoseconds / 1'000'000.0;
-            }
-        }
-        filtered_timings[metric_name] = std::move(filtered_statistics);
+        filtered_timings[metric_name] = statistics.is_object()
+            ? filtered_statistics(statistics, arguments)
+            : statistics;
     }
     result["gpuTimings"] = std::move(filtered_timings);
+
+    Json filtered_scopes = Json::array();
+    const auto scope_values = metrics.value("gpuTimingScopes", Json::array());
+    for (const auto& scope : scope_values) {
+        if (scope.is_object() && selected_metric(arguments, scope.value("metric", std::string{}))) {
+            filtered_scopes.push_back(scope);
+        }
+    }
+    result["gpuTimingScopes"] = std::move(filtered_scopes);
+
+    Json filtered_programs = Json::array();
+    const auto program_values = metrics.value("gpuProgramTimings", Json::array());
+    for (const auto& timing : program_values) {
+        if (!timing.is_object() || !selected_program_timing(arguments, timing)) continue;
+        auto filtered = timing;
+        if (const auto statistics = timing.find("statistics");
+            statistics != timing.end() && statistics->is_object()) {
+            filtered["statistics"] = filtered_statistics(*statistics, arguments);
+        }
+        filtered_programs.push_back(std::move(filtered));
+    }
+    result["gpuProgramTimings"] = std::move(filtered_programs);
     return result;
 }
 
 Json no_gpu_samples_error(std::string_view case_id, std::string_view reason) {
     return {{"success", false},
             {"error_code", "NO_GPU_SAMPLES"},
-            {"message", "GPU metrics did not return a non-empty gpuTimings object."},
+            {"message", "GPU metrics did not return aggregate or program timing samples."},
             {"retryable", true},
             {"details", {{"case_id", case_id}, {"reason", reason}}}};
 }

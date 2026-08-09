@@ -8,6 +8,7 @@ import dev.vibris.protocol.v1.JobActionKind
 import dev.vibris.protocol.v1.SubmitJob
 import java.nio.charset.StandardCharsets
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -194,25 +195,46 @@ internal object ProfileResultArtifacts {
 
     private fun convertedMetrics(payload: JsonElement, units: Set<String>): JsonElement {
         if (units.isEmpty() || payload !is JsonObject) return payload
-        val timings = payload["gpuTimings"] as? JsonObject ?: return payload
         return JsonObject(payload.toMutableMap().apply {
-            put("gpuTimings", JsonObject(timings.mapValues { (_, statistics) ->
-                if (statistics !is JsonObject) return@mapValues statistics
-                JsonObject(statistics.toMutableMap().apply {
-                    statistics.forEach { (name, value) ->
-                        val number = (value as? JsonPrimitive)?.doubleOrNull ?: return@forEach
-                        if ("us" in units) put("${name}_us", JsonPrimitive(number / 1_000.0))
-                        if ("ms" in units) put("${name}_ms", JsonPrimitive(number / 1_000_000.0))
+            (payload["gpuTimings"] as? JsonObject)?.let { timings ->
+                put("gpuTimings", JsonObject(timings.mapValues { (_, statistics) ->
+                    if (statistics is JsonObject) convertedStatistics(statistics, units) else statistics
+                }))
+            }
+            (payload["gpuProgramTimings"] as? JsonArray)?.let { programs ->
+                put("gpuProgramTimings", buildJsonArray {
+                    programs.forEach { value ->
+                        val program = value as? JsonObject
+                        val statistics = program?.get("statistics") as? JsonObject
+                        if (program == null || statistics == null) {
+                            add(value)
+                        } else {
+                            add(JsonObject(program.toMutableMap().apply {
+                                put("statistics", convertedStatistics(statistics, units))
+                            }))
+                        }
                     }
                 })
-            }))
+            }
         })
     }
 
+    private fun convertedStatistics(statistics: JsonObject, units: Set<String>): JsonObject =
+        JsonObject(statistics.toMutableMap().apply {
+            statistics.forEach { (name, value) ->
+                val number = (value as? JsonPrimitive)?.doubleOrNull ?: return@forEach
+                if ("us" in units) put("${name}_us", JsonPrimitive(number / 1_000.0))
+                if ("ms" in units) put("${name}_ms", JsonPrimitive(number / 1_000_000.0))
+            }
+        })
+
     private fun csv(document: JsonObject, units: Set<String>): String {
-        val output = StringBuilder("case_id,source_id,config_id,status,error_code,error_message,pass,statistic,value_ns")
+        val output = StringBuilder(
+            "case_id,source_id,config_id,status,error_code,error_message,pass,statistic,value_ns",
+        )
         if ("us" in units) output.append(",value_us")
         if ("ms" in units) output.append(",value_ms")
+        output.append(",timing_kind,program,stage,source,defines,dispatch,framework_pass,compatibility_metric")
         output.append('\n')
         val cases = document["cases"] ?: return output.toString()
         for (caseValue in cases as kotlinx.serialization.json.JsonArray) {
@@ -222,25 +244,70 @@ internal object ProfileResultArtifacts {
                 text((case["error"] as? JsonObject)?.get("error_code")),
                 text((case["error"] as? JsonObject)?.get("message")),
             )
-            val timings = ((case["metrics"] as? JsonObject)?.get("gpuTimings") as? JsonObject)
+            val metrics = case["metrics"] as? JsonObject
+            val timings = metrics?.get("gpuTimings") as? JsonObject
+            val scopes = (metrics?.get("gpuTimingScopes") as? JsonArray).orEmpty().mapNotNull { value ->
+                val scope = value as? JsonObject ?: return@mapNotNull null
+                text(scope["metric"]).takeIf(String::isNotEmpty)?.let { it to scope }
+            }.toMap()
             var emitted = false
             timings?.forEach { (pass, statistics) ->
                 (statistics as? JsonObject)?.forEach { (statistic, value) ->
                     if (statistic.endsWith("_us") || statistic.endsWith("_ms")) return@forEach
                     val number = (value as? JsonPrimitive)?.doubleOrNull ?: return@forEach
-                    appendCsvRow(output, prefix + listOf(pass, statistic, number.toString()), number, units)
+                    val scope = scopes[pass]
+                    appendCsvRow(
+                        output,
+                        prefix + listOf(pass, statistic, number.toString()),
+                        number,
+                        units,
+                        listOf(
+                            text(scope?.get("kind")), "", text(scope?.get("stage")), "", "", "",
+                            text(scope?.get("framework_pass")), "",
+                        ),
+                    )
                     emitted = true
                 }
             }
-            if (!emitted) appendCsvRow(output, prefix + listOf("", "", ""), null, units)
+            (metrics?.get("gpuProgramTimings") as? JsonArray).orEmpty().forEach programLoop@{ value ->
+                val program = value as? JsonObject ?: return@programLoop
+                val statistics = program["statistics"] as? JsonObject ?: return@programLoop
+                statistics.forEach statisticLoop@{ (statistic, sample) ->
+                    if (statistic.endsWith("_us") || statistic.endsWith("_ms")) return@statisticLoop
+                    val number = (sample as? JsonPrimitive)?.doubleOrNull ?: return@statisticLoop
+                    appendCsvRow(
+                        output,
+                        prefix + listOf(text(program["metric"]), statistic, number.toString()),
+                        number,
+                        units,
+                        listOf(
+                            "program", text(program["program"]), text(program["stage"]),
+                            text(program["source"]), program["defines"]?.toString().orEmpty(),
+                            text(program["dispatch"]), text(program["framework_pass"]),
+                            text(program["compatibility_metric"]),
+                        ),
+                    )
+                    emitted = true
+                }
+            }
+            if (!emitted) {
+                appendCsvRow(output, prefix + listOf("", "", ""), null, units, List(8) { "" })
+            }
         }
         return output.toString()
     }
 
-    private fun appendCsvRow(output: StringBuilder, fields: List<String>, valueNs: Double?, units: Set<String>) {
+    private fun appendCsvRow(
+        output: StringBuilder,
+        fields: List<String>,
+        valueNs: Double?,
+        units: Set<String>,
+        metadata: List<String>,
+    ) {
         output.append(fields.joinToString(",") { csvField(it) })
         if ("us" in units) output.append(',').append(valueNs?.div(1_000.0)?.toString().orEmpty())
         if ("ms" in units) output.append(',').append(valueNs?.div(1_000_000.0)?.toString().orEmpty())
+        output.append(',').append(metadata.joinToString(",") { csvField(it) })
         output.append('\n')
     }
 
@@ -282,12 +349,18 @@ internal object ProfileResultArtifacts {
         value is JsonObject && (value["success"] as? JsonPrimitive)?.content == "false"
 
     private fun hasGpuSamples(value: JsonElement): Boolean =
-        value is JsonObject && (value["gpuTimings"] as? JsonObject)?.isNotEmpty() == true
+        value is JsonObject && (
+            (value["gpuTimings"] as? JsonObject)?.isNotEmpty() == true ||
+                (value["gpuProgramTimings"] as? JsonArray)?.any { program ->
+                    val statistics = (program as? JsonObject)?.get("statistics") as? JsonObject
+                    statistics?.isNotEmpty() == true
+                } == true
+            )
 
     private fun noGpuSamples(caseId: String, metricsSeen: Boolean): JsonObject = buildJsonObject {
         put("success", false)
         put("error_code", "NO_GPU_SAMPLES")
-        put("message", "GPU metrics did not return a non-empty gpuTimings object.")
+        put("message", "GPU metrics did not return aggregate or program timing samples.")
         put("retryable", true)
         put("details", buildJsonObject {
             put("case_id", caseId)

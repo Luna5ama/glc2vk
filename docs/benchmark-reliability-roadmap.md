@@ -46,7 +46,7 @@ Do not restart Minecraft or its launcher unless the user explicitly asks.
 | T05 | P0 | vibris | Checkpoint matrix cases and expose resumable progress | Done | feat(mcp): checkpoint profile matrix progress |
 | T06 | P0 | vibris | Return exact scene/config/source provenance | Done | feat(mcp): add benchmark case provenance |
 | T07 | P0 | vibris | Isolate cases and restore state | Done | fix(core): isolate benchmark matrix cases |
-| T08 | P1 | vibris | Preserve real shader-program timing identity and source metadata | Pending | feat(capture): expose program gpu timings |
+| T08 | P1 | vibris | Preserve real shader-program timing identity and source metadata | Done | feat(capture): expose program gpu timings |
 | T09 | P1 | Iris | Emit distinct program timing labels for grouped wrapper programs | Pending | feat(shaderdev): expose per-program gpu timings |
 | T10 | P1 | vibris | Add interleaved repeated A/B benchmarking and noise evaluation | Pending | feat(mcp): add paired benchmark recipe |
 | T11 | P2 | vibris | Add typed preset selection, tags, and tag filtering | Pending | feat(mcp): add typed preset filters |
@@ -383,3 +383,10 @@ and exact commit title. The Git history is the source of truth for the resulting
   Action and artifact mapping now uses explicit case IDs, with fail-closed mismatch and 128/512/1024 metric-shift
   regressions. Verified with .\gradlew.bat build --offline, the CMake release build, focused isolation/workflow tests,
   and the full release CTest suite (53/53 passed). Commit title: fix(core): isolate benchmark matrix cases.
+- 2026-08-09 - T08 - Added exact program-level GPU timing records keyed by program, stage, source, defines, and
+  dispatch identity while retaining classified framework totals and compatibility aggregate aliases. MCP filters now
+  select program records by metric, program, source, dispatch, and defines; Core JSON/CSV artifacts preserve metadata,
+  and program-only payloads require real statistics before counting as complete. Tests cover `begin3` and `begin3_a`
+  under one wrapper plus `GenerateSkyViewLUT.comp.glsl` source/program selection. Verified with
+  `.\gradlew.bat build --offline`, the CMake Release build, focused Capture/Core/native tests, and the full Release
+  CTest suite (53/53 passed). Commit title: feat(capture): expose program gpu timings.

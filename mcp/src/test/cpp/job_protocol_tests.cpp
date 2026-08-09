@@ -518,6 +518,14 @@ void profile_requires_nonempty_gpu_samples() {
             missing_case.at("frames") == 32 && missing_case.at("warmup_frames") == 0,
         "Missing profile metrics did not return structured NO_GPU_SAMPLES.");
 
+    const auto empty_program = synchronous_metrics_job(arguments, {
+        R"({"gpuTimings":{},"gpuProgramTimings":[{"program":"begin3_a","statistics":{}}]})",
+    });
+    const auto& empty_program_case = std::get<Json>(empty_program).at("cases").at(0);
+    require(empty_program_case.at("status") == "incomplete" &&
+            empty_program_case.at("error").at("error_code") == "NO_GPU_SAMPLES",
+        "Program timing metadata without statistics was accepted as a GPU sample.");
+
     const auto complete = synchronous_metrics_job(
         arguments, {R"({"gpuTimings":{"composite_total":{"avg":7000000}}})"});
     const auto& result = std::get<Json>(complete);
@@ -611,6 +619,53 @@ void profile_metric_filters_and_converted_units() {
             result.at("artifacts").size() == 2 &&
             result.at("artifacts").at(1).at("file_name") == "profile-result.csv",
         "Profile statistic filtering, raw nanoseconds, conversions, or artifact paths were lost.");
+}
+
+void profile_program_timings_filter_by_program_and_source_identity() {
+    Json arguments{
+        {"recipe", "profile"},
+        {"source", {{"kind", "workspace"}}},
+        {"config", Json::object()},
+        {"warmup_frames", 0},
+        {"frames", 32},
+        {"metric_filter", Json::array({"GenerateSkyViewLUT.comp.glsl"})},
+        {"statistics", Json::array({"avg"})},
+        {"converted_units", Json::array({"us"})},
+    };
+    const Json payload{
+        {"gpuTimings", Json::object()},
+        {"gpuTimingScopes", Json::array()},
+        {"gpuProgramTimings", Json::array({
+            {{"metric", "begin3_compute"}, {"kind", "program"}, {"program", "begin3"},
+             {"stage", "compute"}, {"source", "CloudAmbientSample.comp.glsl"},
+             {"defines", Json::object()}, {"dispatch", "direct:1x1x1"},
+             {"framework_pass", "begin3"}, {"compatibility_metric", "begin3_compute"},
+             {"statistics", {{"avg", 100'000}, {"p95", 120'000}}}},
+            {{"metric", "begin3_a_compute"}, {"kind", "program"}, {"program", "begin3_a"},
+             {"stage", "compute"}, {"source", "GenerateSkyViewLUT.comp.glsl"},
+             {"defines", {{"SKY_VIEW_SAMPLES", "32"}}}, {"dispatch", "direct:120x68x1"},
+             {"framework_pass", "begin3"}, {"compatibility_metric", "begin3_compute"},
+             {"statistics", {{"avg", 300'000}, {"p95", 330'000}}}},
+        })},
+    };
+
+    const auto source_outcome = synchronous_metrics_job(arguments, {payload.dump()});
+    const auto& source_metrics = std::get<Json>(source_outcome).at("cases").at(0).at("metrics");
+    const auto& source_programs = source_metrics.at("gpuProgramTimings");
+    require(source_metrics.at("gpuTimings").empty() && source_metrics.at("gpuTimingScopes").empty() &&
+            source_programs.size() == 1 && source_programs.at(0).at("program") == "begin3_a" &&
+            source_programs.at(0).at("source") == "GenerateSkyViewLUT.comp.glsl" &&
+            source_programs.at(0).at("statistics").at("avg") == 300'000 &&
+            source_programs.at(0).at("statistics").at("avg_us") == 300.0 &&
+            !source_programs.at(0).at("statistics").contains("p95"),
+        "Source identity filtering did not isolate GenerateSkyViewLUT program timing.");
+
+    arguments["metric_filter"] = Json::array({"begin3_a"});
+    const auto program_outcome = synchronous_metrics_job(arguments, {payload.dump()});
+    const auto& program_timings = std::get<Json>(program_outcome)
+        .at("cases").at(0).at("metrics").at("gpuProgramTimings");
+    require(program_timings.size() == 1 && program_timings.at(0).at("program") == "begin3_a",
+        "Program identity filtering collapsed begin3_a into the begin3 wrapper.");
 }
 
 void profile_matrix_reports_incomplete_cases() {
@@ -1448,6 +1503,7 @@ int main() {
         profile_requires_nonempty_gpu_samples();
         profile_result_detail_contract();
         profile_metric_filters_and_converted_units();
+        profile_program_timings_filter_by_program_and_source_identity();
         profile_matrix_reports_incomplete_cases();
         profile_matrix_retries_only_retryable_cases();
         profile_retries_retryable_job_failure();

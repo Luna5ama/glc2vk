@@ -87,17 +87,50 @@ class ShaderDebugControl constructor(
     fun captureMetrics(frames: Int): CompletionStage<JsonObject> =
         metrics.capture(frames).thenApply(::metricsJson)
 
-    private fun metricsJson(values: Map<String, GpuTimingStats>): JsonObject = buildJsonObject {
+    internal fun metricsJson(values: GpuTimingSnapshot): JsonObject = buildJsonObject {
         put("gpuTimings", buildJsonObject {
-            values.forEach { (name, stats) ->
-                put(name, buildJsonObject {
-                    put("avg", stats.average)
-                    put("p5", stats.p5)
-                    put("p95", stats.p95)
-                    put("p50", stats.p50)
+            values.aggregateTimings.forEach { (name, stats) ->
+                put(name, timingStatistics(stats))
+            }
+        })
+        put("gpuTimingScopes", buildJsonArray {
+            values.aggregateScopes.forEach { scope ->
+                add(buildJsonObject {
+                    put("metric", scope.metric)
+                    put("kind", scope.kind.jsonName)
+                    put("framework_pass", scope.frameworkPass?.let(::JsonPrimitive) ?: JsonNull)
+                    put("stage", scope.stage?.let(::JsonPrimitive) ?: JsonNull)
                 })
             }
         })
+        put("gpuProgramTimings", buildJsonArray {
+            values.programTimings.forEach { timing ->
+                add(buildJsonObject {
+                    put("metric", timing.metric)
+                    put("kind", "program")
+                    put("program", timing.program.program)
+                    put("stage", timing.program.stage)
+                    put("source", timing.program.sourceFile)
+                    put("defines", buildJsonObject {
+                        timing.program.defines.toSortedMap().forEach { (name, value) -> put(name, value) }
+                    })
+                    put("dispatch", timing.program.dispatch?.let(::JsonPrimitive) ?: JsonNull)
+                    put("framework_pass", timing.frameworkPass?.let(::JsonPrimitive) ?: JsonNull)
+                    put(
+                        "compatibility_metric",
+                        timing.compatibilityMetric?.let(::JsonPrimitive) ?: JsonNull,
+                    )
+                    put("statistics", timingStatistics(timing.statistics))
+                })
+            }
+        })
+    }
+
+    private fun timingStatistics(stats: GpuTimingStats): JsonObject = buildJsonObject {
+        put("avg", stats.average)
+        put("p5", stats.p5)
+        put("p95", stats.p95)
+        put("p50", stats.p50)
     }
 
     fun buffersJson(): JsonObject = buildJsonObject {
@@ -130,7 +163,14 @@ class ShaderDebugControl constructor(
 
     fun pushPass(name: String) {
         passStack.get().addLast(name)
-        metrics.begin("${name}_total")
+        metrics.beginAggregate(
+            GpuTimingScope(
+                metric = "${name}_total",
+                kind = GpuTimingScopeKind.FRAMEWORK_TOTAL,
+                frameworkPass = name,
+                stage = null,
+            ),
+        )
     }
 
     fun popPass() {
@@ -144,16 +184,37 @@ class ShaderDebugControl constructor(
 
     fun beginDraw() = beginTiming("draw")
 
+    fun beginDraw(program: GpuTimingProgram) = beginTiming("draw", program)
+
     fun endDraw() = endTiming()
 
     fun beginCompute() = beginTiming("compute")
 
+    fun beginCompute(program: GpuTimingProgram) = beginTiming("compute", program)
+
     fun endCompute() = endTiming()
 
-    private fun beginTiming(kind: String) {
+    private fun beginTiming(kind: String, program: GpuTimingProgram? = null) {
         val pass = currentPass()
-        timingStack.get().addLast(pass != null)
-        if (pass != null) metrics.begin("${pass}_$kind")
+        val measured = when {
+            program != null -> {
+                metrics.beginProgram(program, pass, kind)
+                true
+            }
+            pass != null -> {
+                metrics.beginAggregate(
+                    GpuTimingScope(
+                        metric = "${pass}_$kind",
+                        kind = GpuTimingScopeKind.COMPATIBILITY_AGGREGATE,
+                        frameworkPass = pass,
+                        stage = kind,
+                    ),
+                )
+                true
+            }
+            else -> false
+        }
+        timingStack.get().addLast(measured)
     }
 
     private fun endTiming() {

@@ -234,10 +234,10 @@ execution order through `action_results` with their action index, kind, and JSON
 Server discovery reports the complete runtime surface only as `supported_job_actions`. Recipes and matrices are
 MCP overlays that expand to action sequences before gRPC submission.
 
-The `get_gpu_metrics` action requires `{"type":"get_gpu_metrics","frames":N}` with `1 <= N <= 10000`. Measurement
-starts when that action executes, timestamps exactly the next `N` rendered frames, and completes when the final requested
-frame has been collected. Its result contains only aggregate timing fields (`avg`, `p5`, `p50`, and `p95`); callers do
-not need a separate wait or a prior snapshot.
+The `get_gpu_metrics` action requires `{"type":"get_gpu_metrics","frames":N}` with `1 <= N <= 10000`.
+Measurement starts when that action executes, timestamps exactly the next `N` rendered frames, and completes when the
+final requested frame has been collected. Timing statistics use `avg`, `p5`, `p50`, and `p95`; metadata-aware capture
+hosts also return exact program records described below. Callers do not need a separate wait or a prior snapshot.
 
 `get_patched_shaders` requires a safe artifact namespace, for example
 `{"type":"get_patched_shaders","artifact_name":"patched"}`. It waits for every Iris `ShaderPrinter` write submitted
@@ -246,12 +246,12 @@ before the action, then snapshots the ordinary files directly under `patched_sha
 are text artifacts. All files form one `patched_shaders` artifact group and share the job transaction, quota, manifest,
 cancellation, and rollback boundary. A write failure or a source file changing during the copy fails the entire job.
 
-The `profile` recipe is the high-level performance workflow. It snapshots the selected workspace or commit, activates and
-reloads that source with the optional shader config, resets temporal state, waits `warmup_frames` (or the configured
-default), and then measures exactly the next required `frames`. It returns the same `avg`, `p5`, `p50`, and `p95`
-aggregates as the `get_gpu_metrics` action. The `profile_matrix` recipe profiles a selected source/config Cartesian
-product under the same scene preset. Both recipes return the same top-level contract and a `cases` array; a single
-`profile` is represented by one `source--config` case.
+The `profile` recipe is the high-level performance workflow. It snapshots the selected workspace or commit, activates
+and reloads that source with the optional shader config, resets temporal state, waits `warmup_frames` (or the configured
+default), and then measures exactly the next required `frames`. It returns the same aggregate and exact-program views as
+the `get_gpu_metrics` action. The `profile_matrix` recipe profiles a selected source/config Cartesian product under the
+same scene preset. Both recipes return the same top-level contract and a `cases` array; a single `profile` is
+represented by one `source--config` case.
 
 Every case always contains `case_id`, `source_id`, `config_id`, `status`, `error`, `frames`,
 `warmup_frames`, `metrics`, `provenance`, and `barriers`. The top level declares `gpu_timing_unit: "ns"` and reports
@@ -290,6 +290,23 @@ Every action result also carries its explicit `case_id`. Normalization and durab
 that identity, not by action-array ranges; a receipt for another case pauses the workflow without advancing its
 checkpoint. `profile-result.json` stores the complete barrier receipts with the raw attributed action results.
 
+GPU metrics expose two timing views under the same `gpu_timing_unit: "ns"` contract:
+
+- `gpuTimings` is the flat compatibility view. A `pass_total` entry is a `framework_total`: elapsed GPU time between
+  the framework debug-group push and pop, which can include several programs and non-program work. A historical
+  `pass_compute` or `pass_draw` entry is a `compatibility_aggregate`: per-invocation samples collapsed across every
+  program observed under that wrapper. It is not a single shader-program identity and is not the sum of the wrapper.
+- `gpuTimingScopes` classifies each flat key as `framework_total` or `compatibility_aggregate` and records its
+  framework pass and stage.
+- `gpuProgramTimings` is the exact program view. Each record has `metric`, `kind: "program"`, `program`, `stage`,
+  `source`, sorted `defines`, optional `dispatch`, `framework_pass`, `compatibility_metric`, and `statistics`.
+  Program histories are keyed by the complete metadata, so `begin3` and `begin3_a` remain separate even when both
+  execute inside the `begin3` wrapper.
+
+Capture hosts publish exact identity through the metadata-aware `beginCompute(GpuTimingProgram)` or
+`beginDraw(GpuTimingProgram)` overload. Calls using the legacy no-argument methods continue producing only the flat
+compatibility view. This keeps existing integrations working while T09 adds program/source emission in Iris.
+
 Profile requests accept an optional `result_detail`:
 
 | Value | Returned detail |
@@ -306,11 +323,15 @@ response can be recovered without rerunning Minecraft. Set `result_csv: true` to
 their paths are rewritten through the workspace `.vibris/artifact` link like other artifacts. Both files share the
 job manifest, quota, rollback, ownership, and unreported-result protection boundary.
 
-Use `metric_filter` to select timing names in the MCP response. Each entry is an exact name or a `*` wildcard pattern,
-so `shadowcomp*` and `composite18_total` can be requested together. Use `statistics` to select any of `avg`, `p5`,
-`p50`, and `p95`. These filters do not remove data from `profile-result.json`. Raw values always remain nanoseconds;
-`converted_units` may contain `us`, `ms`, or both to add suffixed derived values such as `avg_us` and `avg_ms` without
-replacing `avg`. CSV always has `value_ns` and adds `value_us` or `value_ms` columns when requested.
+Use `metric_filter` to select timings in the MCP response. Each entry is an exact name or a `*` wildcard pattern.
+Flat timings match their metric name. Program timings match `metric`, `program`, `stage`, `source`, `dispatch`,
+`framework_pass`, `compatibility_metric`, and define names, values, or `NAME=VALUE`; for example,
+`GenerateSkyViewLUT.comp.glsl` or `begin3_a` selects the exact SkyView program record instead of the `begin3` wrapper.
+Use `statistics` to select any of `avg`, `p5`, `p50`, and `p95`. These filters do not remove data from
+`profile-result.json`. Raw values always remain nanoseconds; `converted_units` may contain `us`, `ms`, or both to add
+suffixed derived values such as `avg_us` and `avg_ms` without replacing `avg`. CSV always has `value_ns`, optionally
+adds `value_us`/`value_ms`, and includes timing kind plus program, stage, source, defines, dispatch, framework pass,
+and compatibility-metric columns.
 
 Both profile recipes retry each retryable case independently. `max_retries` is bounded from 0 through 5 and defaults
 to 2, so a case has at most three automatic attempts. `profile_matrix` executes its selected product as ordered

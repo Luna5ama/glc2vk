@@ -89,7 +89,7 @@ class ShaderDebugRuntimeTest {
                 glClear(GL_COLOR_BUFFER_BIT)
                 metrics.end()
                 metrics.finishFrame()
-                assertTrue(captured.join().getValue("test_draw").p50 >= 0)
+                assertTrue(captured.join().aggregateTimings.getValue("test_draw").p50 >= 0)
             } finally {
                 glPixelStorei(GL_PACK_SKIP_PIXELS, 0)
                 glPixelStorei(GL_PACK_SWAP_BYTES, 0)

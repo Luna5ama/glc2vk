@@ -56,6 +56,70 @@ class ShaderDebugStateTest {
     }
 
     @Test
+    fun preservesMultipleProgramIdentitiesInsideOneFrameworkPass() {
+        val histories = GpuTimingHistories()
+        histories.add(
+            GpuTimingTarget.Aggregate(
+                GpuTimingScope("begin3_total", GpuTimingScopeKind.FRAMEWORK_TOTAL, "begin3", null),
+            ),
+            900,
+        )
+        histories.add(
+            GpuTimingTarget.Program(
+                GpuTimingProgram.compute(
+                    "begin3",
+                    "CloudAmbientSample.comp.glsl",
+                    dispatch = "direct:1x1x1",
+                ),
+                "begin3",
+            ),
+            100,
+        )
+        histories.add(
+            GpuTimingTarget.Program(
+                GpuTimingProgram.compute(
+                    "begin3_a",
+                    "GenerateSkyViewLUT.comp.glsl",
+                    mapOf("SKY_VIEW_SAMPLES" to "32"),
+                    "direct:120x68x1",
+                ),
+                "begin3",
+            ),
+            300,
+        )
+
+        val snapshot = histories.snapshot()
+        val programs = snapshot.programTimings.associateBy { it.program.program }
+
+        assertEquals(setOf("begin3_total", "begin3_compute"), snapshot.aggregateTimings.keys)
+        assertEquals(900, snapshot.aggregateTimings.getValue("begin3_total").average)
+        assertEquals(200, snapshot.aggregateTimings.getValue("begin3_compute").average)
+        assertEquals(setOf("begin3", "begin3_a"), programs.keys)
+        assertEquals("CloudAmbientSample.comp.glsl", programs.getValue("begin3").program.sourceFile)
+        assertEquals("GenerateSkyViewLUT.comp.glsl", programs.getValue("begin3_a").program.sourceFile)
+        assertEquals("32", programs.getValue("begin3_a").program.defines.getValue("SKY_VIEW_SAMPLES"))
+        assertEquals("direct:120x68x1", programs.getValue("begin3_a").program.dispatch)
+        assertEquals(300, programs.getValue("begin3_a").statistics.average)
+        assertEquals("begin3_compute", programs.getValue("begin3_a").compatibilityMetric)
+
+        val json = ShaderDebugControl(EmptyHost(Path.of("."))).metricsJson(snapshot)
+        val skyView = json.getValue("gpuProgramTimings").jsonArray
+            .map { it.jsonObject }
+            .single { it.getValue("program").jsonPrimitive.content == "begin3_a" }
+        assertEquals("program", skyView.getValue("kind").jsonPrimitive.content)
+        assertEquals("compute", skyView.getValue("stage").jsonPrimitive.content)
+        assertEquals("GenerateSkyViewLUT.comp.glsl", skyView.getValue("source").jsonPrimitive.content)
+        assertEquals(
+            "32",
+            skyView.getValue("defines").jsonObject.getValue("SKY_VIEW_SAMPLES").jsonPrimitive.content,
+        )
+        assertEquals("direct:120x68x1", skyView.getValue("dispatch").jsonPrimitive.content)
+        assertEquals("begin3", skyView.getValue("framework_pass").jsonPrimitive.content)
+        assertEquals("begin3_compute", skyView.getValue("compatibility_metric").jsonPrimitive.content)
+        assertEquals(300, skyView.getValue("statistics").jsonObject.getValue("avg").jsonPrimitive.content.toLong())
+    }
+
+    @Test
     fun patchedShaderIdentityIsStableUntilOutputChanges() {
         val temp = createTempDirectory("vibris-patched-identity")
         try {
