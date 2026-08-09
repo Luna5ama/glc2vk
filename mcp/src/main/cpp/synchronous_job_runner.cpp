@@ -1056,10 +1056,40 @@ ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& ar
                             if (!std::holds_alternative<Json>(outcome)) return outcome;
                             return profile_result(std::get<Json>(outcome), attempt, config_, false);
                         });
+                },
+                [this, &server, &context, &control](const Json& visual_arguments) -> ToolOutcome {
+                    return submit_once("vibris_run_recipe", visual_arguments, server, context, control);
                 });
         }
         auto outcome = submit_once(tool_name, arguments, server, context, control);
-        if (auto* result = std::get_if<Json>(&outcome)) (*result)["kind"] = recipe;
+        if (auto* result = std::get_if<Json>(&outcome)) {
+            (*result)["kind"] = recipe;
+            if (recipe == "ab_compare") {
+                const auto& captures = arguments.at("captures");
+                const bool require_heatmap = std::ranges::any_of(captures, [](const Json& capture) {
+                    return capture.is_object() &&
+                        (capture.value("type", std::string{}) == "screenshot" ||
+                            capture.value("format", std::string{}) == "png");
+                });
+                auto visual_guards = visual_comparison_guards(*result, require_heatmap);
+                const auto comparison = result->find("comparison");
+                if (!visual_guards.at("passed").get<bool>()) {
+                    (*result)["status"] = "invalid_comparison";
+                    (*result)["verdict"] = "inconclusive";
+                    (*result)["success"] = false;
+                    (*result)["error"] = {{"success", false},
+                        {"error_code", "INVALID_VISUAL_RECEIPT"},
+                        {"message", "The visual comparison receipt failed its deterministic-state guards."},
+                        {"retryable", false}, {"details", visual_guards.at("mismatches")}};
+                } else if (comparison != result->end() && comparison->is_object()) {
+                    const auto passed = comparison->value("passed", true);
+                    (*result)["status"] = passed ? "completed" : "completed_with_failures";
+                    (*result)["verdict"] = comparison->value("verdict", std::string("not_evaluated"));
+                    (*result)["success"] = passed;
+                }
+                (*result)["visual_guards"] = std::move(visual_guards);
+            }
+        }
         return outcome;
     }
     auto outcome = submit_once(tool_name, arguments, server, context, control);

@@ -115,6 +115,7 @@ internal class CaptureJobExecutor(
                 prepared.comparisonPlans[comparison.candidateCaptureIndex],
                 comparison.baselineLabel,
                 comparison.candidateLabel,
+                comparison.thresholds,
             )
         } catch (exception: Exception) {
             throw failure(exception)

@@ -397,7 +397,11 @@ void paired_benchmark_recipe_schema() {
                      {"statistic", "p50"},
                      {"metric_filter", Json::array({"begin3_a", "composite_total"})},
                      {"max_retries", 2},
-                     {"result_detail", "full"}};
+                     {"result_detail", "full"},
+                     {"visual", {{"warmup_frames", 16}, {"pixel_error_threshold", 0.01},
+                         {"max_mean_absolute_error", 0.002}, {"max_root_mean_square_error", 0.004},
+                         {"max_p95_absolute_error", 0.01}, {"max_absolute_error", 0.1},
+                         {"max_threshold_pixel_ratio", 0.001}, {"min_ssim", 0.995}}}};
     require(std::holds_alternative<Json>(registry.invoke("vibris_run_recipe", valid)),
         "Valid paired benchmark recipe was rejected.");
 
@@ -415,6 +419,15 @@ void paired_benchmark_recipe_schema() {
     require(std::holds_alternative<InvocationError>(
                 registry.invoke("vibris_run_recipe", missing_baseline)),
         "Paired benchmark accepted a missing baseline source.");
+    auto invalid_visual_ratio = valid;
+    invalid_visual_ratio["visual"]["max_threshold_pixel_ratio"] = 1.01;
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_run_recipe", invalid_visual_ratio)),
+        "Paired benchmark accepted a visual ratio outside [0, 1].");
+    auto invalid_ssim = valid;
+    invalid_ssim["visual"]["min_ssim"] = -1.01;
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_recipe", invalid_ssim)),
+        "Paired benchmark accepted an SSIM threshold outside [-1, 1].");
     require(dispatches == 1, "Invalid paired benchmark arguments reached dispatch.");
 }
 

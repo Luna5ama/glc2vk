@@ -188,6 +188,31 @@ void ab_recipe(const Json& arguments, const SessionConfig& config,
     compare->set_candidate_capture_index(1);
     compare->set_baseline_label(arguments.at("a").at("label").get<std::string>());
     compare->set_candidate_label(arguments.at("b").at("label").get<std::string>());
+    if (const auto configured = arguments.find("visual_thresholds"); configured != arguments.end()) {
+        auto* thresholds = compare->mutable_thresholds();
+        thresholds->set_pixel_error_threshold(
+            configured->value("pixel_error_threshold", 0.0));
+        if (configured->contains("max_mean_absolute_error")) {
+            thresholds->set_max_mean_absolute_error(configured->at("max_mean_absolute_error").get<double>());
+        }
+        if (configured->contains("max_root_mean_square_error")) {
+            thresholds->set_max_root_mean_square_error(
+                configured->at("max_root_mean_square_error").get<double>());
+        }
+        if (configured->contains("max_p95_absolute_error")) {
+            thresholds->set_max_p95_absolute_error(configured->at("max_p95_absolute_error").get<double>());
+        }
+        if (configured->contains("max_absolute_error")) {
+            thresholds->set_max_absolute_error(configured->at("max_absolute_error").get<double>());
+        }
+        if (configured->contains("max_threshold_pixel_ratio")) {
+            thresholds->set_max_threshold_pixel_ratio(
+                configured->at("max_threshold_pixel_ratio").get<double>());
+        }
+        if (configured->contains("min_ssim")) {
+            thresholds->set_min_ssim(configured->at("min_ssim").get<double>());
+        }
+    }
 }
 
 void profile_recipe(const Json& arguments, const SessionConfig& config,
@@ -403,11 +428,45 @@ Json diagnostics(const google::protobuf::RepeatedPtrField<proto::ShaderDiagnosti
 Json comparison(const proto::JobResult& value) {
     if (!value.has_comparison()) return nullptr;
     const auto& comparison = value.comparison();
-    return {{"baseline_label", comparison.baseline_label()},
-            {"candidate_label", comparison.candidate_label()},
-            {"mean_absolute_error", comparison.mean_absolute_error()},
-            {"root_mean_square_error", comparison.root_mean_square_error()},
-            {"max_absolute_error", comparison.max_absolute_error()}};
+    Json violations = Json::array();
+    for (const auto& violation : comparison.violations()) violations.push_back(violation);
+    Json thresholds = nullptr;
+    if (comparison.has_thresholds()) {
+        const auto& configured = comparison.thresholds();
+        thresholds = {{"pixel_error_threshold", configured.pixel_error_threshold()}};
+        if (configured.has_max_mean_absolute_error()) {
+            thresholds["max_mean_absolute_error"] = configured.max_mean_absolute_error();
+        }
+        if (configured.has_max_root_mean_square_error()) {
+            thresholds["max_root_mean_square_error"] = configured.max_root_mean_square_error();
+        }
+        if (configured.has_max_p95_absolute_error()) {
+            thresholds["max_p95_absolute_error"] = configured.max_p95_absolute_error();
+        }
+        if (configured.has_max_absolute_error()) {
+            thresholds["max_absolute_error"] = configured.max_absolute_error();
+        }
+        if (configured.has_max_threshold_pixel_ratio()) {
+            thresholds["max_threshold_pixel_ratio"] = configured.max_threshold_pixel_ratio();
+        }
+        if (configured.has_min_ssim()) thresholds["min_ssim"] = configured.min_ssim();
+    }
+    Json result{{"baseline_label", comparison.baseline_label()},
+                {"candidate_label", comparison.candidate_label()},
+                {"mean_absolute_error", comparison.mean_absolute_error()},
+                {"root_mean_square_error", comparison.root_mean_square_error()},
+                {"p95_absolute_error", comparison.p95_absolute_error()},
+                {"max_absolute_error", comparison.max_absolute_error()},
+                {"threshold_pixel_ratio", comparison.threshold_pixel_ratio()},
+                {"ssim", comparison.has_ssim() ? Json(comparison.ssim()) : Json(nullptr)},
+                {"sample_count", comparison.sample_count()},
+                {"pixel_count", comparison.pixel_count()},
+                {"pixel_error_threshold", comparison.pixel_error_threshold()},
+                {"passed", comparison.passed()},
+                {"verdict", comparison.verdict()},
+                {"violations", std::move(violations)},
+                {"thresholds", std::move(thresholds)}};
+    return result;
 }
 
 Json artifact_groups(const google::protobuf::RepeatedPtrField<proto::ArtifactGroup>& values) {

@@ -382,6 +382,17 @@ message CompareCaptures {
     uint32 candidate_capture_index = 2;
     string baseline_label = 3;
     string candidate_label = 4;
+    VisualThresholds thresholds = 5;
+}
+
+message VisualThresholds {
+    double pixel_error_threshold = 1;
+    optional double max_mean_absolute_error = 2;
+    optional double max_root_mean_square_error = 3;
+    optional double max_p95_absolute_error = 4;
+    optional double max_absolute_error = 5;
+    optional double max_threshold_pixel_ratio = 6;
+    optional double min_ssim = 7;
 }
 
 message ResetTemporalState {}
@@ -575,6 +586,16 @@ message AbComparisonResult {
     double mean_absolute_error = 3;
     double root_mean_square_error = 4;
     double max_absolute_error = 5;
+    double p95_absolute_error = 6;
+    double threshold_pixel_ratio = 7;
+    optional double ssim = 8;
+    uint64 sample_count = 9;
+    uint64 pixel_count = 10;
+    double pixel_error_threshold = 11;
+    bool passed = 12;
+    string verdict = 13;
+    repeated string violations = 14;
+    VisualThresholds thresholds = 15;
 }
 
 message ArtifactMetadata {

@@ -48,7 +48,7 @@ import java.util.function.Predicate;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class IntegrationHarness {
-    static final Duration WAIT = Duration.ofSeconds(5);
+    static final Duration WAIT = Duration.ofSeconds(15);
     private static final ProtocolVersion V1 = ProtocolVersion.newBuilder().setMajor(1).setMinor(0).build();
 
     private IntegrationHarness() {

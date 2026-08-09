@@ -3,6 +3,7 @@ package dev.vibris.core
 import dev.vibris.api.CapturePlan
 import dev.vibris.api.ResourceCatalog
 import dev.vibris.protocol.v1.ErrorCode
+import dev.vibris.protocol.v1.VisualThresholds
 import java.util.Locale
 
 internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_ACTIONS) {
@@ -18,7 +19,7 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
         if (job.submission.hasResultArtifacts()) {
             val options = job.submission.resultArtifacts
             if ((!options.json && !options.csv) ||
-                options.kind !in setOf("profile", "profile_matrix") ||
+                options.kind !in RESULT_ARTIFACT_KINDS ||
                 options.convertedUnitsList.any { it != "us" && it != "ms" } ||
                 options.convertedUnitsList.distinct().size != options.convertedUnitsCount ||
                 options.attempt == 0 ||
@@ -101,7 +102,8 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                         comparisons++ != 0 || compare.baselineCaptureIndex >= captureCount ||
                         compare.candidateCaptureIndex >= captureCount ||
                         compare.baselineCaptureIndex == compare.candidateCaptureIndex ||
-                        compare.baselineLabel.isBlank() || compare.candidateLabel.isBlank()
+                        compare.baselineLabel.isBlank() || compare.candidateLabel.isBlank() ||
+                        (compare.hasThresholds() && !validThresholds(compare.thresholds))
                     ) {
                         throw invalid("Capture comparison is invalid.")
                     }
@@ -113,6 +115,7 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                                 compare.candidateCaptureIndex,
                                 compare.baselineLabel,
                                 compare.candidateLabel,
+                                if (compare.hasThresholds()) compare.thresholds else null,
                             ),
                         ),
                     )
@@ -138,7 +141,8 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
             if (
                 loads.size != 1 || samples.size != 1 ||
                 loads.single().loadShader?.caseId != identity.caseId ||
-                !job.submission.hasResultArtifacts() || job.submission.resultArtifacts.kind != "profile_matrix"
+                !job.submission.hasResultArtifacts() ||
+                job.submission.resultArtifacts.kind !in ISOLATED_RESULT_ARTIFACT_KINDS
             ) {
                 throw invalid("An isolated benchmark case must contain exactly one matching load and GPU sample.")
             }
@@ -194,6 +198,7 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
         val candidateCaptureIndex: Int,
         val baselineLabel: String,
         val candidateLabel: String,
+        val thresholds: VisualThresholds?,
     )
 
     @JvmRecord
@@ -201,6 +206,17 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
 
     companion object {
         private const val DEFAULT_MAX_ACTIONS = 64
+        private val RESULT_ARTIFACT_KINDS = setOf("profile", "profile_matrix", "benchmark_ab")
+        private val ISOLATED_RESULT_ARTIFACT_KINDS = setOf("profile_matrix", "benchmark_ab")
+
+        private fun validThresholds(value: VisualThresholds): Boolean =
+            value.pixelErrorThreshold in 0.0..1.0 &&
+                (!value.hasMaxMeanAbsoluteError() || value.maxMeanAbsoluteError in 0.0..1.0) &&
+                (!value.hasMaxRootMeanSquareError() || value.maxRootMeanSquareError in 0.0..1.0) &&
+                (!value.hasMaxP95AbsoluteError() || value.maxP95AbsoluteError in 0.0..1.0) &&
+                (!value.hasMaxAbsoluteError() || value.maxAbsoluteError in 0.0..1.0) &&
+                (!value.hasMaxThresholdPixelRatio() || value.maxThresholdPixelRatio in 0.0..1.0) &&
+                (!value.hasMinSsim() || value.minSsim in -1.0..1.0)
 
         @Throws(RuntimeJobExecutor.Failure::class)
         private fun flush(

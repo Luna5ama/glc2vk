@@ -225,6 +225,8 @@ void remaining_execution_mappings() {
         {{"recipe", "ab_compare"},
          {"a", {{"label", "baseline"}, {"source", {{"kind", "workspace"}}}}},
          {"b", {{"label", "candidate"}, {"source", {{"kind", "workspace"}}}}},
+         {"visual_thresholds", {{"pixel_error_threshold", 0.01},
+             {"max_threshold_pixel_ratio", 0.001}, {"min_ssim", 0.995}}},
          {"captures", Json::array({{{"type", "screenshot"}},
                                     {{"type", "texture"}, {"name", "colortex5"}},
                                     {{"type", "buffer"}, {"name", "debugSsbo"}}})}},
@@ -237,7 +239,10 @@ void remaining_execution_mappings() {
             ab_actions.actions(4).has_dump_buffer() &&
             ab_actions.actions(5).load_shader().source_uuid() == two_sources[1].uuid() &&
             ab_actions.actions(10).compare_captures().baseline_label() == "baseline" &&
-            ab_actions.actions(10).compare_captures().candidate_label() == "candidate",
+            ab_actions.actions(10).compare_captures().candidate_label() == "candidate" &&
+            ab_actions.actions(10).compare_captures().thresholds().pixel_error_threshold() == 0.01 &&
+            ab_actions.actions(10).compare_captures().thresholds().max_threshold_pixel_ratio() == 0.001 &&
+            ab_actions.actions(10).compare_captures().thresholds().min_ssim() == 0.995,
         "ab_compare was not expanded into runtime actions.");
 
     const Json action_arguments{
@@ -1339,6 +1344,17 @@ void completed_mapping() {
     comparison->set_mean_absolute_error(0.25);
     comparison->set_root_mean_square_error(0.5);
     comparison->set_max_absolute_error(1.0);
+    comparison->set_p95_absolute_error(0.75);
+    comparison->set_threshold_pixel_ratio(0.125);
+    comparison->set_ssim(0.97);
+    comparison->set_sample_count(300);
+    comparison->set_pixel_count(100);
+    comparison->set_pixel_error_threshold(0.01);
+    comparison->set_passed(false);
+    comparison->set_verdict("failed");
+    comparison->add_violations("SSIM_BELOW_MINIMUM");
+    comparison->mutable_thresholds()->set_pixel_error_threshold(0.01);
+    comparison->mutable_thresholds()->set_min_ssim(0.995);
     auto* diagnostic = result->add_shader_diagnostics();
     diagnostic->set_severity(proto::DIAGNOSTIC_SEVERITY_WARNING);
     diagnostic->set_file_name("composite.fsh");
@@ -1370,7 +1386,16 @@ void completed_mapping() {
             mapped.at("timings").at("total_ms") == 13 && mapped.at("frame_ids").size() == 2,
         "Diagnostics, timings, or frame IDs were lost.");
     require(mapped.at("comparison").at("baseline_label") == "baseline" &&
-            mapped.at("comparison").at("root_mean_square_error") == 0.5,
+            mapped.at("comparison").at("root_mean_square_error") == 0.5 &&
+            mapped.at("comparison").at("p95_absolute_error") == 0.75 &&
+            mapped.at("comparison").at("threshold_pixel_ratio") == 0.125 &&
+            mapped.at("comparison").at("ssim") == 0.97 &&
+            mapped.at("comparison").at("sample_count") == 300 &&
+            mapped.at("comparison").at("pixel_count") == 100 &&
+            mapped.at("comparison").at("passed") == false &&
+            mapped.at("comparison").at("verdict") == "failed" &&
+            mapped.at("comparison").at("violations").at(0) == "SSIM_BELOW_MINIMUM" &&
+            mapped.at("comparison").at("thresholds").at("min_ssim") == 0.995,
         "A/B comparison metrics were lost.");
     require(mapped.at("artifacts").at(0).at("path") == artifact_path &&
             mapped.at("manifest_path") == manifest_path,

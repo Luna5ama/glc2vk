@@ -183,7 +183,9 @@ class ServerDescriptorTest {
     private static void submit(VibrisCoreEngine engine, ControlSession session, ClientMessage message)
         throws Exception {
         for (var method : VibrisCoreEngine.class.getDeclaredMethods()) {
-            if (method.getName().startsWith("submit") && method.getParameterCount() == 2) {
+            if (method.getName().startsWith("submit") && method.getParameterCount() == 2 &&
+                method.getParameterTypes()[0] == ControlSession.class &&
+                method.getParameterTypes()[1] == ClientMessage.class) {
                 method.setAccessible(true);
                 method.invoke(engine, session, message);
                 return;

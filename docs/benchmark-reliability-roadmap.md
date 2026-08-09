@@ -50,7 +50,7 @@ Do not restart Minecraft or its launcher unless the user explicitly asks.
 | T09 | P1 | Iris | Emit distinct program timing labels for grouped wrapper programs | Done | feat(shaderdev): expose per-program gpu timings |
 | T10 | P1 | vibris | Add interleaved repeated A/B benchmarking and noise evaluation | Done | feat(mcp): add paired benchmark recipe |
 | T11 | P2 | vibris | Add typed preset selection, tags, and tag filtering | Done | feat(mcp): add typed preset filters |
-| T12 | P2 | vibris/Iris | Add deterministic visual A/B gate and final live acceptance | Pending | feat(core): add benchmark visual gate |
+| T12 | P2 | vibris/Iris | Add deterministic visual A/B gate and final live acceptance | Done | feat(core): add benchmark visual gate |
 
 ## Task details
 
@@ -308,6 +308,8 @@ Scope:
 - Report MAE, RMSE, p95/max error, threshold pixel ratio, SSIM when available, and a difference artifact.
 - Allow a benchmark case to fail when visual error exceeds configured thresholds.
 - Run a final 19 presets x 2 sources acceptance matrix with failure/retry injection.
+- Keep long, synchronous shader compilation at a runtime safe point after client timeout and report the active request as
+  `BUSY` / `RELOADING_SHADERS` instead of latching Core into `FAILED`.
 - Update public documentation with the final supported workflow and limitations.
 
 Acceptance:
@@ -318,6 +320,50 @@ Acceptance:
 - Every timing names its real program/source and unit.
 - Invalid A/B comparisons are rejected.
 - Performance and visual verdicts are returned together.
+
+Completion evidence (2026-08-09):
+
+- The visual-gate implementation, public documentation, focused tests, full Gradle build, and Release CTest suite are
+  complete offline. The automated acceptance fixture configures 19 distinct typed scene contexts and runs one
+  two-source matrix with one preserved shader config per preset. It injects an empty-sample retry and an interruption
+  after receipt 17, resumes at receipt 18, and verifies 38 unique metric receipts with exact program/source metadata
+  and `gpu_timing_unit: "ns"`. Visual receipts additionally fail closed unless both load receipts prove matching
+  scene/config hashes and include source identities, two distinct frames, `diff.json`, and the PNG heatmap.
+- Long shader compilation exposed three unsafe fixed waits: five seconds after execution cancellation, five seconds for
+  the rollback reload, and ten seconds for isolated benchmark restoration. Those waits could mutate the active source
+  while Iris was still compiling and then permanently mark the activator not ready. Core now joins each non-cancellable
+  runtime operation to its actual safe point. Status uses the last healthy runtime snapshot while a request is active,
+  publishes `active_request_id`, and maps shader/world stages to `BUSY`, `RELOADING_SHADERS`, or `LOADING_WORLD`.
+- Live smoke testing caught that the real `1.21.11-shaderdev` build branch initially omitted the T09 Iris commit. The
+  already-tested change was cherry-picked onto the build branch as Iris commit
+  `27b7c0c6bf5e18e7f3c60a2f0564a7db0b1f43db`; `:common:test :fabric:remapJar --offline` passed, and a user-controlled
+  restart loaded the rebuilt JAR.
+- The restarted runtime completed the live 19-preset x 2-source matrix with exactly 38 unique receipts. The `spawn`
+  pair survived an MCP-only interruption after receipt 1/2, resumed the same job without duplication, and every case
+  returned `begin3_a` / `GenerateSkyViewLUT.comp.glsl`, `composite13_a` / `DirectLighting.glsl`, and `composite34` /
+  `EpipolarScattering.comp.glsl` timings in nanoseconds. The reusable evidence is
+  `I:\code\mcshaders\Alpha-Piscium\.vibris\artifact\t12-live-acceptance-20260809-1213.json.matrix.json`.
+- The first paired benchmark exposed two integration omissions: Core rejected nested result artifact kind
+  `benchmark_ab`, and the paired MCP runner dropped the configured scene-preset provenance from its nested profile and
+  visual requests. Both are fixed with focused Core and paired-runner tests. All 16 live paired measurements now pass
+  provenance, exact metric identity, equal frame/config/scene guards, and final runtime restoration.
+- The updated delivery is published at `I:\code\vibris\build\delivery-benchmark-reliability` with MCP SHA-256
+  `806C04F2EB1BEA10E3F25FECA61B414E025A06C67474D787A32E34237EEBFEC2` and Iris SHA-256
+  `BAAB2D314AFDEEE3A267F9BFEC64901EB5077A661BC06572074DD41B8918F795`; the on-disk MultiMC mod has the same Iris hash.
+- `integration-tests/scripts/live-benchmark-acceptance.ps1` drives the real release gate against an already running MC:
+  it primes an explicit restorable state, runs `spawn` first, interrupts only its own MCP after receipt 1/2, resumes the
+  same job without duplication, completes the other 18 typed presets, verifies exactly 38 program-level receipts and
+  the three required program/source mappings, then runs the paired performance and PNG visual gate. The final evidence
+  is `I:\code\mcshaders\Alpha-Piscium\.vibris\artifact\t12-live-acceptance-final-6.json`, SHA-256
+  `C29CF6CF689533DE7FE2FFDF852FAE9348B909E423A4A50E92E54D7AAACE9EFA`: 38/38 unique passed receipts, 16/16 paired
+  measurements, three exact program identities, `performance_verdict: "inconclusive"`, passed performance/visual
+  guards, restored runtime state, and `visual_verdict: "passed"`. The calibrated same-snapshot PNG receipt reports
+  MAE 0.001115421, RMSE 0.002248306, p95 0.003921569, max 0.035294118, threshold-pixel ratio 0.000943769 below the
+  0.001 limit, and SSIM 0.999646876; `diff.json` and its PNG heatmap are present.
+- Final offline verification passed `./gradlew.bat build --offline`, the full CMake Release build and CTest suite
+  (60/60), focused long-reload status and 4096-file duplicate-validation races, invalid paired comparison/visual
+  receipt guards, and the shortened 100-cycle `SourceSoak` (9.64 seconds). The adversarial test harness now allows
+  slow Windows source validation without weakening its 4096-file duplicate-submission race.
 
 ## Completion log
 
@@ -414,3 +460,13 @@ and exact commit title. The Git history is the source of truth for the resulting
   quality configs remain a separate recipe/matrix model. Verified with `.\gradlew.bat build --offline`, the CMake
   Release build, focused preset/schema/runner tests (4/4 passed), and the full Release CTest suite (58/58 passed).
   Commit title: feat(mcp): add typed preset filters.
+- 2026-08-09 - T12 - Added deterministic PNG A/B statistics, configurable fail-closed thresholds, JSON metrics and
+  PNG heatmap artifacts, combined paired performance/visual verdicts, safe-point joining and truthful busy/reload
+  status for long shader compilation, nested benchmark artifact/preset provenance, and the durable live acceptance
+  driver. The live gate passed 19 presets x 2 sources with 38/38 unique metric receipts, an MCP restart after 1/2
+  receipts without duplication, exact `begin3_a`, `composite13_a`, and `composite34` source mappings, 16/16 guarded
+  paired measurements, restored runtime state, and a passing visual receipt. Verified with `.\gradlew.bat build
+  --offline`, the CMake Release build, full Release CTest (60/60, including 100-cycle SourceSoak), focused adversarial
+  status/validation tests, and live evidence `t12-live-acceptance-final-6.json` with SHA-256
+  `C29CF6CF689533DE7FE2FFDF852FAE9348B909E423A4A50E92E54D7AAACE9EFA`. Commit title: feat(core): add benchmark
+  visual gate.

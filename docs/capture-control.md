@@ -397,6 +397,33 @@ paired Student-t confidence interval, Tukey outlier rounds, the measured control
 confidence interval includes zero is inconclusive. `result_detail: "full"` additionally returns every normalized
 nested profile receipt; compact executions, round samples, comparison rows, and result artifacts are always retained.
 
+Add `visual` to the request to run one deterministic screenshot comparison after the performance rounds. Both sides
+are loaded through the same configured scene transaction: Iris disables day/time and weather advancement, restores
+the exact save, dimension, time, weather, camera, FOV, and resolution, hides the HUD, resets shader temporal counters,
+and renders the same warmup-frame count before each capture. The response returns `performance_verdict`,
+`visual_verdict`, the combined `verdict`, and a `visual` receipt together. A visual threshold violation changes the
+combined status to `completed_with_failures` and `success: false` without discarding the performance comparison or
+difference artifacts.
+
+Visual verdicts are accepted only with a successful runtime receipt, two distinct capture frame IDs, `diff.json`, a
+PNG heatmap for screenshot/PNG comparisons, and exactly two successful `load_shader` receipts. Those load receipts
+must identify both prepared sources and must report matching effective config and scene-context hashes. Missing or
+mismatched evidence returns `INVALID_VISUAL_RECEIPT`, `status: "invalid_comparison"`, and an `inconclusive` verdict;
+the `visual.guards` (or standalone `visual_guards`) object names every failed condition.
+
+PNG visual statistics are normalized to `[0, 1]`. MAE, RMSE, p95, and maximum use channel samples;
+`threshold_pixel_ratio` counts a pixel when any channel exceeds `pixel_error_threshold`. PNG comparisons also report
+a global luminance SSIM. `diff.json` and one or more red difference heatmaps are committed through the normal artifact
+transaction. Binary comparisons report the error statistics but have `ssim: null`; configuring `min_ssim` for a
+comparison without PNG samples fails closed with `SSIM_UNAVAILABLE`. Configurable limits are
+`max_mean_absolute_error`, `max_root_mean_square_error`, `max_p95_absolute_error`, `max_absolute_error`,
+`max_threshold_pixel_ratio`, and `min_ssim`.
+
+The deterministic contract controls the scene and shader clocks, but it cannot make arbitrary world content static.
+Use quiet, fully loaded presets without moving entities, particles, resource streaming, or unseeded shader randomness
+for visual gates. Warm the world before starting the benchmark. A noisy preset should be treated as unsuitable for a
+strict pixel gate, not hidden by widening thresholds until every result passes.
+
 Every matrix has a durable `job_id`, a workspace-local checkpoint at `.vibris/profile-matrix/<job_id>.json`, and
 queue-time source snapshots below `.vibris/profile-matrix/<job_id>/sources/`. Workspace and commit sources are frozen
 once before the first case; later cases, retries, and MCP restart recovery materialize fresh server-owned UUIDs from
@@ -428,6 +455,37 @@ uncertain, `last_error.details.resume_required` is true and the request is not s
 that replay is safe. `SERVER_OFFLINE`, `SERVER_RESTARTED`, RST_STREAM transport loss, deadline, and queue failures can
 then be resumed without discarding earlier cases. One MCP process runs at most one matrix workflow at a time, and its
 checkpoint is capped at 64 MiB.
+
+For the 19-preset release acceptance, keep scene presets separate from shader configs. Enumerate the typed preset
+catalog, configure one preset with `{"kind":"preset","preset_id":"..."}`, and run a two-source matrix containing
+the baseline commit and candidate workspace with one preserved shader config. Repeat for all 19 presets and aggregate
+the 19 two-case results into exactly 38 receipts. Reject the acceptance if any result reports fewer than two requested
+cases, a passed case has empty metrics, a timing omits its real `program` or `source`, `gpu_timing_unit` is not `ns`,
+or the combined unique `(preset_id, source_id)` count is not 38. Interrupted jobs must be resumed by `job_id`; do not
+resubmit already checkpointed cases.
+
+`integration-tests/scripts/live-benchmark-acceptance.ps1` automates that release gate against an already running
+Minecraft instance. It first performs one explicit workspace/config load so Core owns a restorable source, shader
+settings map, and scene; preserve-mode matrices otherwise fail closed with `BENCHMARK_STATE_UNAVAILABLE`. The script
+then puts `spawn` first, interrupts only the MCP process it launched after receipt 1/2, resumes the same `job_id`, runs
+the remaining typed presets, and finishes with a paired performance plus deterministic PNG visual gate. The release
+gate defaults to `spawn`, four visual warmup frames, `pixel_error_threshold: 0.015`, and a strict
+`max_threshold_pixel_ratio: 0.001`. The pixel threshold was calibrated from two clean HEAD-versus-identical-workspace
+captures: both had fewer than 0.095% of pixels above 3/255 channel error, while the remaining MAE, RMSE, p95, maximum,
+and SSIM limits stayed independently enforced. `-VisualPresetId` and `-VisualWarmupFrames` support a different
+prevalidated scene without making these release thresholds a universal preset. It requires
+the exact `begin3_a`, `composite13_a`, and `composite34` program records and their real source files, then writes the
+compact 38-receipt evidence below the shader worktree's `.vibris/artifact` directory. It never launches, stops, or
+restarts Minecraft:
+
+```powershell
+pwsh -NoProfile -File integration-tests/scripts/live-benchmark-acceptance.ps1 `
+  -McpExe $deliveryRoot/vibris-mcp.exe `
+  -WorkspaceRoot $shaderWorktree `
+  -BaselineRevision HEAD `
+  -VisualPresetId 'spawn' `
+  -VisualWarmupFrames 4
+```
 
 This direct in-game path replaces project-local wrappers for routine profiling. Compute capture and external
 replay/Nsight analysis remain separate diagnostic workflows.
@@ -576,7 +634,17 @@ identity and later combinations continue.
   "statistic": "avg",
   "metric_filter": ["begin3_a", "composite_total"],
   "max_retries": 2,
-  "result_detail": "metrics"
+  "result_detail": "metrics",
+  "visual": {
+    "warmup_frames": 32,
+    "pixel_error_threshold": 0.01,
+    "max_mean_absolute_error": 0.002,
+    "max_root_mean_square_error": 0.004,
+    "max_p95_absolute_error": 0.01,
+    "max_absolute_error": 0.10,
+    "max_threshold_pixel_ratio": 0.001,
+    "min_ssim": 0.995
+  }
 }
 ```
 
@@ -621,6 +689,11 @@ resource catalog returned by `vibris_get_status`.
   "a": {"label": "baseline", "source": {"kind": "commit", "revision": "HEAD"}},
   "b": {"label": "candidate", "source": {"kind": "workspace"}},
   "warmup_frames": 32,
+  "visual_thresholds": {
+    "pixel_error_threshold": 0.01,
+    "max_threshold_pixel_ratio": 0.001,
+    "min_ssim": 0.995
+  },
   "captures": [
     {"type": "screenshot", "format": "png"},
     {"type": "texture", "name": "colortex0.main", "format": "bin"}
@@ -629,7 +702,9 @@ resource catalog returned by `vibris_get_status`.
 ```
 
 Runs both variants under the same configured scene and capture specification. Capture targets are screenshot PNG,
-texture BIN/PNG, and buffer BIN. The result includes comparison metrics and the two sets of artifact groups.
+texture BIN/PNG, and buffer BIN. The result includes comparison metrics, threshold verdict and violations, a JSON
+metrics artifact, difference heatmap artifacts, and the two sets of artifact groups. Without `visual_thresholds` it
+reports metrics with `verdict: "not_evaluated"`; with thresholds, any violation makes the recipe unsuccessful.
 
 ## Custom actions
 
@@ -712,6 +787,7 @@ and the artifact quota. A noisy repository can therefore consume shared admissio
 | `SOURCE_TOO_LARGE` / `SOURCE_TOO_MANY_FILES` | Reduce the shader tree below the limits advertised by Iris. |
 | `SOURCE_CONTAINS_REPARSE_POINT` | Replace links/junctions with ordinary files and directories. |
 | `QUEUE_FULL` | Wait for current work; pending calls, source registry, and job queue are bounded. |
+| `SERVER_STATE_BUSY` / `RUNTIME_STATE_RELOADING_SHADERS` | A shader compile or safe-point rollback is still running. Keep the accepted request ID and resume or queue work; do not reconfigure or restart solely because compilation exceeds a client deadline. |
 | `NO_GPU_SAMPLES` | The profile case returned no non-empty GPU timing set; retry it or inspect runtime readiness. |
 | `INCOMPLETE_PROVENANCE` | Source, config, scene, or patched-shader identity is incomplete; do not compare. |
 | `BENCHMARK_STATE_UNAVAILABLE` | Load a known source/config/scene through Vibris before starting an isolated matrix. |

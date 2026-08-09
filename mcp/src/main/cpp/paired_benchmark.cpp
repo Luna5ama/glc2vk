@@ -117,12 +117,75 @@ Json profile_arguments(const Json& arguments, const PlannedMeasurement& measurem
                 {"__vibris_benchmark_variant", measurement.variant}};
     if (arguments.contains("config")) result["config"] = arguments.at("config");
     if (arguments.contains("metric_filter")) result["metric_filter"] = arguments.at("metric_filter");
+    if (arguments.contains("__vibris_preset")) {
+        result["__vibris_preset"] = arguments.at("__vibris_preset");
+    }
     return result;
 }
 
 Json failure_json(const ToolFailure& failure) {
     return {{"success", false}, {"error_code", failure.code}, {"message", failure.message},
             {"retryable", failure.retryable}, {"details", failure.details}};
+}
+
+Json visual_arguments(const Json& arguments, std::size_t default_warmup_frames) {
+    auto thresholds = arguments.at("visual");
+    const auto warmup = thresholds.value(
+        "warmup_frames", arguments.value("warmup_frames", default_warmup_frames));
+    thresholds.erase("warmup_frames");
+    Json result{{"recipe", "ab_compare"},
+                {"a", {{"label", "baseline"}, {"source", arguments.at("baseline")}}},
+                {"b", {{"label", "candidate"}, {"source", arguments.at("candidate")}}},
+                {"warmup_frames", warmup},
+                {"captures", Json::array({{{"type", "screenshot"}, {"format", "png"}}})},
+                {"visual_thresholds", std::move(thresholds)}};
+    if (arguments.contains("config")) result["config"] = arguments.at("config");
+    if (arguments.contains("__vibris_preset")) {
+        result["__vibris_preset"] = arguments.at("__vibris_preset");
+    }
+    return result;
+}
+
+Json visual_receipt(ToolOutcome outcome) {
+    if (const auto* failure = std::get_if<ToolFailure>(&outcome)) {
+        return {{"requested", true}, {"success", false}, {"status", "failed"},
+                {"verdict", "inconclusive"}, {"error", failure_json(*failure)},
+                {"comparison", nullptr}, {"artifacts", Json::array()},
+                {"guards", {{"passed", false}, {"mismatches", Json::array({
+                    {{"code", "VISUAL_EXECUTION_FAILED"},
+                     {"message", "The visual comparison job did not complete successfully."}}
+                })}}}};
+    }
+    auto result = std::get<Json>(std::move(outcome));
+    auto guards = visual_comparison_guards(result, true);
+    const auto comparison = result.find("comparison");
+    if (!guards.at("passed").get<bool>()) {
+        return {{"requested", true}, {"success", false}, {"status", "invalid"},
+                {"verdict", "inconclusive"},
+                {"error", {{"success", false}, {"error_code", "INVALID_VISUAL_RECEIPT"},
+                    {"message", "The visual comparison receipt failed its deterministic-state guards."},
+                    {"retryable", false}, {"details", guards.at("mismatches")}}},
+                {"comparison", comparison != result.end() && comparison->is_object()
+                    ? Json(*comparison) : Json(nullptr)},
+                {"artifacts", result.value("artifacts", Json::array())},
+                {"artifact_groups", result.value("artifact_groups", Json::array())},
+                {"action_results", result.value("action_results", Json::array())},
+                {"benchmark_barriers", result.value("benchmark_barriers", Json::array())},
+                {"frame_ids", result.value("frame_ids", Json::array())},
+                {"guards", std::move(guards)}};
+    }
+    const bool passed = comparison->at("passed").get<bool>();
+    Json receipt{{"requested", true}, {"success", passed},
+                 {"status", passed ? "passed" : "failed"},
+                 {"verdict", comparison->at("verdict")},
+                 {"error", nullptr}, {"comparison", *comparison},
+                 {"artifacts", result.value("artifacts", Json::array())},
+                 {"artifact_groups", result.value("artifact_groups", Json::array())},
+                 {"action_results", result.value("action_results", Json::array())},
+                 {"benchmark_barriers", result.value("benchmark_barriers", Json::array())},
+                 {"frame_ids", result.value("frame_ids", Json::array())},
+                 {"guards", std::move(guards)}};
+    return receipt;
 }
 
 Json failed_case(const PlannedMeasurement& measurement, const Json& arguments, Json error,
@@ -535,8 +598,161 @@ Json guard_receipt(const GuardState& guards, const Json& arguments) {
 
 } // namespace
 
+Json visual_comparison_guards(const Json& result, bool require_heatmap) {
+    Json mismatches = Json::array();
+    const auto add_mismatch = [&mismatches](std::string code, std::string message) {
+        mismatches.push_back({{"code", std::move(code)}, {"message", std::move(message)}});
+    };
+
+    const auto success = result.find("success");
+    const bool runtime_success = success != result.end() && success->is_boolean() && success->get<bool>();
+    if (!runtime_success) {
+        add_mismatch("VISUAL_JOB_NOT_SUCCESSFUL",
+            "The visual comparison job did not return a successful runtime completion receipt.");
+    }
+
+    const auto comparison = result.find("comparison");
+    const bool comparison_receipt = comparison != result.end() && comparison->is_object() &&
+        comparison->contains("passed") && comparison->at("passed").is_boolean() &&
+        comparison->contains("verdict") && comparison->at("verdict").is_string() &&
+        !comparison->at("verdict").get_ref<const std::string&>().empty();
+    if (!comparison_receipt) {
+        add_mismatch("THRESHOLD_VERDICT_MISSING",
+            "The visual comparison did not return a typed threshold verdict.");
+    }
+
+    const auto frame_ids = result.find("frame_ids");
+    const bool two_frames = frame_ids != result.end() && frame_ids->is_array() && frame_ids->size() == 2 &&
+        frame_ids->at(0).is_number_integer() && frame_ids->at(1).is_number_integer() &&
+        frame_ids->at(0) != frame_ids->at(1);
+    if (!two_frames) {
+        add_mismatch("TWO_DISTINCT_FRAME_RECEIPTS_REQUIRED",
+            "The visual comparison must identify distinct baseline and candidate capture frames.");
+    }
+
+    bool metrics_artifact = false;
+    const auto artifacts = result.find("artifacts");
+    if (artifacts != result.end() && artifacts->is_array()) {
+        metrics_artifact = std::ranges::any_of(*artifacts, [](const Json& artifact) {
+            return artifact.is_object() && artifact.value("kind", std::string{}) == "ab_metrics" &&
+                artifact.value("format", std::string{}) == "json" &&
+                artifact.value("file_name", std::string{}) == "diff.json";
+        });
+    }
+    if (!metrics_artifact) {
+        add_mismatch("DIFF_METRICS_ARTIFACT_MISSING",
+            "The visual comparison did not return its diff.json metrics artifact.");
+    }
+
+    bool heatmap_artifact = false;
+    const auto groups = result.find("artifact_groups");
+    if (groups != result.end() && groups->is_array()) {
+        for (const auto& group : *groups) {
+            if (!group.is_object() || group.value("name", std::string{}) != "diff-heatmap") continue;
+            const auto group_artifacts = group.find("artifacts");
+            if (group_artifacts == group.end() || !group_artifacts->is_array()) continue;
+            heatmap_artifact = std::ranges::any_of(*group_artifacts, [](const Json& artifact) {
+                if (!artifact.is_object() || artifact.value("kind", std::string{}) != "heatmap" ||
+                    artifact.value("format", std::string{}) != "png") return false;
+                const auto file_name = artifact.value("file_name", std::string{});
+                return file_name == "diff-heatmap.png" ||
+                    (file_name.starts_with("diff-heatmap.") && file_name.ends_with(".png"));
+            });
+            if (heatmap_artifact) break;
+        }
+    }
+    if (require_heatmap && !heatmap_artifact) {
+        add_mismatch("DIFF_HEATMAP_ARTIFACT_MISSING",
+            "The visual comparison did not return its PNG difference heatmap artifact.");
+    }
+
+    std::vector<const Json*> loads;
+    const auto action_results = result.find("action_results");
+    if (action_results != result.end() && action_results->is_array()) {
+        for (const auto& action : *action_results) {
+            if (action.is_object() && action.value("kind", std::string{}) == "load_shader") {
+                loads.push_back(&action);
+            }
+        }
+    }
+    bool load_receipts = loads.size() == 2;
+    if (!load_receipts) {
+        add_mismatch("TWO_SHADER_LOAD_RECEIPTS_REQUIRED",
+            "The visual comparison must return exactly two shader load receipts.");
+    }
+
+    Json config_hashes = Json::array();
+    Json scene_hashes = Json::array();
+    Json source_hashes = Json::array();
+    std::array<std::string, 2> config_values;
+    std::array<std::string, 2> scene_values;
+    std::array<std::string, 2> source_values;
+    if (loads.size() == 2) {
+        for (std::size_t index = 0; index < loads.size(); ++index) {
+            const auto result_payload = loads[index]->find("result");
+            const bool load_success = result_payload != loads[index]->end() && result_payload->is_object() &&
+                result_payload->contains("success") && result_payload->at("success").is_boolean() &&
+                result_payload->at("success").get<bool>();
+            if (!load_success) {
+                load_receipts = false;
+                add_mismatch("SHADER_LOAD_RECEIPT_FAILED",
+                    "A baseline or candidate shader load receipt was unsuccessful.");
+            }
+            config_values[index] = text_at(*loads[index], {"result", "provenance", "shader", "config_sha256"});
+            scene_values[index] = text_at(*loads[index], {"result", "provenance", "scene", "context_sha256"});
+            source_values[index] = text_at(*loads[index], {"result", "provenance", "source", "identity_sha256"});
+            config_hashes.push_back(config_values[index].empty() ? Json(nullptr) : Json(config_values[index]));
+            scene_hashes.push_back(scene_values[index].empty() ? Json(nullptr) : Json(scene_values[index]));
+            source_hashes.push_back(source_values[index].empty() ? Json(nullptr) : Json(source_values[index]));
+            if (config_values[index].empty()) {
+                load_receipts = false;
+                add_mismatch("CONFIG_HASH_MISSING",
+                    "A shader load receipt omitted its effective config hash.");
+            }
+            if (scene_values[index].empty()) {
+                load_receipts = false;
+                add_mismatch("SCENE_HASH_MISSING",
+                    "A shader load receipt omitted its effective scene-context hash.");
+            }
+            if (source_values[index].empty()) {
+                load_receipts = false;
+                add_mismatch("SOURCE_HASH_MISSING",
+                    "A shader load receipt omitted its prepared source-identity hash.");
+            }
+        }
+    }
+    const bool config_match = loads.size() == 2 && !config_values[0].empty() &&
+        config_values[0] == config_values[1];
+    const bool scene_match = loads.size() == 2 && !scene_values[0].empty() &&
+        scene_values[0] == scene_values[1];
+    if (loads.size() == 2 && !config_values[0].empty() && !config_values[1].empty() && !config_match) {
+        add_mismatch("VISUAL_CONFIG_HASH_MISMATCH",
+            "Baseline and candidate captures used different effective shader configurations.");
+    }
+    if (loads.size() == 2 && !scene_values[0].empty() && !scene_values[1].empty() && !scene_match) {
+        add_mismatch("VISUAL_SCENE_HASH_MISMATCH",
+            "Baseline and candidate captures used different effective scene contexts.");
+    }
+
+    return {{"passed", mismatches.empty()},
+            {"runtime_success", runtime_success},
+            {"comparison_receipt", comparison_receipt},
+            {"two_distinct_frames", two_frames},
+            {"diff_metrics_artifact", metrics_artifact},
+            {"diff_heatmap_required", require_heatmap},
+            {"diff_heatmap_artifact", heatmap_artifact},
+            {"two_successful_load_receipts", load_receipts},
+            {"config_hash_match", config_match},
+            {"scene_hash_match", scene_match},
+            {"config_hashes", std::move(config_hashes)},
+            {"scene_hashes", std::move(scene_hashes)},
+            {"source_hashes", std::move(source_hashes)},
+            {"mismatches", std::move(mismatches)}};
+}
+
 ToolOutcome run_paired_benchmark(const Json& arguments, std::string_view workflow_id,
-    std::size_t default_warmup_frames, const PairedProfileExecutor& execute_profile) {
+    std::size_t default_warmup_frames, const PairedProfileExecutor& execute_profile,
+    const PairedVisualExecutor& execute_visual) {
     const auto measurements_plan = plan(arguments);
     std::vector<Measurement> measurements;
     measurements.reserve(measurements_plan.size());
@@ -604,12 +820,49 @@ ToolOutcome run_paired_benchmark(const Json& arguments, std::string_view workflo
             profiles.push_back(measurement.profile);
         }
     }
+    const auto performance_verdict = valid ? overall_verdict(table) : "inconclusive";
+    Json visual{{"requested", false}, {"success", true}, {"status", "not_requested"},
+                {"verdict", "not_requested"}, {"comparison", nullptr}, {"artifacts", Json::array()}};
+    if (arguments.contains("visual")) {
+        if (!execute_visual) {
+            visual = {{"requested", true}, {"success", false}, {"status", "failed"},
+                      {"verdict", "inconclusive"},
+                      {"error", {{"success", false}, {"error_code", "VISUAL_EXECUTOR_UNAVAILABLE"},
+                          {"message", "Visual comparison execution is unavailable."}, {"retryable", false}}},
+                      {"comparison", nullptr}, {"artifacts", Json::array()}};
+        } else if (halted_without_restore) {
+            visual = {{"requested", true}, {"success", false}, {"status", "skipped"},
+                      {"verdict", "inconclusive"},
+                      {"error", {{"success", false}, {"error_code", "RUNTIME_STATE_NOT_RESTORED"},
+                          {"message", "Visual comparison was skipped because benchmark state was not restored."},
+                          {"retryable", true}}},
+                      {"comparison", nullptr}, {"artifacts", Json::array()}};
+        } else {
+            visual = visual_receipt(execute_visual(visual_arguments(arguments, default_warmup_frames)));
+            for (const auto& artifact : visual.at("artifacts")) {
+                auto attributed = artifact;
+                attributed["benchmark_phase"] = "visual";
+                artifacts.push_back(std::move(attributed));
+            }
+        }
+    }
+    const bool performance_success = failed == 0 && incomplete == 0 && valid;
+    const bool visual_success = visual.at("success").get<bool>();
+    const bool visual_invalid = visual.value("status", std::string{}) == "invalid";
     const auto status = halted_without_restore || incomplete != 0 ? "incomplete" :
-        (failed != 0 ? "completed_with_failures" : (valid ? "completed" : "invalid_comparison"));
-    Json result{{"success", failed == 0 && incomplete == 0 && valid},
+        (failed != 0 ? "completed_with_failures" :
+            (!valid || visual_invalid ? "invalid_comparison" :
+                (!visual_success ? "completed_with_failures" : "completed")));
+    const auto combined_verdict = !valid || visual.at("verdict") == "inconclusive"
+        ? std::string("inconclusive")
+        : (visual.at("verdict") == "failed" ? std::string("failed") : performance_verdict);
+    Json result{{"success", performance_success && visual_success},
                 {"kind", "benchmark_ab"},
                 {"status", status},
-                {"verdict", valid ? overall_verdict(table) : "inconclusive"},
+                {"verdict", combined_verdict},
+                {"performance_verdict", performance_verdict},
+                {"visual_verdict", visual.at("verdict")},
+                {"visual", std::move(visual)},
                 {"result_detail", arguments.value("result_detail", std::string("metrics"))},
                 {"gpu_timing_unit", "ns"},
                 {"statistic", arguments.value("statistic", std::string("avg"))},

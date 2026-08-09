@@ -82,6 +82,27 @@ Json capture_schema() {
     });
 }
 
+Json visual_thresholds_schema() {
+    const Json ratio{{"type", "number"}, {"minimum", 0.0}, {"maximum", 1.0}};
+    const Json ssim{{"type", "number"}, {"minimum", -1.0}, {"maximum", 1.0}};
+    return closed_object({
+        {"pixel_error_threshold", ratio},
+        {"max_mean_absolute_error", ratio},
+        {"max_root_mean_square_error", ratio},
+        {"max_p95_absolute_error", ratio},
+        {"max_absolute_error", ratio},
+        {"max_threshold_pixel_ratio", ratio},
+        {"min_ssim", ssim},
+    });
+}
+
+Json benchmark_visual_schema() {
+    auto schema = visual_thresholds_schema();
+    schema["properties"]["warmup_frames"] =
+        bounded_integer(0, std::numeric_limits<std::uint32_t>::max());
+    return schema;
+}
+
 Json source_variant_schema() {
     return closed_object({{"label", {{"type", "string"}, {"minLength", 1}}}, {"source", source_schema()}},
                          {"label", "source"});
@@ -146,7 +167,8 @@ Json recipe_schema() {
                        {"statistic", enum_string({"avg", "p5", "p50", "p95"})},
                        {"metric_filter", metric_filter},
                        {"max_retries", max_retries},
-                       {"result_detail", result_detail}},
+                       {"result_detail", result_detail},
+                       {"visual", benchmark_visual_schema()}},
                       {"recipe", "baseline", "candidate", "frames"}),
         closed_object({{"recipe", enum_string({"load_and_screenshot"})},
                        {"source", source_schema()},
@@ -167,7 +189,8 @@ Json recipe_schema() {
                        {"b", source_variant_schema()},
                        {"config", config},
                        {"warmup_frames", frames},
-                       {"captures", {{"type", "array"}, {"items", capture_schema()}, {"maxItems", 64}}}},
+                       {"captures", {{"type", "array"}, {"items", capture_schema()}, {"maxItems", 64}}},
+                       {"visual_thresholds", visual_thresholds_schema()}},
                       {"recipe", "a", "b", "captures"}),
     });
 }
@@ -266,7 +289,8 @@ Json build_definitions() {
                    "recipes return normalized cases with summary, metrics, or full result detail. Profile matrices "
                    "support sync/async execution plus checkpoint status, resume, and cancellation operations. "
                    "benchmark_ab runs repeated paired ABBA, ABAB, or seeded randomized profiles plus same-commit "
-                   "controls and returns guarded confidence and measured-noise comparisons.",
+                   "controls and returns guarded confidence and measured-noise comparisons; optional visual "
+                   "thresholds add a deterministic screenshot gate and a combined performance/visual verdict.",
                    recipe_schema(), false),
         definition("vibris_run_actions",
                    "Run one ordered shader action sequence with explicitly named sources and configs.",
