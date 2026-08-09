@@ -432,6 +432,7 @@ enum JobStage {
     JOB_STAGE_WRITING_ARTIFACTS = 10;
     JOB_STAGE_COMPARING = 11;
     JOB_STAGE_FINALIZING = 12;
+    JOB_STAGE_SAMPLING = 13;
 }
 
 message JobCompleted {

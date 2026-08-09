@@ -166,6 +166,8 @@ public:
 
     [[nodiscard]] bool valid_submit() const noexcept { return valid_submit_.load(); }
     [[nodiscard]] std::size_t terminal_writes() const noexcept { return terminal_writes_.load(); }
+    [[nodiscard]] std::size_t resume_requests() const noexcept { return resume_requests_.load(); }
+    [[nodiscard]] std::size_t submit_jobs() const noexcept { return submit_jobs_.load(); }
     [[nodiscard]] std::vector<std::vector<std::string>> submitted_case_ids() const {
         std::scoped_lock lock(mutex_);
         return submitted_case_ids_;
@@ -194,6 +196,14 @@ private:
                 response.set_workspace_id(request.workspace_id());
                 response.mutable_server_hello()->CopyFrom(hello_);
                 if (!stream->Write(response)) return {grpc::StatusCode::UNAVAILABLE, "hello write failed"};
+                continue;
+            }
+            if (request.has_resume_request()) {
+                ++resume_requests_;
+                proto::ServerMessage state;
+                state.set_request_id(request.request_id());
+                state.mutable_resume_state();
+                if (!stream->Write(state)) return {grpc::StatusCode::UNAVAILABLE, "resume state write failed"};
                 continue;
             }
             if (!request.has_submit_job()) return {grpc::StatusCode::INVALID_ARGUMENT, "SUBMIT_JOB_REQUIRED"};
@@ -305,6 +315,7 @@ private:
     std::atomic_bool valid_submit_ = true;
     std::atomic<std::size_t> submit_jobs_ = 0;
     std::atomic<std::size_t> terminal_writes_ = 0;
+    std::atomic<std::size_t> resume_requests_ = 0;
 };
 
 class MetricsJobServer final {
@@ -333,6 +344,8 @@ public:
     [[nodiscard]] const proto::ServerHello& server_hello() const noexcept { return hello_; }
     [[nodiscard]] bool valid_submit() const noexcept { return service_.valid_submit(); }
     [[nodiscard]] std::size_t terminal_writes() const noexcept { return service_.terminal_writes(); }
+    [[nodiscard]] std::size_t resume_requests() const noexcept { return service_.resume_requests(); }
+    [[nodiscard]] std::size_t submit_jobs() const noexcept { return service_.submit_jobs(); }
     [[nodiscard]] std::vector<std::vector<std::string>> submitted_case_ids() const {
         return service_.submitted_case_ids();
     }

@@ -43,7 +43,7 @@ Do not restart Minecraft or its launcher unless the user explicitly asks.
 | T02 | P0 | vibris | Normalize compact profile result schema and explicit timing units | Done | feat(mcp): normalize profile result contract |
 | T03 | P1 | vibris | Add pass/statistic filters and publish full results as an artifact | Done | feat(mcp): add filtered profile output |
 | T04 | P0 | vibris | Retry incomplete matrix cases without rerunning completed cases | Done | feat(mcp): retry incomplete profile cases |
-| T05 | P0 | vibris | Checkpoint matrix cases and expose resumable progress | Pending | feat(mcp): checkpoint profile matrix progress |
+| T05 | P0 | vibris | Checkpoint matrix cases and expose resumable progress | Done | feat(mcp): checkpoint profile matrix progress |
 | T06 | P0 | vibris | Return effective scene/config/source provenance for every case | Pending | feat(mcp): add benchmark case provenance |
 | T07 | P0 | vibris | Enforce case reload barriers, isolation, and final state restoration | Pending | fix(core): isolate benchmark matrix cases |
 | T08 | P1 | vibris | Preserve real shader-program timing identity and source metadata | Pending | feat(capture): expose program gpu timings |
@@ -355,3 +355,14 @@ and exact commit title. The Git history is the source of truth for the resulting
   exhaustion coverage. Verified with .\gradlew.bat :vibris-core:test, CMake release build, focused retry/schema CTest
   cases (2/2 passed), and the full release CTest suite (51/51 passed). Commit title: feat(mcp): retry incomplete
   profile cases.
+- 2026-08-09 - T05 - Changed profile matrices to ordered single-case jobs with an atomic workspace checkpoint after
+  every receipt, durable job IDs, synchronous or asynchronous execution, partial status reads, stop-token
+  cancellation, and explicit resume control. Progress reports requested/completed/current case plus loading, warming,
+  sampling, retrying, checkpointing, paused, cancelled, and completed stages. Persisted Core request IDs resume cached
+  terminals across MCP restart; a committed profile-result.json is recovered when the Core terminal cache was lost,
+  while accepted requests with uncertain terminal state pause before any resubmission, preventing a completed
+  measurement from being submitted again. Added a 17/38 interruption regression, restart no-duplication proof,
+  cancellation/resume receipt preservation, accepted-timeout safety, 38-case schema coverage, JobProgress delivery,
+  resumed attempt history, artifact recovery, and in-flight cancellation tests. Verified with
+  .\gradlew.bat :vibris-core:test, CMake release build, focused workflow/schema/protocol CTest cases (3/3 passed), and
+  the full release CTest suite (52/52 passed). Commit title: feat(mcp): checkpoint profile matrix progress.

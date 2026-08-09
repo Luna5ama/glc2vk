@@ -17,9 +17,9 @@ bool is_request_event(const proto::ServerMessage& message) {
         case PayloadCase::kResumeState:
         case PayloadCase::kPong:
         case PayloadCase::kJobAccepted:
+        case PayloadCase::kJobProgress:
             return true;
         case PayloadCase::kServerHello:
-        case PayloadCase::kJobProgress:
         case PayloadCase::kServerShuttingDown:
         case PayloadCase::PAYLOAD_NOT_SET:
             return false;

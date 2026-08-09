@@ -8,6 +8,7 @@
 #include "workspace_source_fixture.hpp"
 #include "workspace_artifact_link.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -314,6 +315,34 @@ void progress_does_not_consume_terminal() {
         "A duplicate terminal was delivered after the request retired.");
 }
 
+void resume_registration_replays_terminal_without_submit() {
+    PendingRequestRegistry registry(1);
+    std::size_t callbacks = 0;
+    std::size_t terminals = 0;
+    require(registry.add_resume("request-resume", "workspace-id",
+        [&](const grpc::Status& status, const proto::ServerMessage& message) {
+            require(status.ok(), "Resume registration unexpectedly failed.");
+            ++callbacks;
+            if (JobProtocol::is_terminal(message)) ++terminals;
+        }), "A persisted request ID could not be registered for resume.");
+    const auto requests = registry.requests();
+    require(requests.size() == 1 && requests.front().has_resume_request() &&
+            requests.front().resume_request().request_ids_size() == 1 &&
+            requests.front().resume_request().request_ids(0) == "request-resume",
+        "Resume registration reconstructed a SubmitJob instead of ResumeRequest.");
+    proto::ServerMessage state;
+    auto* summary = state.mutable_resume_state()->add_jobs();
+    summary->set_request_id("request-resume");
+    summary->set_state(proto::JOB_STATE_COMPLETED);
+    require(registry.resolve(state) && registry.size() == 1,
+        "ResumeState consumed the request before cached terminal replay.");
+    proto::ServerMessage completed;
+    completed.set_request_id("request-resume");
+    completed.mutable_job_completed()->set_request_id("request-resume");
+    require(registry.resolve(completed) && registry.size() == 0 && callbacks == 2 && terminals == 1,
+        "Cached terminal replay was not delivered exactly once.");
+}
+
 void synchronous_submit_case(std::string_view tool_name, const Json& arguments, bool actions) {
     WorkspaceFixture fixture;
     const auto artifact_root = fixture.pending().parent_path() / "artifacts";
@@ -331,8 +360,14 @@ void synchronous_submit_case(std::string_view tool_name, const Json& arguments, 
     });
     client.start();
     const auto context = SceneContextResolver::resolve(config(), presets());
+    std::vector<std::string> progress;
+    vibris::mcp::SynchronousJobControl control{
+        .progress = [&](const vibris::mcp::SynchronousJobProgress& event) {
+            progress.push_back(event.stage);
+        },
+    };
     const auto outcome = SynchronousJobRunner(client, sources, config()).run(
-        tool_name, arguments, server.server_hello(), context);
+        tool_name, arguments, server.server_hello(), context, control);
     const auto stats = client.stats();
     client.shutdown();
     server.shutdown();
@@ -350,6 +385,8 @@ void synchronous_submit_case(std::string_view tool_name, const Json& arguments, 
     }
     require(server.valid_submit() && server.submit_jobs() == 1 && server.terminal_writes() == 1,
         "Synchronous runner did not submit one complete job and consume exactly one terminal.");
+    require(std::ranges::find(progress, "warming") != progress.end(),
+        "The gRPC client discarded JobProgress before the synchronous runner observed it.");
     require(stats.pending_requests == 0 && vibris::mcp::test::pending_has_no_sources(fixture.pending()),
         "Terminal completion left pending registry or source ownership behind.");
 }
@@ -732,6 +769,79 @@ void profile_does_not_retry_nonretryable_failure() {
         "A non-retryable profile failure was resubmitted or mislabeled as exhausted.");
 }
 
+void profile_resume_preserves_prior_attempts() {
+    const Json prior{{"attempt", 1}, {"status", "failed"}, {"retryable", true},
+                     {"error", {{"success", false}, {"error_code", "SERVER_OFFLINE"},
+                                {"message", "interrupted"}, {"retryable", true}}},
+                     {"artifact_ids", Json::array()}};
+    const Json arguments{
+        {"recipe", "profile"},
+        {"source", {{"kind", "workspace"}}},
+        {"config", Json::object()},
+        {"warmup_frames", 0},
+        {"frames", 32},
+        {"max_retries", 0},
+        {"__vibris_previous_attempts", Json::array({prior})},
+    };
+    const std::optional<std::string> samples =
+        R"({"gpuTimings":{"composite_total":{"avg":7000000}}})";
+    auto run = synchronous_metrics_jobs(arguments, MetricsJobService::Plans{{samples}});
+    const auto& profile_case = std::get<Json>(run.outcome).at("cases").at(0);
+    require(profile_case.at("status") == "passed" && profile_case.at("attempt_count") == 2 &&
+            profile_case.at("attempts").at(0).at("error").at("error_code") == "SERVER_OFFLINE" &&
+            run.submitted_attempts == std::vector<std::uint32_t>{2} &&
+            run.submitted_previous_attempt_counts == std::vector<std::size_t>{1},
+        "A resumed profile case lost its prior attempt history or reused attempt one.");
+}
+
+void profile_resume_recovers_committed_artifact_without_resubmit() {
+    WorkspaceFixture fixture;
+    MetricsJobServer server(fixture.pending(), MetricsJobService::Plans{});
+    const std::string request_id = "99999999-8888-4777-8666-555555555555";
+    const auto artifact = std::filesystem::path(server.server_hello().artifact_root()) /
+        "workspace-id" / request_id / "profile-result.json";
+    vibris::mcp::test::write_file(artifact, Json{
+        {"artifact_schema_version", 1},
+        {"attempt", 2},
+        {"previous_attempts", Json::array({{{"attempt", 1}, {"status", "failed"},
+            {"error_code", "SERVER_OFFLINE"}, {"message", "disconnected"}, {"retryable", true}}})},
+        {"raw_action_results", Json::array({
+            {{"action_index", 0}, {"kind", "load_shader"}, {"result", {{"success", true}}}},
+            {{"action_index", 1}, {"kind", "get_gpu_metrics"},
+             {"result", {{"gpuTimings", {{"composite_total", {{"avg", 7'000'000}}}}}}}},
+        })},
+    }.dump());
+    vibris::mcp::SourceHandler sources(fixture.worktree());
+    vibris::mcp::GrpcClient client({
+        .target = "127.0.0.1:" + std::to_string(server.port()),
+        .workspace_id = "workspace-id",
+        .mcp_version = "checkpoint-recovery-test",
+        .process_instance_uuid = "checkpoint-recovery-test",
+        .pending_request_limit = 1,
+        .reconnect_delay = 1ms,
+        .unary_deadline = 5s,
+    });
+    client.start();
+    const auto context = SceneContextResolver::resolve(config(), presets());
+    vibris::mcp::SynchronousJobControl control{.resume_request_id = request_id};
+    const Json arguments{{"recipe", "profile"}, {"source", {{"kind", "workspace"}}},
+                         {"config", Json::object()}, {"warmup_frames", 0}, {"frames", 32},
+                         {"max_retries", 0}};
+    const auto outcome = SynchronousJobRunner(client, sources, config()).run(
+        "vibris_run_recipe", arguments, server.server_hello(), context, control);
+    const auto stats = client.stats();
+    client.shutdown();
+    server.shutdown();
+
+    const auto& result = std::get<Json>(outcome);
+    const auto& profile_case = result.at("cases").at(0);
+    require(result.at("success") == true && result.at("recovered_from_artifact") == true &&
+            profile_case.at("status") == "passed" && profile_case.at("attempt_count") == 2 &&
+            profile_case.at("attempts").at(0).at("error").at("error_code") == "SERVER_OFFLINE" &&
+            server.resume_requests() == 1 && server.submit_jobs() == 0 && stats.pending_requests == 0,
+        "Restart recovery reran a case whose committed profile artifact was already durable.");
+}
+
 void profile_matrix_38_cases_requires_all_metrics() {
     Json configs = Json::array();
     Json config_axis = Json::array();
@@ -887,10 +997,87 @@ void synchronous_submit_has_local_total_deadline() {
     server.shutdown();
 
     const auto& failure = std::get<ToolFailure>(outcome);
-    require(failure.code == "EXECUTION_TIMEOUT" && stats.pending_requests == 0,
+    require(failure.code == "EXECUTION_TIMEOUT" && failure.details.at("request_accepted") == true &&
+            failure.details.at("resume_required") == true && stats.pending_requests == 0,
         "Local synchronous deadline did not retire its pending request.");
     require(vibris::mcp::test::pending_has_no_sources(fixture.pending()),
         "Local synchronous deadline stranded source ownership.");
+}
+
+void profile_accepted_timeout_requires_resume_before_retry() {
+    WorkspaceFixture fixture;
+    DeadlineJobServer server(fixture.pending());
+    proto::ServerHello hello;
+    hello.set_ready(true);
+    hello.set_pending_shaders_root(std::filesystem::absolute(fixture.pending()).string());
+    hello.mutable_limits()->set_max_source_bytes(1024 * 1024);
+    hello.mutable_limits()->set_max_source_files(128);
+    vibris::mcp::SourceHandler sources(fixture.worktree());
+    vibris::mcp::GrpcClient client({
+        .target = "127.0.0.1:" + std::to_string(server.port()),
+        .workspace_id = "workspace-id",
+        .mcp_version = "profile-resume-required-test",
+        .process_instance_uuid = "profile-resume-required-test",
+        .pending_request_limit = 1,
+        .reconnect_delay = 1ms,
+        .unary_deadline = 5s,
+    });
+    client.start();
+    const auto context = SceneContextResolver::resolve(config(), presets());
+    const Json arguments{{"recipe", "profile"}, {"source", {{"kind", "workspace"}}},
+                         {"config", Json::object()}, {"warmup_frames", 0}, {"frames", 32},
+                         {"max_retries", 2}};
+    const auto outcome = SynchronousJobRunner(client, sources, config(), 75ms).run(
+        "vibris_run_recipe", arguments, hello, context);
+    client.shutdown();
+    server.shutdown();
+
+    const auto& result = std::get<Json>(outcome);
+    const auto& profile_case = result.at("cases").at(0);
+    require(result.at("total_attempts") == 1 && profile_case.at("attempt_count") == 1 &&
+            profile_case.at("retry_exhausted") == false &&
+            profile_case.at("error").at("error_code") == "EXECUTION_TIMEOUT" &&
+            profile_case.at("error").at("details").at("resume_required") == true,
+        "An accepted profile timeout was resubmitted before its request ID could be resumed.");
+}
+
+void synchronous_stop_cancels_inflight_request() {
+    WorkspaceFixture fixture;
+    DeadlineJobServer server(fixture.pending());
+    proto::ServerHello hello;
+    hello.set_ready(true);
+    hello.set_pending_shaders_root(std::filesystem::absolute(fixture.pending()).string());
+    hello.mutable_limits()->set_max_source_bytes(1024 * 1024);
+    hello.mutable_limits()->set_max_source_files(128);
+    vibris::mcp::SourceHandler sources(fixture.worktree());
+    vibris::mcp::GrpcClient client({
+        .target = "127.0.0.1:" + std::to_string(server.port()),
+        .workspace_id = "workspace-id",
+        .mcp_version = "workflow-cancel-test",
+        .process_instance_uuid = "workflow-cancel-test",
+        .pending_request_limit = 1,
+        .reconnect_delay = 1ms,
+        .unary_deadline = 5s,
+    });
+    client.start();
+    const auto context = SceneContextResolver::resolve(config(), presets());
+    std::stop_source stop;
+    vibris::mcp::SynchronousJobControl control{.stop = stop.get_token()};
+    auto outcome = std::async(std::launch::async, [&] {
+        return SynchronousJobRunner(client, sources, config(), 5s).run(
+            "vibris_run_recipe", {{"recipe", "load_and_screenshot"}}, hello, context, control);
+    });
+    std::this_thread::sleep_for(100ms);
+    stop.request_stop();
+    require(outcome.wait_for(5s) == std::future_status::ready,
+        "Workflow cancellation did not wake the synchronous runner.");
+    const auto result = outcome.get();
+    const auto stats = client.stats();
+    client.shutdown();
+    server.shutdown();
+    require(std::get<ToolFailure>(result).code == "CANCELLED" && stats.pending_requests == 0 &&
+            vibris::mcp::test::pending_has_no_sources(fixture.pending()),
+        "Workflow cancellation did not retire its request and source ownership.");
 }
 
 void cancel_waits_for_dispatched_acceptance() {
@@ -1234,6 +1421,7 @@ int main() {
         empty_actions_mapping();
         source_free_runtime_actions_mapping();
         progress_does_not_consume_terminal();
+        resume_registration_replays_terminal_without_submit();
         synchronous_submit_waits_for_terminal();
         profile_requires_nonempty_gpu_samples();
         profile_result_detail_contract();
@@ -1242,10 +1430,14 @@ int main() {
         profile_matrix_retries_only_retryable_cases();
         profile_retries_retryable_job_failure();
         profile_does_not_retry_nonretryable_failure();
+        profile_resume_preserves_prior_attempts();
+        profile_resume_recovers_committed_artifact_without_resubmit();
         profile_matrix_38_cases_requires_all_metrics();
         title_screen_runtime_can_prepare_source_for_world_loading_job();
         synchronous_submit_resumes_after_acceptance();
         synchronous_submit_has_local_total_deadline();
+        profile_accepted_timeout_requires_resume_before_retry();
+        synchronous_stop_cancels_inflight_request();
         cancel_waits_for_dispatched_acceptance();
         grpc_shutdown_does_not_start_operations_after_cq_shutdown();
         completed_mapping();

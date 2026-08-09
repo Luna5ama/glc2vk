@@ -15,6 +15,7 @@ import dev.vibris.protocol.v1.EmptyAction;
 import dev.vibris.protocol.v1.GetGpuMetrics;
 import dev.vibris.protocol.v1.GetPatchedShaders;
 import dev.vibris.protocol.v1.JobActionKind;
+import dev.vibris.protocol.v1.JobStage;
 import dev.vibris.protocol.v1.LoadShader;
 import dev.vibris.protocol.v1.NamedShaderConfig;
 import dev.vibris.protocol.v1.PreparedSourceRef;
@@ -215,7 +216,8 @@ class RuntimeJobExecutorCaptureTest {
             .addActions(Action.newBuilder().setGetGpuMetrics(GetGpuMetrics.newBuilder().setFrames(8)))
             .build();
 
-        TerminalResult terminal = fixture.executor.execute(fixture.job(actions), ignored -> {});
+        var progress = new java.util.ArrayList<JobStage>();
+        TerminalResult terminal = fixture.executor.execute(fixture.job(actions), progress::add);
 
         assertEquals(List.of("link:A", "reload", "context", "action:InspectShader", "action:GpuMetrics"),
             fixture.runtime.events);
@@ -228,6 +230,7 @@ class RuntimeJobExecutorCaptureTest {
         assertEquals(List.of("{\"loaded\":true}", "{\"p50\":1.25}"),
             terminal.completed().getResult().getActionResultsList().stream()
                 .map(result -> result.getJson()).toList());
+        assertTrue(progress.contains(JobStage.JOB_STAGE_SAMPLING));
     }
 
     @Test

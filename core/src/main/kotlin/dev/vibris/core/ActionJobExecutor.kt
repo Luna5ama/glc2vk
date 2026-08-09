@@ -99,6 +99,9 @@ internal class ActionJobExecutor(
                             }
                             CaptureProgramBuilder.ActionType.RUNTIME -> {
                                 val runtimeAction = step.runtimeAction!!
+                                if (runtimeAction.hasGetGpuMetrics()) {
+                                    progress.accept(JobStage.JOB_STAGE_SAMPLING)
+                                }
                                 val json = owner.await(
                                     runtime.executeAction(RuntimeActionProtocol.toApi(runtimeAction)),
                                     job,

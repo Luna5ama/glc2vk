@@ -39,6 +39,26 @@ bool GrpcClient::Impl::submit(proto::ClientMessage message, GrpcCompletion compl
     return true;
 }
 
+bool GrpcClient::Impl::resume(std::string request_id, GrpcCompletion completion) {
+    std::scoped_lock lock(mutex_);
+    if (!started_ || stopping_ || pending_.size() != 0 ||
+        pending_.size() + unary_in_flight_ >= options_.pending_request_limit) {
+        return false;
+    }
+    proto::ClientMessage request;
+    request.mutable_protocol_version()->set_major(protocol_major);
+    request.mutable_protocol_version()->set_minor(protocol_minor);
+    request.set_message_id("resume-" + request_id);
+    request.set_request_id(request_id);
+    request.set_workspace_id(options_.workspace_id);
+    request.mutable_resume_request()->add_request_ids(request_id);
+    if (!pending_.add_resume(request_id, options_.workspace_id, std::move(completion))) return false;
+    peak_pending_ = std::max(peak_pending_, pending_.size() + unary_in_flight_);
+    submitted_.push_back(std::move(request));
+    schedule_alarm_locked(AlarmKind::wake, std::chrono::milliseconds::zero());
+    return true;
+}
+
 bool GrpcClient::Impl::cancel(const std::string_view request_id, std::string reason) {
     if (request_id.empty()) return false;
     const grpc::Status deadline(grpc::StatusCode::DEADLINE_EXCEEDED, reason);
@@ -155,6 +175,9 @@ bool GrpcClient::validate_context(::vibris::control::v1::ValidateContextRequest 
 bool GrpcClient::get_status(GetStatusCompletion completion) { return impl_->get_status(std::move(completion)); }
 bool GrpcClient::submit(::vibris::control::v1::ClientMessage message, GrpcCompletion completion) {
     return impl_->submit(std::move(message), std::move(completion));
+}
+bool GrpcClient::resume(std::string request_id, GrpcCompletion completion) {
+    return impl_->resume(std::move(request_id), std::move(completion));
 }
 bool GrpcClient::cancel(std::string_view request_id, std::string reason) {
     return impl_->cancel(request_id, std::move(reason));

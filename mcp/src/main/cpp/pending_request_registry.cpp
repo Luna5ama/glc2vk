@@ -29,6 +29,27 @@ bool PendingRequestRegistry::add(proto::ClientMessage request, GrpcCompletion co
     return true;
 }
 
+bool PendingRequestRegistry::add_resume(
+    std::string request_id, std::string workspace_id, GrpcCompletion completion) {
+    if (request_id.empty() || workspace_id.empty() || !completion) return false;
+    proto::ClientMessage request;
+    request.mutable_protocol_version()->set_major(1);
+    request.mutable_protocol_version()->set_minor(0);
+    request.set_message_id("resume-" + request_id);
+    request.set_request_id(request_id);
+    request.set_workspace_id(std::move(workspace_id));
+    request.mutable_resume_request()->add_request_ids(request_id);
+
+    std::scoped_lock lock(mutex_);
+    if (entries_.size() >= capacity_ || entries_.contains(request_id)) return false;
+    auto [entry, inserted] = entries_.emplace(request_id,
+        Entry{std::move(request), std::make_shared<CallbackSlot>(std::move(completion)), true});
+    static_cast<void>(entry);
+    if (!inserted) return false;
+    peak_size_ = std::max(peak_size_, entries_.size());
+    return true;
+}
+
 bool PendingRequestRegistry::resolve(const proto::ServerMessage& response) {
     if (response.has_resume_state()) {
         struct Event {

@@ -28,6 +28,7 @@ public:
     PendingRequestRegistry& operator=(const PendingRequestRegistry&) = delete;
 
     bool add(::vibris::control::v1::ClientMessage request, GrpcCompletion completion);
+    bool add_resume(std::string request_id, std::string workspace_id, GrpcCompletion completion);
     bool resolve(const ::vibris::control::v1::ServerMessage& response);
     bool cancel(std::string_view request_id, const grpc::Status& status);
     void fail_all(const grpc::Status& status);

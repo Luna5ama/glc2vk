@@ -5,10 +5,13 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -40,6 +43,109 @@ ToolFailure transport_failure(const grpc::Status& status) {
     if (message.empty()) message = "The local Vibris server disconnected before the job completed.";
     if (message.size() > 512) message.resize(512);
     return {"SERVER_OFFLINE", std::move(message), true};
+}
+
+ToolFailure request_failure(ToolFailure failure, std::string_view request_id, const bool request_accepted) {
+    failure.details["request_id"] = request_id;
+    failure.details["request_accepted"] = request_accepted;
+    if (request_accepted) failure.details["resume_required"] = true;
+    return failure;
+}
+
+std::string progress_stage(const proto::JobStage stage) {
+    switch (stage) {
+        case proto::JOB_STAGE_VALIDATING:
+        case proto::JOB_STAGE_QUEUED:
+        case proto::JOB_STAGE_ACTIVATING_SOURCE:
+        case proto::JOB_STAGE_LOADING_WORLD:
+        case proto::JOB_STAGE_APPLYING_CONTEXT:
+        case proto::JOB_STAGE_RELOADING_SHADERS:
+            return "loading";
+        case proto::JOB_STAGE_RESETTING_TEMPORAL_STATE:
+        case proto::JOB_STAGE_WARMING_UP:
+            return "warming";
+        case proto::JOB_STAGE_SAMPLING:
+        case proto::JOB_STAGE_CAPTURING:
+            return "sampling";
+        case proto::JOB_STAGE_WRITING_ARTIFACTS:
+        case proto::JOB_STAGE_FINALIZING:
+            return "checkpointing";
+        case proto::JOB_STAGE_COMPARING:
+            return "sampling";
+        case proto::JOB_STAGE_UNSPECIFIED:
+            return "loading";
+    }
+    return "loading";
+}
+
+void report_progress(const SynchronousJobProgressSink& sink, std::string request_id,
+    std::string stage, const bool accepted) {
+    if (sink) sink({std::move(request_id), std::move(stage), accepted});
+}
+
+std::optional<Json> recovered_profile_job(const proto::ServerHello& server, const SessionConfig& config,
+    std::string_view request_id) {
+    namespace fs = std::filesystem;
+    if (server.artifact_root().empty() || config.workspace_id.empty() || !detail::is_uuid(request_id)) {
+        return std::nullopt;
+    }
+    const auto path = fs::path(server.artifact_root()) / config.workspace_id /
+        std::string(request_id) / "profile-result.json";
+    std::error_code error;
+    const auto status = fs::symlink_status(path, error);
+    if (error || !fs::is_regular_file(status) || fs::is_symlink(status)) return std::nullopt;
+    const auto size = fs::file_size(path, error);
+    constexpr std::uintmax_t maximum_bytes = 64ULL * 1024ULL * 1024ULL;
+    if (error || size == 0 || size > maximum_bytes) return std::nullopt;
+
+    try {
+        std::ifstream input(path, std::ios::binary);
+        if (!input) return std::nullopt;
+        Json document;
+        input >> document;
+        if (!input || !document.is_object() || document.value("artifact_schema_version", 0) != 1 ||
+            !document.contains("raw_action_results") || !document.at("raw_action_results").is_array() ||
+            !document.contains("previous_attempts") || !document.at("previous_attempts").is_array() ||
+            document.value("attempt", std::uint32_t{}) == 0) {
+            return std::nullopt;
+        }
+        Json previous = Json::array();
+        for (const auto& diagnostic : document.at("previous_attempts")) {
+            Json diagnostic_error = nullptr;
+            if (!diagnostic.value("error_code", std::string{}).empty()) {
+                diagnostic_error = {{"success", false},
+                                    {"error_code", diagnostic.value("error_code", std::string{})},
+                                    {"message", diagnostic.value("message", std::string{})},
+                                    {"retryable", diagnostic.value("retryable", false)}};
+            }
+            previous.push_back({{"attempt", diagnostic.at("attempt")},
+                                {"status", diagnostic.at("status")},
+                                {"retryable", diagnostic.value("retryable", false)},
+                                {"error", std::move(diagnostic_error)},
+                                {"artifact_ids", Json::array()}});
+        }
+        Json artifact{{"artifact_id", std::string(request_id) + "--profile-result-json"},
+                      {"file_name", "profile-result.json"},
+                      {"kind", "profile_result"},
+                      {"format", "json"},
+                      {"media_type", "application/json"},
+                      {"byte_size", size},
+                      {"path", fs::absolute(path).string()}};
+        return Json{{"success", true},
+                    {"kind", "action_sequence"},
+                    {"diagnostics", Json::array()},
+                    {"comparison", nullptr},
+                    {"action_results", document.at("raw_action_results")},
+                    {"timings", Json::object()},
+                    {"frame_ids", Json::array()},
+                    {"artifacts", Json::array({std::move(artifact)})},
+                    {"artifact_groups", Json::array()},
+                    {"recovered_from_artifact", true},
+                    {"recovered_attempt", document.at("attempt")},
+                    {"recovered_previous_attempts", std::move(previous)}};
+    } catch (const Json::exception&) {
+        return std::nullopt;
+    }
 }
 
 bool failed_action(const Json& action) {
@@ -218,7 +324,8 @@ void append_profile_case(const Json& job, Json& cases, ProfileCounts& counts, co
 void append_full_job_metadata(const Json& job, Json& result) {
     constexpr std::array fields{
         "diagnostics", "comparison", "timings", "frame_ids", "artifacts",
-        "artifact_groups", "manifest_path",
+        "artifact_groups", "manifest_path", "recovered_from_artifact", "recovered_attempt",
+        "recovered_previous_attempts",
     };
     for (const auto* field : fields) {
         const auto value = job.find(field);
@@ -274,6 +381,9 @@ Json profile_result(Json job, const Json& arguments, const SessionConfig& config
         {"cases", std::move(cases)},
         {"artifacts", profile_artifacts(job)},
     };
+    for (const auto* field : {"recovered_from_artifact", "recovered_attempt", "recovered_previous_attempts"}) {
+        if (const auto value = job.find(field); value != job.end()) result[field] = *value;
+    }
     if (detail == "full") append_full_job_metadata(job, result);
     return result;
 }
@@ -333,6 +443,7 @@ struct ProfileCaseState final {
     ProfileCaseSpec spec;
     Json value = nullptr;
     Json attempts = Json::array();
+    std::size_t run_attempts = 0;
 };
 
 const Json& named_value(const Json& values, std::string_view id, std::string_view kind) {
@@ -393,6 +504,11 @@ bool retryable_error(const Json& error) {
     };
     if (std::ranges::find(retryable_codes, code) != retryable_codes.end()) return true;
     return error.value("retryable", false);
+}
+
+bool resume_required(const Json& error) {
+    const auto details = error.find("details");
+    return details != error.end() && details->is_object() && details->value("resume_required", false);
 }
 
 Json failed_profile_case(
@@ -488,6 +604,9 @@ using ProfileAttempt = std::function<ToolOutcome(const Json&, bool)>;
 Json retry_profile(
     const Json& arguments, bool matrix, std::size_t default_warmup, const ProfileAttempt& submit) {
     auto states = profile_cases(arguments, matrix);
+    if (!matrix && arguments.contains("__vibris_previous_attempts")) {
+        states.front().attempts = arguments.at("__vibris_previous_attempts");
+    }
     const auto max_retries = arguments.value("max_retries", std::size_t{2});
     Json artifacts = Json::array();
     Json job_attempts = Json::array();
@@ -495,35 +614,47 @@ Json retry_profile(
     bool aggregate_initialized = false;
 
     Json initial_arguments = arguments;
-    initial_arguments["__vibris_attempt"] = 1;
+    const auto initial_attempt = states.front().attempts.size() + 1;
+    initial_arguments["__vibris_attempt"] = initial_attempt;
     const auto initial_outcome = submit(initial_arguments, matrix);
     Json all_case_ids = Json::array();
     for (const auto& state : states) all_case_ids.push_back(state.spec.case_id);
     if (const auto* result = std::get_if<Json>(&initial_outcome)) {
         aggregate = *result;
         aggregate_initialized = true;
-        const auto artifact_ids = collect_artifacts(*result, 1, all_case_ids, artifacts);
+        if (!matrix && result->contains("recovered_previous_attempts") &&
+            states.front().attempts.size() < result->at("recovered_previous_attempts").size()) {
+            states.front().attempts = result->at("recovered_previous_attempts");
+        }
+        const auto actual_attempt = result->value("recovered_attempt", initial_attempt);
+        aggregate.erase("recovered_attempt");
+        aggregate.erase("recovered_previous_attempts");
+        const auto artifact_ids = collect_artifacts(*result, actual_attempt, all_case_ids, artifacts);
         job_attempts.push_back(job_attempt_record(
-            1, all_case_ids, result->at("status").get<std::string>(), nullptr, artifact_ids, result));
+            actual_attempt, all_case_ids, result->at("status").get<std::string>(), nullptr, artifact_ids, result));
         for (auto& state : states) {
             const auto* profile_case = find_profile_case(*result, state.spec.case_id);
             state.value = profile_case == nullptr ?
                 missing_profile_case(state.spec, arguments, default_warmup) : *profile_case;
-            state.attempts.push_back(attempt_record(1, state.value, artifact_ids));
+            state.attempts.push_back(attempt_record(actual_attempt, state.value, artifact_ids));
+            state.run_attempts = 1;
         }
     } else {
         const auto& failure = std::get<ToolFailure>(initial_outcome);
         const auto error = failure_error(failure);
-        const auto artifact_ids = collect_artifacts(failure.details, 1, all_case_ids, artifacts);
-        job_attempts.push_back(job_attempt_record(1, all_case_ids, "failed", error, artifact_ids, nullptr));
+        const auto artifact_ids = collect_artifacts(failure.details, initial_attempt, all_case_ids, artifacts);
+        job_attempts.push_back(job_attempt_record(
+            initial_attempt, all_case_ids, "failed", error, artifact_ids, nullptr));
         for (auto& state : states) {
             state.value = failed_profile_case(state.spec, arguments, default_warmup, error);
-            state.attempts.push_back(attempt_record(1, state.value, artifact_ids));
+            state.attempts.push_back(attempt_record(initial_attempt, state.value, artifact_ids));
+            state.run_attempts = 1;
         }
     }
 
     for (auto& state : states) {
-        while (retryable_error(state.value.at("error")) && state.attempts.size() <= max_retries) {
+        while (retryable_error(state.value.at("error")) && !resume_required(state.value.at("error")) &&
+            state.run_attempts <= max_retries) {
             const auto attempt = state.attempts.size() + 1;
             const auto outcome = submit(retry_arguments(arguments, state, attempt), false);
             const Json case_ids = Json::array({state.spec.case_id});
@@ -539,6 +670,7 @@ Json retry_profile(
                 state.value = profile_case == nullptr ?
                     missing_profile_case(state.spec, arguments, default_warmup) : *profile_case;
                 state.attempts.push_back(attempt_record(attempt, state.value, artifact_ids));
+                ++state.run_attempts;
             } else {
                 const auto& failure = std::get<ToolFailure>(outcome);
                 const auto error = failure_error(failure);
@@ -547,6 +679,7 @@ Json retry_profile(
                     job_attempt_record(attempt, case_ids, "failed", error, artifact_ids, nullptr));
                 state.value = failed_profile_case(state.spec, arguments, default_warmup, error);
                 state.attempts.push_back(attempt_record(attempt, state.value, artifact_ids));
+                ++state.run_attempts;
             }
         }
     }
@@ -576,7 +709,7 @@ Json retry_profile(
         total_attempts += state.attempts.size();
         state.value["attempt_count"] = state.attempts.size();
         state.value["retry_exhausted"] = retryable_error(state.value.at("error")) &&
-            state.attempts.size() == max_retries + 1;
+            state.run_attempts == max_retries + 1;
         state.value["attempts"] = std::move(state.attempts);
         cases.push_back(std::move(state.value));
     }
@@ -610,8 +743,10 @@ SynchronousJobRunner::SynchronousJobRunner(
 }
 
 ToolOutcome SynchronousJobRunner::submit_once(std::string_view tool_name, const Json& arguments,
-    const proto::ServerHello& server, const proto::SceneContext& context) {
+    const proto::ServerHello& server, const proto::SceneContext& context,
+    const SynchronousJobControl& control) {
     const auto request_id = detail::generate_uuid();
+    report_progress(control.progress, request_id, "loading", false);
     sources_.prepare(tool_name, arguments, server);
     const auto references = sources_.bind_latest(request_id);
     try {
@@ -620,9 +755,18 @@ ToolOutcome SynchronousJobRunner::submit_once(std::string_view tool_name, const 
         const auto maximum_wait = maximum_wait_.count() == 0 ? server_timeout + std::chrono::seconds(5)
                                                               : maximum_wait_;
         const auto state = std::make_shared<CompletionState>();
-        const bool accepted = client_.submit(std::move(request), [this, state](
-            const grpc::Status& status, const proto::ServerMessage& message) {
+        const auto request_accepted = std::make_shared<std::atomic_bool>(false);
+        const bool accepted = client_.submit(std::move(request),
+            [this, state, request_accepted, progress = control.progress, request_id](
+                const grpc::Status& status, const proto::ServerMessage& message) {
             sources_.observe(message);
+            if (status.ok() && message.has_job_accepted()) {
+                request_accepted->store(true, std::memory_order_relaxed);
+                report_progress(progress, request_id, "loading", true);
+            } else if (status.ok() && message.has_job_progress()) {
+                request_accepted->store(true, std::memory_order_relaxed);
+                report_progress(progress, request_id, progress_stage(message.job_progress().stage()), true);
+            }
             if (status.ok() && !JobProtocol::is_terminal(message)) return;
             {
                 std::scoped_lock lock(state->mutex);
@@ -639,7 +783,24 @@ ToolOutcome SynchronousJobRunner::submit_once(std::string_view tool_name, const 
         }
 
         std::unique_lock lock(state->mutex);
-        if (!state->ready.wait_for(lock, maximum_wait, [&state] { return state->done; })) {
+        const auto deadline = std::chrono::steady_clock::now() + maximum_wait;
+        while (!state->done && !control.stop.stop_requested() &&
+            std::chrono::steady_clock::now() < deadline) {
+            state->ready.wait_for(lock, std::chrono::milliseconds(100), [&state] { return state->done; });
+        }
+        if (control.stop.stop_requested() && !state->done) {
+            lock.unlock();
+            if (!client_.cancel(request_id, "Vibris profile workflow was cancelled.")) {
+                lock.lock();
+                state->ready.wait(lock, [&state] { return state->done; });
+                lock.unlock();
+            }
+            sources_.retire(request_id);
+            return request_failure(
+                {"CANCELLED", "The Vibris profile workflow was cancelled.", false}, request_id,
+                request_accepted->load(std::memory_order_relaxed));
+        }
+        if (!state->done) {
             lock.unlock();
             if (!client_.cancel(request_id, "Vibris job exceeded the local synchronous deadline.")) {
                 lock.lock();
@@ -647,14 +808,28 @@ ToolOutcome SynchronousJobRunner::submit_once(std::string_view tool_name, const 
                 lock.unlock();
             }
             sources_.retire(request_id);
-            return ToolFailure{"EXECUTION_TIMEOUT", "The Vibris job exceeded its total deadline.", true};
+            return request_failure(
+                {"EXECUTION_TIMEOUT", "The Vibris job exceeded its total deadline.", true}, request_id,
+                request_accepted->load(std::memory_order_relaxed));
         }
         const auto status = state->status;
         auto terminal = std::move(state->terminal);
         lock.unlock();
         sources_.retire(request_id);
-        if (!status.ok()) return transport_failure(status);
+        if (!status.ok()) {
+            if (status.error_code() == grpc::StatusCode::NOT_FOUND) {
+                if (auto recovered = recovered_profile_job(server, config_, request_id)) {
+                    report_progress(control.progress, request_id, "checkpointing", false);
+                    return std::move(*recovered);
+                }
+                report_progress(control.progress, request_id, "loading", false);
+                return transport_failure(status);
+            }
+            return request_failure(transport_failure(status), request_id,
+                request_accepted->load(std::memory_order_relaxed));
+        }
         if (!terminal) throw std::logic_error("gRPC completed without a terminal job message");
+        report_progress(control.progress, request_id, "checkpointing", false);
         return JobProtocol::terminal(*terminal);
     } catch (...) {
         sources_.retire(request_id);
@@ -662,23 +837,110 @@ ToolOutcome SynchronousJobRunner::submit_once(std::string_view tool_name, const 
     }
 }
 
+ToolOutcome SynchronousJobRunner::resume_once(std::string_view request_id,
+    const proto::ServerHello& server, const SynchronousJobControl& control) {
+    report_progress(control.progress, std::string(request_id), "loading", true);
+    const auto state = std::make_shared<CompletionState>();
+    const bool accepted = client_.resume(std::string(request_id),
+        [state, progress = control.progress, id = std::string(request_id)](
+            const grpc::Status& status, const proto::ServerMessage& message) {
+            if (status.ok() && message.has_job_progress()) {
+                report_progress(progress, id, progress_stage(message.job_progress().stage()), true);
+            }
+            if (status.ok() && !JobProtocol::is_terminal(message)) return;
+            {
+                std::scoped_lock lock(state->mutex);
+                if (state->done) return;
+                state->status = status;
+                if (status.ok()) state->terminal = message;
+                state->done = true;
+            }
+            state->ready.notify_one();
+        });
+    if (!accepted) {
+        return request_failure(
+            {"QUEUE_FULL", "The bounded gRPC request registry is full.", true}, request_id, true);
+    }
+
+    const auto maximum_wait = maximum_wait_.count() == 0 ? std::chrono::minutes(15) : maximum_wait_;
+    std::unique_lock lock(state->mutex);
+    const auto deadline = std::chrono::steady_clock::now() + maximum_wait;
+    while (!state->done && !control.stop.stop_requested() &&
+        std::chrono::steady_clock::now() < deadline) {
+        state->ready.wait_for(lock, std::chrono::milliseconds(100), [&state] { return state->done; });
+    }
+    if (control.stop.stop_requested() && !state->done) {
+        lock.unlock();
+        if (!client_.cancel(request_id, "Vibris profile workflow was cancelled.")) {
+            lock.lock();
+            state->ready.wait(lock, [&state] { return state->done; });
+            lock.unlock();
+        }
+        return request_failure(
+            {"CANCELLED", "The Vibris profile workflow was cancelled.", false}, request_id, true);
+    }
+    if (!state->done) {
+        lock.unlock();
+        if (!client_.cancel(request_id, "Vibris resumed job exceeded the local synchronous deadline.")) {
+            lock.lock();
+            state->ready.wait(lock, [&state] { return state->done; });
+            lock.unlock();
+        }
+        return request_failure(
+            {"EXECUTION_TIMEOUT", "The resumed Vibris job exceeded its deadline.", true}, request_id, true);
+    }
+    const auto status = state->status;
+    auto terminal = std::move(state->terminal);
+    lock.unlock();
+    if (!status.ok()) {
+        if (status.error_code() == grpc::StatusCode::NOT_FOUND) {
+            if (auto recovered = recovered_profile_job(server, config_, request_id)) {
+                report_progress(control.progress, std::string(request_id), "checkpointing", false);
+                return std::move(*recovered);
+            }
+            report_progress(control.progress, std::string(request_id), "loading", false);
+            return transport_failure(status);
+        }
+        return request_failure(transport_failure(status), request_id, true);
+    }
+    if (!terminal) throw std::logic_error("gRPC resume completed without a terminal job message");
+    report_progress(control.progress, std::string(request_id), "checkpointing", false);
+    return JobProtocol::terminal(*terminal);
+}
+
 ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& arguments,
-    const proto::ServerHello& server, const proto::SceneContext& context) {
+    const proto::ServerHello& server, const proto::SceneContext& context,
+    const SynchronousJobControl& control) {
     if (tool_name == "vibris_run_recipe") {
         const auto recipe = arguments.at("recipe").get<std::string>();
         if (recipe == "profile" || recipe == "profile_matrix") {
+            bool first_attempt = true;
             return retry_profile(arguments, recipe == "profile_matrix", config_.default_warmup_frames,
-                [this, &server, &context](const Json& attempt, bool matrix) -> ToolOutcome {
-                    auto outcome = submit_once("vibris_run_recipe", attempt, server, context);
+                [this, &server, &context, &control, &first_attempt](const Json& attempt, bool matrix) -> ToolOutcome {
+                    ToolOutcome outcome;
+                    if (first_attempt && control.resume_request_id) {
+                        outcome = resume_once(*control.resume_request_id, server, control);
+                        if (auto* failure = std::get_if<ToolFailure>(&outcome);
+                            failure != nullptr && failure->code == "CANCELLED" &&
+                            (!failure->details.is_object() ||
+                                !failure->details.value("resume_required", false))) {
+                            *failure = ToolFailure{"SERVER_RESTARTED",
+                                "The resumed request was cancelled and can be submitted safely again.", true};
+                        }
+                    } else {
+                        if (!first_attempt) report_progress(control.progress, {}, "retrying", false);
+                        outcome = submit_once("vibris_run_recipe", attempt, server, context, control);
+                    }
+                    first_attempt = false;
                     if (!std::holds_alternative<Json>(outcome)) return outcome;
                     return profile_result(std::get<Json>(outcome), attempt, config_, matrix);
                 });
         }
-        auto outcome = submit_once(tool_name, arguments, server, context);
+        auto outcome = submit_once(tool_name, arguments, server, context, control);
         if (auto* result = std::get_if<Json>(&outcome)) (*result)["kind"] = recipe;
         return outcome;
     }
-    auto outcome = submit_once(tool_name, arguments, server, context);
+    auto outcome = submit_once(tool_name, arguments, server, context, control);
     if (tool_name == "vibris_run_matrix" && std::holds_alternative<Json>(outcome)) {
         return matrix_result(std::get<Json>(outcome), arguments);
     }

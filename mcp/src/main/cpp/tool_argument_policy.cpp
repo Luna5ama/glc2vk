@@ -177,10 +177,9 @@ std::optional<InvocationError> validate_argument_policy(std::string_view tool_na
             }
         }
         const auto cases = matrix->at("sources").size() * matrix->at("configs").size();
-        const std::size_t template_actions = arguments.value("recipe", std::string{}) == "profile_matrix"
-            ? 3
-            : actions != arguments.end() && actions->is_array() ? actions->size() : 0;
-        if (cases * (template_actions + 1) > 128) {
+        const std::size_t template_actions = actions != arguments.end() && actions->is_array() ? actions->size() : 0;
+        if (arguments.value("recipe", std::string{}) != "profile_matrix" &&
+            cases * (template_actions + 1) > 128) {
             return InvocationError{InvocationErrorCode::InvalidArguments,
                 "expanded matrix exceeds the action limit"};
         }

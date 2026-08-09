@@ -281,10 +281,11 @@ so `shadowcomp*` and `composite18_total` can be requested together. Use `statist
 replacing `avg`. CSV always has `value_ns` and adds `value_us` or `value_ms` columns when requested.
 
 Both profile recipes retry each retryable case independently. `max_retries` is bounded from 0 through 5 and defaults
-to 2, so a case has at most three attempts by default. The first `profile_matrix` submission still runs the requested
-matrix in order. After its terminal result, only cases ending in `NO_GPU_SAMPLES`, an explicit `retryable: true` error,
-or a retryable transport/runtime code are resubmitted as single-case profiles. Passed and non-retryable cases are not
-submitted again, and exhausting one case does not stop later retryable cases. Retryable codes currently include
+to 2, so a case has at most three automatic attempts. `profile_matrix` executes its selected product as ordered
+single-case profile jobs, atomically checkpointing each terminal case before submitting the next one. Only cases ending
+in `NO_GPU_SAMPLES`, an explicit `retryable: true` error, or a retryable transport/runtime code are retried. Passed and
+non-retryable cases are not submitted again, and exhausting one case does not stop later independent cases. Retryable
+codes currently include
 `SERVER_OFFLINE`, `SERVER_RESTARTED`, `SERVER_NOT_READY`, `QUEUE_FULL`, `QUEUE_TIMEOUT`, `EXECUTION_TIMEOUT`,
 `WORLD_LOAD_FAILED`, `SOURCE_ACTIVATION_FAILED`, `INTERNAL_ERROR`, and `CAPTURE_FAILED`.
 
@@ -292,8 +293,35 @@ Each final case contains `attempt_count`, `retry_exhausted`, and a compact order
 `total_attempts`, the configured `max_retries`, and `job_attempts`; `retried_cases` counts cases with more than one
 attempt. Result artifacts from every terminal attempt are retained in the top-level `artifacts` array and annotated
 with their attempt number and case IDs. Retry artifacts also embed prior attempt diagnostics in `profile-result.json`.
-This is in-memory retry orchestration: persistent per-case checkpoints, partial reads, and restart-safe resume are a
-separate workflow and are not implied by these fields.
+
+Every matrix has a durable `job_id` and a workspace-local checkpoint at
+`.vibris/profile-matrix/<job_id>.json`. The default `execution: "sync"` preserves the blocking call behavior. Set
+`execution: "async"` to return immediately, then use the same recipe with one of these control forms:
+
+```json
+{"recipe":"profile_matrix","operation":"status","job_id":"<job-id>"}
+{"recipe":"profile_matrix","operation":"resume","job_id":"<job-id>","execution":"async"}
+{"recipe":"profile_matrix","operation":"cancel","job_id":"<job-id>"}
+```
+
+Status is a partial-result read: completed cases retain their final receipts, while remaining entries have
+`status: "pending"`. `progress` contains `requested_cases`, receipt-oriented `completed_cases`, the one-based
+`current_case_number`, `current_case_id`, and `stage`. Stages include `queued`, `loading`, `warming`, `sampling`,
+`retrying`, `checkpointing`, `paused`, `cancelled`, and `completed`; `progress_stages` lists the distinct observed
+stages, while `result_detail: "full"` also returns the bounded per-transition `progress_events` diagnostics.
+`vibris_get_status` includes a compact view of the currently active
+`profile_matrix_job` snapshot.
+
+Cancellation stops the in-flight Core request at its cancellation boundary and keeps every checkpointed receipt.
+`resume` starts at the first case without a final receipt. On MCP restart, the persisted Core request ID is resumed
+first; if the Core terminal cache was lost but its committed `profile-result.json` exists, that artifact is recovered
+as the case receipt instead of measuring the case again. If neither receipt exists, only the unfinished case is
+submitted again with the full stored scene configuration and explicit source/config load. Transport/queue exhaustion
+pauses the workflow with a structured `last_error`. If Core already accepted the request and its terminal state is
+uncertain, `last_error.details.resume_required` is true and the request is not submitted again until `resume` proves
+that replay is safe. `SERVER_OFFLINE`, `SERVER_RESTARTED`, RST_STREAM transport loss, deadline, and queue failures can
+then be resumed without discarding earlier cases. One MCP process runs at most one matrix workflow at a time, and its
+checkpoint is capped at 64 MiB.
 
 This direct in-game path replaces project-local wrappers for routine profiling. Compute capture and external
 replay/Nsight analysis remain separate diagnostic workflows.
@@ -387,9 +415,9 @@ Action and matrix requests use named declarations, so one immutable snapshot can
 
 ## Recipes
 
-Recipes exist only in the native MCP: it expands
-each recipe into a bounded action sequence before submitting the job. The protobuf boundary and Minecraft runtime carry
-and execute action sequences only; no recipe enum or recipe decoder exists in the mod.
+Recipes exist only in the native MCP: it expands each single recipe or checkpointed matrix case into a bounded action
+sequence before submitting the job. The protobuf boundary and Minecraft runtime carry and execute action sequences
+only; no recipe enum or recipe decoder exists in the mod.
 
 ### Profile
 
@@ -412,6 +440,19 @@ and execute action sequences only; no recipe enum or recipe decoder exists in th
 `profile_matrix` accepts `sources`, `configs`, and `matrix` axes in the same form as `vibris_run_matrix`, then profiles
 every selected source/config combination. A failed or incomplete combination is recorded with explicit source/config
 identity and later combinations continue.
+
+```json
+{
+  "recipe": "profile_matrix",
+  "sources": [{"id":"base","kind":"commit","revision":"HEAD~1"},
+              {"id":"candidate","kind":"workspace"}],
+  "configs": [{"id":"spawn","mode":"preserve"}],
+  "matrix": {"sources":["base","candidate"],"configs":["spawn"]},
+  "frames": 120,
+  "max_retries": 2,
+  "execution": "async"
+}
+```
 
 ### Load and screenshot
 

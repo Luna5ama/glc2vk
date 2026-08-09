@@ -27,6 +27,7 @@ public:
     bool validate_context(proto::ValidateContextRequest request, ValidateContextCompletion completion);
     bool get_status(GetStatusCompletion completion);
     bool submit(proto::ClientMessage message, GrpcCompletion completion);
+    bool resume(std::string request_id, GrpcCompletion completion);
     bool cancel(std::string_view request_id, std::string reason);
     void shutdown();
     [[nodiscard]] GrpcClientStats stats() const;

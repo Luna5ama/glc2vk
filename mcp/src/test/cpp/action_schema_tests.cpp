@@ -280,6 +280,30 @@ void profile_result_detail_schema() {
     filtered_matrix["statistics"] = Json::array({"p95"});
     require(std::holds_alternative<Json>(registry.invoke("vibris_run_recipe", filtered_matrix)),
         "Profile matrix rejected valid metric filters.");
+    auto asynchronous = matrix;
+    asynchronous["execution"] = "async";
+    require(std::holds_alternative<Json>(registry.invoke("vibris_run_recipe", asynchronous)),
+        "Profile matrix rejected asynchronous checkpoint execution.");
+    for (const auto* operation : {"status", "cancel"}) {
+        require(std::holds_alternative<Json>(registry.invoke("vibris_run_recipe", {
+            {"recipe", "profile_matrix"}, {"operation", operation},
+            {"job_id", "11111111-2222-4333-8444-555555555555"},
+        })), "Profile matrix rejected a checkpoint control operation.");
+    }
+    require(std::holds_alternative<Json>(registry.invoke("vibris_run_recipe", {
+        {"recipe", "profile_matrix"}, {"operation", "resume"},
+        {"job_id", "11111111-2222-4333-8444-555555555555"}, {"execution", "sync"},
+    })), "Profile matrix rejected checkpoint resume.");
+    auto matrix_38 = matrix;
+    matrix_38["configs"] = Json::array();
+    matrix_38["matrix"]["configs"] = Json::array();
+    for (std::size_t index = 0; index < 38; ++index) {
+        const auto id = "config-" + std::to_string(index);
+        matrix_38["configs"].push_back({{"id", id}, {"values", Json::object()}});
+        matrix_38["matrix"]["configs"].push_back(id);
+    }
+    require(std::holds_alternative<Json>(registry.invoke("vibris_run_recipe", matrix_38)),
+        "Checkpointed profile matrix rejected the required 38-case workflow.");
     auto invalid_profile = profile;
     invalid_profile["result_detail"] = "verbose";
     require(std::holds_alternative<InvocationError>(
@@ -305,7 +329,12 @@ void profile_result_detail_schema() {
     require(std::holds_alternative<InvocationError>(
                 registry.invoke("vibris_run_recipe", invalid_retries)),
         "Profile accepted an unbounded retry count.");
-    require(dispatches == 8, "Invalid profile output options reached dispatch.");
+    auto invalid_execution = matrix;
+    invalid_execution["execution"] = "detached";
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_run_recipe", invalid_execution)),
+        "Profile matrix accepted an unsupported execution mode.");
+    require(dispatches == 13, "Invalid profile output options reached dispatch.");
 }
 
 void matrix_schema_requires_named_sources_configs_and_axes() {

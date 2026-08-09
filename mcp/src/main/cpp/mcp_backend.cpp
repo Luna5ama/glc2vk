@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "config_document.hpp"
+#include "profile_matrix_workflow.hpp"
 #include "session_config.hpp"
 #include "source_handler.hpp"
 #include "result_mapper.hpp"
@@ -53,7 +54,11 @@ public:
           server_address_(std::move(server_address)),
           process_id_(detail::generate_uuid()),
           source_handler_(binding_.root),
-          artifact_link_(binding_.root, workspace_id_) {}
+          artifact_link_(binding_.root, workspace_id_),
+          profile_matrix_(binding_.root, workspace_id_,
+              [this](ProfileMatrixCaseExecution execution) {
+                  return run_profile_case(std::move(execution));
+              }) {}
 
     ToolOutcome dispatch(std::string_view name, const Json& arguments) {
         try {
@@ -61,7 +66,18 @@ public:
             if (name == "vibris_list_presets") return list_presets(arguments);
             if (name == "vibris_configure") return configure(arguments);
             if (name == "vibris_get_status") return get_status();
+            if (name == "vibris_run_recipe" &&
+                arguments.value("recipe", std::string{}) == "profile_matrix") {
+                if (arguments.contains("operation")) return profile_matrix_.control(arguments);
+                if (!config_) {
+                    return ToolFailure{"NOT_CONFIGURED", "Configure this worktree before running jobs.", false};
+                }
+                return profile_matrix_.start(arguments, *config_);
+            }
             if (name == "vibris_run_recipe" || name == "vibris_run_actions" || name == "vibris_run_matrix") {
+                if (profile_matrix_.running()) {
+                    return ToolFailure{"PROFILE_MATRIX_BUSY", "A profile matrix workflow is active.", true};
+                }
                 return run_job(name, arguments);
             }
             return ToolFailure{"INTERNAL_ERROR", "The validated tool was not dispatched.", false};
@@ -74,6 +90,7 @@ public:
     }
 
     std::optional<GrpcClientStats> shutdown() {
+        profile_matrix_.shutdown();
         source_handler_.clear();
         release_client();
         if (!used_client_) return std::nullopt;
@@ -160,7 +177,35 @@ private:
                 result["configured"] = config_.has_value();
                 result["workspace_id"] = workspace_id_;
                 result["worktree_root"] = binding_.root.string();
+                result["profile_matrix_job"] = profile_matrix_.active_status();
                 return result;
+            });
+    }
+
+    ToolOutcome run_profile_case(ProfileMatrixCaseExecution execution) {
+        return unary<control::ListPresetsResponse>(
+            [this](auto completion) { return client().list_presets(std::move(completion)); },
+            [this, &execution](const auto& presets) -> ToolOutcome {
+                const auto context = SceneContextResolver::resolve(execution.config, presets);
+                return unary<control::GetServerInfoResponse>(
+                    [this](auto completion) { return client().get_server_info(std::move(completion)); },
+                    [this, &execution, &context](const auto& response) -> ToolOutcome {
+                        if (!response.has_server()) {
+                            throw StateError(
+                                "SERVER_NOT_READY", "The local Vibris server did not provide server info.", true);
+                        }
+                        SynchronousJobControl control{
+                            .stop = execution.stop,
+                            .resume_request_id = execution.resume_request_id,
+                            .progress = [progress = execution.progress](const SynchronousJobProgress& event) {
+                                progress(event.request_id, event.stage, event.accepted);
+                            },
+                        };
+                        auto outcome = SynchronousJobRunner(client(), source_handler_, execution.config).run(
+                            "vibris_run_recipe", execution.arguments, response.server(), context, control);
+                        artifact_link_.rewrite(outcome);
+                        return outcome;
+                    });
             });
     }
 
@@ -219,6 +264,7 @@ private:
     SourceHandler source_handler_;
     WorkspaceArtifactLink artifact_link_;
     std::unique_ptr<GrpcClient> grpc_;
+    ProfileMatrixWorkflow profile_matrix_;
     GrpcClientStats aggregate_{};
     bool used_client_ = false;
 };

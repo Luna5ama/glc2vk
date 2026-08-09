@@ -95,6 +95,7 @@ Json recipe_schema() {
     const auto statistics = enum_array({"avg", "p5", "p50", "p95"}, 4);
     const auto converted_units = enum_array({"us", "ms"}, 2);
     const auto max_retries = bounded_integer(0, 5);
+    const auto execution = enum_string({"sync", "async"});
     const Json config{{"type", "object"}};
     return one_of({
         closed_object({{"recipe", enum_string({"profile"})},
@@ -120,8 +121,18 @@ Json recipe_schema() {
                        {"statistics", statistics},
                        {"converted_units", converted_units},
                        {"max_retries", max_retries},
+                       {"execution", execution},
                        {"result_csv", {{"type", "boolean"}}}},
                       {"recipe", "sources", "configs", "matrix", "frames"}),
+        closed_object({{"recipe", enum_string({"profile_matrix"})},
+                       {"operation", enum_string({"status", "cancel"})},
+                       {"job_id", {{"type", "string"}, {"minLength", 1}}}},
+                      {"recipe", "operation", "job_id"}),
+        closed_object({{"recipe", enum_string({"profile_matrix"})},
+                       {"operation", enum_string({"resume"})},
+                       {"job_id", {{"type", "string"}, {"minLength", 1}}},
+                       {"execution", execution}},
+                      {"recipe", "operation", "job_id"}),
         closed_object({{"recipe", enum_string({"load_and_screenshot"})},
                        {"source", source_schema()},
                        {"config", config},
@@ -224,7 +235,8 @@ Json build_definitions() {
         definition("vibris_run_recipe",
                    "Run a standard shader workflow and return its terminal result. load_and_screenshot loads one "
                    "shader source and config, waits for the requested warmup frames, and saves a screenshot. Profile "
-                   "recipes return normalized cases with summary, metrics, or full result detail.",
+                   "recipes return normalized cases with summary, metrics, or full result detail. Profile matrices "
+                   "support sync/async execution plus checkpoint status, resume, and cancellation operations.",
                    recipe_schema(), false),
         definition("vibris_run_actions",
                    "Run one ordered shader action sequence with explicitly named sources and configs.",
