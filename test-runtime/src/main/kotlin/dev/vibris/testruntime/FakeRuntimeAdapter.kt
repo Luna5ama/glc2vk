@@ -109,8 +109,35 @@ class FakeRuntimeAdapter : VibrisRuntimeAdapter {
         cancellation: CancellationToken,
     ): CompletionStage<CaptureResult> =
         immediate(cancellation) {
-            CaptureResult(renderedFrames.get(), emptyMap())
+            CaptureResult(renderedFrames.get(), emptyList())
         }
+
+    override fun capturePatchedShaders(
+        artifactName: String,
+        sink: ArtifactSink,
+        cancellation: CancellationToken,
+    ): CompletionStage<CaptureResult> = immediate(cancellation) {
+        val fileName = "$artifactName.001_fake.vsh"
+        val bytes = "void main() {}\n".encodeToByteArray()
+        sink.open(fileName).use { it.write(bytes) }
+        val resource = ResourceCatalog.ResourceDescriptor(
+            "patched_shaders",
+            ResourceCatalog.ResourceKind.PATCHED_SHADERS,
+            0, 0, 0, 0, 1, "text", 0, ResourceCatalog.ScalarType.UNSPECIFIED,
+            bytes.size.toLong(), renderedFrames.get(), "patched_shaders", "patched_shaders",
+            "", "", "", 0, "", "",
+        )
+        CaptureResult(renderedFrames.get(), listOf(CaptureResult.ArtifactGroup(
+            artifactName,
+            resource,
+            listOf(CaptureResult.CapturedArtifact(
+                fileName,
+                CapturePlan.ArtifactFormat.TEXT,
+                CapturePlan.ArtifactRole.SUBRESOURCE,
+                0,
+            )),
+        )))
+    }
 
     override fun executeAction(action: RuntimeAction): CompletionStage<String> = immediate {
         when (action) {
@@ -121,11 +148,8 @@ class FakeRuntimeAdapter : VibrisRuntimeAdapter {
                 "{\"status\":\"ok\",\"pack_loaded\":true,\"shaderpack\":\"vibris\",\"errors\":[]}"
             is RuntimeAction.GpuMetrics ->
                 "{\"avg\":1.0,\"p5\":0.9,\"p50\":1.0,\"p95\":1.1}"
-            RuntimeAction.ListSsbos -> "{\"buffers\":[]}"
-            is RuntimeAction.DumpSsbo -> "{\"path\":\"ssbo.bin\"}"
+            RuntimeAction.ListBuffers -> "{\"buffers\":[]}"
             RuntimeAction.ListTextures -> "{\"textures\":[]}"
-            is RuntimeAction.DumpTexture -> "{\"path\":\"texture.raw\"}"
-            RuntimeAction.ListPatchedShaders -> "{\"files\":[]}"
         }
     }
 

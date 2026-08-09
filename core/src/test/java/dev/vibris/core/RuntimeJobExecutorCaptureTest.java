@@ -8,11 +8,12 @@ import dev.vibris.protocol.v1.ActivateSource;
 import dev.vibris.protocol.v1.ArtifactFormat;
 import dev.vibris.protocol.v1.ArtifactKind;
 import dev.vibris.protocol.v1.TakeScreenshot;
-import dev.vibris.protocol.v1.CaptureBuffer;
-import dev.vibris.protocol.v1.CaptureTexture;
+import dev.vibris.protocol.v1.DumpBuffer;
+import dev.vibris.protocol.v1.DumpTextureV2;
 import dev.vibris.protocol.v1.ErrorCode;
 import dev.vibris.protocol.v1.EmptyAction;
 import dev.vibris.protocol.v1.GetGpuMetrics;
+import dev.vibris.protocol.v1.GetPatchedShaders;
 import dev.vibris.protocol.v1.JobActionKind;
 import dev.vibris.protocol.v1.LoadShader;
 import dev.vibris.protocol.v1.NamedShaderConfig;
@@ -51,10 +52,10 @@ class RuntimeJobExecutorCaptureTest {
         ResourceCatalog.ResourceDescriptor buffer = resource(
             "radiance_cache", ResourceCatalog.ResourceKind.BUFFER, 77, 8);
         fixture.runtime.catalog = new ResourceCatalog(List.of(screenshot, texture, buffer));
-        fixture.runtime.captureResult = new CaptureResult(77, Map.of(
+        fixture.runtime.captureResult = captureResult(77, Map.of(
             "screenshot", screenshot, "colortex0", texture, "radiance_cache", buffer));
         fixture.runtime.captureFiles.put("screenshot.png", new byte[]{1, 2, 3});
-        fixture.runtime.captureFiles.put("colortex0.raw", new byte[]{4, 5, 6, 7});
+        fixture.runtime.captureFiles.put("colortex0.bin", new byte[]{4, 5, 6, 7});
         fixture.runtime.captureFiles.put("colortex0.json", "{}".getBytes(StandardCharsets.UTF_8));
         fixture.runtime.captureFiles.put("radiance_cache.bin", new byte[]{8, 9});
         fixture.runtime.captureFiles.put("radiance_cache.json", "{}".getBytes(StandardCharsets.UTF_8));
@@ -65,11 +66,9 @@ class RuntimeJobExecutorCaptureTest {
         assertEquals(List.of("link:A", "reload", "context", "frames", "capture"),
             fixture.runtime.events);
         assertEquals(List.of(77L), result.getFrameIdsList());
-        assertEquals(5, result.getArtifactsCount());
+        assertEquals(2, result.getArtifactsCount());
+        assertEquals(3, result.getArtifactGroupsCount());
         assertEquals(List.of(
-            ArtifactKind.ARTIFACT_KIND_SCREENSHOT,
-            ArtifactKind.ARTIFACT_KIND_TEXTURE,
-            ArtifactKind.ARTIFACT_KIND_BUFFER,
             ArtifactKind.ARTIFACT_KIND_SHADER_COMPILE_LOG,
             ArtifactKind.ARTIFACT_KIND_MANIFEST),
             result.getArtifactsList().stream().map(artifact -> artifact.getKind()).toList());
@@ -86,8 +85,8 @@ class RuntimeJobExecutorCaptureTest {
         Fixture fixture = new Fixture();
         fixture.runtime.catalog = new ResourceCatalog(List.of(
             resource("final", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 1, 16)));
-        ActionSequence actions = ActionSequence.newBuilder().addActions(Action.newBuilder().setCaptureTexture(
-            CaptureTexture.newBuilder().setLogicalName("missing").setFormat(ArtifactFormat.ARTIFACT_FORMAT_RAW)
+        ActionSequence actions = ActionSequence.newBuilder().addActions(Action.newBuilder().setDumpTextureV2(
+            DumpTextureV2.newBuilder().setLogicalName("missing").setFormat(ArtifactFormat.ARTIFACT_FORMAT_BIN)
                 .setArtifactName("missing"))).build();
 
         RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
@@ -106,7 +105,7 @@ class RuntimeJobExecutorCaptureTest {
         ResourceCatalog.ResourceDescriptor screenshot = resource(
             "final", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 1, 0);
         fixture.runtime.catalog = new ResourceCatalog(List.of(screenshot));
-        fixture.runtime.captureResult = new CaptureResult(1, Map.of("screenshot", screenshot));
+        fixture.runtime.captureResult = captureResult(1, Map.of("screenshot", screenshot));
         fixture.runtime.captureFiles.put("screenshot.png", new byte[128]);
         ActionSequence actions = ActionSequence.newBuilder().addActions(Action.newBuilder().setTakeScreenshot(
             TakeScreenshot.newBuilder().setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)
@@ -129,7 +128,7 @@ class RuntimeJobExecutorCaptureTest {
         ResourceCatalog.ResourceDescriptor screenshot = resource(
             "final", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 1, 16);
         fixture.runtime.catalog = new ResourceCatalog(List.of(screenshot));
-        fixture.runtime.captureResult = new CaptureResult(1, Map.of("screenshot", screenshot));
+        fixture.runtime.captureResult = captureResult(1, Map.of("screenshot", screenshot));
         ActionSequence actions = ActionSequence.newBuilder().addActions(Action.newBuilder().setTakeScreenshot(
             TakeScreenshot.newBuilder().setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)
                 .setArtifactName("screenshot"))).build();
@@ -158,6 +157,38 @@ class RuntimeJobExecutorCaptureTest {
 
         assertEquals(ErrorCode.CAPTURE_FAILED, failure.code);
         assertFalse(fixture.runtime.events.contains("capture"));
+    }
+
+    @Test
+    void capturesPatchedShadersAsDynamicArtifactGroup() throws Exception {
+        Fixture fixture = new Fixture();
+        ResourceCatalog.ResourceDescriptor resource = resource(
+            "patched_shaders", ResourceCatalog.ResourceKind.PATCHED_SHADERS, 81, 12);
+        fixture.runtime.patchedShaderFiles.put("patched.001_begin.vsh", "vertex".getBytes(StandardCharsets.UTF_8));
+        fixture.runtime.patchedShaderFiles.put("patched.002_begin.json", "{\"ok\":true}".getBytes(StandardCharsets.UTF_8));
+        fixture.runtime.patchedShaderResult = new CaptureResult(81, List.of(new CaptureResult.ArtifactGroup(
+            "patched", resource, List.of(
+                new CaptureResult.CapturedArtifact("patched.001_begin.vsh",
+                    dev.vibris.api.CapturePlan.ArtifactFormat.TEXT,
+                    dev.vibris.api.CapturePlan.ArtifactRole.SUBRESOURCE, 0),
+                new CaptureResult.CapturedArtifact("patched.002_begin.json",
+                    dev.vibris.api.CapturePlan.ArtifactFormat.JSON,
+                    dev.vibris.api.CapturePlan.ArtifactRole.SUBRESOURCE, 1)))));
+        ActionSequence actions = ActionSequence.newBuilder().addActions(Action.newBuilder()
+            .setGetPatchedShaders(GetPatchedShaders.newBuilder().setArtifactName("patched"))).build();
+
+        TerminalResult terminal = fixture.executor.execute(fixture.job(actions), ignored -> {});
+
+        var result = terminal.completed().getResult();
+        assertEquals(List.of("link:A", "reload", "context", "capture_patched_shaders"), fixture.runtime.events);
+        assertEquals(1, result.getArtifactGroupsCount());
+        assertEquals(ArtifactKind.ARTIFACT_KIND_PATCHED_SHADER,
+            result.getArtifactGroups(0).getArtifacts(0).getKind());
+        assertEquals(dev.vibris.protocol.v1.ArtifactFormat.ARTIFACT_FORMAT_TEXT,
+            result.getArtifactGroups(0).getArtifacts(0).getFormat());
+        Path directory = Path.of(result.getManifestPath()).getParent();
+        assertEquals("vertex", Files.readString(directory.resolve("patched.001_begin.vsh")));
+        assertEquals("{\"ok\":true}", Files.readString(directory.resolve("patched.002_begin.json")));
     }
 
     @Test
@@ -205,7 +236,7 @@ class RuntimeJobExecutorCaptureTest {
         ResourceCatalog.ResourceDescriptor screenshot = resource(
             "final", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 91, 16);
         fixture.runtime.catalog = new ResourceCatalog(List.of(screenshot));
-        fixture.runtime.captureResult = new CaptureResult(91, Map.of("case-b--screenshot", screenshot));
+        fixture.runtime.captureResult = captureResult(91, Map.of("case-b--screenshot", screenshot));
         fixture.runtime.captureFailuresAfterWrite.add(new IllegalStateException("first case failed"));
         fixture.runtime.captureFileBatches.add(Map.of("case-a--screenshot.png", new byte[]{9}));
         fixture.runtime.captureFileBatches.add(Map.of("case-b--screenshot.png", new byte[]{1, 2, 3}));
@@ -224,9 +255,9 @@ class RuntimeJobExecutorCaptureTest {
         assertTrue(result.getActionResultsList().stream()
             .anyMatch(action -> action.getJson().contains("\"case_id\":\"case-a\"") &&
                 action.getJson().contains("\"success\":false")));
-        assertTrue(result.getArtifactsList().stream()
+        assertTrue(result.getArtifactGroupsList().stream().flatMap(group -> group.getArtifactsList().stream())
             .anyMatch(artifact -> artifact.getFileName().equals("case-b--screenshot.png")));
-        assertFalse(result.getArtifactsList().stream()
+        assertFalse(result.getArtifactGroupsList().stream().flatMap(group -> group.getArtifactsList().stream())
             .anyMatch(artifact -> artifact.getFileName().equals("case-a--screenshot.png")));
     }
 
@@ -234,11 +265,32 @@ class RuntimeJobExecutorCaptureTest {
         return ActionSequence.newBuilder()
             .addActions(Action.newBuilder().setTakeScreenshot(TakeScreenshot.newBuilder()
                 .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setArtifactName("screenshot").setAfterFrames(2)))
-            .addActions(Action.newBuilder().setCaptureTexture(CaptureTexture.newBuilder().setLogicalName("colortex0")
-                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_RAW).setArtifactName("colortex0")))
-            .addActions(Action.newBuilder().setCaptureBuffer(CaptureBuffer.newBuilder().setLogicalName("radiance_cache")
-                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_BIN).setArtifactName("radiance_cache")))
+            .addActions(Action.newBuilder().setDumpTextureV2(DumpTextureV2.newBuilder().setLogicalName("colortex0")
+                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_BIN).setArtifactName("colortex0")))
+            .addActions(Action.newBuilder().setDumpBuffer(DumpBuffer.newBuilder().setLogicalName("radiance_cache")
+                .setArtifactName("radiance_cache")))
             .build();
+    }
+
+    private static CaptureResult captureResult(
+        long frameId, Map<String, ResourceCatalog.ResourceDescriptor> resources) {
+        return new CaptureResult(frameId, resources.entrySet().stream().map(entry -> {
+            String name = entry.getKey();
+            ResourceCatalog.ResourceDescriptor resource = entry.getValue();
+            dev.vibris.api.CapturePlan.ArtifactFormat format =
+                resource.kind() == ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER
+                    ? dev.vibris.api.CapturePlan.ArtifactFormat.PNG
+                    : dev.vibris.api.CapturePlan.ArtifactFormat.BIN;
+            var files = new java.util.ArrayList<CaptureResult.CapturedArtifact>();
+            files.add(new CaptureResult.CapturedArtifact(name + "." + format.name().toLowerCase(), format,
+                dev.vibris.api.CapturePlan.ArtifactRole.PRIMARY, null));
+            if (resource.kind() != ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER) {
+                files.add(new CaptureResult.CapturedArtifact(name + ".json",
+                    dev.vibris.api.CapturePlan.ArtifactFormat.JSON,
+                    dev.vibris.api.CapturePlan.ArtifactRole.METADATA, null));
+            }
+            return new CaptureResult.ArtifactGroup(name, resource, files);
+        }).toList());
     }
 
     private static ResourceCatalog.ResourceDescriptor resource(

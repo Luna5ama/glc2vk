@@ -1,6 +1,5 @@
 package dev.luna5ama.vibris.capture
 
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -16,7 +15,7 @@ class ShaderDebugStateTest {
     fun retainsTheNewestOneHundredErrors() {
         val temp = createTempDirectory("vibris-shader-debug-state")
         try {
-            val control = ShaderDebugControl(EmptyHost(temp), EmptyDumper)
+            val control = ShaderDebugControl(EmptyHost(temp))
             repeat(101) { index ->
                 control.recordError("type", "file", "message", "trace", index.toLong())
             }
@@ -44,7 +43,7 @@ class ShaderDebugStateTest {
 
     @Test
     fun gpuMetricsCaptureWaitsForTheRequestedFutureFrames() {
-        val control = ShaderDebugControl(EmptyHost(Path.of(".")), EmptyDumper)
+        val control = ShaderDebugControl(EmptyHost(Path.of(".")))
 
         val result = control.captureMetrics(2).toCompletableFuture()
         control.tickFrame()
@@ -61,12 +60,7 @@ class ShaderDebugStateTest {
         override fun gameDirectory() = root
         override fun debugShadersEnabled() = false
         override fun storageBuffers() = emptyList<StorageBufferInfo>()
-        override fun textureCatalog() = TextureCatalog(emptyList(), emptyList())
+        override fun textureCatalog() = TextureCatalog(emptyList())
         override fun resolveTexture(name: String): Int? = null
-    }
-
-    private object EmptyDumper : ShaderDebugResourceDumper {
-        override fun dumpStorageBuffer(buffer: StorageBufferInfo, output: Path) = JsonObject(emptyMap())
-        override fun dumpTexture(textureId: Int, output: Path, raw: Boolean) = JsonObject(emptyMap())
     }
 }

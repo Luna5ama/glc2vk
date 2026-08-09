@@ -47,9 +47,9 @@ void schema_rejects_before_dispatch() {
     require(std::holds_alternative<Json>(
                 registry.invoke("vibris_run_actions", {{"actions", Json::array()}})),
         "Empty action sequence was rejected.");
-    const Json flat{{"actions", Json::array({{{"type", "capture_texture"},
+    const Json flat{{"actions", Json::array({{{"type", "dump_texture"},
                                                {"name", "colortex5"},
-                                               {"format", "raw"},
+                                               {"format", "bin"},
                                                {"artifact_name", "frame_1"}}})}};
     require(std::holds_alternative<Json>(registry.invoke("vibris_run_actions", flat)),
         "Safe flat artifact name was rejected.");
@@ -113,20 +113,37 @@ void atomic_action_schemas_reject_invalid_arguments() {
         "Texture dump accepted no texture selector.");
     require(std::holds_alternative<InvocationError>(
                 registry.invoke("vibris_run_actions", {{"actions", Json::array({
-                    {{"type", "dump_ssbo"}}})}})),
-        "SSBO dump accepted a missing binding index.");
+                    {{"type", "dump_buffer"}}})}})),
+        "Buffer dump accepted missing required fields.");
     require(std::holds_alternative<InvocationError>(
                 registry.invoke("vibris_run_actions", {{"actions", Json::array({
-                    {{"type", "dump_texture"}, {"name", "colortex0"}, {"id", 1}}})}})),
-        "Texture dump accepted two texture selectors.");
+                    {{"type", "get_patched_shaders"}}})}})),
+        "Patched shader capture accepted a missing artifact name.");
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_run_actions", {{"actions", Json::array({
+                    {{"type", "list_patched_shaders"}}})}})),
+        "Removed patched shader listing action remained exposed.");
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_run_actions", {{"actions", Json::array({
+                    {{"type", "dump_texture"}, {"name", "colortex0"}, {"format", "raw"},
+                     {"artifact_name", "texture"}}})}})),
+        "Texture dump accepted the reserved raw format.");
     require(std::holds_alternative<InvocationError>(
                 registry.invoke("vibris_run_actions", {{"actions", Json::array({
                     {{"type", "capture_pass"}, {"pass", "prepare"}, {"path", "../outside"}}})}})),
         "Capture pass accepted a path that escapes the game directory.");
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_run_actions", {{"actions", Json::array({
+                    {{"type", "dump_texture"}, {"name", "colortex0"}, {"format", "bin"},
+                     {"artifact_name", "texture"}, {"raw", true}}})}})),
+        "Texture dump accepted the removed raw selector.");
     require(std::holds_alternative<Json>(
                 registry.invoke("vibris_run_actions", {{"actions", Json::array({
-                    {{"type", "dump_texture"}, {"name", "colortex0"}, {"raw", true}}})}})),
-        "Texture dump rejected a valid logical name.");
+                    {{"type", "dump_texture"}, {"name", "colortex0.main"}, {"format", "bin"},
+                     {"artifact_name", "texture"}},
+                    {{"type", "dump_buffer"}, {"name", "iris_ssbo_6"},
+                     {"artifact_name", "buffer"}}})}})),
+        "Valid logical-name dumps were rejected.");
     require(std::holds_alternative<Json>(registry.invoke("vibris_run_actions", {
         {"sources", Json::array({{{"id", "candidate"}, {"kind", "workspace"}}})},
         {"configs", Json::array({{{"id", "quality"},

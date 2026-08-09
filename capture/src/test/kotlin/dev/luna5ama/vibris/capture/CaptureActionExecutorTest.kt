@@ -2,7 +2,6 @@ package dev.luna5ama.vibris.capture
 
 import dev.vibris.api.RuntimeAction
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.nio.file.Path
@@ -18,7 +17,7 @@ class CaptureActionExecutorTest {
         val root = createTempDirectory("vibris-action-executor")
         try {
             val manager = CaptureManager()
-            val executor = CaptureActionExecutor(root, manager, ShaderDebugControl(EmptyHost(root), EmptyDumper))
+            val executor = CaptureActionExecutor(root, manager, ShaderDebugControl(EmptyHost(root)))
 
             val result = Json.parseToJsonElement(
                 executor.execute(RuntimeAction.CapturePass("composite", "vibris/test-capture"))
@@ -42,12 +41,7 @@ class CaptureActionExecutorTest {
         override fun gameDirectory() = root
         override fun debugShadersEnabled() = false
         override fun storageBuffers() = emptyList<StorageBufferInfo>()
-        override fun textureCatalog() = TextureCatalog(emptyList(), emptyList())
+        override fun textureCatalog() = TextureCatalog(emptyList())
         override fun resolveTexture(name: String): Int? = null
-    }
-
-    private object EmptyDumper : ShaderDebugResourceDumper {
-        override fun dumpStorageBuffer(buffer: StorageBufferInfo, output: Path) = JsonObject(emptyMap())
-        override fun dumpTexture(textureId: Int, output: Path, raw: Boolean) = JsonObject(emptyMap())
     }
 }

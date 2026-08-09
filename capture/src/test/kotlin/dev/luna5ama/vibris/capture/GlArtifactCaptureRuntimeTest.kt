@@ -107,17 +107,20 @@ class GlArtifactCaptureRuntimeTest {
                     texture,
                     0,
                     0,
-                    CapturePlan.ArtifactFormat.RAW,
+                    CapturePlan.ArtifactFormat.BIN,
                     rawOutput,
                 )
                 assertEquals(2, rawMetadata.width)
                 assertEquals(1, rawMetadata.height)
                 assertEquals(4, rawMetadata.channelCount)
-                assertEquals(ResourceCatalog.ScalarType.FLOAT32, rawMetadata.scalarType)
-                assertEquals(32, rawMetadata.byteSize)
+                assertEquals(ResourceCatalog.ScalarType.UINT8, rawMetadata.scalarType)
+                assertEquals(8, rawMetadata.byteSize)
                 assertEquals(rawMetadata, GlArtifactCapture.describeTexture(texture, 0))
                 assertEquals(rawMetadata.byteSize, rawOutput.size().toLong())
-                assertRawPixels(rawOutput.toByteArray())
+                assertContentEquals(
+                    byteArrayOf(255.toByte(), 0, 0, 255.toByte(), 0, 255.toByte(), 0, 255.toByte()),
+                    rawOutput.toByteArray(),
+                )
                 assertPackState(packBuffer)
 
                 val pngOutput = ByteArrayOutputStream()
@@ -179,18 +182,6 @@ class GlArtifactCaptureRuntimeTest {
         glPixelStorei(GL_PACK_SKIP_PIXELS, 0)
         glPixelStorei(GL_PACK_SKIP_ROWS, 0)
         glPixelStorei(GL_PACK_SKIP_IMAGES, 0)
-    }
-
-    private fun assertRawPixels(bytes: ByteArray) {
-        val raw = ByteBuffer.wrap(bytes).order(ByteOrder.nativeOrder())
-        assertEquals(1.0f, raw.getFloat(0))
-        assertEquals(0.0f, raw.getFloat(4))
-        assertEquals(0.0f, raw.getFloat(8))
-        assertEquals(1.0f, raw.getFloat(12))
-        assertEquals(0.0f, raw.getFloat(16))
-        assertEquals(1.0f, raw.getFloat(20))
-        assertEquals(0.0f, raw.getFloat(24))
-        assertEquals(1.0f, raw.getFloat(28))
     }
 
     private fun writeBufferFromComputeShader(buffer: Int) {

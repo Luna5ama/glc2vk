@@ -7,6 +7,7 @@ import dev.vibris.api.ResourceCatalog
 import dev.vibris.protocol.v1.AbComparisonResult
 import dev.vibris.protocol.v1.ArtifactKind
 import dev.vibris.protocol.v1.ArtifactMetadata
+import dev.vibris.protocol.v1.ArtifactRole
 import dev.vibris.protocol.v1.DiagnosticSeverity
 import dev.vibris.protocol.v1.ErrorCode
 import dev.vibris.protocol.v1.JobResult
@@ -45,20 +46,27 @@ internal class CaptureProtocolArtifacts {
             val plan = plans[index]
             val capture = captured[index]
             result.addFrameIds(capture.frameId)
-            for (target in plan.targets) {
-                val resource = capture.artifacts[target.artifactName]
-                val file = requireArtifact(committed, target.fileName())
-                if (
-                    target.format == CapturePlan.ArtifactFormat.RAW ||
-                    target.format == CapturePlan.ArtifactFormat.BIN
-                ) {
-                    requireArtifact(committed, target.metadataFileName())
+            for (group in capture.groups) {
+                val target = plan.targets.first { it.artifactName == group.name }
+                val protocolGroup = dev.vibris.protocol.v1.ArtifactGroup.newBuilder()
+                    .setName(group.name)
+                    .setResource(toProtocol(group.resource, target, null))
+                for (artifact in group.artifacts) {
+                    protocolGroup.addArtifacts(
+                        captureArtifact(
+                            job,
+                            target,
+                            group.resource,
+                            artifact,
+                            requireArtifact(committed, artifact.fileName),
+                        ),
+                    )
                 }
-                result.addArtifacts(captureArtifact(job, target, resource!!, file))
+                result.addArtifactGroups(protocolGroup)
             }
         }
         if (comparison != null) {
-            addComparison(job, committed, result, comparison)
+            addComparison(job, committed, result, comparison, plans.first(), captured.first())
         }
         result.addArtifacts(
             fileArtifact(
@@ -117,18 +125,12 @@ internal class CaptureProtocolArtifacts {
             expected.add("shader.log")
             for (plan in plans) {
                 for (target in plan.targets) {
-                    expected.add(target.fileName())
-                    if (
-                        target.format == CapturePlan.ArtifactFormat.RAW ||
-                        target.format == CapturePlan.ArtifactFormat.BIN
-                    ) {
-                        expected.add(target.metadataFileName())
-                    }
+                    target.outputs.forEach { expected.add(it.fileName) }
                 }
             }
             if (comparison) {
                 expected.add(AbArtifactComparator.METRICS_FILE)
-                expected.add(AbArtifactComparator.HEATMAP_FILE)
+                expected.addAll(AbArtifactComparator.heatmapFiles(plans.first()))
             }
             return expected
         }
@@ -138,6 +140,8 @@ internal class CaptureProtocolArtifacts {
             committed: ArtifactManager.CommittedJob,
             result: JobResult.Builder,
             comparison: AbComparisonResult,
+            baseline: CapturePlan,
+            baselineCapture: CaptureResult,
         ) {
             result.setComparison(comparison)
             result.addArtifacts(
@@ -150,26 +154,54 @@ internal class CaptureProtocolArtifacts {
                     requireArtifact(committed, AbArtifactComparator.METRICS_FILE),
                 ),
             )
-            result.addArtifacts(
-                fileArtifact(
-                    job,
-                    AbArtifactComparator.HEATMAP_FILE,
-                    ArtifactKind.ARTIFACT_KIND_HEATMAP,
-                    dev.vibris.protocol.v1.ArtifactFormat.ARTIFACT_FORMAT_PNG,
-                    "image/png",
-                    requireArtifact(committed, AbArtifactComparator.HEATMAP_FILE),
-                ),
-            )
+            val heatmaps = AbArtifactComparator.heatmapFiles(baseline)
+            if (heatmaps.isNotEmpty()) {
+                val baselineTarget = baseline.targets.first { target ->
+                    target.outputs.any { it.role != CapturePlan.ArtifactRole.METADATA &&
+                        it.format == CapturePlan.ArtifactFormat.PNG }
+                }
+                val baselineResource = baselineCapture.groups.first { it.name == baselineTarget.artifactName }.resource
+                val group = dev.vibris.protocol.v1.ArtifactGroup.newBuilder()
+                    .setName("diff-heatmap")
+                    .setResource(toProtocol(baselineResource, baselineTarget, null).toBuilder()
+                        .setLogicalName("comparison.diff_heatmap")
+                        .setCategory("comparison"))
+                val pngOutputs = baseline.targets.flatMap { target ->
+                    target.outputs.filter { it.role != CapturePlan.ArtifactRole.METADATA &&
+                        it.format == CapturePlan.ArtifactFormat.PNG }
+                }
+                for (index in heatmaps.indices) {
+                    val output = pngOutputs[index]
+                    group.addArtifacts(fileArtifact(
+                        job, heatmaps[index], ArtifactKind.ARTIFACT_KIND_HEATMAP,
+                        dev.vibris.protocol.v1.ArtifactFormat.ARTIFACT_FORMAT_PNG,
+                        "image/png", requireArtifact(committed, heatmaps[index]),
+                    ).toBuilder()
+                        .setRole(if (output.subresourceIndex == null) ArtifactRole.ARTIFACT_ROLE_PRIMARY
+                            else ArtifactRole.ARTIFACT_ROLE_SUBRESOURCE)
+                        .apply { output.subresourceIndex?.let { setSubresourceIndex(it) } })
+                }
+                result.addArtifactGroups(group)
+            }
         }
 
         private fun validateResult(plan: CapturePlan, result: CaptureResult) {
+            if (result.groups.size != plan.targets.size) {
+                throw RuntimeJobExecutor.Failure(ErrorCode.CAPTURE_FAILED, "Runtime capture groups did not match its plan.")
+            }
             for (target in plan.targets) {
-                val resource = result.artifacts[target.artifactName]
+                val group = result.groups.firstOrNull { it.name == target.artifactName }
+                val resource = group?.resource
                 if (
                     resource == null ||
                     resource.kind != target.kind ||
                     resource.logicalName != target.logicalName ||
-                    resource.frameId != result.frameId
+                    resource.frameId != result.frameId ||
+                    group.artifacts.map { artifact ->
+                        listOf(artifact.fileName, artifact.format, artifact.role, artifact.subresourceIndex)
+                    }.toSet() != target.outputs.map { output ->
+                        listOf(output.fileName, output.format, output.role, output.subresourceIndex)
+                    }.toSet()
                 ) {
                     throw RuntimeJobExecutor.Failure(
                         ErrorCode.CAPTURE_FAILED,
@@ -183,17 +215,20 @@ internal class CaptureProtocolArtifacts {
             job: CoreJob,
             target: CapturePlan.Target,
             resource: ResourceCatalog.ResourceDescriptor,
+            artifact: CaptureResult.CapturedArtifact,
             file: CommittedFile,
         ): ArtifactMetadata =
             fileArtifact(
                 job,
-                target.fileName(),
+                artifact.fileName,
                 kind(target.kind),
-                protocolFormat(target.format),
-                mediaType(target.format),
+                protocolFormat(artifact.format),
+                mediaType(artifact.format),
                 file,
             ).toBuilder()
-                .setResource(toProtocol(resource, target))
+                .setRole(protocolRole(artifact.role))
+                .apply { artifact.subresourceIndex?.let { setSubresourceIndex(it) } }
+                .setResource(toProtocol(resource, target, artifact.subresourceIndex))
                 .build()
 
         private fun fileArtifact(
@@ -222,6 +257,7 @@ internal class CaptureProtocolArtifacts {
         private fun toProtocol(
             resource: ResourceCatalog.ResourceDescriptor,
             target: CapturePlan.Target,
+            subresourceIndex: Int?,
         ): dev.vibris.protocol.v1.ResourceDescriptor =
             dev.vibris.protocol.v1.ResourceDescriptor.newBuilder()
                 .setLogicalName(resource.logicalName)
@@ -233,13 +269,15 @@ internal class CaptureProtocolArtifacts {
                             dev.vibris.protocol.v1.ResourceKind.RESOURCE_KIND_TEXTURE
                         ResourceCatalog.ResourceKind.BUFFER ->
                             dev.vibris.protocol.v1.ResourceKind.RESOURCE_KIND_BUFFER
+                        ResourceCatalog.ResourceKind.PATCHED_SHADERS ->
+                            dev.vibris.protocol.v1.ResourceKind.RESOURCE_KIND_PATCHED_SHADERS
                     },
                 )
                 .setWidth(resource.width)
                 .setHeight(resource.height)
                 .setDepth(resource.depth)
                 .setMipLevel(target.mipLevel)
-                .setLayer(target.layer)
+                .setLayer(subresourceIndex ?: target.layer)
                 .setInternalFormat(resource.internalFormat)
                 .setChannelCount(resource.channelCount)
                 .setScalarType(
@@ -250,6 +288,14 @@ internal class CaptureProtocolArtifacts {
                 .setByteSize(resource.byteSize)
                 .setFrameId(resource.frameId)
                 .setSemanticLabel(resource.semanticLabel)
+                .setCategory(resource.category)
+                .setTextureTarget(resource.textureTarget)
+                .setChannelLayout(resource.channelLayout)
+                .setNumericClass(resource.numericClass)
+                .setComponentBits(resource.componentBits)
+                .setReadbackFormat(resource.readbackFormat)
+                .setReadbackType(resource.readbackType)
+                .setMipLevels(resource.mipLevels)
                 .build()
 
         private fun requireArtifact(
@@ -281,16 +327,23 @@ internal class CaptureProtocolArtifacts {
                     ArtifactKind.ARTIFACT_KIND_SCREENSHOT
                 ResourceCatalog.ResourceKind.TEXTURE -> ArtifactKind.ARTIFACT_KIND_TEXTURE
                 ResourceCatalog.ResourceKind.BUFFER -> ArtifactKind.ARTIFACT_KIND_BUFFER
+                ResourceCatalog.ResourceKind.PATCHED_SHADERS -> ArtifactKind.ARTIFACT_KIND_PATCHED_SHADER
             }
 
         private fun mediaType(format: CapturePlan.ArtifactFormat): String =
             when (format) {
                 CapturePlan.ArtifactFormat.PNG -> "image/png"
                 CapturePlan.ArtifactFormat.EXR -> "image/x-exr"
-                CapturePlan.ArtifactFormat.RAW,
-                CapturePlan.ArtifactFormat.BIN,
-                -> "application/octet-stream"
+                CapturePlan.ArtifactFormat.BIN -> "application/octet-stream"
+                CapturePlan.ArtifactFormat.TEXT -> "text/plain; charset=utf-8"
+                CapturePlan.ArtifactFormat.JSON -> "application/json"
             }
+
+        private fun protocolRole(role: CapturePlan.ArtifactRole): ArtifactRole = when (role) {
+            CapturePlan.ArtifactRole.PRIMARY -> ArtifactRole.ARTIFACT_ROLE_PRIMARY
+            CapturePlan.ArtifactRole.SUBRESOURCE -> ArtifactRole.ARTIFACT_ROLE_SUBRESOURCE
+            CapturePlan.ArtifactRole.METADATA -> ArtifactRole.ARTIFACT_ROLE_METADATA
+        }
 
     }
 }

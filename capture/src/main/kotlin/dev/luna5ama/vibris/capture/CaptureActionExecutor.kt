@@ -27,12 +27,17 @@ class CaptureActionExecutor(
         is RuntimeAction.CaptureMulti -> queueMulti(action)
         RuntimeAction.InspectShader -> shader.inspect()
         is RuntimeAction.GpuMetrics -> error("GPU metrics are asynchronous")
-        RuntimeAction.ListSsbos -> shader.storageBuffersJson()
-        is RuntimeAction.DumpSsbo -> shader.dumpStorageBuffer(action.index)
         RuntimeAction.ListTextures -> shader.texturesJson()
-        is RuntimeAction.DumpTexture -> shader.dumpTexture(action.name, action.id, action.raw)
-        RuntimeAction.ListPatchedShaders -> shader.patchedShadersJson()
+        RuntimeAction.ListBuffers -> shader.buffersJson()
     }
+
+    fun capturePatchedShaders(
+        artifactName: String,
+        sink: dev.vibris.api.ArtifactSink,
+        frameId: Long,
+        cancellation: dev.vibris.api.CancellationToken,
+    ): CompletionStage<dev.vibris.api.CaptureResult> =
+        shader.capturePatchedShaders(artifactName, sink, frameId, cancellation)
 
     private fun captureStatus() = captureManager.status().let { status ->
         buildJsonObject {

@@ -283,15 +283,14 @@ message ActionSequence {
 }
 
 message Action {
-    reserved 21, 25, 26, 27;
+    reserved 4, 5, 21, 25, 26, 27, 29, 30, 31, 32, 33;
     reserved "capture_screenshot", "get_shader_status", "get_shader_errors", "schedule_screenshot",
-        "get_screenshot_result";
+        "get_screenshot_result", "capture_texture", "capture_buffer", "list_ssbos", "dump_ssbo",
+        "list_textures", "dump_texture", "list_patched_shaders";
     oneof action {
         ResetTemporalState reset_temporal_state = 1;
         WaitFrames wait_frames = 2;
         TakeScreenshot take_screenshot = 3;
-        CaptureTexture capture_texture = 4;
-        CaptureBuffer capture_buffer = 5;
         ActivateSource activate_source = 6;
         CompareCaptures compare_captures = 7;
         EmptyAction get_capture_status = 20;
@@ -299,26 +298,27 @@ message Action {
         CaptureMulti capture_multi = 23;
         EmptyAction inspect_shader = 24;
         GetGpuMetrics get_gpu_metrics = 28;
-        EmptyAction list_ssbos = 29;
-        DumpSsbo dump_ssbo = 30;
-        EmptyAction list_textures = 31;
-        DumpTexture dump_texture = 32;
-        EmptyAction list_patched_shaders = 33;
         LoadShader load_shader = 34;
+        EmptyAction list_textures_v2 = 35;
+        DumpTextureV2 dump_texture_v2 = 36;
+        EmptyAction list_buffers = 37;
+        DumpBuffer dump_buffer = 38;
+        GetPatchedShaders get_patched_shaders = 39;
     }
 }
 
 enum JobActionKind {
-    reserved 21, 25, 26, 27;
+    reserved 4, 5, 21, 25, 26, 27, 29, 30, 31, 32, 33;
     reserved "JOB_ACTION_KIND_CAPTURE_SCREENSHOT", "JOB_ACTION_KIND_GET_SHADER_STATUS",
         "JOB_ACTION_KIND_GET_SHADER_ERRORS", "JOB_ACTION_KIND_SCHEDULE_SCREENSHOT",
-        "JOB_ACTION_KIND_GET_SCREENSHOT_RESULT";
+        "JOB_ACTION_KIND_GET_SCREENSHOT_RESULT", "JOB_ACTION_KIND_CAPTURE_TEXTURE",
+        "JOB_ACTION_KIND_CAPTURE_BUFFER", "JOB_ACTION_KIND_LIST_SSBOS", "JOB_ACTION_KIND_DUMP_SSBO",
+        "JOB_ACTION_KIND_LIST_TEXTURES", "JOB_ACTION_KIND_DUMP_TEXTURE",
+        "JOB_ACTION_KIND_LIST_PATCHED_SHADERS";
     JOB_ACTION_KIND_UNSPECIFIED = 0;
     JOB_ACTION_KIND_RESET_TEMPORAL_STATE = 1;
     JOB_ACTION_KIND_WAIT_FRAMES = 2;
     JOB_ACTION_KIND_TAKE_SCREENSHOT = 3;
-    JOB_ACTION_KIND_CAPTURE_TEXTURE = 4;
-    JOB_ACTION_KIND_CAPTURE_BUFFER = 5;
     JOB_ACTION_KIND_ACTIVATE_SOURCE = 6;
     JOB_ACTION_KIND_COMPARE_CAPTURES = 7;
     JOB_ACTION_KIND_GET_CAPTURE_STATUS = 20;
@@ -326,12 +326,12 @@ enum JobActionKind {
     JOB_ACTION_KIND_CAPTURE_MULTI = 23;
     JOB_ACTION_KIND_INSPECT_SHADER = 24;
     JOB_ACTION_KIND_GET_GPU_METRICS = 28;
-    JOB_ACTION_KIND_LIST_SSBOS = 29;
-    JOB_ACTION_KIND_DUMP_SSBO = 30;
-    JOB_ACTION_KIND_LIST_TEXTURES = 31;
-    JOB_ACTION_KIND_DUMP_TEXTURE = 32;
-    JOB_ACTION_KIND_LIST_PATCHED_SHADERS = 33;
     JOB_ACTION_KIND_LOAD_SHADER = 34;
+    JOB_ACTION_KIND_LIST_TEXTURES_V2 = 35;
+    JOB_ACTION_KIND_DUMP_TEXTURE_V2 = 36;
+    JOB_ACTION_KIND_LIST_BUFFERS = 37;
+    JOB_ACTION_KIND_DUMP_BUFFER = 38;
+    JOB_ACTION_KIND_GET_PATCHED_SHADERS = 39;
 }
 
 message ActivateSource {
@@ -357,18 +357,15 @@ message TakeScreenshot {
     uint32 after_frames = 3;
 }
 
-message CaptureTexture {
-    string logical_name = 1;
-    uint32 mip_level = 2;
-    uint32 layer = 3;
-    ArtifactFormat format = 4;
-    string artifact_name = 5;
-}
-
-message CaptureBuffer {
+message DumpTextureV2 {
     string logical_name = 1;
     ArtifactFormat format = 2;
     string artifact_name = 3;
+}
+
+message DumpBuffer {
+    string logical_name = 1;
+    string artifact_name = 2;
 }
 
 message CancelJob {
@@ -463,6 +460,13 @@ message JobResult {
     repeated uint64 frame_ids = 6;
     string manifest_path = 7;
     repeated ActionResult action_results = 8;
+    repeated ArtifactGroup artifact_groups = 9;
+}
+
+message ArtifactGroup {
+    string name = 1;
+    ResourceDescriptor resource = 2;
+    repeated ArtifactMetadata artifacts = 3;
 }
 
 message ActionResult {
@@ -517,6 +521,15 @@ message ArtifactMetadata {
     uint64 byte_size = 6;
     ResourceDescriptor resource = 7;
     string path = 8;
+    ArtifactRole role = 9;
+    optional uint32 subresource_index = 10;
+}
+
+enum ArtifactRole {
+    ARTIFACT_ROLE_UNSPECIFIED = 0;
+    ARTIFACT_ROLE_PRIMARY = 1;
+    ARTIFACT_ROLE_SUBRESOURCE = 2;
+    ARTIFACT_ROLE_METADATA = 3;
 }
 
 enum ArtifactKind {
@@ -528,13 +541,15 @@ enum ArtifactKind {
     ARTIFACT_KIND_AB_METRICS = 5;
     ARTIFACT_KIND_HEATMAP = 6;
     ARTIFACT_KIND_MANIFEST = 7;
+    ARTIFACT_KIND_PATCHED_SHADER = 8;
 }
 
 enum ArtifactFormat {
+    reserved 3;
+    reserved "ARTIFACT_FORMAT_RAW";
     ARTIFACT_FORMAT_UNSPECIFIED = 0;
     ARTIFACT_FORMAT_PNG = 1;
     ARTIFACT_FORMAT_EXR = 2;
-    ARTIFACT_FORMAT_RAW = 3;
     ARTIFACT_FORMAT_BIN = 4;
     ARTIFACT_FORMAT_TEXT = 5;
     ARTIFACT_FORMAT_JSON = 6;
@@ -554,6 +569,14 @@ message ResourceDescriptor {
     uint64 byte_size = 11;
     uint64 frame_id = 12;
     string semantic_label = 13;
+    string category = 14;
+    string texture_target = 15;
+    string channel_layout = 16;
+    string numeric_class = 17;
+    uint32 component_bits = 18;
+    string readback_format = 19;
+    string readback_type = 20;
+    uint32 mip_levels = 21;
 }
 
 enum ResourceKind {
@@ -561,6 +584,7 @@ enum ResourceKind {
     RESOURCE_KIND_FINAL_FRAMEBUFFER = 1;
     RESOURCE_KIND_TEXTURE = 2;
     RESOURCE_KIND_BUFFER = 3;
+    RESOURCE_KIND_PATCHED_SHADERS = 4;
 }
 
 enum ScalarType {
@@ -576,6 +600,10 @@ enum ScalarType {
 }
 
 message EmptyAction {}
+
+message GetPatchedShaders {
+    string artifact_name = 1;
+}
 
 message LoadShader {
     string source_uuid = 1;
@@ -597,16 +625,4 @@ message CaptureMulti {
 
 message GetGpuMetrics {
     uint32 frames = 1;
-}
-
-message DumpSsbo {
-    uint32 index = 1;
-}
-
-message DumpTexture {
-    oneof selector {
-        string name = 1;
-        uint32 id = 2;
-    }
-    bool raw = 3;
 }

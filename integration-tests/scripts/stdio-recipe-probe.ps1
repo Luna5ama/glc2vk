@@ -40,8 +40,9 @@ try
     {
         throw "load_and_screenshot did not return one final screenshot frame."
     }
-    $names = @($bundle.artifacts | ForEach-Object { $_.file_name })
-    $expected = @("screenshot.png", "colortex0.raw", "depthtex0.raw", "radiance_cache.bin",
+    $names = @(@($bundle.artifacts | ForEach-Object { $_.file_name }) +
+        @($bundle.artifact_groups | ForEach-Object { @($_.artifacts | ForEach-Object { $_.file_name }) }))
+    $expected = @("screenshot.png", "colortex0.main.bin", "depthtex0.bin", "iris_ssbo_6.bin",
         "shader.log", "manifest.json")
     foreach ($name in $expected)
     {

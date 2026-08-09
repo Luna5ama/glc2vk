@@ -118,12 +118,14 @@ final class CaptureTestRuntime implements VibrisRuntimeAdapter {
                 baselineDeletedBeforeCandidateCapture = !Files.exists(baselineDirectory);
             }
             long captureFrame = frame.incrementAndGet();
-            Map<String, ResourceCatalog.ResourceDescriptor> captured = new LinkedHashMap<>();
+            List<CaptureResult.ArtifactGroup> captured = new java.util.ArrayList<>();
             for (CapturePlan.Target target : plan.targets()) {
                 ResourceCatalog.ResourceDescriptor descriptor = withFrame(
                     resources.get(target.logicalName()), captureFrame);
                 write(sink, target, descriptor, active);
-                captured.put(target.artifactName(), descriptor);
+                captured.add(new CaptureResult.ArtifactGroup(target.artifactName(), descriptor,
+                    target.outputs().stream().map(output -> new CaptureResult.CapturedArtifact(
+                        output.fileName(), output.format(), output.role(), output.subresourceIndex())).toList()));
             }
             events.add("capture:" + plan.targets().stream()
                 .map(CapturePlan.Target::artifactName).toList() + ':' + active);
@@ -139,19 +141,18 @@ final class CaptureTestRuntime implements VibrisRuntimeAdapter {
 
     private static void write(ArtifactSink sink, CapturePlan.Target target,
         ResourceCatalog.ResourceDescriptor descriptor, String marker) throws IOException {
-        try (OutputStream output = sink.open(target.fileName())) {
-            if (target.format() == CapturePlan.ArtifactFormat.PNG) {
-                BufferedImage image = new BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB);
-                int color = marker.equals("A") ? 0xff000000 : marker.equals("B") ? 0xffffffff : 0xff336699;
-                for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) image.setRGB(x, y, color);
-                if (!ImageIO.write(image, "png", output)) throw new IOException("PNG writer unavailable");
-            } else {
-                output.write(new byte[Math.toIntExact(descriptor.byteSize())]);
-            }
-        }
-        if (target.format() == CapturePlan.ArtifactFormat.RAW || target.format() == CapturePlan.ArtifactFormat.BIN) {
-            try (OutputStream output = sink.open(target.metadataFileName())) {
-                output.write(("{\"frame_id\":" + descriptor.frameId() + "}").getBytes(StandardCharsets.UTF_8));
+        for (CapturePlan.ArtifactOutputSpec spec : target.outputs()) {
+            try (OutputStream output = sink.open(spec.fileName())) {
+                if (spec.role() == CapturePlan.ArtifactRole.METADATA) {
+                    output.write(("{\"frame_id\":" + descriptor.frameId() + "}").getBytes(StandardCharsets.UTF_8));
+                } else if (spec.format() == CapturePlan.ArtifactFormat.PNG) {
+                    BufferedImage image = new BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB);
+                    int color = marker.equals("A") ? 0xff000000 : marker.equals("B") ? 0xffffffff : 0xff336699;
+                    for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) image.setRGB(x, y, color);
+                    if (!ImageIO.write(image, "png", output)) throw new IOException("PNG writer unavailable");
+                } else {
+                    output.write(new byte[Math.toIntExact(descriptor.byteSize())]);
+                }
             }
         }
     }

@@ -61,7 +61,7 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                     if (action.waitFrames.frameCount <= 0) throw invalid("Frame count must be positive.")
                     steps.add(ActionStep.waitFrames(actionIndex, action.waitFrames.frameCount))
                 }
-                action.hasTakeScreenshot() || action.hasCaptureTexture() || action.hasCaptureBuffer() -> {
+                action.hasTakeScreenshot() || action.hasDumpTextureV2() || action.hasDumpBuffer() -> {
                     val afterFrames = if (action.hasTakeScreenshot()) action.takeScreenshot.afterFrames else 0
                     if (afterFrames < 0) throw invalid("Screenshot frame delay is too large.")
                     if (afterFrames > 0) {
@@ -70,6 +70,12 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                     }
                     if (group.isEmpty()) groupActionIndex = actionIndex
                     CapturePlanBuilder.addAction(group, action, catalog)
+                }
+                action.hasGetPatchedShaders() -> {
+                    flushGroup()
+                    val capture = CapturePlanBuilder.patchedShaders(action.getPatchedShaders.artifactName)
+                    requireUnique(artifactNames, capture.targets.single().artifactName)
+                    steps.add(ActionStep.patchedShaders(actionIndex, capture))
                 }
                 action.hasCompareCaptures() -> {
                     flushGroup()
@@ -116,6 +122,7 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
         RESET,
         WAIT,
         CAPTURE,
+        PATCHED_SHADERS,
         COMPARE,
         RUNTIME,
     }
@@ -142,6 +149,8 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                 ActionStep(ActionType.WAIT, null, frames, null, null, actionIndex, null, null)
             fun capture(actionIndex: Int, capture: CapturePlan) =
                 ActionStep(ActionType.CAPTURE, null, 0, capture, null, actionIndex, null, null)
+            fun patchedShaders(actionIndex: Int, capture: CapturePlan) =
+                ActionStep(ActionType.PATCHED_SHADERS, null, 0, capture, null, actionIndex, null, null)
             fun compare(actionIndex: Int, comparison: Comparison) =
                 ActionStep(ActionType.COMPARE, null, 0, null, comparison, actionIndex, null, null)
             fun runtime(actionIndex: Int, action: dev.vibris.protocol.v1.Action) =
@@ -174,14 +183,8 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
         ): Long {
             if (group.isEmpty()) return estimatedBytes
             val planned = CapturePlanBuilder.plan(java.util.List.copyOf(group), catalog)
-            for (target in group) {
-                requireUnique(artifactNames, target.fileName())
-                if (
-                    target.format == CapturePlan.ArtifactFormat.RAW ||
-                    target.format == CapturePlan.ArtifactFormat.BIN
-                ) {
-                    requireUnique(artifactNames, target.metadataFileName())
-                }
+            for (target in planned.capture.targets) {
+                target.outputs.forEach { requireUnique(artifactNames, it.fileName) }
             }
             group.clear()
             steps.add(ActionStep.capture(actionIndex, planned.capture))

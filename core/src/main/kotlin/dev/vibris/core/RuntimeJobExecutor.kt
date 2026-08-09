@@ -224,6 +224,34 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     }
 
     @Throws(Failure::class)
+    fun capturePatchedShaders(
+        job: CoreJob,
+        progress: Consumer<JobStage>,
+        deadline: Long,
+        prepared: CaptureJobExecutor.Prepared,
+        artifactName: String,
+    ): CaptureResult {
+        progress.accept(JobStage.JOB_STAGE_CAPTURING)
+        probe.event(job.requestId, "CAPTURING_PATCHED_SHADERS")
+        val checkpoint = prepared.checkpoint()
+        try {
+            return awaitCapture(
+                runtime.capturePatchedShaders(artifactName, prepared.sink(), job.cancellation.token()),
+                job,
+                deadline,
+            )
+        } catch (failure: Failure) {
+            try {
+                prepared.rollback(checkpoint)
+            } catch (rollbackFailure: IOException) {
+                rollbackFailure.addSuppressed(failure)
+                throw CaptureJobExecutor.failure(rollbackFailure)
+            }
+            throw failure
+        }
+    }
+
+    @Throws(Failure::class)
     fun awaitCapture(stage: CompletionStage<CaptureResult>, job: CoreJob, deadline: Long): CaptureResult =
         awaiter.capture(stage, job, deadline)
 

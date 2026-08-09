@@ -223,13 +223,13 @@ execution order through `action_results` with their action index, kind, and JSON
 | Action types | Purpose |
 |--------------|---------|
 | `wait_frames` | wait for rendered frames |
-| `take_screenshot`, `capture_texture`, `capture_buffer` | optionally wait for rendered frames, then write managed artifacts |
+| `take_screenshot`, `dump_texture`, `dump_buffer` | optionally wait for rendered frames, then write managed artifact groups |
 | `get_capture_status`, `capture_pass`, `capture_multi` | inspect or queue compute and OpenGL raster draw captures; raster replay uses `vibris-replay-gl` |
 | `load_shader`, `inspect_shader` | load a named source/config pair with diagnostics, or inspect current shader state |
 | `get_gpu_metrics` | measure GPU pass timings over its next required `frames` |
-| `list_ssbos`, `dump_ssbo` | inspect or dump SSBOs by binding index |
-| `list_textures`, `dump_texture` | inspect or dump textures by logical name or OpenGL ID |
-| `list_patched_shaders` | inspect patched shader debug files |
+| `list_buffers`, `dump_buffer` | inspect or dump Iris SSBOs by stable logical name |
+| `list_textures`, `dump_texture` | inspect or dump textures by stable logical name |
+| `get_patched_shaders` | wait for Iris patched-shader writes and capture the files as one artifact group |
 
 Server discovery reports the complete runtime surface only as `supported_job_actions`. Recipes and matrices are
 MCP overlays that expand to action sequences before gRPC submission.
@@ -238,6 +238,13 @@ The `get_gpu_metrics` action requires `{"type":"get_gpu_metrics","frames":N}` wi
 starts when that action executes, timestamps exactly the next `N` rendered frames, and completes when the final requested
 frame has been collected. Its result contains only aggregate timing fields (`avg`, `p5`, `p50`, and `p95`); callers do
 not need a separate wait or a prior snapshot.
+
+`get_patched_shaders` requires a safe artifact namespace, for example
+`{"type":"get_patched_shaders","artifact_name":"patched"}`. It waits for every Iris `ShaderPrinter` write submitted
+before the action, then snapshots the ordinary files directly under `patched_shaders`. A source file such as
+`001_begin.vsh` is published as `patched.001_begin.vsh`; JSON files retain JSON metadata and other shader/property files
+are text artifacts. All files form one `patched_shaders` artifact group and share the job transaction, quota, manifest,
+cancellation, and rollback boundary. A write failure or a source file changing during the copy fails the entire job.
 
 The `profile` recipe is the high-level performance workflow. It snapshots the selected workspace or commit, activates and
 reloads that source with the optional shader config, resets temporal state, waits `warmup_frames` (or the configured
@@ -388,19 +395,19 @@ resource catalog returned by `vibris_get_status`.
   "warmup_frames": 32,
   "captures": [
     {"type": "screenshot", "format": "png"},
-    {"type": "texture", "name": "colortex0", "format": "raw"}
+    {"type": "texture", "name": "colortex0.main", "format": "bin"}
   ]
 }
 ```
 
 Runs both variants under the same configured scene and capture specification. Capture targets are screenshot PNG,
-texture raw/PNG, and buffer BIN. The result includes comparison metrics and the two sets of artifacts.
+texture BIN/PNG, and buffer BIN. The result includes comparison metrics and the two sets of artifact groups.
 
 ## Custom actions
 
-The full action set is listed in the MCP table above. Managed artifacts use `take_screenshot`,
-`capture_texture`, and `capture_buffer`; live debug resource dumps
-use `dump_texture` and `dump_ssbo`, so their ownership and result semantics remain unambiguous.
+The full action set is listed in the MCP table above. `take_screenshot`, `dump_texture`, and `dump_buffer`
+all write through the same artifact transaction, quota, commit, and rollback path. Texture and buffer dumps include
+a JSON sidecar; 3D PNG dumps produce one Z-ordered layer file per slice. No dump writes into the game directory.
 
 ```json
 {
@@ -411,7 +418,9 @@ use `dump_texture` and `dump_ssbo`, so their ownership and result semantics rema
     {"type": "take_screenshot", "after_frames": 32, "format": "png", "artifact_name": "beauty"},
     {"type": "get_gpu_metrics", "frames": 120},
     {"type": "list_textures"},
-    {"type": "list_ssbos"}
+    {"type": "list_buffers"},
+    {"type": "dump_texture", "name": "colortex0.main", "format": "bin", "artifact_name": "colortex0"},
+    {"type": "dump_buffer", "name": "iris_ssbo_6", "artifact_name": "ssbo-6"}
   ]
 }
 ```

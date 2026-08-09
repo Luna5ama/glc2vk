@@ -18,8 +18,8 @@ import dev.vibris.protocol.v1.ActivateSource;
 import dev.vibris.protocol.v1.ArtifactFormat;
 import dev.vibris.protocol.v1.ArtifactMetadata;
 import dev.vibris.protocol.v1.TakeScreenshot;
-import dev.vibris.protocol.v1.CaptureBuffer;
-import dev.vibris.protocol.v1.CaptureTexture;
+import dev.vibris.protocol.v1.DumpBuffer;
+import dev.vibris.protocol.v1.DumpTextureV2;
 import dev.vibris.protocol.v1.ErrorCode;
 import dev.vibris.protocol.v1.JobCompleted;
 import dev.vibris.protocol.v1.JobTimeouts;
@@ -64,22 +64,23 @@ final class IrisCaptureTest {
              IntegrationHarness.Client client = new IntegrationHarness.Client(bootstrap.port(), WORKSPACE)) {
             PreparedSourceRef source = IntegrationHarness.createSource(fixture.pendingRoot, "readable").reference();
 
-            client.submit(job("readable", source, List.of("colortex0")));
+            client.submit(job("readable", source, List.of("colortex0.main")));
             JobCompleted completed = client.awaitCompleted("readable");
 
             assertEquals(List.of(FRAME_ID), completed.getResult().getFrameIdsList());
-            assertEquals(5, completed.getResult().getArtifactsCount());
+            assertEquals(2, completed.getResult().getArtifactsCount());
+            assertEquals(3, completed.getResult().getArtifactGroupsCount());
             Path beauty = artifact(completed, "beauty.png");
-            Path texture = artifact(completed, "colortex0.raw");
-            Path buffer = artifact(completed, "radiance_cache.bin");
+            Path texture = artifact(completed, "colortex0.main.bin");
+            Path buffer = artifact(completed, "iris_ssbo_6.bin");
             assertArrayEquals(PNG_SIGNATURE, prefix(beauty, PNG_SIGNATURE.length));
             BufferedImage image = ImageIO.read(beauty.toFile());
             assertEquals(2, image.getWidth());
             assertEquals(2, image.getHeight());
             assertEquals(16, Files.size(texture));
             assertEquals(64, Files.size(buffer));
-            assertTrue(Files.isRegularFile(beauty.resolveSibling("colortex0.json")));
-            assertTrue(Files.isRegularFile(buffer.resolveSibling("radiance_cache.json")));
+            assertTrue(Files.isRegularFile(beauty.resolveSibling("colortex0.main.json")));
+            assertTrue(Files.isRegularFile(buffer.resolveSibling("iris_ssbo_6.json")));
             assertTrue(Files.isRegularFile(artifact(completed, "shader.log")));
             assertTrue(Files.isRegularFile(artifact(completed, "manifest.json")));
         }
@@ -92,20 +93,21 @@ final class IrisCaptureTest {
              IntegrationHarness.Client client = new IntegrationHarness.Client(bootstrap.port(), WORKSPACE)) {
             PreparedSourceRef valid = IntegrationHarness.createSource(fixture.pendingRoot, "bundle").reference();
 
-            client.submit(job("bundle", valid, List.of("colortex0", "depthtex0")));
+            client.submit(job("bundle", valid, List.of("colortex0.main", "depthtex0")));
             JobCompleted completed = client.awaitCompleted("bundle");
 
-            assertEquals(6, completed.getResult().getArtifactsCount());
+            assertEquals(2, completed.getResult().getArtifactsCount());
+            assertEquals(4, completed.getResult().getArtifactGroupsCount());
             assertEquals(List.of(FRAME_ID), completed.getResult().getFrameIdsList());
-            for (String name : List.of("beauty.png", "colortex0.raw", "depthtex0.raw", "radiance_cache.bin")) {
+            for (String name : List.of("beauty.png", "colortex0.main.bin", "depthtex0.bin", "iris_ssbo_6.bin")) {
                 ArtifactMetadata artifact = metadata(completed, name);
                 assertEquals(FRAME_ID, artifact.getResource().getFrameId());
                 assertTrue(Files.isReadable(Path.of(artifact.getPath())));
             }
             Path manifest = artifact(completed, "manifest.json");
-            assertTrue(Files.isRegularFile(manifest.resolveSibling("colortex0.json")));
+            assertTrue(Files.isRegularFile(manifest.resolveSibling("colortex0.main.json")));
             assertTrue(Files.isRegularFile(manifest.resolveSibling("depthtex0.json")));
-            assertTrue(Files.isRegularFile(manifest.resolveSibling("radiance_cache.json")));
+            assertTrue(Files.isRegularFile(manifest.resolveSibling("iris_ssbo_6.json")));
             List<String> beforeFailure = artifactTree(fixture.artifactRoot);
             PreparedSourceRef missing = IntegrationHarness.createSource(fixture.pendingRoot, "missing").reference();
 
@@ -125,11 +127,10 @@ final class IrisCaptureTest {
             .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(2)))
             .addActions(Action.newBuilder().setTakeScreenshot(TakeScreenshot.newBuilder()
                 .setArtifactName("beauty").setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)));
-        textures.forEach(name -> actions.addActions(Action.newBuilder().setCaptureTexture(CaptureTexture.newBuilder()
-            .setLogicalName(name).setArtifactName(name).setFormat(ArtifactFormat.ARTIFACT_FORMAT_RAW))));
-        actions.addActions(Action.newBuilder().setCaptureBuffer(CaptureBuffer.newBuilder()
-            .setLogicalName("radiance_cache").setArtifactName("radiance_cache")
-            .setFormat(ArtifactFormat.ARTIFACT_FORMAT_BIN)));
+        textures.forEach(name -> actions.addActions(Action.newBuilder().setDumpTextureV2(DumpTextureV2.newBuilder()
+            .setLogicalName(name).setArtifactName(name).setFormat(ArtifactFormat.ARTIFACT_FORMAT_BIN))));
+        actions.addActions(Action.newBuilder().setDumpBuffer(DumpBuffer.newBuilder()
+            .setLogicalName("iris_ssbo_6").setArtifactName("iris_ssbo_6")));
         return submission(requestId, source).setActions(actions).build();
     }
 
@@ -137,9 +138,9 @@ final class IrisCaptureTest {
         ActionSequence actions = ActionSequence.newBuilder()
             .addActions(Action.newBuilder().setActivateSource(
                 ActivateSource.newBuilder().setSourceUuid(source.getUuid())))
-            .addActions(Action.newBuilder().setCaptureTexture(
-                CaptureTexture.newBuilder().setLogicalName("missing_resource").setArtifactName("missing_resource")
-                    .setFormat(ArtifactFormat.ARTIFACT_FORMAT_RAW))).build();
+            .addActions(Action.newBuilder().setDumpTextureV2(
+                DumpTextureV2.newBuilder().setLogicalName("missing_resource").setArtifactName("missing_resource")
+                    .setFormat(ArtifactFormat.ARTIFACT_FORMAT_BIN))).build();
         return submission("missing", source).setActions(actions).build();
     }
 
@@ -150,7 +151,10 @@ final class IrisCaptureTest {
     }
 
     private static ArtifactMetadata metadata(JobCompleted completed, String fileName) {
-        return completed.getResult().getArtifactsList().stream()
+        return java.util.stream.Stream.concat(
+                completed.getResult().getArtifactsList().stream(),
+                completed.getResult().getArtifactGroupsList().stream()
+                    .flatMap(group -> group.getArtifactsList().stream()))
             .filter(artifact -> artifact.getFileName().equals(fileName)).findFirst().orElseThrow();
     }
 
@@ -225,11 +229,13 @@ final class IrisCaptureTest {
             CapturePlan plan, ArtifactSink sink, CancellationToken cancellation
         ) {
             try {
-                Map<String, ResourceCatalog.ResourceDescriptor> captured = new LinkedHashMap<>();
+                List<CaptureResult.ArtifactGroup> captured = new java.util.ArrayList<>();
                 for (CapturePlan.Target target : plan.targets()) {
                     ResourceCatalog.ResourceDescriptor resource = resources.get(target.logicalName());
                     writeCapture(sink, target, resource);
-                    captured.put(target.artifactName(), resource);
+                    captured.add(new CaptureResult.ArtifactGroup(target.artifactName(), resource,
+                        target.outputs().stream().map(output -> new CaptureResult.CapturedArtifact(
+                            output.fileName(), output.format(), output.role(), output.subresourceIndex())).toList()));
                 }
                 return CompletableFuture.completedFuture(new CaptureResult(FRAME_ID, captured));
             } catch (IOException exception) {
@@ -244,17 +250,15 @@ final class IrisCaptureTest {
         private static void writeCapture(
             ArtifactSink sink, CapturePlan.Target target, ResourceCatalog.ResourceDescriptor resource
         ) throws IOException {
-            try (OutputStream output = sink.open(target.fileName())) {
-                if (target.format() == CapturePlan.ArtifactFormat.PNG) {
-                    ImageIO.write(new BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB), "png", output);
-                } else {
-                    output.write(new byte[Math.toIntExact(resource.byteSize())]);
-                }
-            }
-            if (target.format() == CapturePlan.ArtifactFormat.RAW ||
-                target.format() == CapturePlan.ArtifactFormat.BIN) {
-                try (OutputStream output = sink.open(target.metadataFileName())) {
-                    output.write(("{\"frame_id\":" + FRAME_ID + "}").getBytes(StandardCharsets.UTF_8));
+            for (CapturePlan.ArtifactOutputSpec spec : target.outputs()) {
+                try (OutputStream output = sink.open(spec.fileName())) {
+                    if (spec.role() == CapturePlan.ArtifactRole.METADATA) {
+                        output.write(("{\"frame_id\":" + FRAME_ID + "}").getBytes(StandardCharsets.UTF_8));
+                    } else if (spec.format() == CapturePlan.ArtifactFormat.PNG) {
+                        ImageIO.write(new BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB), "png", output);
+                    } else {
+                        output.write(new byte[Math.toIntExact(resource.byteSize())]);
+                    }
                 }
             }
         }
@@ -262,10 +266,10 @@ final class IrisCaptureTest {
         private static Map<String, ResourceCatalog.ResourceDescriptor> resources() {
             Map<String, ResourceCatalog.ResourceDescriptor> resources = new LinkedHashMap<>();
             resources.put("beauty", resource("beauty", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 4, 16));
-            resources.put("colortex0", resource("colortex0", ResourceCatalog.ResourceKind.TEXTURE, 4, 16));
+            resources.put("colortex0.main", resource("colortex0.main", ResourceCatalog.ResourceKind.TEXTURE, 4, 16));
             resources.put("depthtex0", resource("depthtex0", ResourceCatalog.ResourceKind.TEXTURE, 1, 16));
-            resources.put("radiance_cache", resource(
-                "radiance_cache", ResourceCatalog.ResourceKind.BUFFER, 0, 64));
+            resources.put("iris_ssbo_6", resource(
+                "iris_ssbo_6", ResourceCatalog.ResourceKind.BUFFER, 0, 64));
             return Map.copyOf(resources);
         }
 

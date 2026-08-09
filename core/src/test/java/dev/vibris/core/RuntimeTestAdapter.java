@@ -32,8 +32,10 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     RuntimeStatus status = new RuntimeStatus(true, "save", "minecraft:overworld", "");
     TemporalResetResult reset = new TemporalResetResult(true);
     ResourceCatalog catalog = ResourceCatalog.empty();
-    CaptureResult captureResult = new CaptureResult(0, Map.of());
+    CaptureResult captureResult = new CaptureResult(0, List.of());
     final Map<String, byte[]> captureFiles = new LinkedHashMap<>();
+    CaptureResult patchedShaderResult = new CaptureResult(0, List.of());
+    final Map<String, byte[]> patchedShaderFiles = new LinkedHashMap<>();
     Map<String, String> lastShaderConfig;
     SceneContext lastContext;
     List<ScenePreset> presets = List.of();
@@ -118,6 +120,26 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
                 return CompletableFuture.failedFuture(captureFailuresAfterWrite.removeFirst());
             }
             return CompletableFuture.completedFuture(captureResult);
+        } catch (java.io.IOException | RuntimeException exception) {
+            return CompletableFuture.failedFuture(exception);
+        }
+    }
+
+    @Override
+    public CompletionStage<CaptureResult> capturePatchedShaders(
+        String artifactName,
+        ArtifactSink sink,
+        CancellationToken cancellation
+    ) {
+        events.add("capture_patched_shaders");
+        try {
+            cancellation.throwIfCancellationRequested();
+            for (Map.Entry<String, byte[]> file : patchedShaderFiles.entrySet()) {
+                try (var output = sink.open(file.getKey())) {
+                    output.write(file.getValue());
+                }
+            }
+            return CompletableFuture.completedFuture(patchedShaderResult);
         } catch (java.io.IOException | RuntimeException exception) {
             return CompletableFuture.failedFuture(exception);
         }

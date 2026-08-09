@@ -4,7 +4,7 @@ import dev.vibris.api.RuntimeAction
 import dev.vibris.protocol.v1.Action
 import dev.vibris.protocol.v1.CaptureMulti
 import dev.vibris.protocol.v1.CapturePass
-import dev.vibris.protocol.v1.DumpTexture
+import dev.vibris.protocol.v1.DumpTextureV2
 import dev.vibris.protocol.v1.GetGpuMetrics
 import dev.vibris.protocol.v1.EmptyAction
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -25,12 +25,12 @@ class RuntimeActionProtocolTest {
         )
         assertEquals(RuntimeAction.CapturePass("begin1", "vibris/capture"), pass)
 
-        val texture = RuntimeActionProtocol.toApi(
+        val buffers = RuntimeActionProtocol.toApi(
             Action.newBuilder()
-                .setDumpTexture(DumpTexture.newBuilder().setName("colortex0").setRaw(true))
+                .setListBuffers(EmptyAction.getDefaultInstance())
                 .build(),
         )
-        assertEquals(RuntimeAction.DumpTexture("colortex0", null, true), texture)
+        assertEquals(RuntimeAction.ListBuffers, buffers)
 
         val metrics = RuntimeActionProtocol.toApi(
             Action.newBuilder()
@@ -70,7 +70,7 @@ class RuntimeActionProtocolTest {
         )
         assertInvalid(
             Action.newBuilder()
-                .setDumpTexture(DumpTexture.getDefaultInstance())
+                .setDumpTextureV2(DumpTextureV2.getDefaultInstance())
                 .build(),
         )
     }

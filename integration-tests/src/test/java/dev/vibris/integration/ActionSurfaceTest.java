@@ -68,10 +68,11 @@ final class ActionSurfaceTest {
             List<String> supported = Action.getDescriptor().getOneofs().getFirst().getFields().stream()
                 .map(field -> field.getName()).toList();
             assertEquals(List.of("reset_temporal_state", "wait_frames", "take_screenshot",
-                "capture_texture", "capture_buffer", "activate_source", "compare_captures",
+                "activate_source", "compare_captures",
                 "get_capture_status", "capture_pass", "capture_multi",
-                "inspect_shader", "get_gpu_metrics", "list_ssbos", "dump_ssbo",
-                "list_textures", "dump_texture", "list_patched_shaders", "load_shader"), supported);
+                "inspect_shader", "get_gpu_metrics", "load_shader",
+                "list_textures_v2", "dump_texture_v2", "list_buffers", "dump_buffer",
+                "get_patched_shaders"), supported);
             assertFalse(supported.stream().anyMatch(name -> name.contains("shell") || name.contains("renderdoc") ||
                 name.contains("path")));
         }

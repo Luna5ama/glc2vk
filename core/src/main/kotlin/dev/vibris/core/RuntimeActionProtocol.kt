@@ -4,7 +4,6 @@ import dev.vibris.api.RuntimeAction
 import dev.vibris.protocol.v1.Action
 import dev.vibris.protocol.v1.CaptureMulti
 import dev.vibris.protocol.v1.CapturePass
-import dev.vibris.protocol.v1.DumpTexture
 import dev.vibris.protocol.v1.JobActionKind
 
 internal object RuntimeActionProtocol {
@@ -14,11 +13,8 @@ internal object RuntimeActionProtocol {
         Action.ActionCase.CAPTURE_MULTI,
         Action.ActionCase.INSPECT_SHADER,
         Action.ActionCase.GET_GPU_METRICS,
-        Action.ActionCase.LIST_SSBOS,
-        Action.ActionCase.DUMP_SSBO,
-        Action.ActionCase.LIST_TEXTURES,
-        Action.ActionCase.DUMP_TEXTURE,
-        Action.ActionCase.LIST_PATCHED_SHADERS,
+        Action.ActionCase.LIST_TEXTURES_V2,
+        Action.ActionCase.LIST_BUFFERS,
         -> true
         else -> false
     }
@@ -38,20 +34,8 @@ internal object RuntimeActionProtocol {
         Action.ActionCase.INSPECT_SHADER -> RuntimeAction.InspectShader
         Action.ActionCase.GET_GPU_METRICS ->
             RuntimeAction.GpuMetrics(action.getGpuMetrics.frames.requireRange("frames", 1, 10_000))
-        Action.ActionCase.LIST_SSBOS -> RuntimeAction.ListSsbos
-        Action.ActionCase.DUMP_SSBO -> RuntimeAction.DumpSsbo(action.dumpSsbo.index)
-        Action.ActionCase.LIST_TEXTURES -> RuntimeAction.ListTextures
-        Action.ActionCase.DUMP_TEXTURE -> action.dumpTexture.let { command ->
-            when (command.selectorCase) {
-                DumpTexture.SelectorCase.NAME ->
-                    RuntimeAction.DumpTexture(command.name.requireText("name"), null, command.raw)
-                DumpTexture.SelectorCase.ID ->
-                    RuntimeAction.DumpTexture(null, command.id, command.raw)
-                DumpTexture.SelectorCase.SELECTOR_NOT_SET ->
-                    throw IllegalArgumentException("texture selector is required")
-            }
-        }
-        Action.ActionCase.LIST_PATCHED_SHADERS -> RuntimeAction.ListPatchedShaders
+        Action.ActionCase.LIST_TEXTURES_V2 -> RuntimeAction.ListTextures
+        Action.ActionCase.LIST_BUFFERS -> RuntimeAction.ListBuffers
         else -> throw IllegalArgumentException("Action is not a runtime action")
     }
 
@@ -59,8 +43,6 @@ internal object RuntimeActionProtocol {
         Action.ActionCase.RESET_TEMPORAL_STATE -> JobActionKind.JOB_ACTION_KIND_RESET_TEMPORAL_STATE
         Action.ActionCase.WAIT_FRAMES -> JobActionKind.JOB_ACTION_KIND_WAIT_FRAMES
         Action.ActionCase.TAKE_SCREENSHOT -> JobActionKind.JOB_ACTION_KIND_TAKE_SCREENSHOT
-        Action.ActionCase.CAPTURE_TEXTURE -> JobActionKind.JOB_ACTION_KIND_CAPTURE_TEXTURE
-        Action.ActionCase.CAPTURE_BUFFER -> JobActionKind.JOB_ACTION_KIND_CAPTURE_BUFFER
         Action.ActionCase.ACTIVATE_SOURCE -> JobActionKind.JOB_ACTION_KIND_ACTIVATE_SOURCE
         Action.ActionCase.COMPARE_CAPTURES -> JobActionKind.JOB_ACTION_KIND_COMPARE_CAPTURES
         Action.ActionCase.GET_CAPTURE_STATUS -> JobActionKind.JOB_ACTION_KIND_GET_CAPTURE_STATUS
@@ -68,11 +50,11 @@ internal object RuntimeActionProtocol {
         Action.ActionCase.CAPTURE_MULTI -> JobActionKind.JOB_ACTION_KIND_CAPTURE_MULTI
         Action.ActionCase.INSPECT_SHADER -> JobActionKind.JOB_ACTION_KIND_INSPECT_SHADER
         Action.ActionCase.GET_GPU_METRICS -> JobActionKind.JOB_ACTION_KIND_GET_GPU_METRICS
-        Action.ActionCase.LIST_SSBOS -> JobActionKind.JOB_ACTION_KIND_LIST_SSBOS
-        Action.ActionCase.DUMP_SSBO -> JobActionKind.JOB_ACTION_KIND_DUMP_SSBO
-        Action.ActionCase.LIST_TEXTURES -> JobActionKind.JOB_ACTION_KIND_LIST_TEXTURES
-        Action.ActionCase.DUMP_TEXTURE -> JobActionKind.JOB_ACTION_KIND_DUMP_TEXTURE
-        Action.ActionCase.LIST_PATCHED_SHADERS -> JobActionKind.JOB_ACTION_KIND_LIST_PATCHED_SHADERS
+        Action.ActionCase.LIST_TEXTURES_V2 -> JobActionKind.JOB_ACTION_KIND_LIST_TEXTURES_V2
+        Action.ActionCase.DUMP_TEXTURE_V2 -> JobActionKind.JOB_ACTION_KIND_DUMP_TEXTURE_V2
+        Action.ActionCase.LIST_BUFFERS -> JobActionKind.JOB_ACTION_KIND_LIST_BUFFERS
+        Action.ActionCase.DUMP_BUFFER -> JobActionKind.JOB_ACTION_KIND_DUMP_BUFFER
+        Action.ActionCase.GET_PATCHED_SHADERS -> JobActionKind.JOB_ACTION_KIND_GET_PATCHED_SHADERS
         Action.ActionCase.LOAD_SHADER -> JobActionKind.JOB_ACTION_KIND_LOAD_SHADER
         else -> throw IllegalArgumentException("Action kind is unsupported")
     }

@@ -123,7 +123,7 @@ final class IrisSourceLifecycleTest {
             ArtifactSink sink,
             CancellationToken cancellation
         ) {
-            return completed(cancellation, new CaptureResult(0, Map.of()));
+            return completed(cancellation, new CaptureResult(0, List.of()));
         }
 
         @Override

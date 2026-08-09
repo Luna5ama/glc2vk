@@ -3,11 +3,24 @@ package dev.luna5ama.vibris.capture
 import kotlinx.serialization.json.JsonObject
 import java.nio.file.Path
 
-data class StorageBufferInfo(val index: Int, val glId: Int)
+data class StorageBufferInfo(val name: String, val glId: Int, val sizeBytes: Long, val category: String = "iris_ssbo")
 
-data class TextureInfo(val name: String, val textureId: Int, val width: Int?, val height: Int?)
+data class TextureInfo(
+    val name: String,
+    val textureId: Int,
+    val category: String,
+    val target: String,
+    val width: Int,
+    val height: Int,
+    val depth: Int,
+    val mipLevels: Int,
+    val internalFormat: String,
+    val channelLayout: String,
+    val numericClass: String,
+    val componentBits: Int,
+)
 
-data class TextureCatalog(val colortex: List<TextureInfo>, val custom: List<TextureInfo>)
+data class TextureCatalog(val textures: List<TextureInfo>)
 
 data class ShaderDebugError(
     val type: String,
@@ -39,10 +52,7 @@ interface ShaderDebugHost {
     fun textureCatalog(): TextureCatalog
 
     fun resolveTexture(name: String): Int?
-}
 
-interface ShaderDebugResourceDumper {
-    fun dumpStorageBuffer(buffer: StorageBufferInfo, output: Path): JsonObject
-
-    fun dumpTexture(textureId: Int, output: Path, raw: Boolean): JsonObject
+    @Throws(Exception::class)
+    fun awaitPatchedShaderWrites() = Unit
 }

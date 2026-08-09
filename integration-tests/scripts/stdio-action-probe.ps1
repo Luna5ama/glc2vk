@@ -67,11 +67,15 @@ try
     $actionKinds = @($allowed.action_results | ForEach-Object { $_.kind })
     $expectedActionKinds = @(
         "inspect_shader", "get_gpu_metrics",
-        "list_textures", "list_ssbos", "list_patched_shaders"
+        "list_textures", "list_buffers"
     )
     if ([string]::Join("`n", $actionKinds) -cne [string]::Join("`n", $expectedActionKinds))
     {
         throw "Runtime action results were missing or out of order."
+    }
+    if (@($allowed.artifact_groups | Where-Object { $_.name -ceq "allowed-patched" }).Count -ne 1)
+    {
+        throw "Patched shader artifact group was missing."
     }
 
     $pendingBefore = Get-OwnedTreeSnapshot -Root $scope.PendingRoot

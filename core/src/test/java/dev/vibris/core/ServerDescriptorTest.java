@@ -53,8 +53,8 @@ class ServerDescriptorTest {
             java.util.List.of(
                 JobActionKind.JOB_ACTION_KIND_WAIT_FRAMES,
                 JobActionKind.JOB_ACTION_KIND_TAKE_SCREENSHOT,
-                JobActionKind.JOB_ACTION_KIND_CAPTURE_TEXTURE,
-                JobActionKind.JOB_ACTION_KIND_CAPTURE_BUFFER,
+                JobActionKind.JOB_ACTION_KIND_DUMP_TEXTURE_V2,
+                JobActionKind.JOB_ACTION_KIND_DUMP_BUFFER,
                 JobActionKind.JOB_ACTION_KIND_ACTIVATE_SOURCE,
                 JobActionKind.JOB_ACTION_KIND_COMPARE_CAPTURES,
                 JobActionKind.JOB_ACTION_KIND_GET_CAPTURE_STATUS,
@@ -62,11 +62,9 @@ class ServerDescriptorTest {
                 JobActionKind.JOB_ACTION_KIND_CAPTURE_MULTI,
                 JobActionKind.JOB_ACTION_KIND_INSPECT_SHADER,
                 JobActionKind.JOB_ACTION_KIND_GET_GPU_METRICS,
-                JobActionKind.JOB_ACTION_KIND_LIST_SSBOS,
-                JobActionKind.JOB_ACTION_KIND_DUMP_SSBO,
-                JobActionKind.JOB_ACTION_KIND_LIST_TEXTURES,
-                JobActionKind.JOB_ACTION_KIND_DUMP_TEXTURE,
-                JobActionKind.JOB_ACTION_KIND_LIST_PATCHED_SHADERS,
+                JobActionKind.JOB_ACTION_KIND_LIST_TEXTURES_V2,
+                JobActionKind.JOB_ACTION_KIND_LIST_BUFFERS,
+                JobActionKind.JOB_ACTION_KIND_GET_PATCHED_SHADERS,
                 JobActionKind.JOB_ACTION_KIND_LOAD_SHADER),
             hello.getSupportedJobActionsList());
         assertIterableEquals(

@@ -27,12 +27,16 @@ internal class CaptureJobExecutor(
     ): ActionPrepared {
         val program = programs.actions(job, catalog)
         val captures = program.steps
+            .filter { it.type == CaptureProgramBuilder.ActionType.CAPTURE ||
+                it.type == CaptureProgramBuilder.ActionType.PATCHED_SHADERS }
+            .map { it.capture!! }
+        val comparisonPlans = program.steps
             .filter { it.type == CaptureProgramBuilder.ActionType.CAPTURE }
             .map { it.capture!! }
         val prepared = if (captures.isEmpty()) {
             null
         } else {
-            prepare(job, captures, program.estimatedBytes, diagnostics)
+            prepare(job, captures, comparisonPlans, program.estimatedBytes, diagnostics)
         }
         return ActionPrepared(program, prepared)
     }
@@ -41,6 +45,7 @@ internal class CaptureJobExecutor(
     private fun prepare(
         job: CoreJob,
         capturePlans: List<CapturePlan>,
+        comparisonPlans: List<CapturePlan>,
         estimate: Long,
         diagnostics: List<ReloadResult.Diagnostic>,
     ): Prepared {
@@ -54,7 +59,7 @@ internal class CaptureJobExecutor(
                 job.requestId,
                 Math.addExact(estimate, shaderLog.size.toLong()),
             )
-            return Prepared(transaction, capturePlans, diagnostics)
+            return Prepared(transaction, capturePlans, comparisonPlans, diagnostics)
         } catch (exception: Exception) {
             closeAfterFailure(transaction, exception)
             throw failure(exception)
@@ -104,8 +109,8 @@ internal class CaptureJobExecutor(
         try {
             return comparisons.compare(
                 prepared.transaction,
-                prepared.plans[comparison.baselineCaptureIndex],
-                prepared.plans[comparison.candidateCaptureIndex],
+                prepared.comparisonPlans[comparison.baselineCaptureIndex],
+                prepared.comparisonPlans[comparison.candidateCaptureIndex],
                 comparison.baselineLabel,
                 comparison.candidateLabel,
             )
@@ -117,9 +122,11 @@ internal class CaptureJobExecutor(
     inner class Prepared internal constructor(
         internal val transaction: ArtifactManager.JobTransaction,
         capturePlans: List<CapturePlan>,
+        comparisonPlans: List<CapturePlan>,
         diagnostics: List<ReloadResult.Diagnostic>,
     ) : AutoCloseable {
         internal val plans: List<CapturePlan> = java.util.List.copyOf(capturePlans)
+        internal val comparisonPlans: List<CapturePlan> = java.util.List.copyOf(comparisonPlans)
         internal val diagnostics = ArrayList(diagnostics)
         private var shaderLogWritten = false
 

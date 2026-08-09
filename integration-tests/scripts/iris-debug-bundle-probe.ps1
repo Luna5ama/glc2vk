@@ -5,8 +5,8 @@ param(
     [Parameter(Mandatory)] [string] $GameDir,
     [string] $Source = "integration-tests/fixtures/shaderpacks/capture-known-resources/shaders",
     [string] $Context = "integration-tests/fixtures/context/overworld-sunset-rooftop.json",
-    [string[]] $Textures = @("colortex0", "depthtex0"),
-    [string[]] $Buffers = @("radiance_cache"),
+    [string[]] $Textures = @("colortex0.main", "depthtex0"),
+    [string[]] $Buffers = @("iris_ssbo_6"),
     [string] $AlsoRequest = "missing_resource",
     [ValidateRange(1, 600)] [int] $TimeoutSeconds = 180
 )
@@ -17,7 +17,8 @@ function Get-BundleArtifact
 {
     param([Parameter(Mandatory)] [object] $Terminal, [Parameter(Mandatory)] [string] $FileName)
 
-    $matches = @($Terminal.result.artifacts | Where-Object { $_.file_name -ceq $FileName })
+    $groupArtifacts = @($Terminal.result.artifact_groups | ForEach-Object { @($_.artifacts) })
+    $matches = @(@($Terminal.result.artifacts) + $groupArtifacts | Where-Object { $_.file_name -ceq $FileName })
     if ($matches.Count -ne 1) { throw "Expected exactly one '$FileName' artifact; found $($matches.Count)." }
     return $matches[0]
 }
@@ -88,11 +89,11 @@ $summary = $null
 
 try
 {
-    if ($Textures.Count -ne 2 -or $Textures[0] -cne "colortex0" -or $Textures[1] -cne "depthtex0" -or
-        $Buffers.Count -ne 1 -or $Buffers[0] -cne "radiance_cache" -or
+    if ($Textures.Count -ne 2 -or $Textures[0] -cne "colortex0.main" -or $Textures[1] -cne "depthtex0" -or
+        $Buffers.Count -ne 1 -or $Buffers[0] -cne "iris_ssbo_6" -or
         $AlsoRequest -cne "missing_resource")
     {
-        throw "G006-C002 requires Textures colortex0,depthtex0, Buffers radiance_cache, " +
+        throw "G006-C002 requires Textures colortex0.main,depthtex0, Buffers iris_ssbo_6, " +
             "and AlsoRequest missing_resource."
     }
     $jar = Resolve-IrisPatchedJar -Path $PatchedJar
@@ -122,9 +123,9 @@ try
     $bundleActions = @(
         [ordered] @{ type = "wait_frames"; frames = 2 },
         [ordered] @{ type = "take_screenshot"; format = "png"; artifact_name = "beauty" },
-        [ordered] @{ type = "capture_texture"; name = "colortex0"; format = "raw"; artifact_name = "colortex0" },
-        [ordered] @{ type = "capture_texture"; name = "depthtex0"; format = "raw"; artifact_name = "depthtex0" },
-        [ordered] @{ type = "capture_buffer"; name = "radiance_cache"; format = "bin"; artifact_name = "radiance_cache" }
+        [ordered] @{ type = "dump_texture"; name = "colortex0.main"; format = "bin"; artifact_name = "colortex0.main" },
+        [ordered] @{ type = "dump_texture"; name = "depthtex0"; format = "bin"; artifact_name = "depthtex0" },
+        [ordered] @{ type = "dump_buffer"; name = "iris_ssbo_6"; artifact_name = "iris_ssbo_6" }
     )
     $bundleCommand = New-CoreSubmitCommand -MessageId "g006-c002-bundle" `
         -RequestId "g006-c002-bundle" -Sources @($sourceA) -Context $contextValue `
@@ -145,15 +146,16 @@ try
     }
 
     if (@($bundleTerminal.result.frame_ids).Count -ne 1 -or
-        @($bundleTerminal.result.artifacts).Count -ne 6)
+        @($bundleTerminal.result.artifacts).Count -ne 2 -or
+        @($bundleTerminal.result.artifact_groups).Count -ne 4)
     {
         throw "G006-C002 valid bundle did not return one frame and six protocol artifacts."
     }
     $frameId = [long] $bundleTerminal.result.frame_ids[0]
     $beauty = Get-BundleArtifact -Terminal $bundleTerminal -FileName "beauty.png"
-    $textureArtifact = Get-BundleArtifact -Terminal $bundleTerminal -FileName "colortex0.raw"
-    $depth = Get-BundleArtifact -Terminal $bundleTerminal -FileName "depthtex0.raw"
-    $bufferArtifact = Get-BundleArtifact -Terminal $bundleTerminal -FileName "radiance_cache.bin"
+    $textureArtifact = Get-BundleArtifact -Terminal $bundleTerminal -FileName "colortex0.main.bin"
+    $depth = Get-BundleArtifact -Terminal $bundleTerminal -FileName "depthtex0.bin"
+    $bufferArtifact = Get-BundleArtifact -Terminal $bundleTerminal -FileName "iris_ssbo_6.bin"
     $shaderLog = Get-BundleArtifact -Terminal $bundleTerminal -FileName "shader.log"
     $manifest = Get-BundleArtifact -Terminal $bundleTerminal -FileName "manifest.json"
     foreach ($artifact in @($beauty, $textureArtifact, $depth, $bufferArtifact))
@@ -166,12 +168,12 @@ try
     $manifestPath = Resolve-BundleArtifactFile -Scope $scope -Artifact $manifest -ExpectedName "manifest.json"
     $jobDirectory = Split-Path -Parent $manifestPath
     foreach ($pair in @(
-            @($beauty, "beauty.png"), @($textureArtifact, "colortex0.raw"), @($depth, "depthtex0.raw"),
-            @($bufferArtifact, "radiance_cache.bin"), @($shaderLog, "shader.log")))
+            @($beauty, "beauty.png"), @($textureArtifact, "colortex0.main.bin"), @($depth, "depthtex0.bin"),
+            @($bufferArtifact, "iris_ssbo_6.bin"), @($shaderLog, "shader.log")))
     {
         [void] (Resolve-BundleArtifactFile -Scope $scope -Artifact $pair[0] -ExpectedName $pair[1])
     }
-    foreach ($logicalName in @("colortex0", "depthtex0", "radiance_cache"))
+    foreach ($logicalName in @("colortex0.main", "depthtex0", "iris_ssbo_6"))
     {
         $sidecarPath = Resolve-IrisOwnedArtifact -Scope $scope -Path (Join-Path $jobDirectory "$logicalName.json")
         if (-not (Test-Path -LiteralPath $sidecarPath -PathType Leaf))
@@ -193,7 +195,7 @@ try
 
     $sourceB = New-IrisPreparedSource -Scope $scope -Source $sourceRoot
     $failureActions = @(
-        [ordered] @{ type = "capture_texture"; name = $AlsoRequest; format = "raw"; artifact_name = $AlsoRequest }
+        [ordered] @{ type = "dump_texture"; name = $AlsoRequest; format = "bin"; artifact_name = $AlsoRequest }
     )
     $failureCommand = New-CoreSubmitCommand -MessageId "g006-c002-missing" `
         -RequestId "g006-c002-missing" -Sources @($sourceB) -Context $contextValue `

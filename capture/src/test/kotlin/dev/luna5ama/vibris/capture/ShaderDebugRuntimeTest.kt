@@ -1,6 +1,5 @@
 package dev.luna5ama.vibris.capture
 
-import kotlinx.serialization.json.jsonPrimitive
 import org.lwjgl.BufferUtils
 import org.lwjgl.glfw.Callbacks.glfwFreeCallbacks
 import org.lwjgl.glfw.GLFW.GLFW_CONTEXT_VERSION_MAJOR
@@ -38,8 +37,7 @@ import org.lwjgl.opengl.GL45C.glNamedBufferData
 import org.lwjgl.opengl.GL45C.glTextureStorage2D
 import org.lwjgl.opengl.GL45C.glTextureStorage3D
 import org.lwjgl.opengl.GL45C.glTextureSubImage2D
-import java.nio.file.Files
-import kotlin.io.path.createTempDirectory
+import java.io.ByteArrayOutputStream
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -51,16 +49,15 @@ class ShaderDebugRuntimeTest {
         if (!System.getProperty("vibris.runtimeTest").toBoolean()) return
 
         withGlContext {
-            val temp = createTempDirectory("vibris-shader-debug-gl")
             val buffer = glCreateBuffers()
             val texture = glCreateTextures(GL_TEXTURE_2D)
             val volume = glCreateTextures(GL_TEXTURE_3D)
             try {
                 val bufferBytes = byteArrayOf(0, 0x7f, 0x80.toByte(), 0xff.toByte())
                 glNamedBufferData(buffer, BufferUtils.createByteBuffer(4).put(bufferBytes).flip(), GL_STATIC_DRAW)
-                val ssboPath = temp.resolve("ssbo.bin")
-                GlShaderDebugResourceDumper.dumpStorageBuffer(StorageBufferInfo(3, buffer), ssboPath)
-                assertContentEquals(bufferBytes, Files.readAllBytes(ssboPath))
+                val ssbo = ByteArrayOutputStream()
+                GlArtifactCapture.captureBuffer(buffer, ssbo)
+                assertContentEquals(bufferBytes, ssbo.toByteArray())
 
                 glTextureStorage2D(texture, 1, GL_RGBA8, 2, 1)
                 val pixels = BufferUtils.createByteBuffer(8)
@@ -69,27 +66,22 @@ class ShaderDebugRuntimeTest {
                 glTextureSubImage2D(texture, 0, 0, 0, 2, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixels)
                 glPixelStorei(GL_PACK_SKIP_PIXELS, 1)
                 glPixelStorei(GL_PACK_SWAP_BYTES, 1)
-                val rawPath = temp.resolve("texture.bin")
-                val raw = GlShaderDebugResourceDumper.dumpTexture(texture, rawPath, true)
-                assertEquals(32L, Files.size(rawPath))
-                assertEquals(32, raw["totalBytes"]!!.jsonPrimitive.content.toInt())
+                val bin = ByteArrayOutputStream()
+                GlArtifactCapture.readTexture(texture, 0).use { it.writeBin(bin) }
+                assertEquals(8, bin.size())
                 assertEquals(1, glGetInteger(GL_PACK_SKIP_PIXELS))
                 assertEquals(1, glGetInteger(GL_PACK_SWAP_BYTES))
 
-                val pngPath = temp.resolve("texture.png")
-                GlShaderDebugResourceDumper.dumpTexture(texture, pngPath, false)
-                assertTrue(Files.size(pngPath) > 0)
+                val png = ByteArrayOutputStream()
+                GlArtifactCapture.readTexture(texture, 0).use { it.writePng(0, png) }
+                assertTrue(png.size() > 0)
 
                 glTextureStorage3D(volume, 1, GL_RGBA8, 1, 1, 2)
-                val volumeResult = GlShaderDebugResourceDumper.dumpTexture(
-                    volume,
-                    temp.resolve("volume.png"),
-                    false
-                )
-                assertTrue(volumeResult["path"]!!.jsonPrimitive.content.endsWith("volume_layer*.png"))
-                assertEquals(2, volumeResult["layers"]!!.jsonPrimitive.content.toInt())
-                assertTrue(Files.isRegularFile(temp.resolve("volume_layer0.png")))
-                assertTrue(Files.isRegularFile(temp.resolve("volume_layer1.png")))
+                GlArtifactCapture.readTexture(volume, 0).use { readback ->
+                    assertEquals(2, readback.metadata.depth)
+                    assertTrue(ByteArrayOutputStream().also { readback.writePng(0, it) }.size() > 0)
+                    assertTrue(ByteArrayOutputStream().also { readback.writePng(1, it) }.size() > 0)
+                }
 
                 val metrics = GpuTimingMetrics()
                 val captured = metrics.capture(1).toCompletableFuture()
@@ -104,7 +96,6 @@ class ShaderDebugRuntimeTest {
                 glDeleteTextures(volume)
                 glDeleteTextures(texture)
                 glDeleteBuffers(buffer)
-                temp.toFile().deleteRecursively()
             }
         }
     }

@@ -18,6 +18,13 @@ data class ResourceCatalog(@field:DefensiveSnapshot val resources: List<Resource
         val byteSize: Long,
         val frameId: Long,
         val semanticLabel: String,
+        val category: String,
+        val textureTarget: String,
+        val channelLayout: String,
+        val numericClass: String,
+        val componentBits: Int,
+        val readbackFormat: String,
+        val readbackType: String,
     ) {
         init {
             require(
@@ -27,6 +34,7 @@ data class ResourceCatalog(@field:DefensiveSnapshot val resources: List<Resource
                     mipLevels >= 0 &&
                     layers >= 0 &&
                     channelCount >= 0 &&
+                    componentBits >= 0 &&
                     byteSize >= 0 &&
                     frameId >= 0,
             ) {
@@ -48,6 +56,32 @@ data class ResourceCatalog(@field:DefensiveSnapshot val resources: List<Resource
             0,
             0,
             "",
+            "",
+            "",
+            "",
+            "",
+            0,
+            "",
+            "",
+        )
+
+        constructor(
+            logicalName: String,
+            kind: ResourceKind,
+            width: Int,
+            height: Int,
+            depth: Int,
+            mipLevels: Int,
+            layers: Int,
+            internalFormat: String,
+            channelCount: Int,
+            scalarType: ScalarType,
+            byteSize: Long,
+            frameId: Long,
+            semanticLabel: String,
+        ) : this(
+            logicalName, kind, width, height, depth, mipLevels, layers, internalFormat, channelCount,
+            scalarType, byteSize, frameId, semanticLabel, "", "", "", "", 0, "", "",
         )
     }
 
@@ -55,6 +89,7 @@ data class ResourceCatalog(@field:DefensiveSnapshot val resources: List<Resource
         FINAL_FRAMEBUFFER,
         TEXTURE,
         BUFFER,
+        PATCHED_SHADERS,
     }
 
     enum class ScalarType {

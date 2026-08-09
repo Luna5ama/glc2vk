@@ -78,6 +78,19 @@ internal class ActionJobExecutor(
                                 results.add(owner.capture(job, progress, deadline, prepared, step.capture!!))
                                 completedCapturePlans.add(step.capture)
                             }
+                            CaptureProgramBuilder.ActionType.PATCHED_SHADERS -> {
+                                if (prepared == null) throw captureUnavailable()
+                                val placeholder = step.capture!!
+                                val captured = owner.capturePatchedShaders(
+                                    job,
+                                    progress,
+                                    deadline,
+                                    prepared,
+                                    placeholder.targets.single().artifactName,
+                                )
+                                results.add(captured)
+                                completedCapturePlans.add(CapturePlanBuilder.realizePatchedShaders(placeholder, captured))
+                            }
                             CaptureProgramBuilder.ActionType.COMPARE -> {
                                 if (prepared == null) throw captureUnavailable()
                                 progress.accept(JobStage.JOB_STAGE_COMPARING)

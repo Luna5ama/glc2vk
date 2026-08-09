@@ -14,6 +14,7 @@ data class CapturePlan(@field:DefensiveSnapshot val targets: List<Target>) {
         val artifactName: String,
         val mipLevel: Int,
         val layer: Int,
+        @field:DefensiveSnapshot val outputs: List<ArtifactOutputSpec>,
     ) {
         init {
             require(mipLevel >= 0 && layer >= 0) {
@@ -24,7 +25,17 @@ data class CapturePlan(@field:DefensiveSnapshot val targets: List<Target>) {
             }
         }
 
+        constructor(
+            kind: ResourceCatalog.ResourceKind,
+            logicalName: String,
+            format: ArtifactFormat,
+            artifactName: String,
+            mipLevel: Int,
+            layer: Int,
+        ) : this(kind, logicalName, format, artifactName, mipLevel, layer, java.util.List.of())
+
         fun fileName(): String {
+            outputs.firstOrNull { it.role != ArtifactRole.METADATA }?.let { return it.fileName }
             val extension = "." + format.name.lowercase(Locale.ROOT)
             return if (artifactName.lowercase(Locale.ROOT).endsWith(extension)) {
                 artifactName
@@ -40,11 +51,35 @@ data class CapturePlan(@field:DefensiveSnapshot val targets: List<Target>) {
         }
     }
 
+    @JvmRecord
+    data class ArtifactOutputSpec(
+        val fileName: String,
+        val format: ArtifactFormat,
+        val role: ArtifactRole,
+        val subresourceIndex: Int?,
+    ) {
+        init {
+            require(SAFE_OUTPUT_NAME.matcher(fileName).matches()) { "Artifact output name must be safe" }
+            require(subresourceIndex == null || subresourceIndex >= 0) { "Subresource index must not be negative" }
+        }
+
+        companion object {
+            private val SAFE_OUTPUT_NAME = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,191}")
+        }
+    }
+
+    enum class ArtifactRole {
+        PRIMARY,
+        SUBRESOURCE,
+        METADATA,
+    }
+
     enum class ArtifactFormat {
         PNG,
         EXR,
-        RAW,
         BIN,
+        TEXT,
+        JSON,
     }
 
     companion object {

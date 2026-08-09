@@ -46,5 +46,14 @@ interface VibrisRuntimeHost : AutoCloseable {
         cancellation: CancellationToken,
     ): CaptureResult
 
+    fun capturePatchedShaders(
+        artifactName: String,
+        sink: ArtifactSink,
+        frameId: Long,
+        cancellation: CancellationToken,
+    ): CompletionStage<CaptureResult> = java.util.concurrent.CompletableFuture.failedFuture(
+        UnsupportedOperationException("Patched shader capture is unavailable"),
+    )
+
     override fun close()
 }

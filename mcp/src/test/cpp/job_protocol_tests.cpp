@@ -199,8 +199,9 @@ void remaining_execution_mappings() {
             debug_actions.actions(0).load_shader().source_uuid() == one_source.front().uuid() &&
             debug_actions.actions(1).wait_frames().frame_count() == 5 &&
             debug_actions.actions(2).take_screenshot().artifact_name() == "screenshot" &&
-            debug_actions.actions(3).capture_texture().logical_name() == "colortex5" &&
-            debug_actions.actions(4).capture_buffer().logical_name() == "debugSsbo",
+            debug_actions.actions(3).dump_texture_v2().logical_name() == "colortex5" &&
+            debug_actions.actions(3).dump_texture_v2().format() == proto::ARTIFACT_FORMAT_BIN &&
+            debug_actions.actions(4).dump_buffer().logical_name() == "debugSsbo",
         "capture_debug_bundle was not expanded into runtime actions.");
 
     const std::vector two_sources{source("44444444-4444-4444-8444-444444444444"),
@@ -217,8 +218,8 @@ void remaining_execution_mappings() {
     require(ab_actions.actions_size() == 11 &&
             ab_actions.actions(0).load_shader().source_uuid() == two_sources[0].uuid() &&
             ab_actions.actions(2).take_screenshot().format() == proto::ARTIFACT_FORMAT_PNG &&
-            ab_actions.actions(3).capture_texture().format() == proto::ARTIFACT_FORMAT_PNG &&
-            ab_actions.actions(4).capture_buffer().format() == proto::ARTIFACT_FORMAT_BIN &&
+            ab_actions.actions(3).dump_texture_v2().format() == proto::ARTIFACT_FORMAT_PNG &&
+            ab_actions.actions(4).has_dump_buffer() &&
             ab_actions.actions(5).load_shader().source_uuid() == two_sources[1].uuid() &&
             ab_actions.actions(10).compare_captures().baseline_label() == "baseline" &&
             ab_actions.actions(10).compare_captures().candidate_label() == "candidate",
@@ -231,20 +232,22 @@ void remaining_execution_mappings() {
             {{"type", "load_shader"}, {"source", "candidate"}, {"config", "quality"}},
             {{"type", "wait_frames"}, {"frames", 3}},
             {{"type", "take_screenshot"}, {"artifact_name", "beauty"}},
-            {{"type", "capture_texture"}, {"name", "colortex5"}, {"format", "raw"},
+            {{"type", "dump_texture"}, {"name", "colortex5.main"}, {"format", "bin"},
              {"artifact_name", "texture"}},
-            {{"type", "capture_buffer"}, {"name", "debugSsbo"}, {"format", "bin"},
+            {{"type", "dump_buffer"}, {"name", "iris_ssbo_6"},
              {"artifact_name", "buffer"}},
+            {{"type", "get_patched_shaders"}, {"artifact_name", "patched"}},
         })}};
     const auto actions = JobProtocol::request(
         "vibris_run_actions", action_arguments, config(), context, one_source, "request-actions");
     const auto& sequence = actions.submit_job().actions();
-    require(sequence.actions_size() == 5 && sequence.actions(0).has_load_shader() &&
+    require(sequence.actions_size() == 6 && sequence.actions(0).has_load_shader() &&
             sequence.actions(0).load_shader().continue_on_failure() &&
             sequence.actions(1).wait_frames().frame_count() == 3 &&
             sequence.actions(2).take_screenshot().format() == proto::ARTIFACT_FORMAT_PNG &&
-            sequence.actions(3).capture_texture().logical_name() == "colortex5" &&
-            sequence.actions(4).capture_buffer().artifact_name() == "buffer",
+            sequence.actions(3).dump_texture_v2().logical_name() == "colortex5.main" &&
+            sequence.actions(4).dump_buffer().artifact_name() == "buffer" &&
+            sequence.actions(5).get_patched_shaders().artifact_name() == "patched",
         "Allowed action sequence was not mapped exactly.");
 }
 

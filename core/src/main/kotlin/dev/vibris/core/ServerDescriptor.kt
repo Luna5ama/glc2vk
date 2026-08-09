@@ -31,8 +31,8 @@ internal class ServerDescriptor @JvmOverloads constructor(
             listOf(
                 JobActionKind.JOB_ACTION_KIND_WAIT_FRAMES,
                 JobActionKind.JOB_ACTION_KIND_TAKE_SCREENSHOT,
-                JobActionKind.JOB_ACTION_KIND_CAPTURE_TEXTURE,
-                JobActionKind.JOB_ACTION_KIND_CAPTURE_BUFFER,
+                JobActionKind.JOB_ACTION_KIND_DUMP_TEXTURE_V2,
+                JobActionKind.JOB_ACTION_KIND_DUMP_BUFFER,
                 JobActionKind.JOB_ACTION_KIND_ACTIVATE_SOURCE,
                 JobActionKind.JOB_ACTION_KIND_COMPARE_CAPTURES,
                 JobActionKind.JOB_ACTION_KIND_GET_CAPTURE_STATUS,
@@ -40,19 +40,17 @@ internal class ServerDescriptor @JvmOverloads constructor(
                 JobActionKind.JOB_ACTION_KIND_CAPTURE_MULTI,
                 JobActionKind.JOB_ACTION_KIND_INSPECT_SHADER,
                 JobActionKind.JOB_ACTION_KIND_GET_GPU_METRICS,
-                JobActionKind.JOB_ACTION_KIND_LIST_SSBOS,
-                JobActionKind.JOB_ACTION_KIND_DUMP_SSBO,
-                JobActionKind.JOB_ACTION_KIND_LIST_TEXTURES,
-                JobActionKind.JOB_ACTION_KIND_DUMP_TEXTURE,
-                JobActionKind.JOB_ACTION_KIND_LIST_PATCHED_SHADERS,
+                JobActionKind.JOB_ACTION_KIND_LIST_TEXTURES_V2,
+                JobActionKind.JOB_ACTION_KIND_LIST_BUFFERS,
+                JobActionKind.JOB_ACTION_KIND_GET_PATCHED_SHADERS,
                 JobActionKind.JOB_ACTION_KIND_LOAD_SHADER,
             ),
         )
         .addAllSupportedFormats(
             listOf(
                 ArtifactFormat.ARTIFACT_FORMAT_PNG,
-                ArtifactFormat.ARTIFACT_FORMAT_RAW,
                 ArtifactFormat.ARTIFACT_FORMAT_BIN,
+                ArtifactFormat.ARTIFACT_FORMAT_TEXT,
             ),
         )
         .build()
@@ -126,6 +124,7 @@ internal class ServerDescriptor @JvmOverloads constructor(
     private fun resourceCatalog(): ResourceCatalog {
         val catalog = ResourceCatalog.newBuilder()
         for (resource in runtime.getResourceCatalog().resources) {
+            if (resource.kind == dev.vibris.api.ResourceCatalog.ResourceKind.PATCHED_SHADERS) continue
             val entry = ResourceCatalogEntry.newBuilder()
                 .setLogicalName(resource.logicalName)
                 .setKind(
@@ -136,6 +135,8 @@ internal class ServerDescriptor @JvmOverloads constructor(
                             ResourceKind.RESOURCE_KIND_TEXTURE
                         dev.vibris.api.ResourceCatalog.ResourceKind.BUFFER ->
                             ResourceKind.RESOURCE_KIND_BUFFER
+                        dev.vibris.api.ResourceCatalog.ResourceKind.PATCHED_SHADERS ->
+                            ResourceKind.RESOURCE_KIND_PATCHED_SHADERS
                     },
                 )
                 .setInternalFormat(resource.internalFormat)

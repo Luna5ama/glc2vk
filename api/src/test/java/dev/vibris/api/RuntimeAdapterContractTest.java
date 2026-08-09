@@ -71,12 +71,13 @@ class RuntimeAdapterContractTest {
         var descriptor = new ResourceCatalog.ResourceDescriptor(
             "colortex0", ResourceCatalog.ResourceKind.TEXTURE
         );
-        var artifacts = new LinkedHashMap<String, ResourceCatalog.ResourceDescriptor>();
-        artifacts.put("colortex0", descriptor);
-        CaptureResult result = new CaptureResult(1, artifacts);
-        artifacts.clear();
-        assertEquals(Map.of("colortex0", descriptor), result.artifacts());
-        assertThrows(UnsupportedOperationException.class, () -> result.artifacts().clear());
+        var groups = new ArrayList<>(List.of(
+            new CaptureResult.ArtifactGroup("colortex0", descriptor, List.of())
+        ));
+        CaptureResult result = new CaptureResult(1, groups);
+        groups.clear();
+        assertEquals(1, result.groups().size());
+        assertThrows(UnsupportedOperationException.class, () -> result.groups().clear());
 
         var errors = new ArrayList<>(List.of("invalid context"));
         ContextValidationResult validation = new ContextValidationResult(false, errors);
@@ -113,7 +114,7 @@ class RuntimeAdapterContractTest {
     @Test
     void kotlinDataCarriersPreserveJavaRecordAbi() {
         assertRecord(CapturePlan.class, "targets");
-        assertRecord(CaptureResult.class, "frameId", "artifacts");
+        assertRecord(CaptureResult.class, "frameId", "groups");
         assertRecord(ContextValidationResult.class, "valid", "errors");
         assertRecord(ReloadResult.class, "successful", "activeStatePreserved", "diagnostics");
         assertRecord(ResourceCatalog.class, "resources");
@@ -169,7 +170,7 @@ class RuntimeAdapterContractTest {
             ArtifactSink sink,
             CancellationToken cancellation
         ) {
-            return CompletableFuture.completedFuture(new CaptureResult(9, Map.of()));
+            return CompletableFuture.completedFuture(new CaptureResult(9, List.of()));
         }
 
         @Override

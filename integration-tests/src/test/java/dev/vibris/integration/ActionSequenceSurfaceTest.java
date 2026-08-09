@@ -7,8 +7,8 @@ import dev.vibris.protocol.v1.ActionSequence;
 import dev.vibris.protocol.v1.ArtifactFormat;
 import dev.vibris.protocol.v1.TakeScreenshot;
 import dev.vibris.protocol.v1.CompareCaptures;
-import dev.vibris.protocol.v1.CaptureBuffer;
-import dev.vibris.protocol.v1.CaptureTexture;
+import dev.vibris.protocol.v1.DumpBuffer;
+import dev.vibris.protocol.v1.DumpTextureV2;
 import dev.vibris.protocol.v1.JobCompleted;
 import dev.vibris.protocol.v1.JobResultKind;
 import dev.vibris.protocol.v1.JobTimeouts;
@@ -53,7 +53,8 @@ final class ActionSequenceSurfaceTest {
             JobCompleted reload = client.awaitCompleted("reload");
 
             assertEquals(JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE, reload.getResult().getKind());
-            assertEquals(3, reload.getResult().getArtifactsCount());
+            assertEquals(2, reload.getResult().getArtifactsCount());
+            assertEquals(1, reload.getResult().getArtifactGroupsCount());
             assertEquals(1, reload.getResult().getFrameIdsCount());
             assertEquals(1, reload.getResult().getShaderDiagnosticsCount());
             assertTrue(reload.getResult().getTimings().getStartedAtUnixMs() > 0);
@@ -68,20 +69,21 @@ final class ActionSequenceSurfaceTest {
                 .addActions(waitFrames(2))
                 .addActions(Action.newBuilder().setTakeScreenshot(TakeScreenshot.newBuilder()
                     .setArtifactName("screenshot").setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)))
-                .addActions(Action.newBuilder().setCaptureTexture(CaptureTexture.newBuilder()
+                .addActions(Action.newBuilder().setDumpTextureV2(DumpTextureV2.newBuilder()
                     .setLogicalName("colortex0").setArtifactName("colortex0")
-                    .setFormat(ArtifactFormat.ARTIFACT_FORMAT_RAW)))
-                .addActions(Action.newBuilder().setCaptureBuffer(CaptureBuffer.newBuilder()
+                    .setFormat(ArtifactFormat.ARTIFACT_FORMAT_BIN)))
+                .addActions(Action.newBuilder().setDumpBuffer(DumpBuffer.newBuilder()
                     .setLogicalName("radiance_cache").setArtifactName("radiance_cache")
-                    .setFormat(ArtifactFormat.ARTIFACT_FORMAT_BIN)))).build());
+                    ))).build());
             JobCompleted bundle = client.awaitCompleted("bundle");
 
             assertEquals(JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE, bundle.getResult().getKind());
-            assertEquals(5, bundle.getResult().getArtifactsCount());
+            assertEquals(2, bundle.getResult().getArtifactsCount());
+            assertEquals(3, bundle.getResult().getArtifactGroupsCount());
             assertEquals(1, bundle.getResult().getFrameIdsCount());
             long frameId = bundle.getResult().getFrameIds(0);
-            bundle.getResult().getArtifactsList().stream().filter(artifact -> artifact.hasResource())
-                .forEach(artifact -> assertEquals(frameId, artifact.getResource().getFrameId()));
+            bundle.getResult().getArtifactGroupsList().stream()
+                .forEach(group -> assertEquals(frameId, group.getResource().getFrameId()));
         }
     }
 
@@ -174,7 +176,10 @@ final class ActionSequenceSurfaceTest {
     }
 
     private static Path artifact(JobCompleted completed, String fileName) {
-        return completed.getResult().getArtifactsList().stream()
+        return java.util.stream.Stream.concat(
+                completed.getResult().getArtifactsList().stream(),
+                completed.getResult().getArtifactGroupsList().stream()
+                    .flatMap(group -> group.getArtifactsList().stream()))
             .filter(artifact -> artifact.getFileName().equals(fileName)).map(artifact -> Path.of(artifact.getPath()))
             .filter(Files::isReadable).findFirst().orElseThrow();
     }

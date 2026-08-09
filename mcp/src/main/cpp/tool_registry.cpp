@@ -71,11 +71,10 @@ Json capture_schema() {
                       {"type"}),
         closed_object({{"type", enum_string({"texture"})},
                        {"name", {{"type", "string"}, {"minLength", 1}}},
-                       {"format", enum_string({"raw", "png"})}},
+                       {"format", enum_string({"bin", "png"})}},
                       {"type", "name"}),
         closed_object({{"type", enum_string({"buffer"})},
-                       {"name", {{"type", "string"}, {"minLength", 1}}},
-                       {"format", enum_string({"bin"})}},
+                       {"name", {{"type", "string"}, {"minLength", 1}}}},
                       {"type", "name"}),
     });
 }
@@ -131,7 +130,6 @@ Json action_schema() {
     const Json artifact_name{{"type", "string"}, {"minLength", 1}};
     const Json resource_name{{"type", "string"}, {"minLength", 1}};
     const auto frames = bounded_integer(1, 10'000);
-    const auto index = bounded_integer(0, std::numeric_limits<std::uint32_t>::max());
     const auto empty_action = [](const char* type) {
         return closed_object({{"type", enum_string({type})}}, {"type"});
     };
@@ -152,16 +150,15 @@ Json action_schema() {
                        {"artifact_name", artifact_name},
                        {"after_frames", bounded_integer(0, std::numeric_limits<std::int32_t>::max())}},
                       {"type"}),
-        closed_object({{"type", enum_string({"capture_texture"})},
+        closed_object({{"type", enum_string({"dump_texture"})},
                        {"name", resource_name},
-                       {"format", enum_string({"raw", "png"})},
+                       {"format", enum_string({"bin", "png"})},
                        {"artifact_name", artifact_name}},
                       {"type", "name", "format", "artifact_name"}),
-        closed_object({{"type", enum_string({"capture_buffer"})},
+        closed_object({{"type", enum_string({"dump_buffer"})},
                        {"name", resource_name},
-                       {"format", enum_string({"bin"})},
                        {"artifact_name", artifact_name}},
-                      {"type", "name", "format", "artifact_name"}),
+                      {"type", "name", "artifact_name"}),
         empty_action("get_capture_status"),
         load_shader,
         closed_object({{"type", enum_string({"capture_pass"})},
@@ -171,14 +168,10 @@ Json action_schema() {
                        {"path", resource_name}}, {"type", "capture_type"}),
         empty_action("inspect_shader"),
         closed_object({{"type", enum_string({"get_gpu_metrics"})}, {"frames", frames}}, {"type", "frames"}),
-        empty_action("list_ssbos"),
-        closed_object({{"type", enum_string({"dump_ssbo"})}, {"index", index}}, {"type", "index"}),
+        empty_action("list_buffers"),
         empty_action("list_textures"),
-        closed_object({{"type", enum_string({"dump_texture"})}, {"name", resource_name},
-                       {"raw", {{"type", "boolean"}}}}, {"type", "name"}),
-        closed_object({{"type", enum_string({"dump_texture"})}, {"id", index},
-                       {"raw", {{"type", "boolean"}}}}, {"type", "id"}),
-        empty_action("list_patched_shaders"),
+        closed_object({{"type", enum_string({"get_patched_shaders"})},
+                       {"artifact_name", artifact_name}}, {"type", "artifact_name"}),
     });
 }
 

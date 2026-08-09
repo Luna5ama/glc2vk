@@ -6,8 +6,8 @@ param(
     [string] $Source = "integration-tests/fixtures/shaderpacks/capture-known-resources/shaders",
     [string] $Context = "integration-tests/fixtures/context/overworld-sunset-rooftop.json",
     [ValidateSet("png")] [string] $Screenshot = "png",
-    [string] $Texture = "colortex0",
-    [string] $Buffer = "radiance_cache",
+    [string] $Texture = "colortex0.main",
+    [string] $Buffer = "iris_ssbo_6",
     [ValidateRange(1, 600)] [int] $TimeoutSeconds = 180
 )
 
@@ -17,7 +17,8 @@ function Get-CaptureArtifact
 {
     param([Parameter(Mandatory)] [object] $Terminal, [Parameter(Mandatory)] [string] $FileName)
 
-    $matches = @($Terminal.result.artifacts | Where-Object { $_.file_name -ceq $FileName })
+    $groupArtifacts = @($Terminal.result.artifact_groups | ForEach-Object { @($_.artifacts) })
+    $matches = @(@($Terminal.result.artifacts) + $groupArtifacts | Where-Object { $_.file_name -ceq $FileName })
     if ($matches.Count -ne 1) { throw "Expected exactly one '$FileName' artifact; found $($matches.Count)." }
     return $matches[0]
 }
@@ -105,9 +106,9 @@ $summary = $null
 
 try
 {
-    if ($Texture -cne "colortex0" -or $Buffer -cne "radiance_cache")
+    if ($Texture -cne "colortex0.main" -or $Buffer -cne "iris_ssbo_6")
     {
-        throw "G006-C001 requires Texture colortex0 and Buffer radiance_cache."
+        throw "G006-C001 requires Texture colortex0.main and Buffer iris_ssbo_6."
     }
     $jar = Resolve-IrisPatchedJar -Path $PatchedJar
     $clientExe = Resolve-IrisArtifact -Path $Client -Label "Release native control client"
@@ -136,8 +137,8 @@ try
     $actions = @(
         [ordered] @{ type = "wait_frames"; frames = 2 },
         [ordered] @{ type = "take_screenshot"; format = $Screenshot; artifact_name = "beauty" },
-        [ordered] @{ type = "capture_texture"; name = $Texture; format = "raw"; artifact_name = $Texture },
-        [ordered] @{ type = "capture_buffer"; name = $Buffer; format = "bin"; artifact_name = $Buffer }
+        [ordered] @{ type = "dump_texture"; name = $Texture; format = "bin"; artifact_name = $Texture },
+        [ordered] @{ type = "dump_buffer"; name = $Buffer; artifact_name = $Buffer }
     )
     $command = New-CoreSubmitCommand -MessageId "g006-c001" -RequestId "g006-c001" `
         -Sources @($prepared) -Context $contextValue -Actions $actions -Timeouts @{
@@ -155,15 +156,15 @@ try
         throw "G006-C001 capture failed: $($terminal | ConvertTo-Json -Compress -Depth 20)"
     }
 
-    $artifacts = @($terminal.result.artifacts)
-    if ($artifacts.Count -ne 5 -or @($terminal.result.frame_ids).Count -ne 1)
+    if (@($terminal.result.artifacts).Count -ne 2 -or @($terminal.result.artifact_groups).Count -ne 3 -or
+        @($terminal.result.frame_ids).Count -ne 1)
     {
         throw "G006-C001 did not return one frame and exactly five protocol artifacts."
     }
     $frameId = [long] $terminal.result.frame_ids[0]
     $beauty = Get-CaptureArtifact -Terminal $terminal -FileName "beauty.png"
-    $textureArtifact = Get-CaptureArtifact -Terminal $terminal -FileName "colortex0.raw"
-    $bufferArtifact = Get-CaptureArtifact -Terminal $terminal -FileName "radiance_cache.bin"
+    $textureArtifact = Get-CaptureArtifact -Terminal $terminal -FileName "colortex0.main.bin"
+    $bufferArtifact = Get-CaptureArtifact -Terminal $terminal -FileName "iris_ssbo_6.bin"
     $shaderLog = Get-CaptureArtifact -Terminal $terminal -FileName "shader.log"
     $manifestArtifact = Get-CaptureArtifact -Terminal $terminal -FileName "manifest.json"
     foreach ($capture in @($beauty, $textureArtifact, $bufferArtifact))
@@ -206,13 +207,13 @@ try
     }
 
     $rawBytes = Assert-RawCapture -Scope $scope -Artifact $textureArtifact -JobDirectory $jobDirectory `
-        -LogicalName "colortex0" -Kind "TEXTURE" -Extension "raw"
+        -LogicalName "colortex0.main" -Kind "TEXTURE" -Extension "bin"
     $binBytes = Assert-RawCapture -Scope $scope -Artifact $bufferArtifact -JobDirectory $jobDirectory `
-        -LogicalName "radiance_cache" -Kind "BUFFER" -Extension "bin"
+        -LogicalName "iris_ssbo_6" -Kind "BUFFER" -Extension "bin"
 
     $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
-    $expectedFiles = @("beauty.png", "colortex0.raw", "colortex0.json", "radiance_cache.bin",
-        "radiance_cache.json", "shader.log")
+    $expectedFiles = @("beauty.png", "colortex0.main.bin", "colortex0.main.json", "iris_ssbo_6.bin",
+        "iris_ssbo_6.json", "shader.log")
     if (@($manifest.artifacts).Count -ne $expectedFiles.Count) { throw "Manifest file count is incorrect." }
     foreach ($name in $expectedFiles)
     {

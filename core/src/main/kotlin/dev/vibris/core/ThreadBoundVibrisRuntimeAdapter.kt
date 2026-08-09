@@ -110,6 +110,20 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
         }
     }
 
+    override fun capturePatchedShaders(
+        artifactName: String,
+        sink: ArtifactSink,
+        cancellation: CancellationToken,
+    ): CompletionStage<CaptureResult> {
+        if (closed.get()) {
+            return CompletableFuture.failedFuture(IllegalStateException("Vibris runtime is closed"))
+        }
+        return onClientStage(
+            Supplier { host.capturePatchedShaders(artifactName, sink, frames.currentFrame(), cancellation) },
+            cancellation,
+        )
+    }
+
     override fun close() {
         if (!closed.compareAndSet(false, true)) {
             return

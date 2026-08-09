@@ -20,7 +20,6 @@ constexpr std::uint64_t total_timeout_ms = 180'000;
 
 proto::ArtifactFormat format(std::string_view value) {
     if (value == "png") return proto::ARTIFACT_FORMAT_PNG;
-    if (value == "raw") return proto::ARTIFACT_FORMAT_RAW;
     if (value == "bin") return proto::ARTIFACT_FORMAT_BIN;
     throw std::invalid_argument("unsupported artifact format");
 }
@@ -134,17 +133,16 @@ void debug_recipe(const Json& arguments, const SessionConfig& config,
     }
     for (const auto& texture : arguments.value("textures", Json::array())) {
         const auto name = texture.get<std::string>();
-        auto* capture = add_action(sequence)->mutable_capture_texture();
-        capture->set_logical_name(name);
-        capture->set_artifact_name(name);
-        capture->set_format(proto::ARTIFACT_FORMAT_RAW);
-    }
-    for (const auto& buffer : arguments.value("buffers", Json::array())) {
-        const auto name = buffer.get<std::string>();
-        auto* capture = add_action(sequence)->mutable_capture_buffer();
+        auto* capture = add_action(sequence)->mutable_dump_texture_v2();
         capture->set_logical_name(name);
         capture->set_artifact_name(name);
         capture->set_format(proto::ARTIFACT_FORMAT_BIN);
+    }
+    for (const auto& buffer : arguments.value("buffers", Json::array())) {
+        const auto name = buffer.get<std::string>();
+        auto* capture = add_action(sequence)->mutable_dump_buffer();
+        capture->set_logical_name(name);
+        capture->set_artifact_name(name);
     }
 }
 
@@ -158,16 +156,15 @@ void add_ab_capture(proto::ActionSequence& sequence, const Json& capture, std::s
     }
     const auto default_format = type == "buffer" ? std::string("bin") : std::string("png");
     if (type == "texture") {
-        auto* value = add_action(sequence)->mutable_capture_texture();
+        auto* value = add_action(sequence)->mutable_dump_texture_v2();
         value->set_logical_name(capture.at("name").get<std::string>());
         value->set_artifact_name(std::move(artifact_name));
         value->set_format(format(capture.value("format", default_format)));
         return;
     }
-    auto* value = add_action(sequence)->mutable_capture_buffer();
+    auto* value = add_action(sequence)->mutable_dump_buffer();
     value->set_logical_name(capture.at("name").get<std::string>());
     value->set_artifact_name(std::move(artifact_name));
-    value->set_format(format(capture.value("format", default_format)));
 }
 
 void ab_recipe(const Json& arguments, const SessionConfig& config,
@@ -256,15 +253,14 @@ void append_actions(const Json& inputs, const SourceMap& sources, proto::ActionS
             value->set_artifact_name(std::string(artifact_prefix) +
                 input.value("artifact_name", std::string("screenshot")));
             value->set_after_frames(input.value("after_frames", std::uint32_t{0}));
-        } else if (type == "capture_texture") {
-            auto* value = action->mutable_capture_texture();
+        } else if (type == "dump_texture") {
+            auto* value = action->mutable_dump_texture_v2();
             value->set_logical_name(input.at("name").get<std::string>());
             value->set_format(format(input.at("format").get<std::string>()));
             value->set_artifact_name(std::string(artifact_prefix) + input.at("artifact_name").get<std::string>());
-        } else if (type == "capture_buffer") {
-            auto* value = action->mutable_capture_buffer();
+        } else if (type == "dump_buffer") {
+            auto* value = action->mutable_dump_buffer();
             value->set_logical_name(input.at("name").get<std::string>());
-            value->set_format(format(input.at("format").get<std::string>()));
             value->set_artifact_name(std::string(artifact_prefix) + input.at("artifact_name").get<std::string>());
         } else if (type == "get_capture_status") action->mutable_get_capture_status();
         else if (type == "load_shader") {
@@ -288,16 +284,12 @@ void append_actions(const Json& inputs, const SourceMap& sources, proto::ActionS
         } else if (type == "inspect_shader") action->mutable_inspect_shader();
         else if (type == "get_gpu_metrics") {
             action->mutable_get_gpu_metrics()->set_frames(input.at("frames").get<std::uint32_t>());
-        } else if (type == "list_ssbos") action->mutable_list_ssbos();
-        else if (type == "dump_ssbo") {
-            action->mutable_dump_ssbo()->set_index(input.at("index").get<std::uint32_t>());
-        } else if (type == "list_textures") action->mutable_list_textures();
-        else if (type == "dump_texture") {
-            auto* value = action->mutable_dump_texture();
-            if (input.contains("name")) value->set_name(input.at("name").get<std::string>());
-            else value->set_id(input.at("id").get<std::uint32_t>());
-            value->set_raw(input.value("raw", false));
-        } else if (type == "list_patched_shaders") action->mutable_list_patched_shaders();
+        } else if (type == "list_buffers") action->mutable_list_buffers();
+        else if (type == "list_textures") action->mutable_list_textures_v2();
+        else if (type == "get_patched_shaders") {
+            action->mutable_get_patched_shaders()->set_artifact_name(
+                std::string(artifact_prefix) + input.at("artifact_name").get<std::string>());
+        }
         else throw std::invalid_argument("unsupported action type");
     }
 }
@@ -340,8 +332,11 @@ Json resource(const proto::ResourceDescriptor& value) {
     return {{"logical_name", value.logical_name()},
             {"kind", short_name(proto::ResourceKind_Name(value.kind()), "RESOURCE_KIND_")},
             {"width", value.width()}, {"height", value.height()}, {"depth", value.depth()},
-            {"mip_level", value.mip_level()}, {"layer", value.layer()},
-            {"internal_format", value.internal_format()}};
+            {"mip_level", value.mip_level()}, {"mip_levels", value.mip_levels()}, {"layer", value.layer()},
+            {"internal_format", value.internal_format()}, {"category", value.category()},
+            {"target", value.texture_target()}, {"channel_layout", value.channel_layout()},
+            {"numeric_class", value.numeric_class()}, {"component_bits", value.component_bits()},
+            {"readback_format", value.readback_format()}, {"readback_type", value.readback_type()}};
 }
 
 Json artifact(const proto::ArtifactMetadata& value) {
@@ -350,7 +345,10 @@ Json artifact(const proto::ArtifactMetadata& value) {
             {"kind", short_name(proto::ArtifactKind_Name(value.kind()), "ARTIFACT_KIND_")},
             {"format", short_name(proto::ArtifactFormat_Name(value.format()), "ARTIFACT_FORMAT_")},
             {"media_type", value.media_type()}, {"byte_size", value.byte_size()},
-            {"resource", resource(value.resource())}, {"path", value.path()}};
+            {"resource", resource(value.resource())},
+            {"role", short_name(proto::ArtifactRole_Name(value.role()), "ARTIFACT_ROLE_")},
+            {"subresource_index", value.has_subresource_index() ? Json(value.subresource_index()) : Json(nullptr)},
+            {"path", value.path()}};
 }
 
 Json artifacts(const google::protobuf::RepeatedPtrField<proto::ArtifactMetadata>& values) {
@@ -379,6 +377,15 @@ Json comparison(const proto::JobResult& value) {
             {"mean_absolute_error", comparison.mean_absolute_error()},
             {"root_mean_square_error", comparison.root_mean_square_error()},
             {"max_absolute_error", comparison.max_absolute_error()}};
+}
+
+Json artifact_groups(const google::protobuf::RepeatedPtrField<proto::ArtifactGroup>& values) {
+    Json result = Json::array();
+    for (const auto& value : values) {
+        result.push_back({{"name", value.name()}, {"resource", resource(value.resource())},
+                          {"artifacts", artifacts(value.artifacts())}});
+    }
+    return result;
 }
 
 Json action_results(const proto::JobResult& value) {
@@ -411,6 +418,7 @@ ToolOutcome completed(const proto::JobCompleted& completed) {
                              {"queue_ms", timing.queue_ms()}, {"execution_ms", timing.execution_ms()},
                              {"total_ms", timing.total_ms()}}},
                 {"frame_ids", value.frame_ids()}, {"artifacts", artifacts(value.artifacts())},
+                {"artifact_groups", artifact_groups(value.artifact_groups())},
                 {"manifest_path", value.manifest_path()}};
 }
 

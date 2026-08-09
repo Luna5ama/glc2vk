@@ -79,7 +79,6 @@ void set_context(const Json& value, proto::SceneContext* context) {
 proto::ArtifactFormat artifact_format(const std::string& value) {
     if (value == "png") return proto::ARTIFACT_FORMAT_PNG;
     if (value == "exr") return proto::ARTIFACT_FORMAT_EXR;
-    if (value == "raw") return proto::ARTIFACT_FORMAT_RAW;
     if (value == "bin") return proto::ARTIFACT_FORMAT_BIN;
     throw std::invalid_argument("unsupported artifact format: " + value);
 }
@@ -95,18 +94,19 @@ void add_action(const Json& value, proto::ActionSequence* sequence) {
         capture->set_artifact_name(value.value("artifact_name", std::string{"beauty"}));
         capture->set_format(artifact_format(value.value("format", std::string{"png"})));
         capture->set_after_frames(value.value("after_frames", std::uint32_t{}));
-    } else if (type == "capture_texture") {
-        auto* capture = action->mutable_capture_texture();
-        capture->set_logical_name(value.at("name").get<std::string>());
-        capture->set_mip_level(value.value("mip_level", std::uint32_t{}));
-        capture->set_layer(value.value("layer", std::uint32_t{}));
-        capture->set_artifact_name(value.value("artifact_name", capture->logical_name()));
-        capture->set_format(artifact_format(value.value("format", std::string{"raw"})));
-    } else if (type == "capture_buffer") {
-        auto* capture = action->mutable_capture_buffer();
+    } else if (type == "dump_texture") {
+        auto* capture = action->mutable_dump_texture_v2();
         capture->set_logical_name(value.at("name").get<std::string>());
         capture->set_artifact_name(value.value("artifact_name", capture->logical_name()));
         capture->set_format(artifact_format(value.value("format", std::string{"bin"})));
+    } else if (type == "dump_buffer") {
+        auto* capture = action->mutable_dump_buffer();
+        capture->set_logical_name(value.at("name").get<std::string>());
+        capture->set_artifact_name(value.value("artifact_name", capture->logical_name()));
+    } else if (type == "list_textures") {
+        action->mutable_list_textures_v2();
+    } else if (type == "list_buffers") {
+        action->mutable_list_buffers();
     } else {
         throw std::invalid_argument("unsupported action: " + type);
     }

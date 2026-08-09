@@ -1,20 +1,20 @@
 package dev.luna5ama.vibris.capture
 
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import java.nio.file.Files
-import java.nio.file.Path
 import java.util.ArrayDeque
+import dev.vibris.api.ArtifactSink
+import dev.vibris.api.CancellationToken
+import dev.vibris.api.CaptureResult
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 
-class ShaderDebugControl @JvmOverloads constructor(
+class ShaderDebugControl constructor(
     private val host: ShaderDebugHost,
-    private val dumper: ShaderDebugResourceDumper = GlShaderDebugResourceDumper
 ) {
     private val errorLock = Any()
     private val errors = ArrayDeque<ShaderDebugError>()
@@ -95,61 +95,32 @@ class ShaderDebugControl @JvmOverloads constructor(
         })
     }
 
-    fun storageBuffersJson(): JsonObject = buildJsonObject {
+    fun buffersJson(): JsonObject = buildJsonObject {
         put("buffers", buildJsonArray {
             host.storageBuffers().forEach { buffer ->
                 add(buildJsonObject {
-                    put("index", buffer.index)
-                    put("glId", buffer.glId)
+                    put("name", buffer.name)
+                    put("category", buffer.category)
+                    put("size_bytes", buffer.sizeBytes)
                 })
             }
         })
     }
 
-    fun dumpStorageBuffer(index: Int): JsonObject {
-        val buffer = host.storageBuffers().firstOrNull { it.index == index }
-            ?: throw IllegalArgumentException("No SSBO found at index $index")
-        return dumper.dumpStorageBuffer(buffer, host.gameDirectory().resolve("ssbo_dumps/ssbo_$index.bin"))
-    }
-
     fun texturesJson(): JsonObject {
         val catalog = host.textureCatalog()
         return buildJsonObject {
-            put("colortex", textureArray(catalog.colortex))
-            put("custom", textureArray(catalog.custom))
+            put("textures", textureArray(catalog.textures))
         }
     }
 
-    fun dumpTexture(name: String?, id: Int?, raw: Boolean): JsonObject {
-        val textureId = if (name != null) {
-            host.resolveTexture(name) ?: throw IllegalArgumentException("Unknown texture: $name")
-        } else {
-            id ?: 0
-        }
-        val fileName = safeFileName(name ?: "texture_$textureId")
-        val extension = if (raw) "bin" else "png"
-        val result = dumper.dumpTexture(
-            textureId,
-            host.gameDirectory().resolve("texture_dumps/$fileName.$extension"),
-            raw
-        )
-        return if (name == null) result else JsonObject(result + ("name" to JsonPrimitive(name)))
-    }
-
-    fun patchedShadersJson(): JsonObject {
-        val directory = host.gameDirectory().resolve("patched_shaders")
-        val files = if (Files.isDirectory(directory)) {
-            Files.list(directory).use { stream ->
-                stream.map { it.fileName.toString() }.sorted().toList()
-            }
-        } else {
-            emptyList()
-        }
-        return buildJsonObject {
-            put("debugEnabled", host.debugShadersEnabled())
-            put("path", directory.toString())
-            put("files", JsonArray(files.map(::JsonPrimitive)))
-        }
+    fun capturePatchedShaders(
+        artifactName: String,
+        sink: ArtifactSink,
+        frameId: Long,
+        cancellation: CancellationToken,
+    ): CompletionStage<CaptureResult> = CompletableFuture.supplyAsync {
+        PatchedShaderCapture.capture(host, artifactName, sink, frameId, cancellation)
     }
 
     fun pushPass(name: String) {
@@ -188,11 +159,6 @@ class ShaderDebugControl @JvmOverloads constructor(
 
     private fun currentPass() = passStack.get().peekLast()
 
-    private fun safeFileName(value: String): String {
-        val sanitized = value.replace(Regex("[^A-Za-z0-9._-]"), "_")
-        return sanitized.takeUnless { it.isBlank() || it == "." || it == ".." } ?: "texture"
-    }
-
     private fun errorSnapshot() = synchronized(errorLock) { errors.toList() }
 
     private fun errorJson() = buildJsonArray {
@@ -211,9 +177,16 @@ class ShaderDebugControl @JvmOverloads constructor(
         textures.forEach { texture ->
             add(buildJsonObject {
                 put("name", texture.name)
-                put("textureId", texture.textureId)
-                texture.width?.let { put("width", it) }
-                texture.height?.let { put("height", it) }
+                put("category", texture.category)
+                put("target", texture.target)
+                put("width", texture.width)
+                put("height", texture.height)
+                put("depth", texture.depth)
+                put("mip_levels", texture.mipLevels)
+                put("internal_format", texture.internalFormat)
+                put("channel_layout", texture.channelLayout)
+                put("numeric_class", texture.numericClass)
+                put("component_bits", texture.componentBits)
             })
         }
     }

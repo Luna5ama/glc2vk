@@ -48,7 +48,7 @@ class FakeVibrisServerTest {
                 temp.resolve("unary/pending-shaders").toAbsolutePath().normalize().toString(),
                 parsed.getServer().getPendingShadersRoot()
             );
-            assertEquals(21, parsed.getServer().getSupportedJobActionsCount());
+            assertEquals(15, parsed.getServer().getSupportedJobActionsCount());
             assertEquals(1, client.listPresets(ListPresetsRequest.getDefaultInstance()).getPresetsCount());
             assertTrue(client.getStatus(GetStatusRequest.getDefaultInstance()).getReady());
         }
