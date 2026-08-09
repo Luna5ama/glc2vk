@@ -127,6 +127,7 @@ class VibrisControlService internal constructor(
                     ScenePreset.newBuilder()
                         .setPresetId(preset.presetId)
                         .setDisplayName(preset.displayName)
+                        .setVersion(preset.version)
                         .setContext(RuntimeJobContext.toProtocol(preset.context)),
                 )
             }

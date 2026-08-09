@@ -71,7 +71,11 @@ proto::PreparedSourceRef source(std::string uuid) {
 
 proto::ListPresetsResponse presets() {
     proto::ListPresetsResponse result;
-    auto* context = result.add_presets()->mutable_context();
+    auto* preset = result.add_presets();
+    preset->set_preset_id("village-rooftop");
+    preset->set_display_name("Village rooftop");
+    preset->set_version("2");
+    auto* context = preset->mutable_context();
     context->set_save_id("shader-test-world");
     context->set_dimension_id("minecraft:the_nether");
     context->set_time_preset_id("sunset");
@@ -153,6 +157,8 @@ void request_mapping() {
         {"recipe", "load_and_screenshot"},
         {"screenshot_format", "png"},
         {"config", {{"SETTING_SAMPLE_COUNT", 32}, {"SETTING_CLOUDS", false}}},
+        {"__vibris_preset", {{"preset_id", "village-rooftop"}, {"version", "2"},
+                             {"display_name", "Village rooftop"}}},
     };
     const auto context = SceneContextResolver::resolve(config(), presets());
 
@@ -189,6 +195,10 @@ void request_mapping() {
                 job.shader_configs(0).config().values().at("SETTING_SAMPLE_COUNT") == "32" &&
                 job.shader_configs(0).config().values().at("SETTING_CLOUDS") == "false",
         "Shader config was not copied into SubmitJob.");
+    require(job.benchmark_provenance().preset_id() == "village-rooftop" &&
+            job.benchmark_provenance().preset_version() == "2" &&
+            job.benchmark_provenance().preset_display_name() == "Village rooftop",
+        "Preset version provenance was not copied into SubmitJob.");
 }
 
 void remaining_execution_mappings() {
@@ -270,6 +280,9 @@ void default_settings_disambiguates_scene_presets() {
     auto response = presets();
     response.mutable_presets(0)->mutable_context()->set_settings_preset_id("cinematic");
     auto* fallback = response.add_presets();
+    fallback->set_preset_id("village-rooftop-default");
+    fallback->set_display_name("Village rooftop default");
+    fallback->set_version("2");
     fallback->mutable_context()->CopyFrom(response.presets(0).context());
     fallback->mutable_context()->set_settings_preset_id("default");
     const auto resolved = SceneContextResolver::resolve(config(), response);
@@ -806,7 +819,8 @@ void profile_resume_recovers_committed_artifact_without_resubmit() {
         {"previous_attempts", Json::array({{{"attempt", 1}, {"status", "failed"},
             {"error_code", "SERVER_OFFLINE"}, {"message", "disconnected"}, {"retryable", true}}})},
         {"raw_action_results", Json::array({
-            {{"action_index", 0}, {"kind", "load_shader"}, {"result", {{"success", true}}}},
+            {{"action_index", 0}, {"kind", "load_shader"}, {"result", {{"success", true},
+                {"provenance", {{"complete", true}, {"case_hash", "recovered-case-hash"}}}}}},
             {{"action_index", 1}, {"kind", "get_gpu_metrics"},
              {"result", {{"gpuTimings", {{"composite_total", {{"avg", 7'000'000}}}}}}}},
         })},

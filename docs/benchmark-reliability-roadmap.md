@@ -44,7 +44,7 @@ Do not restart Minecraft or its launcher unless the user explicitly asks.
 | T03 | P1 | vibris | Add pass/statistic filters and publish full results as an artifact | Done | feat(mcp): add filtered profile output |
 | T04 | P0 | vibris | Retry incomplete matrix cases without rerunning completed cases | Done | feat(mcp): retry incomplete profile cases |
 | T05 | P0 | vibris | Checkpoint matrix cases and expose resumable progress | Done | feat(mcp): checkpoint profile matrix progress |
-| T06 | P0 | vibris | Return effective scene/config/source provenance for every case | Pending | feat(mcp): add benchmark case provenance |
+| T06 | P0 | vibris | Return exact scene/config/source provenance | Done | feat(mcp): add benchmark case provenance |
 | T07 | P0 | vibris | Enforce case reload barriers, isolation, and final state restoration | Pending | fix(core): isolate benchmark matrix cases |
 | T08 | P1 | vibris | Preserve real shader-program timing identity and source metadata | Pending | feat(capture): expose program gpu timings |
 | T09 | P1 | Iris | Emit distinct program timing labels for grouped wrapper programs | Pending | feat(shaderdev): expose per-program gpu timings |
@@ -366,3 +366,13 @@ and exact commit title. The Git history is the source of truth for the resulting
   resumed attempt history, artifact recovery, and in-flight cancellation tests. Verified with
   .\gradlew.bat :vibris-core:test, CMake release build, focused workflow/schema/protocol CTest cases (3/3 passed), and
   the full release CTest suite (52/52 passed). Commit title: feat(mcp): checkpoint profile matrix progress.
+- 2026-08-09 - T06 - Added fail-closed per-case provenance for the exact Core-owned source tree, requested revision,
+  resolved full commit, active source UUID, explicit shader settings/config hash, full runtime-applied scene, preset
+  version/hash, and actual patched-shader hash/generation. Stable case hashes exclude transient activation UUIDs and
+  generations while binding all effective source/config/scene/patched content. Profile matrices now freeze each
+  workspace or commit source and resolved scene once into the durable queue checkpoint, then materialize fresh
+  server-owned UUIDs from that snapshot across cases, retries, and MCP restart recovery. Added same-content retry,
+  changed-config, active-source mutation, patched-output generation, preset-version, queue-time workspace mutation,
+  and restart-resume coverage. Verified with .\gradlew.bat build --offline, the CMake release build, focused
+  provenance/workflow tests, and the full release CTest suite (53/53 passed). Commit title: feat(mcp): add benchmark
+  case provenance.

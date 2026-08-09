@@ -5,6 +5,7 @@ import dev.vibris.api.TemporalResetResult;
 import dev.vibris.protocol.v1.Action;
 import dev.vibris.protocol.v1.ActionSequence;
 import dev.vibris.protocol.v1.ActivateSource;
+import dev.vibris.protocol.v1.BenchmarkProvenance;
 import dev.vibris.protocol.v1.ErrorCode;
 import dev.vibris.protocol.v1.JobStage;
 import dev.vibris.protocol.v1.LoadShader;
@@ -134,6 +135,28 @@ class RuntimeJobExecutorTest {
 
         assertEquals(ErrorCode.INTERNAL_ERROR, failure.code);
         assertEquals(List.of("link:A", "reload", "context", "reset"), fixture.runtime.events);
+    }
+
+    @Test
+    void benchmarkCaseHashIsStableAcrossRetryAndChangesWithEffectiveConfig() throws Exception {
+        Fixture fixture = new Fixture();
+        Source firstSource = fixture.source("same");
+        Source retrySource = fixture.source("same");
+        String inspection = "{\"status\":\"ok\",\"patched_shader\":{" +
+            "\"available\":true,\"sha256\":\"" + "b".repeat(64) + "\",\"generation\":7}}";
+        fixture.runtime.actionResponses.add(inspection);
+        fixture.runtime.actionResponses.add(inspection.replace("\"generation\":7", "\"generation\":8"));
+        fixture.runtime.actionResponses.add(inspection);
+
+        String first = loadActionJson(fixture.executor.execute(jobWithLoad(firstSource, "32"), ignored -> {}));
+        String retry = loadActionJson(fixture.executor.execute(jobWithLoad(retrySource, "32"), ignored -> {}));
+        String changed = loadActionJson(fixture.executor.execute(jobWithLoad(retrySource, "64"), ignored -> {}));
+
+        assertEquals(jsonString(first, "case_hash"), jsonString(retry, "case_hash"));
+        assertFalse(jsonString(first, "case_hash").equals(jsonString(changed, "case_hash")));
+        assertTrue(first.contains("\"complete\":true"));
+        assertTrue(first.contains("\"active_source_uuid\":\"" + firstSource.uuid + "\""));
+        assertTrue(retry.contains("\"active_source_uuid\":\"" + retrySource.uuid + "\""));
     }
 
     @Test
@@ -289,15 +312,26 @@ class RuntimeJobExecutorTest {
     }
 
     private static CoreJob jobWithLoad(Source source) {
+        return jobWithLoad(source, "32");
+    }
+
+    private static CoreJob jobWithLoad(Source source, String sampleCount) {
         SubmitJob submission = SubmitJob.newBuilder()
             .setRequestId("request")
             .setWorkspaceId("11111111-1111-4111-8111-111111111111")
             .setContext(SceneContext.newBuilder()
                 .setSaveId("save")
                 .setDimensionId("minecraft:overworld")
+                .setTimePresetId("noon")
+                .setWeatherPresetId("clear")
+                .setCameraPresetId("spawn")
+                .setSettingsPresetId("quality")
+                .setResolution(dev.vibris.protocol.v1.Resolution.newBuilder().setWidth(1920).setHeight(1080))
                 .setFov(70.0))
+            .setBenchmarkProvenance(BenchmarkProvenance.newBuilder()
+                .setPresetId("spawn").setPresetVersion("2").setPresetDisplayName("Spawn"))
             .addShaderConfigs(NamedShaderConfig.newBuilder().setId("config")
-                .setConfig(ShaderConfig.newBuilder().putValues("SETTING_SAMPLE_COUNT", "32")))
+                .setConfig(ShaderConfig.newBuilder().putValues("SETTING_SAMPLE_COUNT", sampleCount)))
             .setActions(ActionSequence.newBuilder()
                 .addActions(load(source, "source", "config", "source--config", false))
                 .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(3))))
@@ -305,6 +339,19 @@ class RuntimeJobExecutorTest {
         CoreJob job = new CoreJob(submission, "message", null);
         job.initialize(List.of(source.lease));
         return job;
+    }
+
+    private static String loadActionJson(TerminalResult terminal) {
+        return terminal.completed().getResult().getActionResults(0).getJson();
+    }
+
+    private static String jsonString(String json, String field) {
+        String prefix = "\"" + field + "\":\"";
+        int start = json.indexOf(prefix);
+        if (start < 0) throw new AssertionError("Missing JSON field: " + field);
+        start += prefix.length();
+        int end = json.indexOf('"', start);
+        return json.substring(start, end);
     }
 
     private static Action.Builder load(
@@ -353,6 +400,10 @@ class RuntimeJobExecutorTest {
             Path file = Files.writeString(path.resolve("main.glsl"), marker);
             PreparedSourceRef reference = PreparedSourceRef.newBuilder()
                 .setUuid(uuid)
+                .setRequestedRevision("workspace")
+                .setResolvedRevision("a".repeat(40))
+                .setOrigin(dev.vibris.protocol.v1.SourceOrigin.newBuilder()
+                    .setWorkspace(dev.vibris.protocol.v1.WorkspaceOrigin.newBuilder().setDisplayName("fixture")))
                 .setFileCount(1)
                 .setTotalBytes(Files.size(file))
                 .build();

@@ -44,6 +44,38 @@ std::string bounded(std::string value) {
     return value;
 }
 
+Json scene_json(const control::SceneContext& context) {
+    return {{"save_id", context.save_id()},
+            {"dimension_id", context.dimension_id()},
+            {"time_preset_id", context.time_preset_id()},
+            {"weather_preset_id", context.weather_preset_id()},
+            {"camera_preset_id", context.camera_preset_id()},
+            {"fov", context.fov()},
+            {"resolution", {{"width", context.resolution().width()},
+                            {"height", context.resolution().height()}}},
+            {"settings_preset_id", context.settings_preset_id()}};
+}
+
+control::SceneContext scene_from_json(const Json& value) {
+    control::SceneContext context;
+    context.set_save_id(value.at("save_id").get<std::string>());
+    context.set_dimension_id(value.at("dimension_id").get<std::string>());
+    context.set_time_preset_id(value.at("time_preset_id").get<std::string>());
+    context.set_weather_preset_id(value.at("weather_preset_id").get<std::string>());
+    context.set_camera_preset_id(value.at("camera_preset_id").get<std::string>());
+    context.set_fov(value.at("fov").get<double>());
+    context.mutable_resolution()->set_width(value.at("resolution").at("width").get<std::uint32_t>());
+    context.mutable_resolution()->set_height(value.at("resolution").at("height").get<std::uint32_t>());
+    context.set_settings_preset_id(value.at("settings_preset_id").get<std::string>());
+    return context;
+}
+
+Json preset_json(const control::ScenePreset& preset) {
+    return {{"preset_id", preset.preset_id()},
+            {"version", preset.version()},
+            {"display_name", preset.display_name()}};
+}
+
 } // namespace
 
 class McpBackend::Impl final {
@@ -72,7 +104,7 @@ public:
                 if (!config_) {
                     return ToolFailure{"NOT_CONFIGURED", "Configure this worktree before running jobs.", false};
                 }
-                return profile_matrix_.start(arguments, *config_);
+                return start_profile_matrix(arguments);
             }
             if (name == "vibris_run_recipe" || name == "vibris_run_actions" || name == "vibris_run_matrix") {
                 if (profile_matrix_.running()) {
@@ -183,29 +215,37 @@ private:
     }
 
     ToolOutcome run_profile_case(ProfileMatrixCaseExecution execution) {
+        const auto context = scene_from_json(execution.arguments.at("__vibris_scene_context"));
+        return unary<control::GetServerInfoResponse>(
+            [this](auto completion) { return client().get_server_info(std::move(completion)); },
+            [this, &execution, &context](const auto& response) -> ToolOutcome {
+                if (!response.has_server()) {
+                    throw StateError(
+                        "SERVER_NOT_READY", "The local Vibris server did not provide server info.", true);
+                }
+                SynchronousJobControl control{
+                    .stop = execution.stop,
+                    .resume_request_id = execution.resume_request_id,
+                    .progress = [progress = execution.progress](const SynchronousJobProgress& event) {
+                        progress(event.request_id, event.stage, event.accepted);
+                    },
+                };
+                auto outcome = SynchronousJobRunner(client(), source_handler_, execution.config).run(
+                    "vibris_run_recipe", execution.arguments, response.server(), context, control);
+                artifact_link_.rewrite(outcome);
+                return outcome;
+            });
+    }
+
+    ToolOutcome start_profile_matrix(const Json& arguments) {
         return unary<control::ListPresetsResponse>(
             [this](auto completion) { return client().list_presets(std::move(completion)); },
-            [this, &execution](const auto& presets) -> ToolOutcome {
-                const auto context = SceneContextResolver::resolve(execution.config, presets);
-                return unary<control::GetServerInfoResponse>(
-                    [this](auto completion) { return client().get_server_info(std::move(completion)); },
-                    [this, &execution, &context](const auto& response) -> ToolOutcome {
-                        if (!response.has_server()) {
-                            throw StateError(
-                                "SERVER_NOT_READY", "The local Vibris server did not provide server info.", true);
-                        }
-                        SynchronousJobControl control{
-                            .stop = execution.stop,
-                            .resume_request_id = execution.resume_request_id,
-                            .progress = [progress = execution.progress](const SynchronousJobProgress& event) {
-                                progress(event.request_id, event.stage, event.accepted);
-                            },
-                        };
-                        auto outcome = SynchronousJobRunner(client(), source_handler_, execution.config).run(
-                            "vibris_run_recipe", execution.arguments, response.server(), context, control);
-                        artifact_link_.rewrite(outcome);
-                        return outcome;
-                    });
+            [this, &arguments](const auto& presets) -> ToolOutcome {
+                const auto preset = SceneContextResolver::resolve_preset(*config_, presets);
+                auto enriched = arguments;
+                enriched["__vibris_scene_context"] = scene_json(preset.context());
+                enriched["__vibris_preset"] = preset_json(preset);
+                return profile_matrix_.start(enriched, *config_);
             });
     }
 
@@ -214,16 +254,19 @@ private:
         return unary<control::ListPresetsResponse>(
             [this](auto completion) { return client().list_presets(std::move(completion)); },
             [this, name, &arguments](const auto& presets) -> ToolOutcome {
-                const auto context = SceneContextResolver::resolve(*config_, presets);
+                const auto preset = SceneContextResolver::resolve_preset(*config_, presets);
+                const auto context = preset.context();
+                auto enriched = arguments;
+                enriched["__vibris_preset"] = preset_json(preset);
                 return unary<control::GetServerInfoResponse>(
                     [this](auto completion) { return client().get_server_info(std::move(completion)); },
-                    [this, name, &arguments, &context](const auto& response) -> ToolOutcome {
+                    [this, name, &enriched, &context](const auto& response) -> ToolOutcome {
                         if (!response.has_server()) {
                             throw StateError(
                                 "SERVER_NOT_READY", "The local Vibris server did not provide server info.", true);
                         }
                         auto outcome = SynchronousJobRunner(client(), source_handler_, *config_).run(
-                            name, arguments, response.server(), context);
+                            name, enriched, response.server(), context);
                         artifact_link_.rewrite(outcome);
                         return outcome;
                     });

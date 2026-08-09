@@ -46,7 +46,13 @@ internal class SourceRegistry @JvmOverloads constructor(
                     "Source metadata does not match its directory.",
                 )
             }
-            candidates.add(Candidate(uuid, inspection.directory, reference.fileCount, reference.totalBytes))
+            candidates.add(Candidate(
+                uuid,
+                inspection.directory,
+                reference.fileCount,
+                reference.totalBytes,
+                reference,
+            ))
         }
         return candidates
     }
@@ -57,12 +63,16 @@ internal class SourceRegistry @JvmOverloads constructor(
         if (sources.size + candidates.size > CAPACITY) {
             throw Failure(ErrorCode.QUEUE_FULL, "The source registry is full.")
         }
-        val ownerships = ArrayList<OwnedSourceTree.Ownership>(candidates.size)
+        val reservations = ArrayList<OwnedSourceTree.Reservation>(candidates.size)
         for (candidate in candidates) {
             if (sources.containsKey(candidate.uuid)) {
                 throw Failure(ErrorCode.INVALID_SOURCE_UUID, "Source UUID is already owned.")
             }
-            ownerships.add(trees.reserve(candidate.directory, candidate.fileCount, candidate.totalBytes))
+            reservations.add(trees.reserve(
+                candidate.directory,
+                candidate.fileCount,
+                candidate.totalBytes,
+            ))
         }
         val reserved = ArrayList<Lease>(candidates.size)
         for (index in candidates.indices) {
@@ -70,8 +80,10 @@ internal class SourceRegistry @JvmOverloads constructor(
             val lease = Lease(
                 candidate.uuid,
                 candidate.directory,
-                ownerships[index],
+                reservations[index].ownership,
                 SourceRecord(candidate.uuid, 1),
+                reservations[index].snapshotSha256,
+                candidate.reference,
             )
             sources[candidate.uuid] = lease
             reserved.add(lease)
@@ -153,6 +165,17 @@ internal class SourceRegistry @JvmOverloads constructor(
     fun requireOwned(lease: Lease) {
         if (!sources.containsKey(lease.uuid) || !trees.stillOwned(lease.directory, lease.ownership)) {
             throw Failure(ErrorCode.SOURCE_ACTIVATION_FAILED, "Prepared source identity changed.")
+        }
+    }
+
+    @Synchronized
+    @Throws(Failure::class)
+    fun requireActiveOwned() {
+        activeSource?.let { source ->
+            requireOwned(source)
+            if (!trees.matchesSnapshot(source.directory, source.snapshotSha256)) {
+                throw Failure(ErrorCode.SOURCE_ACTIVATION_FAILED, "Prepared source content changed.")
+            }
         }
     }
 
@@ -266,6 +289,7 @@ internal class SourceRegistry @JvmOverloads constructor(
         val directory: Path,
         val fileCount: Long,
         val totalBytes: Long,
+        val reference: PreparedSourceRef,
     ) {
         fun uuid(): String = uuid
 
@@ -274,6 +298,8 @@ internal class SourceRegistry @JvmOverloads constructor(
         fun fileCount(): Long = fileCount
 
         fun totalBytes(): Long = totalBytes
+
+        fun reference(): PreparedSourceRef = reference
     }
 
     data class Lease(
@@ -281,6 +307,8 @@ internal class SourceRegistry @JvmOverloads constructor(
         val directory: Path,
         val ownership: OwnedSourceTree.Ownership,
         val record: SourceRecord,
+        val snapshotSha256: String,
+        val reference: PreparedSourceRef,
     ) {
         fun uuid(): String = uuid
 
@@ -289,6 +317,10 @@ internal class SourceRegistry @JvmOverloads constructor(
         fun ownership(): OwnedSourceTree.Ownership = ownership
 
         fun record(): SourceRecord = record
+
+        fun snapshotSha256(): String = snapshotSha256
+
+        fun reference(): PreparedSourceRef = reference
     }
 
     data class Activation(

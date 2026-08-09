@@ -49,7 +49,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     }
 
     @Throws(Failure::class)
-    fun applyContext(job: CoreJob, progress: Consumer<JobStage>, deadline: Long) {
+    fun applyContext(job: CoreJob, progress: Consumer<JobStage>, deadline: Long): ContextApplyResult {
         val cancellation = job.cancellation.token()
         progress.accept(JobStage.JOB_STAGE_LOADING_WORLD)
         probe.event(job.requestId, "ENSURING_WORLD")
@@ -63,6 +63,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             throw Failure(ErrorCode.WORLD_LOAD_FAILED, context.message)
         }
         probe.contextApplied(job.requestId, job.workspaceId, RuntimeJobContext.toProtocol(context.context))
+        return context
     }
 
     @Throws(Failure::class)
@@ -107,7 +108,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         configId: String,
         progress: Consumer<JobStage>,
         deadline: Long,
-    ): ReloadResult {
+    ): LoadResult {
         val matches = job.submission.shaderConfigsList.filter { it.id == configId }
         if (matches.size != 1) {
             throw Failure(ErrorCode.NOT_CONFIGURED, "Load action references an unknown shader config.")
@@ -119,9 +120,9 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         } else {
             activateSource(job, source, config, progress, deadline)
         }
-        applyContext(job, progress, deadline)
+        val context = applyContext(job, progress, deadline)
         reset(job, progress, deadline)
-        return reload
+        return LoadResult(reload, context, config)
     }
 
     @Throws(Failure::class)
@@ -271,6 +272,12 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
 
     @Throws(Failure::class)
     fun <T> await(stage: CompletionStage<T>, job: CoreJob, deadline: Long): T = awaiter.await(stage, job, deadline)
+
+    data class LoadResult(
+        val reload: ReloadResult,
+        val context: ContextApplyResult,
+        val effectiveShaderSettings: Map<String, String>?,
+    )
 
     class Failure internal constructor(
         @JvmField val code: ErrorCode,

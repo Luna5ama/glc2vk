@@ -9,9 +9,50 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.attribute.BasicFileAttributes
+import java.security.MessageDigest
 import java.util.Locale
 
 internal object PatchedShaderCapture {
+    data class Identity(
+        val sha256: String,
+        val fileCount: Int,
+        val totalBytes: Long,
+    )
+
+    fun identity(host: ShaderDebugHost): Identity {
+        check(host.debugShadersEnabled()) { "Iris shader debug output is disabled" }
+        host.awaitPatchedShaderWrites()
+        val directory = host.gameDirectory().resolve("patched_shaders").toAbsolutePath().normalize()
+        val files = snapshot(directory)
+        check(files.isNotEmpty()) { "Iris did not produce patched shader output" }
+        val digest = MessageDigest.getInstance("SHA-256")
+        digest.update("vibris-patched-shaders-v1\u0000".toByteArray(Charsets.UTF_8))
+        var totalBytes = 0L
+        files.forEach { file ->
+            val name = file.fileName.toString().toByteArray(Charsets.UTF_8)
+            digest.update(name.size.toString().toByteArray(Charsets.US_ASCII))
+            digest.update(0.toByte())
+            digest.update(name)
+            digest.update(0.toByte())
+            val before = attributes(file)
+            Files.newInputStream(file).use { input ->
+                val buffer = ByteArray(1024 * 1024)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    digest.update(buffer, 0, count)
+                }
+            }
+            val after = attributes(file)
+            check(before.size() == after.size() && before.lastModifiedTime() == after.lastModifiedTime() &&
+                before.fileKey() == after.fileKey()) {
+                "Patched shader changed while its identity was computed: ${file.fileName}"
+            }
+            totalBytes = Math.addExact(totalBytes, after.size())
+        }
+        return Identity(digest.digest().joinToString("") { byte -> "%02x".format(byte) }, files.size, totalBytes)
+    }
+
     fun capture(
         host: ShaderDebugHost,
         artifactName: String,

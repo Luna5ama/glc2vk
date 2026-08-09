@@ -35,6 +35,7 @@ class VibrisPresetCatalogTest {
 
             assertEquals("current", catalog.save(current))
             assertEquals(listOf("current", "existing"), catalog.presets().map { it.presetId })
+            assertEquals(listOf("2", "2"), catalog.presets().map { it.version })
             assertEquals(current.context(), catalog.presets().first().context)
             assertEquals(18_234, catalog.resolve(current.context()).tick)
             assertTrue(VibrisPresetCatalog.load(path).validate(current.context()).valid)

@@ -63,6 +63,9 @@ public:
 
     [[nodiscard]] PreparedSource prepare_workspace() const;
     [[nodiscard]] PreparedSource prepare_commit(std::string_view revision) const;
+    [[nodiscard]] PreparedSource prepare_snapshot(
+        const std::filesystem::path& snapshot_root,
+        const control::v1::PreparedSourceRef& provenance) const;
 
 private:
     std::filesystem::path workspace_root_;

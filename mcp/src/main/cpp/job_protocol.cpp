@@ -477,6 +477,12 @@ proto::ClientMessage JobProtocol::request(std::string_view tool_name, const Json
     auto* job = message.mutable_submit_job();
     job->set_request_id(std::move(request_id));
     scene(config, context, *job);
+    if (const auto preset = arguments.find("__vibris_preset"); preset != arguments.end()) {
+        auto* provenance = job->mutable_benchmark_provenance();
+        provenance->set_preset_id(preset->at("preset_id").get<std::string>());
+        provenance->set_preset_version(preset->at("version").get<std::string>());
+        provenance->set_preset_display_name(preset->at("display_name").get<std::string>());
+    }
     for (const auto& source : sources) job->add_sources()->CopyFrom(source);
     if (tool_name == "vibris_run_recipe") recipe(arguments, config, sources, *job);
     else if (tool_name == "vibris_run_actions") actions(arguments, sources, *job);

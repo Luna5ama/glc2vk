@@ -1,5 +1,6 @@
 #include "source_handler.hpp"
 
+#include "config_document.hpp"
 #include "state_error.hpp"
 
 #include <algorithm>
@@ -16,9 +17,35 @@ namespace {
 
 namespace control = ::vibris::control::v1;
 
-void prepare_one(SourcePreparer& preparer, const Json* source, std::list<PreparedSource>& prepared) {
-    if (source == nullptr || source->value("kind", std::string("workspace")) == "workspace") {
+void prepare_one(SourcePreparer& preparer, const std::filesystem::path& workspace_root,
+    const Json* source, std::list<PreparedSource>& prepared) {
+    const auto kind = source == nullptr ? std::string("workspace") : source->value("kind", std::string("workspace"));
+    if (kind == "workspace") {
         prepared.emplace_back(preparer.prepare_workspace());
+        return;
+    }
+    if (kind == "snapshot") {
+        const auto job_id = source->at("job_id").get<std::string>();
+        const auto snapshot_uuid = source->at("snapshot_uuid").get<std::string>();
+        if (!detail::is_uuid(job_id) || !detail::is_uuid(snapshot_uuid)) {
+            throw StateError("PROFILE_CHECKPOINT_ERROR", "Queued source snapshot identity is invalid.", false);
+        }
+        control::PreparedSourceRef provenance;
+        provenance.set_file_count(source->at("file_count").get<std::uint64_t>());
+        provenance.set_total_bytes(source->at("total_bytes").get<std::uint64_t>());
+        provenance.set_requested_revision(source->at("requested_revision").get<std::string>());
+        provenance.set_resolved_revision(source->at("resolved_revision").get<std::string>());
+        if (source->at("origin_kind") == "commit") {
+            auto* origin = provenance.mutable_origin()->mutable_commit();
+            origin->set_repository_id(source->at("origin_name").get<std::string>());
+            origin->set_revision(provenance.resolved_revision());
+        } else {
+            provenance.mutable_origin()->mutable_workspace()->set_display_name(
+                source->at("origin_name").get<std::string>());
+        }
+        const auto snapshot = workspace_root / ".vibris" / "profile-matrix" /
+            job_id / "sources" / snapshot_uuid;
+        prepared.emplace_back(preparer.prepare_snapshot(snapshot, provenance));
         return;
     }
     prepared.emplace_back(preparer.prepare_commit(source->at("revision").get<std::string>()));
@@ -52,15 +79,15 @@ void SourceHandler::prepare(
         (tool_name == "vibris_run_recipe" && recipe == "profile_matrix") ||
         (tool_name == "vibris_run_actions" && arguments.contains("sources"))) {
         for (const auto& source : arguments.at("sources")) {
-            prepare_one(preparer, &source, prepared);
+            prepare_one(preparer, workspace_root_, &source, prepared);
         }
     } else if (tool_name == "vibris_run_recipe" && recipe == "ab_compare") {
-        prepare_one(preparer, &arguments.at("a").at("source"), prepared);
-        prepare_one(preparer, &arguments.at("b").at("source"), prepared);
+        prepare_one(preparer, workspace_root_, &arguments.at("a").at("source"), prepared);
+        prepare_one(preparer, workspace_root_, &arguments.at("b").at("source"), prepared);
     } else {
         const auto source = arguments.find("source");
         if (tool_name != "vibris_run_actions" || source != arguments.end()) {
-            prepare_one(preparer, source == arguments.end() ? nullptr : &*source, prepared);
+            prepare_one(preparer, workspace_root_, source == arguments.end() ? nullptr : &*source, prepared);
         }
     }
 

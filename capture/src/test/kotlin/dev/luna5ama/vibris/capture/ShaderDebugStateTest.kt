@@ -4,6 +4,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.nio.file.Path
+import java.nio.file.Files
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -54,11 +55,44 @@ class ShaderDebugStateTest {
         assertEquals(emptySet(), result.join()["gpuTimings"]!!.jsonObject.keys)
     }
 
+    @Test
+    fun patchedShaderIdentityIsStableUntilOutputChanges() {
+        val temp = createTempDirectory("vibris-patched-identity")
+        try {
+            val output = Files.createDirectories(temp.resolve("patched_shaders"))
+            Files.writeString(output.resolve("composite.fsh"), "first")
+            val control = ShaderDebugControl(DebugHost(temp))
+
+            val first = control.inspect().getValue("patched_shader").jsonObject
+            val retry = control.inspect().getValue("patched_shader").jsonObject
+            Files.writeString(output.resolve("composite.fsh"), "second")
+            val changed = control.inspect().getValue("patched_shader").jsonObject
+
+            assertTrue(first.getValue("available").jsonPrimitive.content.toBoolean())
+            assertEquals(first.getValue("sha256"), retry.getValue("sha256"))
+            assertEquals("1", retry.getValue("generation").jsonPrimitive.content)
+            assertFalse(first.getValue("sha256") == changed.getValue("sha256"))
+            assertEquals("2", changed.getValue("generation").jsonPrimitive.content)
+        } finally {
+            temp.toFile().deleteRecursively()
+        }
+    }
+
     private class EmptyHost(private val root: Path) : ShaderDebugHost {
         override fun shaderPackName(): String? = null
         override fun reloadShaders() = Unit
         override fun gameDirectory() = root
         override fun debugShadersEnabled() = false
+        override fun storageBuffers() = emptyList<StorageBufferInfo>()
+        override fun textureCatalog() = TextureCatalog(emptyList())
+        override fun resolveTexture(name: String): Int? = null
+    }
+
+    private class DebugHost(private val root: Path) : ShaderDebugHost {
+        override fun shaderPackName() = "vibris"
+        override fun reloadShaders() = Unit
+        override fun gameDirectory() = root
+        override fun debugShadersEnabled() = true
         override fun storageBuffers() = emptyList<StorageBufferInfo>()
         override fun textureCatalog() = TextureCatalog(emptyList())
         override fun resolveTexture(name: String): Int? = null

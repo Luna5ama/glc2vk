@@ -144,6 +144,7 @@ private:
         auto* preset = response.add_presets();
         preset->set_preset_id(id);
         preset->set_display_name(id);
+        preset->set_version("1");
         auto* context = preset->mutable_context();
         context->set_save_id(save);
         context->set_dimension_id(dimension);

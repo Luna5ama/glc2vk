@@ -1,6 +1,7 @@
 #include "profile_matrix_workflow.hpp"
 
 #include "config_document.hpp"
+#include "source_preparer.hpp"
 #include "state_error.hpp"
 
 #define WIN32_LEAN_AND_MEAN
@@ -117,6 +118,39 @@ Json checkpoint_config(const SessionConfig& config) {
     return Json::parse(detail::serialize_config(config));
 }
 
+Json freeze_sources(const fs::path& workspace_root, const fs::path& state_directory,
+    const std::string& job_id, const Json& sources) {
+    const auto snapshot_root = state_directory / job_id / "sources";
+    ensure_directory(snapshot_root);
+    SourcePreparer preparer(
+        workspace_root, snapshot_root, {.max_total_bytes = 512ULL * 1024ULL * 1024ULL, .max_files = 100'000});
+    std::vector<PreparedSource> snapshots;
+    Json frozen = Json::array();
+    snapshots.reserve(sources.size());
+    for (const auto& declared : sources) {
+        const auto kind = declared.at("kind").get<std::string>();
+        snapshots.emplace_back(kind == "commit"
+            ? preparer.prepare_commit(declared.at("revision").get<std::string>())
+            : preparer.prepare_workspace());
+        const auto& prepared = snapshots.back();
+        const auto& reference = prepared.reference();
+        const bool commit = reference.origin().has_commit();
+        frozen.push_back({{"id", declared.at("id")},
+                          {"kind", "snapshot"},
+                          {"job_id", job_id},
+                          {"snapshot_uuid", reference.uuid()},
+                          {"origin_kind", commit ? "commit" : "workspace"},
+                          {"origin_name", commit ? reference.origin().commit().repository_id()
+                                                  : reference.origin().workspace().display_name()},
+                          {"requested_revision", reference.requested_revision()},
+                          {"resolved_revision", reference.resolved_revision()},
+                          {"file_count", reference.file_count()},
+                          {"total_bytes", reference.total_bytes()}});
+    }
+    for (auto& snapshot : snapshots) snapshot.release();
+    return frozen;
+}
+
 SessionConfig parse_checkpoint_config(const Json& value, std::string_view workspace_id) {
     auto config = detail::parse_config(value.dump(), detail::ConfigDocumentKind::persisted);
     if (config.workspace_id != workspace_id) invalid_job();
@@ -172,6 +206,10 @@ Json case_arguments(const Json& document, const Json& spec) {
     for (const auto* field : copied) {
         if (original.contains(field)) result[field] = original.at(field);
     }
+    if (original.contains("__vibris_scene_context")) {
+        result["__vibris_scene_context"] = original.at("__vibris_scene_context");
+    }
+    if (original.contains("__vibris_preset")) result["__vibris_preset"] = original.at("__vibris_preset");
     result["source"] = spec.at("source");
     if (!spec.at("config").is_null()) result["config"] = spec.at("config");
     result["__vibris_case_id"] = spec.at("case_id");
@@ -213,6 +251,7 @@ Json pending_case(const Json& spec, const Json& arguments, const std::uint32_t d
                 {"frames", arguments.at("frames")},
                 {"warmup_frames", arguments.value("warmup_frames", default_warmup)},
                 {"metrics", nullptr},
+                {"provenance", nullptr},
                 {"attempt_count", spec.at("pending_attempts").size()},
                 {"retry_exhausted", false},
                 {"attempts", spec.at("pending_attempts")}};
@@ -227,7 +266,8 @@ bool terminal_workflow(std::string_view state) {
 
 ProfileMatrixWorkflow::ProfileMatrixWorkflow(
     fs::path workspace_root, std::string workspace_id, ProfileMatrixCaseExecutor executor)
-    : state_directory_(std::move(workspace_root) / ".vibris" / "profile-matrix"),
+    : workspace_root_(fs::absolute(workspace_root).lexically_normal()),
+      state_directory_(workspace_root_ / ".vibris" / "profile-matrix"),
       workspace_id_(std::move(workspace_id)), executor_(std::move(executor)) {
     if (!detail::is_uuid(workspace_id_) || !executor_) {
         throw std::invalid_argument("invalid profile matrix workflow configuration");
@@ -242,6 +282,8 @@ Json ProfileMatrixWorkflow::create_checkpoint(const Json& arguments, const Sessi
     Json stored_arguments = arguments;
     stored_arguments.erase("execution");
     const auto job_id = detail::generate_uuid();
+    stored_arguments["sources"] = freeze_sources(
+        workspace_root_, state_directory_, job_id, stored_arguments.at("sources"));
     auto specs = case_specs(stored_arguments);
     return {{"schema_version", 1},
             {"workspace_id", workspace_id_},

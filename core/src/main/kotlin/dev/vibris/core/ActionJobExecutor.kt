@@ -50,7 +50,8 @@ internal class ActionJobExecutor(
                         when (step.type) {
                             CaptureProgramBuilder.ActionType.LOAD -> {
                                 val load = step.loadShader!!
-                                reload = load(job, load, progress, deadline)
+                                val loaded = load(job, load, progress, deadline)
+                                reload = loaded.reload
                                 diagnostics.addAll(reload.diagnostics)
                                 prepared?.addDiagnostics(reload.diagnostics)
                                 val inspection = inspectShader(job, deadline)
@@ -61,6 +62,7 @@ internal class ActionJobExecutor(
                                         load,
                                         reload,
                                         inspection,
+                                        BenchmarkProvenance.create(job, load, loaded, inspection),
                                         null,
                                     ),
                                 )
@@ -127,6 +129,7 @@ internal class ActionJobExecutor(
                                 load,
                                 null,
                                 null,
+                                null,
                                 failure,
                             ),
                         )
@@ -137,7 +140,15 @@ internal class ActionJobExecutor(
                         val input = job.submission.actions.getActions(step.actionIndex)
                         val failure = RuntimeJobExecutor.Failure(ErrorCode.INTERNAL_ERROR, exception.message)
                         actionResults.add(
-                            actionResult(step.actionIndex, RuntimeActionProtocol.kind(input), load, null, null, failure),
+                            actionResult(
+                                step.actionIndex,
+                                RuntimeActionProtocol.kind(input),
+                                load,
+                                null,
+                                null,
+                                null,
+                                failure,
+                            ),
                         )
                         caseFailed = true
                     }
@@ -195,7 +206,7 @@ internal class ActionJobExecutor(
         load: dev.vibris.protocol.v1.LoadShader,
         progress: Consumer<JobStage>,
         deadline: Long,
-    ): ReloadResult {
+    ): RuntimeJobExecutor.LoadResult {
         val source = job.sources.firstOrNull { it.uuid().equals(load.sourceUuid, ignoreCase = true) }
             ?: throw RuntimeJobExecutor.Failure(
                 ErrorCode.INVALID_SOURCE_UUID,
@@ -210,6 +221,7 @@ internal class ActionJobExecutor(
         load: dev.vibris.protocol.v1.LoadShader,
         reload: ReloadResult?,
         inspection: JsonObject?,
+        provenance: JsonObject?,
         failure: RuntimeJobExecutor.Failure?,
     ): ActionResult {
         val reloadDiagnostics = reload?.diagnostics ?: failure?.diagnostics.orEmpty()
@@ -219,6 +231,7 @@ internal class ActionJobExecutor(
             put("source", load.sourceId)
             put("config", load.configId)
             inspection?.forEach { (key, value) -> put(key, value) }
+            provenance?.let { put("provenance", it) }
             put("diagnostics", buildJsonArray {
                 reloadDiagnostics.forEach { diagnostic ->
                     add(buildJsonObject {

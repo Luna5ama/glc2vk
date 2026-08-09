@@ -27,26 +27,33 @@ bool complete(const proto::SceneContext& context) {
 
 }
 
-proto::SceneContext SceneContextResolver::resolve(
+proto::ScenePreset SceneContextResolver::resolve_preset(
     const SessionConfig& config, const proto::ListPresetsResponse& response) {
-    const proto::SceneContext* match = nullptr;
+    const proto::ScenePreset* match = nullptr;
     for (const auto& preset : response.presets()) {
         if (!matches(config, preset.context())) continue;
         if (match == nullptr) {
-            match = &preset.context();
+            match = &preset;
             continue;
         }
-        const bool current_default = match->settings_preset_id() == "default";
+        const bool current_default = match->context().settings_preset_id() == "default";
         const bool candidate_default = preset.context().settings_preset_id() == "default";
         if (current_default != candidate_default) {
-            if (candidate_default) match = &preset.context();
+            if (candidate_default) match = &preset;
             continue;
         }
         invalid("The configured scene matches multiple server presets.");
     }
     if (match == nullptr) invalid("The configured scene does not match a server preset.");
-    if (!complete(*match)) invalid("The matched server preset has an incomplete scene context.");
+    if (!complete(match->context()) || match->preset_id().empty() || match->version().empty()) {
+        invalid("The matched server preset has incomplete provenance.");
+    }
     return *match;
+}
+
+proto::SceneContext SceneContextResolver::resolve(
+    const SessionConfig& config, const proto::ListPresetsResponse& response) {
+    return resolve_preset(config, response).context();
 }
 
 }

@@ -96,12 +96,15 @@ void promote(Destination& destination) {
 }
 
 control::v1::PreparedSourceRef workspace_reference(
-    std::string_view uuid, const fs::path& worktree, const WorkspaceMetadata& metadata) {
+    std::string_view uuid, const fs::path& worktree, std::string_view resolved_revision,
+    const WorkspaceMetadata& metadata) {
     control::v1::PreparedSourceRef reference;
     reference.set_uuid(uuid);
     reference.set_file_count(metadata.file_count);
     reference.set_total_bytes(metadata.total_bytes);
     reference.mutable_origin()->mutable_workspace()->set_display_name(worktree.filename().string());
+    reference.set_requested_revision("workspace");
+    reference.set_resolved_revision(resolved_revision);
     return reference;
 }
 
@@ -117,6 +120,8 @@ control::v1::PreparedSourceRef commit_reference(
     auto* origin = reference.mutable_origin()->mutable_commit();
     origin->set_repository_id(worktree.filename().string());
     origin->set_revision(resolved_revision);
+    reference.set_requested_revision(resolved_revision);
+    reference.set_resolved_revision(resolved_revision);
     return reference;
 }
 
@@ -155,7 +160,7 @@ PreparedSource SourcePreparer::prepare_workspace() const {
             }
             const auto resolved_revision = GitRepository(workspace_root_).resolve_commit("HEAD");
             promote(destination);
-            auto reference = workspace_reference(destination.uuid, workspace_root_, after);
+            auto reference = workspace_reference(destination.uuid, workspace_root_, resolved_revision, after);
             PreparedSource prepared(
                 std::move(reference), destination.staging.path(), {}, attempt, {}, resolved_revision);
             destination.staging.release();
@@ -185,6 +190,7 @@ PreparedSource SourcePreparer::prepare_commit(std::string_view revision) const {
     }
     promote(destination);
     auto reference = commit_reference(destination.uuid, workspace_root_, resolved_revision, metadata);
+    reference.set_requested_revision(revision);
     PreparedSource prepared(
         std::move(reference),
         destination.staging.path(),
@@ -192,6 +198,29 @@ PreparedSource SourcePreparer::prepare_commit(std::string_view revision) const {
         1,
         std::string(revision),
         resolved_revision);
+    destination.staging.release();
+    return prepared;
+}
+
+PreparedSource SourcePreparer::prepare_snapshot(
+    const fs::path& snapshot_root, const control::v1::PreparedSourceRef& provenance) const {
+    SourcePathPolicy{}.require_no_reparse_ancestry(snapshot_root, snapshot_root);
+    const auto before = enumerate_workspace_tree(snapshot_root, limits_);
+    if (before.file_count != provenance.file_count() || before.total_bytes != provenance.total_bytes()) {
+        throw StateError(kChangedCode, "The queued source snapshot no longer matches its checkpoint.", false);
+    }
+    auto destination = create_destination(pending_root_);
+    workspace_copier_(snapshot_root, destination.staging.path());
+    const auto after = enumerate_workspace_tree(snapshot_root, limits_);
+    if (before != after) {
+        throw StateError(kChangedCode, "The queued source snapshot changed while it was materialized.", false);
+    }
+    promote(destination);
+    auto reference = provenance;
+    reference.set_uuid(destination.uuid);
+    PreparedSource prepared(
+        std::move(reference), destination.staging.path(), {}, 1,
+        provenance.requested_revision(), provenance.resolved_revision());
     destination.staging.release();
     return prepared;
 }

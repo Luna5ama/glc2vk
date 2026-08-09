@@ -51,6 +51,7 @@ private:
     void finish_active(std::string_view job_id) noexcept;
     void reap_finished();
 
+    std::filesystem::path workspace_root_;
     std::filesystem::path state_directory_;
     std::string workspace_id_;
     ProfileMatrixCaseExecutor executor_;

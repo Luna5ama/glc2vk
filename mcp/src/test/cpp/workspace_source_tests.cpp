@@ -46,6 +46,8 @@ void workspace_snapshot_tracked_untracked_ignored_and_retry() {
         require(reference.file_count() == expected_files, "PreparedSourceRef did not use the second file count.");
         require(reference.total_bytes() == expected_bytes, "PreparedSourceRef did not use the second byte count.");
         require(reference.origin().has_workspace(), "Prepared source did not record workspace origin.");
+        require(reference.requested_revision() == "workspace" && reference.resolved_revision().size() == 40,
+            "PreparedSourceRef omitted the requested workspace revision or resolved full commit.");
         require(prepared.resolved_revision().size() == 40,
             "Prepared workspace source did not retain its full HEAD revision.");
         require(owned_directory == fixture.pending() / reference.uuid(), "Prepared source used the wrong final path.");
@@ -157,14 +159,34 @@ void source_soak() {
     }
 }
 
+void queued_snapshot_materializes_with_stable_provenance() {
+    WorkspaceFixture fixture;
+    vibris::mcp::test::TempDirectory server_pending("queued-snapshot-server");
+    SourcePreparer freezer(fixture.worktree(), fixture.pending(), generous_limits());
+    auto frozen = freezer.prepare_workspace();
+    vibris::mcp::test::write_file(fixture.live_file(), "changed-after-queue");
+    SourcePreparer materializer(fixture.worktree(), server_pending.path(), generous_limits());
+
+    auto materialized = materializer.prepare_snapshot(frozen.directory(), frozen.reference());
+
+    require(materialized.reference().uuid() != frozen.reference().uuid(),
+        "Queued snapshot materialization reused the checkpoint source UUID.");
+    require(materialized.reference().requested_revision() == frozen.reference().requested_revision() &&
+            materialized.reference().resolved_revision() == frozen.reference().resolved_revision(),
+        "Queued snapshot materialization changed revision provenance.");
+    require(read_file(materialized.directory() / "lib" / "live.glsl") != read_file(fixture.live_file()),
+        "Queued snapshot materialization reread the mutable workspace.");
+}
+
 using TestCase = std::pair<std::string_view, void (*)()>;
-constexpr std::array<TestCase, 6> test_cases {{
+constexpr std::array<TestCase, 7> test_cases {{
     {"WorkspaceSnapshotTrackedUntrackedIgnoredAndRetry", workspace_snapshot_tracked_untracked_ignored_and_retry},
     {"StagingPromotion", staging_promotion},
     {"MutationTwiceFails", mutation_twice_fails},
     {"MissingPendingRootRejected", missing_pending_root_is_rejected},
     {"CheckedFileSwapDoesNotReadReparseTarget", checked_file_swap_does_not_read_reparse_target},
     {"SourceSoak", source_soak},
+    {"QueuedSnapshotMaterializesWithStableProvenance", queued_snapshot_materializes_with_stable_provenance},
 }};
 
 } // namespace

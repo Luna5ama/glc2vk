@@ -53,7 +53,7 @@ class VibrisPresetCatalog private constructor(
     @Synchronized
     fun presets(): List<ScenePreset> = values.values
         .sortedBy { it.id }
-        .map { ScenePreset(it.id, it.id, it.context()) }
+        .map { ScenePreset(it.id, it.id, it.context(), SCHEMA_VERSION.toString()) }
 
     @Synchronized
     fun validate(context: SceneContext): ContextValidationResult = try {
@@ -147,12 +147,16 @@ class VibrisPresetCatalog private constructor(
     }
 
     companion object {
+        private const val SCHEMA_VERSION = 2
+
         @JvmStatic
         @Throws(IOException::class)
         fun load(path: Path): VibrisPresetCatalog {
             try {
                 val root = Json.parseToJsonElement(Files.readString(path)) as JsonObject
-                if (integer(root, "schema_version") != 2) throw IOException("Unsupported Vibris preset schema")
+                if (integer(root, "schema_version") != SCHEMA_VERSION) {
+                    throw IOException("Unsupported Vibris preset schema")
+                }
                 val presets = HashMap<String, Preset>()
                 for (element in array(root, "presets")) {
                     val value = element as JsonObject
@@ -202,7 +206,7 @@ class VibrisPresetCatalog private constructor(
         @OptIn(ExperimentalSerializationApi::class)
         private fun write(path: Path, presets: Map<String, Preset>) {
             val root = buildJsonObject {
-                put("schema_version", JsonPrimitive(2))
+                put("schema_version", JsonPrimitive(SCHEMA_VERSION))
                 put("presets", buildJsonArray {
                     for (preset in presets.values.sortedBy { it.id }) add(buildJsonObject {
                         put("id", JsonPrimitive(preset.id))

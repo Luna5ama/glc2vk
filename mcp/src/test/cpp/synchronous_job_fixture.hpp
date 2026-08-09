@@ -288,7 +288,9 @@ private:
                     action_result->set_json(Json{{"success", true},
                                                 {"case_id", load.case_id()},
                                                 {"source", load.source_id()},
-                                                {"config", load.config_id()}}.dump());
+                                                {"config", load.config_id()},
+                                                {"provenance", {{"complete", true},
+                                                                {"case_hash", "fixture-case-hash"}}}}.dump());
                     continue;
                 }
                 if (!action.has_get_gpu_metrics()) continue;

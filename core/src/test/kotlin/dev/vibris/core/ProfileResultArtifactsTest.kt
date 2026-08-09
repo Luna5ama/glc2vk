@@ -36,7 +36,17 @@ class ProfileResultArtifactsTest {
             ActionResult.newBuilder()
                 .setActionIndex(0)
                 .setKind(JobActionKind.JOB_ACTION_KIND_LOAD_SHADER)
-                .setJson("""{"success":true,"case_id":"dev--spawn","source":"dev","config":"spawn"}""")
+                .setJson(
+                    """
+                    {
+                      "success": true,
+                      "case_id": "dev--spawn",
+                      "source": "dev",
+                      "config": "spawn",
+                      "provenance": {"complete": true, "case_hash": "hash"}
+                    }
+                    """.trimIndent(),
+                )
                 .build(),
             ActionResult.newBuilder()
                 .setActionIndex(2)
@@ -77,6 +87,7 @@ class ProfileResultArtifactsTest {
         assertEquals(7_000.0, composite.getValue("avg_us").jsonPrimitive.double)
         assertEquals(7.0, composite.getValue("avg_ms").jsonPrimitive.double)
         assertEquals("passed", case.getValue("status").jsonPrimitive.content)
+        assertEquals("hash", case.getValue("provenance").jsonObject.getValue("case_hash").jsonPrimitive.content)
         assertEquals(2, document.getValue("attempt").jsonPrimitive.content.toInt())
         assertEquals(
             "NO_GPU_SAMPLES",

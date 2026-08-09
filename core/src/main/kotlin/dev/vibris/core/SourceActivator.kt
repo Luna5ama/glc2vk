@@ -75,6 +75,10 @@ internal class SourceActivator(
     fun verifyActiveSource() {
         try {
             link.retainsActiveSource()
+            sources.requireActiveOwned()
+        } catch (failure: SourceRegistry.Failure) {
+            ready = false
+            throw Failure(ErrorCode.SOURCE_ACTIVATION_FAILED, failure.message, failure)
         } catch (failure: ShaderLink.Failure) {
             ready = false
             throw Failure(ErrorCode.SYMLINK_SWITCH_FAILED, failure.message, failure)

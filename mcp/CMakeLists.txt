@@ -268,6 +268,7 @@ if(BUILD_TESTING)
             MutationTwiceFails
             MissingPendingRootRejected
             CheckedFileSwapDoesNotReadReparseTarget
+            QueuedSnapshotMaterializesWithStableProvenance
             SourceSoak)
         add_test(NAME ${scenario} COMMAND vibris-workspace-source-tests ${scenario})
     endforeach()

@@ -292,6 +292,10 @@ void distinct_uuid_without_dedup() {
 
     // Then: each preparation owns an independent UUID directory without hash reuse or deduplication.
     require(first.reference().uuid() != second.reference().uuid(), "Identical commits reused a source UUID.");
+    require(first.reference().requested_revision() == "HEAD" &&
+            first.reference().resolved_revision().size() == 40 &&
+            first.reference().resolved_revision() == first.reference().origin().commit().revision(),
+        "Commit provenance omitted the requested revision or resolved full commit.");
     require(first.directory() != second.directory(), "Identical commits reused a source directory.");
     require(fs::is_regular_file(first.directory() / "main.glsl"), "The first source was not retained.");
     require(fs::is_regular_file(second.directory() / "main.glsl"), "The second source was not retained.");

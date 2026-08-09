@@ -254,9 +254,24 @@ product under the same scene preset. Both recipes return the same top-level cont
 `profile` is represented by one `source--config` case.
 
 Every case always contains `case_id`, `source_id`, `config_id`, `status`, `error`, `frames`,
-`warmup_frames`, and `metrics`. The top level declares `gpu_timing_unit: "ns"` and reports requested, completed,
-with-metrics, missing, failed, retried, passed, and incomplete counts. Empty GPU samples produce a retryable
-`NO_GPU_SAMPLES` case error instead of a passed result.
+`warmup_frames`, `metrics`, and `provenance`. The top level declares `gpu_timing_unit: "ns"` and reports
+requested, completed, with-metrics, missing, failed, retried, passed, and incomplete counts. Empty GPU samples
+produce a retryable `NO_GPU_SAMPLES` case error instead of a passed result.
+
+Successful measurements require `provenance.complete: true`. The provenance receipt includes:
+
+- `source`: workspace/commit kind, requested revision, resolved 40-character commit, immutable source-tree SHA-256,
+  active source UUID, file/byte counts, and a stable source identity hash.
+- `shader`: explicit effective settings, config SHA-256, and the actual Iris patched-shader output SHA-256,
+  generation, file count, and byte count.
+- `scene`: the full effective save, dimension, time, weather, camera, FOV, resolution, and settings preset, plus
+  context SHA-256, preset ID/version/display name, and preset SHA-256.
+- `case_hash`: a stable SHA-256 over the source, config, scene, preset, and patched-shader identities.
+
+The active source UUID and patched-shader generation remain diagnostic activation receipts and are deliberately
+excluded from `case_hash`, so an identical retry/resume keeps the same case identity. A different source tree,
+effective config, scene, preset, or patched shader changes the case hash. Missing runtime proof returns
+`INCOMPLETE_PROVENANCE`; the case is `incomplete`, never passed.
 
 Profile requests accept an optional `result_detail`:
 
@@ -294,8 +309,11 @@ Each final case contains `attempt_count`, `retry_exhausted`, and a compact order
 attempt. Result artifacts from every terminal attempt are retained in the top-level `artifacts` array and annotated
 with their attempt number and case IDs. Retry artifacts also embed prior attempt diagnostics in `profile-result.json`.
 
-Every matrix has a durable `job_id` and a workspace-local checkpoint at
-`.vibris/profile-matrix/<job_id>.json`. The default `execution: "sync"` preserves the blocking call behavior. Set
+Every matrix has a durable `job_id`, a workspace-local checkpoint at `.vibris/profile-matrix/<job_id>.json`, and
+queue-time source snapshots below `.vibris/profile-matrix/<job_id>/sources/`. Workspace and commit sources are frozen
+once before the first case; later cases, retries, and MCP restart recovery materialize fresh server-owned UUIDs from
+those snapshots instead of rereading the mutable workspace. The full resolved scene and preset identity are stored in
+the same checkpoint. The default `execution: "sync"` preserves the blocking call behavior. Set
 `execution: "async"` to return immediately, then use the same recipe with one of these control forms:
 
 ```json
@@ -583,6 +601,7 @@ and the artifact quota. A noisy repository can therefore consume shared admissio
 | `SOURCE_CONTAINS_REPARSE_POINT` | Replace links/junctions with ordinary files and directories. |
 | `QUEUE_FULL` | Wait for current work; pending calls, source registry, and job queue are bounded. |
 | `NO_GPU_SAMPLES` | The profile case returned no non-empty GPU timing set; retry it or inspect runtime readiness. |
+| `INCOMPLETE_PROVENANCE` | Source, config, scene, or patched-shader identity is incomplete; do not compare. |
 | `CAPTURE_RESOURCE_NOT_FOUND` | Choose a logical name from `vibris_get_status.resource_catalog`. |
 | `ARTIFACT_JOB_TOO_LARGE` / `ARTIFACT_QUOTA_EXCEEDED` | Reduce captures or allow reported jobs to become evictable. |
 

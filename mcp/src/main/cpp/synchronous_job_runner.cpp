@@ -235,6 +235,14 @@ Json no_gpu_samples_error(std::string_view case_id, std::string_view reason) {
             {"details", {{"case_id", case_id}, {"reason", reason}}}};
 }
 
+Json incomplete_provenance_error(std::string_view case_id) {
+    return {{"success", false},
+            {"error_code", "INCOMPLETE_PROVENANCE"},
+            {"message", "Benchmark provenance did not prove the complete measured state."},
+            {"retryable", false},
+            {"details", {{"case_id", case_id}}}};
+}
+
 struct ProfileCounts final {
     std::size_t requested = 0;
     std::size_t passed = 0;
@@ -271,11 +279,16 @@ void append_profile_case(const Json& job, Json& cases, ProfileCounts& counts, co
     Json action_results = Json::array();
     Json metrics = nullptr;
     Json error = nullptr;
+    Json provenance = nullptr;
     bool metrics_seen = false;
     for (const auto& action : job.at("action_results")) {
         const auto index = action.at("action_index").get<std::size_t>();
         if (index < first_action || index >= last_action) continue;
         if (failed_action(action) && error.is_null()) error = action.at("result");
+        if (action.at("kind") == "load_shader" && action.at("result").is_object()) {
+            const auto found = action.at("result").find("provenance");
+            if (found != action.at("result").end()) provenance = *found;
+        }
         if (action.at("kind") == "get_gpu_metrics") {
             metrics_seen = true;
             if (has_gpu_samples(action.at("result"))) metrics = action.at("result");
@@ -289,9 +302,10 @@ void append_profile_case(const Json& job, Json& cases, ProfileCounts& counts, co
 
     ++counts.requested;
     const bool has_metrics = !metrics.is_null();
+    const bool has_provenance = provenance.is_object() && provenance.value("complete", false);
     if (has_metrics) ++counts.with_metrics;
     const bool failed = !error.is_null();
-    const bool incomplete = !failed && !has_metrics;
+    const bool incomplete = !failed && (!has_metrics || !has_provenance);
     const char* status = "passed";
     if (failed) {
         ++counts.failed;
@@ -299,7 +313,7 @@ void append_profile_case(const Json& job, Json& cases, ProfileCounts& counts, co
     } else if (incomplete) {
         ++counts.incomplete;
         status = "incomplete";
-        error = no_gpu_samples_error(
+        error = has_metrics ? incomplete_provenance_error(case_id) : no_gpu_samples_error(
             case_id, metrics_seen ? "empty_gpu_timings" : "missing_gpu_metrics_action");
     } else {
         ++counts.passed;
@@ -313,7 +327,8 @@ void append_profile_case(const Json& job, Json& cases, ProfileCounts& counts, co
               {"error", std::move(error)},
               {"frames", arguments.at("frames")},
               {"warmup_frames", warmup_frames},
-              {"metrics", std::move(visible_metrics)}};
+              {"metrics", std::move(visible_metrics)},
+              {"provenance", std::move(provenance)}};
     if (full) {
         item["action_results"] = std::move(action_results);
         item["artifacts"] = case_artifacts(job, item.at("case_id").get<std::string>(), matrix);
@@ -520,7 +535,8 @@ Json failed_profile_case(
             {"error", std::move(error)},
             {"frames", arguments.at("frames")},
             {"warmup_frames", arguments.value("warmup_frames", default_warmup)},
-            {"metrics", nullptr}};
+            {"metrics", nullptr},
+            {"provenance", nullptr}};
 }
 
 const Json* find_profile_case(const Json& result, std::string_view case_id) {
@@ -582,6 +598,7 @@ Json retry_arguments(const Json& arguments, const ProfileCaseState& state, std::
     for (const auto* field : copied_fields) {
         if (arguments.contains(field)) result[field] = arguments.at(field);
     }
+    if (arguments.contains("__vibris_preset")) result["__vibris_preset"] = arguments.at("__vibris_preset");
     if (!state.spec.source.is_null()) result["source"] = state.spec.source;
     if (!state.spec.config.is_null()) result["config"] = state.spec.config;
     result["__vibris_case_id"] = state.spec.case_id;

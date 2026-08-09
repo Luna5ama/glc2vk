@@ -79,6 +79,11 @@ internal object ProfileResultArtifacts {
                 val related = orderedResults.filter { it.actionIndex >= firstAction && it.actionIndex < lastAction }
                 val parsed = related.map { it to parse(it.json) }
                 val failure = parsed.firstOrNull { (_, payload) -> isFailed(payload) }?.second
+                val provenance = parsed.firstOrNull { (result, _) ->
+                    result.kind == JobActionKind.JOB_ACTION_KIND_LOAD_SHADER
+                }?.second?.let { payload -> (payload as? JsonObject)?.get("provenance") }
+                val provenanceComplete = ((provenance as? JsonObject)?.get("complete") as? JsonPrimitive)
+                    ?.content == "true"
                 val metricResult = parsed.firstOrNull { (result, payload) ->
                     result.kind == JobActionKind.JOB_ACTION_KIND_GET_GPU_METRICS && hasGpuSamples(payload)
                 }?.second
@@ -94,10 +99,11 @@ internal object ProfileResultArtifacts {
                         status = "failed"
                         error = failure
                     }
-                    metricResult == null -> {
+                    metricResult == null || !provenanceComplete -> {
                         ++incomplete
                         status = "incomplete"
-                        error = noGpuSamples(load.caseId, metricsSeen)
+                        error = if (metricResult == null) noGpuSamples(load.caseId, metricsSeen)
+                            else incompleteProvenance(load.caseId)
                     }
                     else -> {
                         ++passed
@@ -126,6 +132,7 @@ internal object ProfileResultArtifacts {
                             convertedMetrics(it, submission.resultArtifacts.convertedUnitsList.toSet())
                         } ?: JsonNull,
                     )
+                    put("provenance", provenance ?: JsonNull)
                     put("action_results", buildJsonArray {
                         parsed.filter { (result, _) ->
                             result.kind != JobActionKind.JOB_ACTION_KIND_GET_GPU_METRICS
@@ -265,6 +272,14 @@ internal object ProfileResultArtifacts {
             put("case_id", caseId)
             put("reason", if (metricsSeen) "empty_gpu_timings" else "missing_gpu_metrics_action")
         })
+    }
+
+    private fun incompleteProvenance(caseId: String): JsonObject = buildJsonObject {
+        put("success", false)
+        put("error_code", "INCOMPLETE_PROVENANCE")
+        put("message", "Benchmark provenance did not prove the complete measured state.")
+        put("retryable", false)
+        put("details", buildJsonObject { put("case_id", caseId) })
     }
 
     private fun write(transaction: ArtifactManager.JobTransaction, name: String, value: String) {

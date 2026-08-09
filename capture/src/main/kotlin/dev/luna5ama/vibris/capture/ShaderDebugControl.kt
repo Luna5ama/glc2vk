@@ -21,6 +21,9 @@ class ShaderDebugControl constructor(
     private val passStack: ThreadLocal<ArrayDeque<String>> = ThreadLocal.withInitial { ArrayDeque() }
     private val timingStack: ThreadLocal<ArrayDeque<Boolean>> = ThreadLocal.withInitial { ArrayDeque() }
     private val metrics = GpuTimingMetrics()
+    private val identityLock = Any()
+    private var patchedShaderSha256 = ""
+    private var patchedShaderGeneration = 0L
 
     fun status(): JsonObject = try {
         val pack = host.shaderPackName()
@@ -37,7 +40,9 @@ class ShaderDebugControl constructor(
         }
     }
 
-    fun inspect(): JsonObject = JsonObject(status() + ("errors" to errorJson()))
+    fun inspect(): JsonObject = JsonObject(
+        status() + ("errors" to errorJson()) + ("patched_shader" to patchedShaderIdentity()),
+    )
 
     fun reload(): JsonObject {
         clearErrors()
@@ -188,6 +193,35 @@ class ShaderDebugControl constructor(
                 put("numeric_class", texture.numericClass)
                 put("component_bits", texture.componentBits)
             })
+        }
+    }
+
+    private fun patchedShaderIdentity(): JsonObject {
+        if (!host.debugShadersEnabled()) return buildJsonObject {
+            put("available", false)
+            put("reason", "debug_shaders_disabled")
+        }
+        return try {
+            val identity = PatchedShaderCapture.identity(host)
+            val generation = synchronized(identityLock) {
+                if (identity.sha256 != patchedShaderSha256) {
+                    patchedShaderSha256 = identity.sha256
+                    ++patchedShaderGeneration
+                }
+                patchedShaderGeneration
+            }
+            buildJsonObject {
+                put("available", true)
+                put("sha256", identity.sha256)
+                put("generation", generation)
+                put("file_count", identity.fileCount)
+                put("total_bytes", identity.totalBytes)
+            }
+        } catch (exception: Exception) {
+            buildJsonObject {
+                put("available", false)
+                put("reason", exception.message ?: "patched_shader_identity_failed")
+            }
         }
     }
 

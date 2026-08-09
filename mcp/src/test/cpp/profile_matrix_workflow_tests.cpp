@@ -22,6 +22,7 @@ using vibris::mcp::SessionConfig;
 using vibris::mcp::ToolFailure;
 using vibris::mcp::ToolOutcome;
 using vibris::mcp::test::TempDirectory;
+using vibris::mcp::test::WorkspaceFixture;
 using namespace std::chrono_literals;
 
 constexpr std::string_view workspace_id = "11111111-2222-4333-8444-555555555555";
@@ -52,12 +53,21 @@ Json matrix(std::size_t count, std::string execution = "sync") {
             {"sources", Json::array({{{"id", "source"}, {"kind", "workspace"}}})},
             {"configs", std::move(configs)},
             {"matrix", {{"sources", Json::array({"source"})}, {"configs", std::move(axis)}}},
+            {"__vibris_scene_context", {{"save_id", "shader-test-world"},
+                {"dimension_id", "minecraft:overworld"}, {"time_preset_id", "noon"},
+                {"weather_preset_id", "clear"}, {"camera_preset_id", "spawn"}, {"fov", 70.0},
+                {"resolution", {{"width", 1920}, {"height", 1080}}},
+                {"settings_preset_id", "quality"}}},
+            {"__vibris_preset", {{"preset_id", "spawn"}, {"version", "2"}, {"display_name", "Spawn"}}},
             {"warmup_frames", 4},
             {"frames", 16},
             {"execution", std::move(execution)}};
 }
 
 ToolOutcome success(ProfileMatrixCaseExecution& execution) {
+    require(execution.arguments.at("__vibris_scene_context").at("resolution").at("width") == 1920 &&
+            execution.arguments.at("__vibris_preset").at("version") == "2",
+        "A profile case did not retain its queue-time scene and preset provenance.");
     const auto case_id = execution.arguments.at("__vibris_case_id").get<std::string>();
     const auto source_id = execution.arguments.at("__vibris_source_id").get<std::string>();
     const auto config_id = execution.arguments.at("__vibris_config_id").get<std::string>();
@@ -102,10 +112,10 @@ ToolOutcome interrupted(ProfileMatrixCaseExecution& execution) {
 }
 
 void interruption_after_17_resumes_at_18() {
-    TempDirectory root("profile-checkpoint-38");
+    WorkspaceFixture workspace;
     std::vector<std::string> successful;
     std::size_t calls = 0;
-    ProfileMatrixWorkflow first(root.path(), std::string(workspace_id),
+    ProfileMatrixWorkflow first(workspace.worktree(), std::string(workspace_id),
         [&](ProfileMatrixCaseExecution execution) -> ToolOutcome {
             ++calls;
             execution.progress("request-" + std::to_string(calls), "loading", false);
@@ -120,6 +130,14 @@ void interruption_after_17_resumes_at_18() {
         });
     const auto paused = std::get<Json>(first.start(matrix(38), config()));
     const auto job_id = paused.at("job_id").get<std::string>();
+    const auto snapshots = workspace.worktree() / ".vibris" / "profile-matrix" / job_id / "sources";
+    std::filesystem::path frozen_live;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(snapshots)) {
+        if (entry.path().filename() == "live.glsl") frozen_live = entry.path();
+    }
+    require(!frozen_live.empty() && vibris::mcp::test::read_file(frozen_live) == "live-0",
+        "The profile source was not frozen when the matrix was queued.");
+    vibris::mcp::test::write_file(workspace.live_file(), "mutated-after-queue");
     require(paused.at("workflow_state") == "paused" && paused.at("receipt_count") == 17 &&
             paused.at("progress").at("completed_cases") == 17 &&
             paused.at("progress").at("current_case_number") == 18,
@@ -128,7 +146,7 @@ void interruption_after_17_resumes_at_18() {
     std::size_t resumed_calls = 0;
     std::optional<std::string> resumed_request;
     std::size_t resumed_previous_attempts = 0;
-    ProfileMatrixWorkflow restarted(root.path(), std::string(workspace_id),
+    ProfileMatrixWorkflow restarted(workspace.worktree(), std::string(workspace_id),
         [&](ProfileMatrixCaseExecution execution) -> ToolOutcome {
             ++resumed_calls;
             if (resumed_calls == 1) {
@@ -149,6 +167,8 @@ void interruption_after_17_resumes_at_18() {
             completed.at("progress").at("stage") == "completed" && resumed_calls == 21 &&
             resumed_request == "request-18" && resumed_previous_attempts == 0,
         "The restarted workflow did not resume exactly at case 18.");
+    require(vibris::mcp::test::read_file(frozen_live) == "live-0",
+        "Resume reread the mutable workspace instead of the queued source snapshot.");
     std::unordered_map<std::string, std::size_t> counts;
     for (const auto& id : successful) ++counts[id];
     require(counts.size() == 38 && std::ranges::all_of(counts, [](const auto& item) { return item.second == 1; }),
@@ -161,13 +181,13 @@ void interruption_after_17_resumes_at_18() {
 }
 
 void async_status_cancel_and_resume_preserve_receipts() {
-    TempDirectory root("profile-checkpoint-cancel");
+    WorkspaceFixture workspace;
     std::mutex mutex;
     std::condition_variable ready;
     bool blocked = false;
     bool block_once = true;
     std::unordered_map<std::string, std::size_t> successful;
-    ProfileMatrixWorkflow workflow(root.path(), std::string(workspace_id),
+    ProfileMatrixWorkflow workflow(workspace.worktree(), std::string(workspace_id),
         [&](ProfileMatrixCaseExecution execution) -> ToolOutcome {
             const auto id = execution.arguments.at("__vibris_case_id").get<std::string>();
             execution.progress("request-" + id, "loading", false);

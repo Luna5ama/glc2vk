@@ -85,6 +85,19 @@ class SourceRegistrySecurityTest {
     }
 
     @Test
+    void reservationHashesTheExactTransferredContent() throws Exception {
+        Path pending = Files.createDirectory(temp.resolve("pending-content-mutation"));
+        PreparedSourceRef reference = source(pending);
+        SourceRegistry registry = new SourceRegistry(pending, new CoreProbe());
+        List<SourceRegistry.Candidate> candidates = registry.validate(List.of(reference));
+        Files.writeString(pending.resolve(reference.getUuid()).resolve("main.glsl"), "x".repeat(36));
+
+        SourceRegistry.Lease lease = registry.reserve(candidates).getFirst();
+
+        assertEquals(64, lease.snapshotSha256().length());
+    }
+
+    @Test
     void cleanupDoesNotFollowPendingRootReplacedAfterReservation() throws Exception {
         Path pending = Files.createDirectory(temp.resolve("pending-reserved"));
         String uuid = UUID.randomUUID().toString();
@@ -134,6 +147,20 @@ class SourceRegistrySecurityTest {
         assertEquals(second.uuid(), registry.activeUuid());
         registry.release(List.of(second), false);
         assertFalse(Files.exists(second.directory()));
+    }
+
+    @Test
+    void activeContentMutationInvalidatesSnapshotReceipt() throws Exception {
+        Path pending = Files.createDirectory(temp.resolve("pending-active-mutation"));
+        SourceRegistry registry = new SourceRegistry(pending, new CoreProbe());
+        SourceRegistry.Lease lease = registry.reserve(registry.validate(List.of(source(pending)))).getFirst();
+        registry.accept(List.of(lease));
+        registry.commitActivation(registry.beginActivation(lease));
+        Files.writeString(lease.directory().resolve("main.glsl"), "x".repeat(36));
+
+        SourceRegistry.Failure failure = assertThrows(SourceRegistry.Failure.class, registry::requireActiveOwned);
+
+        assertEquals(ErrorCode.SOURCE_ACTIVATION_FAILED, failure.code);
     }
 
     private static PreparedSourceRef source(Path pending) throws Exception {

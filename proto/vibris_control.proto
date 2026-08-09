@@ -102,6 +102,7 @@ message ScenePreset {
     string preset_id = 1;
     string display_name = 2;
     SceneContext context = 3;
+    string version = 4;
 }
 
 message ValidateContextRequest {
@@ -217,6 +218,8 @@ message PreparedSourceRef {
     SourceOrigin origin = 2;
     uint64 file_count = 3;
     uint64 total_bytes = 4;
+    string requested_revision = 5;
+    string resolved_revision = 6;
 }
 
 message SourceOrigin {
@@ -267,6 +270,13 @@ message SubmitJob {
     ShaderConfig shader_config = 8;
     repeated NamedShaderConfig shader_configs = 9;
     ResultArtifactOptions result_artifacts = 10;
+    BenchmarkProvenance benchmark_provenance = 11;
+}
+
+message BenchmarkProvenance {
+    string preset_id = 1;
+    string preset_version = 2;
+    string preset_display_name = 3;
 }
 
 message ResultArtifactOptions {

@@ -2,12 +2,14 @@ package dev.vibris.core
 
 import dev.vibris.protocol.v1.ErrorCode
 import java.io.IOException
+import java.nio.ByteBuffer
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.attribute.BasicFileAttributes
+import java.security.MessageDigest
 
 internal class OwnedSourceTree(
     pendingRoot: Path,
@@ -35,7 +37,7 @@ internal class OwnedSourceTree(
 
     @Synchronized
     @Throws(SourceRegistry.Failure::class)
-    fun reserve(directory: Path, fileCount: Long, totalBytes: Long): Ownership {
+    fun reserve(directory: Path, fileCount: Long, totalBytes: Long): Reservation {
         requireSafePendingRoot()
         val stats = scan(directory)
         if (stats.files.toLong() != fileCount || stats.bytes != totalBytes) {
@@ -45,9 +47,12 @@ internal class OwnedSourceTree(
             )
         }
         return try {
-            Ownership(
-                checkNotNull(pendingRootIdentity),
-                OwnedPathIdentity.captureDirectory(directory),
+            Reservation(
+                Ownership(
+                    checkNotNull(pendingRootIdentity),
+                    OwnedPathIdentity.captureDirectory(directory),
+                ),
+                sha256(stats, directory),
             )
         } catch (_: IOException) {
             throw SourceRegistry.Failure(
@@ -60,6 +65,12 @@ internal class OwnedSourceTree(
     fun stillOwned(directory: Path, ownership: Ownership): Boolean {
         return ownership.rootIdentity.matchesDirectory(pendingRoot) &&
             ownership.directoryIdentity.matchesDirectory(directory)
+    }
+
+    @Throws(SourceRegistry.Failure::class)
+    fun matchesSnapshot(directory: Path, snapshotSha256: String): Boolean {
+        val stats = scan(directory)
+        return sha256(stats, directory) == snapshotSha256
     }
 
     @Throws(SourceRegistry.Failure::class)
@@ -88,7 +99,7 @@ internal class OwnedSourceTree(
                         if (!attributes.isRegularFile) {
                             throw IOException("non-ordinary source entry")
                         }
-                        stats.add(attributes.size())
+                        stats.add(path, attributes.size())
                         return FileVisitResult.CONTINUE
                     }
                 },
@@ -103,6 +114,16 @@ internal class OwnedSourceTree(
             throw SourceRegistry.Failure(ErrorCode.SOURCE_DIRECTORY_MISSING, "Prepared source is empty.")
         }
         return stats
+    }
+
+    @Throws(SourceRegistry.Failure::class)
+    private fun sha256(stats: FileStats, directory: Path): String = try {
+        stats.sha256(directory)
+    } catch (_: IOException) {
+        throw SourceRegistry.Failure(
+            ErrorCode.SOURCE_CONTAINS_REPARSE_POINT,
+            "Prepared source changed while its snapshot hash was computed.",
+        )
     }
 
     @Synchronized
@@ -146,6 +167,11 @@ internal class OwnedSourceTree(
         fun totalBytes(): Long = totalBytes
     }
 
+    data class Reservation(
+        val ownership: Ownership,
+        val snapshotSha256: String,
+    )
+
     data class Ownership(
         val rootIdentity: OwnedPathIdentity,
         val directoryIdentity: OwnedPathIdentity,
@@ -158,14 +184,46 @@ internal class OwnedSourceTree(
     private class FileStats(private val maxBytes: Long, private val maxFiles: Int) {
         var bytes = 0L
         var files = 0
+        private val paths = ArrayList<Path>()
 
         @Throws(IOException::class)
-        fun add(size: Long) {
+        fun add(path: Path, size: Long) {
             files++
             if (files > maxFiles || size > maxBytes - bytes) {
                 throw IOException("source limit exceeded")
             }
             bytes += size
+            paths.add(path)
+        }
+
+        @Throws(IOException::class)
+        fun sha256(root: Path): String {
+            val digest = MessageDigest.getInstance("SHA-256")
+            digest.update("vibris-source-tree-v1\u0000".toByteArray(Charsets.UTF_8))
+            paths.sortedBy { root.relativize(it).toString().replace('\\', '/') }.forEach { path ->
+                val relative = root.relativize(path).toString().replace('\\', '/').toByteArray(Charsets.UTF_8)
+                digest.update('F'.code.toByte())
+                digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(relative.size).array())
+                digest.update(relative)
+                val before = Files.readAttributes(path, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
+                requireOrdinary(path, before)
+                digest.update(ByteBuffer.allocate(Long.SIZE_BYTES).putLong(before.size()).array())
+                Files.newInputStream(path).use { input ->
+                    val buffer = ByteArray(1024 * 1024)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        digest.update(buffer, 0, count)
+                    }
+                }
+                val after = Files.readAttributes(path, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
+                requireOrdinary(path, after)
+                if (before.size() != after.size() || before.lastModifiedTime() != after.lastModifiedTime() ||
+                    before.fileKey() != after.fileKey()) {
+                    throw IOException("source changed while hashing")
+                }
+            }
+            return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
         }
     }
 
