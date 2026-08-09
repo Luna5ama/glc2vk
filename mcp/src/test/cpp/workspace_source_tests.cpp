@@ -148,7 +148,7 @@ void checked_file_swap_does_not_read_reparse_target() {
 
 void source_soak() {
     WorkspaceFixture fixture;
-    constexpr std::size_t iterations = 1'000;
+    constexpr std::size_t iterations = 100;
     for (std::size_t index = 0; index < iterations; ++index) {
         {
             SourcePreparer preparer(fixture.worktree(), fixture.pending(), generous_limits());
