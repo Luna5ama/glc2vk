@@ -181,6 +181,10 @@ public:
         std::scoped_lock lock(mutex_);
         return submitted_previous_attempt_counts_;
     }
+    [[nodiscard]] std::vector<bool> submitted_benchmark_cases() const {
+        std::scoped_lock lock(mutex_);
+        return submitted_benchmark_cases_;
+    }
 
 private:
     grpc::Status Control(grpc::ServerContext*,
@@ -226,10 +230,12 @@ private:
                 submitted_case_ids_.push_back(std::move(case_ids));
                 submitted_attempts_.push_back(job.result_artifacts().attempt());
                 submitted_previous_attempt_counts_.push_back(job.result_artifacts().previous_attempts_size());
+                submitted_benchmark_cases_.push_back(job.has_benchmark_case());
             }
             const bool valid = metric_actions == metric_payloads.size() && job.has_result_artifacts() &&
                 job.result_artifacts().json() && job.result_artifacts().attempt() > 0 &&
-                (job.result_artifacts().kind() == "profile" || job.result_artifacts().kind() == "profile_matrix");
+                (job.result_artifacts().kind() == "profile" || job.result_artifacts().kind() == "profile_matrix" ||
+                    job.result_artifacts().kind() == "benchmark_ab");
             valid_submit_.store(valid_submit_.load() && valid);
 
             proto::ServerMessage accepted;
@@ -293,8 +299,14 @@ private:
                                                 {"case_id", load.case_id()},
                                                 {"source", load.source_id()},
                                                 {"config", load.config_id()},
-                                                {"provenance", {{"complete", true},
-                                                                {"case_hash", "fixture-case-hash"}}}}.dump());
+                                                {"provenance", {
+                                                    {"complete", true},
+                                                    {"case_hash", "fixture-case-hash"},
+                                                    {"source", {{"identity_sha256",
+                                                        load.source_id() + "-source-hash"}}},
+                                                    {"shader", {{"config_sha256", "fixture-config-hash"}}},
+                                                    {"scene", {{"context_sha256", "fixture-scene-hash"}}},
+                                                }}}.dump());
                     continue;
                 }
                 if (!action.has_get_gpu_metrics()) continue;
@@ -338,6 +350,7 @@ private:
     std::vector<std::vector<std::string>> submitted_case_ids_;
     std::vector<std::uint32_t> submitted_attempts_;
     std::vector<std::size_t> submitted_previous_attempt_counts_;
+    std::vector<bool> submitted_benchmark_cases_;
     std::atomic_bool valid_submit_ = true;
     std::atomic<std::size_t> submit_jobs_ = 0;
     std::atomic<std::size_t> terminal_writes_ = 0;
@@ -380,6 +393,9 @@ public:
     }
     [[nodiscard]] std::vector<std::size_t> submitted_previous_attempt_counts() const {
         return service_.submitted_previous_attempt_counts();
+    }
+    [[nodiscard]] std::vector<bool> submitted_benchmark_cases() const {
+        return service_.submitted_benchmark_cases();
     }
 
     void shutdown() {

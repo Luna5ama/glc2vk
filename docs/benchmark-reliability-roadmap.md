@@ -48,7 +48,7 @@ Do not restart Minecraft or its launcher unless the user explicitly asks.
 | T07 | P0 | vibris | Isolate cases and restore state | Done | fix(core): isolate benchmark matrix cases |
 | T08 | P1 | vibris | Preserve real shader-program timing identity and source metadata | Done | feat(capture): expose program gpu timings |
 | T09 | P1 | Iris | Emit distinct program timing labels for grouped wrapper programs | Done | feat(shaderdev): expose per-program gpu timings |
-| T10 | P1 | vibris | Add interleaved repeated A/B benchmarking and noise evaluation | Pending | feat(mcp): add paired benchmark recipe |
+| T10 | P1 | vibris | Add interleaved repeated A/B benchmarking and noise evaluation | Done | feat(mcp): add paired benchmark recipe |
 | T11 | P2 | vibris | Add typed preset selection, tags, and tag filtering | Pending | feat(mcp): add typed preset filters |
 | T12 | P2 | vibris/Iris | Add deterministic visual A/B gate and final live acceptance | Pending | feat(core): add benchmark visual gate |
 
@@ -397,3 +397,12 @@ and exact commit title. The Git history is the source of truth for the resulting
   their wrapper work. Verified with `ComputeProgramTimingTest` (3/3 passed),
   `.\gradlew.bat :common:test :fabric:build --offline`, and `.\gradlew.bat build --offline`. Iris implementation
   commit: bac171f611a29909ba547f5b7da21b7f2495ab9e. Commit title: feat(shaderdev): expose per-program gpu timings.
+- 2026-08-09 - T10 - Added repeated paired performance profiling with ABBA, ABAB, or seeded balanced randomized
+  order, per-round median aggregation, same-baseline control rounds, measured p95 noise floors, paired variance and
+  Student-t confidence intervals, Tukey outlier reporting, and stable/unstable/inconclusive verdicts. Comparisons now
+  fail closed before producing a numeric table when frames, effective config/scene hashes, stable physical-source
+  identity, exact metric/program identity, or final state-restoration receipts differ. Every measurement reuses the
+  bounded profile retry path and an isolated workflow identity; results include compact executions, raw per-round
+  samples, controls, artifacts, and a comparison table. Verified with `.\gradlew.bat build --offline`, the full
+  CMake Release build, focused paired/schema/runner tests (6/6 passed), and the full Release CTest suite (57/57 passed).
+  Commit title: feat(mcp): add paired benchmark recipe.

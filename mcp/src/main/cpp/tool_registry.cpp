@@ -133,6 +133,21 @@ Json recipe_schema() {
                        {"job_id", {{"type", "string"}, {"minLength", 1}}},
                        {"execution", execution}},
                       {"recipe", "operation", "job_id"}),
+        closed_object({{"recipe", enum_string({"benchmark_ab"})},
+                       {"baseline", source_schema()},
+                       {"candidate", source_schema()},
+                       {"config", config},
+                       {"warmup_frames", frames},
+                       {"frames", metric_frames},
+                       {"rounds", bounded_integer(2, 20)},
+                       {"control_rounds", bounded_integer(2, 20)},
+                       {"order", enum_string({"abba", "abab", "randomized"})},
+                       {"random_seed", bounded_integer(0, std::numeric_limits<std::uint32_t>::max())},
+                       {"statistic", enum_string({"avg", "p5", "p50", "p95"})},
+                       {"metric_filter", metric_filter},
+                       {"max_retries", max_retries},
+                       {"result_detail", result_detail}},
+                      {"recipe", "baseline", "candidate", "frames"}),
         closed_object({{"recipe", enum_string({"load_and_screenshot"})},
                        {"source", source_schema()},
                        {"config", config},
@@ -236,7 +251,9 @@ Json build_definitions() {
                    "Run a standard shader workflow and return its terminal result. load_and_screenshot loads one "
                    "shader source and config, waits for the requested warmup frames, and saves a screenshot. Profile "
                    "recipes return normalized cases with summary, metrics, or full result detail. Profile matrices "
-                   "support sync/async execution plus checkpoint status, resume, and cancellation operations.",
+                   "support sync/async execution plus checkpoint status, resume, and cancellation operations. "
+                   "benchmark_ab runs repeated paired ABBA, ABAB, or seeded randomized profiles plus same-commit "
+                   "controls and returns guarded confidence and measured-noise comparisons.",
                    recipe_schema(), false),
         definition("vibris_run_actions",
                    "Run one ordered shader action sequence with explicitly named sources and configs.",

@@ -347,6 +347,26 @@ Each final case contains `attempt_count`, `retry_exhausted`, and a compact order
 attempt. Result artifacts from every terminal attempt are retained in the top-level `artifacts` array and annotated
 with their attempt number and case IDs. Retry artifacts also embed prior attempt diagnostics in `profile-result.json`.
 
+`benchmark_ab` builds on isolated single-case profiles for performance comparisons. Each round contains two baseline
+and two candidate samples arranged as `abba`, `abab`, or a seeded balanced `randomized` order. It interleaves a second
+same-commit block whose logical A and B sides both load the baseline source; the 95th percentile of those absolute
+paired deltas is the measured noise floor. `rounds` and `control_rounds` default to 3 and are bounded from 2 through
+20. Every nested profile uses the normal bounded `max_retries` policy and an isolation workflow identity, so Core must
+publish `state_restored` before that measurement can pass.
+If a nested case does not publish that receipt, the paired workflow stops before submitting another measurement.
+
+The comparison is fail-closed. Every sample must report the requested frame count, the same effective config and scene
+hashes, a stable source identity within each physical source, and the same complete aggregate/program identity sets.
+A different frame count, config hash, scene hash, or exact program metadata produces `invalid_comparison`, structured
+guard mismatches, and no numeric comparison table. This also catches a workspace changing between repeated samples.
+
+Successful output includes raw per-round pair samples and a compact `comparison_table`. Each row reports baseline and
+candidate median-of-round medians, absolute and percentage deltas, paired-delta mean/median/sample variance, a 95%
+paired Student-t confidence interval, Tukey outlier rounds, the measured control noise floor, direction, and a
+`stable`, `unstable`, or `inconclusive` verdict. An effect that does not exceed the measured noise floor or whose
+confidence interval includes zero is inconclusive. `result_detail: "full"` additionally returns every normalized
+nested profile receipt; compact executions, round samples, comparison rows, and result artifacts are always retained.
+
 Every matrix has a durable `job_id`, a workspace-local checkpoint at `.vibris/profile-matrix/<job_id>.json`, and
 queue-time source snapshots below `.vibris/profile-matrix/<job_id>/sources/`. Workspace and commit sources are frozen
 once before the first case; later cases, retries, and MCP restart recovery materialize fresh server-owned UUIDs from
@@ -509,6 +529,30 @@ identity and later combinations continue.
   "execution": "async"
 }
 ```
+
+### Paired performance comparison
+
+```json
+{
+  "recipe": "benchmark_ab",
+  "baseline": {"kind": "commit", "revision": "HEAD~1"},
+  "candidate": {"kind": "workspace"},
+  "config": {"SETTING_PARALLAX_MODE": 4},
+  "warmup_frames": 32,
+  "frames": 120,
+  "rounds": 5,
+  "control_rounds": 3,
+  "order": "abba",
+  "statistic": "avg",
+  "metric_filter": ["begin3_a", "composite_total"],
+  "max_retries": 2,
+  "result_detail": "metrics"
+}
+```
+
+The baseline source is also used for both sides of every control round. Use `random_seed` with `order: "randomized"`
+to reproduce a balanced randomized schedule. The response exposes the actual execution order, all per-round samples,
+guard receipts, measured noise, and the final compact comparison table in nanoseconds.
 
 ### Load and screenshot
 

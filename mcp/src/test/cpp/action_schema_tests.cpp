@@ -337,6 +337,48 @@ void profile_result_detail_schema() {
     require(dispatches == 13, "Invalid profile output options reached dispatch.");
 }
 
+void paired_benchmark_recipe_schema() {
+    std::size_t dispatches = 0;
+    ToolRegistry registry([&](std::string_view name, const Json& request) {
+        ++dispatches;
+        require(name == "vibris_run_recipe" && request.at("recipe") == "benchmark_ab",
+            "Paired benchmark dispatched the wrong tool or recipe.");
+        return Json{{"accepted", true}};
+    });
+    const Json valid{{"recipe", "benchmark_ab"},
+                     {"baseline", {{"kind", "commit"}, {"revision", "HEAD~1"}}},
+                     {"candidate", {{"kind", "workspace"}}},
+                     {"config", {{"QUALITY", 2}}},
+                     {"warmup_frames", 32},
+                     {"frames", 120},
+                     {"rounds", 5},
+                     {"control_rounds", 3},
+                     {"order", "randomized"},
+                     {"random_seed", 42},
+                     {"statistic", "p50"},
+                     {"metric_filter", Json::array({"begin3_a", "composite_total"})},
+                     {"max_retries", 2},
+                     {"result_detail", "full"}};
+    require(std::holds_alternative<Json>(registry.invoke("vibris_run_recipe", valid)),
+        "Valid paired benchmark recipe was rejected.");
+
+    for (const auto& [field, value] : std::array<std::pair<const char*, Json>, 5>{{
+             {"rounds", 1}, {"control_rounds", 21}, {"order", "sequential"},
+             {"statistic", "median"}, {"random_seed", -1},
+         }}) {
+        auto invalid = valid;
+        invalid[field] = value;
+        require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_recipe", invalid)),
+            "Paired benchmark accepted an invalid bounded or enumerated option.");
+    }
+    auto missing_baseline = valid;
+    missing_baseline.erase("baseline");
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_run_recipe", missing_baseline)),
+        "Paired benchmark accepted a missing baseline source.");
+    require(dispatches == 1, "Invalid paired benchmark arguments reached dispatch.");
+}
+
 void matrix_schema_requires_named_sources_configs_and_axes() {
     std::size_t dispatches = 0;
     ToolRegistry registry([&](std::string_view name, const Json&) {
@@ -387,6 +429,7 @@ int main() {
         atomic_action_schemas_reject_invalid_arguments();
         profile_recipe_requires_bounded_future_frames();
         profile_result_detail_schema();
+        paired_benchmark_recipe_schema();
         matrix_schema_requires_named_sources_configs_and_axes();
         registry_declares_accurate_tool_annotations();
         std::cout << "PASS ActionSchemaRejectsForbiddenAndDuplicateTools\n";

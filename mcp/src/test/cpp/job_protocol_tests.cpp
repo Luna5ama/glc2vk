@@ -443,6 +443,7 @@ struct MetricsRun final {
     std::vector<std::vector<std::string>> submitted_case_ids;
     std::vector<std::uint32_t> submitted_attempts;
     std::vector<std::size_t> submitted_previous_attempt_counts;
+    std::vector<bool> submitted_benchmark_cases;
     std::size_t terminal_writes;
 };
 
@@ -469,6 +470,7 @@ MetricsRun synchronous_metrics_jobs(
     auto submitted_case_ids = server.submitted_case_ids();
     auto submitted_attempts = server.submitted_attempts();
     auto submitted_previous_attempt_counts = server.submitted_previous_attempt_counts();
+    auto submitted_benchmark_cases = server.submitted_benchmark_cases();
     const auto terminal_writes = server.terminal_writes();
     client.shutdown();
     server.shutdown();
@@ -478,7 +480,7 @@ MetricsRun synchronous_metrics_jobs(
     require(stats.pending_requests == 0 && vibris::mcp::test::pending_has_no_sources(fixture.pending()),
         "Metrics completion left pending registry or source ownership behind.");
     return {std::move(outcome), std::move(submitted_case_ids), std::move(submitted_attempts),
-            std::move(submitted_previous_attempt_counts), terminal_writes};
+            std::move(submitted_previous_attempt_counts), std::move(submitted_benchmark_cases), terminal_writes};
 }
 
 ToolOutcome synchronous_metrics_job(
@@ -948,6 +950,52 @@ void profile_matrix_38_cases_requires_all_metrics() {
             result.at("passed") == 37 && result.at("incomplete") == 1 &&
             result.at("cases").at(37).at("status") == "incomplete",
         "A 38-case profile matrix reported success despite a missing metrics case.");
+}
+
+void paired_benchmark_runner_uses_isolated_profiles() {
+    const Json arguments{
+        {"recipe", "benchmark_ab"},
+        {"baseline", {{"kind", "commit"}, {"revision", "HEAD"}}},
+        {"candidate", {{"kind", "workspace"}}},
+        {"config", Json::object()},
+        {"warmup_frames", 0},
+        {"frames", 32},
+        {"rounds", 2},
+        {"control_rounds", 2},
+        {"order", "abba"},
+        {"statistic", "avg"},
+        {"max_retries", 0},
+    };
+    const auto payload = [](double value) -> std::optional<std::string> {
+        return Json{{"gpuTimings", {{"composite_total", {{"avg", value}}}}}}.dump();
+    };
+    MetricsJobService::Plans plans;
+    for (std::size_t round = 0; round < 2; ++round) {
+        for (const auto value : {100.0, 80.0, 80.0, 100.0}) plans.push_back({payload(value)});
+        for (const auto value : {100.0, 101.0, 101.0, 100.0}) plans.push_back({payload(value)});
+    }
+    const auto run = synchronous_metrics_jobs(arguments, std::move(plans));
+    const auto& result = std::get<Json>(run.outcome);
+    const std::vector<std::vector<std::string>> expected_cases{
+        {"ab-r01-s1-baseline"}, {"ab-r01-s2-candidate"}, {"ab-r01-s3-candidate"},
+        {"ab-r01-s4-baseline"}, {"noise-r01-s1-a"}, {"noise-r01-s2-b"},
+        {"noise-r01-s3-b"}, {"noise-r01-s4-a"},
+        {"ab-r02-s1-baseline"}, {"ab-r02-s2-candidate"}, {"ab-r02-s3-candidate"},
+        {"ab-r02-s4-baseline"}, {"noise-r02-s1-a"}, {"noise-r02-s2-b"},
+        {"noise-r02-s3-b"}, {"noise-r02-s4-a"},
+    };
+    require(result.at("success") == true && result.at("kind") == "benchmark_ab" &&
+            result.at("status") == "completed" && result.at("verdict") == "stable" &&
+            result.at("requested_measurements") == 16 && result.at("completed_measurements") == 16 &&
+            result.at("guards").at("passed") == true &&
+            result.at("guards").at("runtime_state_restored") == true &&
+            result.at("round_samples").size() == 2 && result.at("control_round_samples").size() == 2 &&
+            result.at("comparison_table").size() == 1 && result.at("artifacts").size() == 16,
+        "Synchronous paired recipe did not aggregate its isolated profile receipts.");
+    require(run.submitted_case_ids == expected_cases && run.terminal_writes == 16 &&
+            run.submitted_benchmark_cases.size() == 16 &&
+            std::ranges::all_of(run.submitted_benchmark_cases, [](bool value) { return value; }),
+        "Paired recipe did not submit the exact ABBA/control order through isolated benchmark cases.");
 }
 
 void matrix_expands_named_source_config_product() {
@@ -1511,6 +1559,7 @@ int main() {
         profile_resume_preserves_prior_attempts();
         profile_resume_recovers_committed_artifact_without_resubmit();
         profile_matrix_38_cases_requires_all_metrics();
+        paired_benchmark_runner_uses_isolated_profiles();
         title_screen_runtime_can_prepare_source_for_world_loading_job();
         synchronous_submit_resumes_after_acceptance();
         synchronous_submit_has_local_total_deadline();

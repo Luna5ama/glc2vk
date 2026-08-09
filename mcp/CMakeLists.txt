@@ -113,6 +113,7 @@ add_library(vibris_mcp_core STATIC
     src/main/cpp/job_protocol.cpp
     src/main/cpp/mcp_stdio_server.cpp
     src/main/cpp/native_metrics.cpp
+    src/main/cpp/paired_benchmark.cpp
     src/main/cpp/pending_request_registry.cpp
     src/main/cpp/profile_matrix_workflow.cpp
     src/main/cpp/mcp_backend.cpp
@@ -191,6 +192,9 @@ if(BUILD_TESTING)
     target_include_directories(vibris-profile-matrix-workflow-tests PRIVATE src/test/cpp)
     target_link_libraries(vibris-profile-matrix-workflow-tests PRIVATE vibris_mcp_core)
 
+    add_executable(vibris-paired-benchmark-tests src/test/cpp/paired_benchmark_tests.cpp)
+    target_link_libraries(vibris-paired-benchmark-tests PRIVATE vibris_mcp_core)
+
     if(MSVC)
         target_compile_options(vibris-state-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-worktree-discovery-tests PRIVATE /W4 /permissive-)
@@ -205,6 +209,7 @@ if(BUILD_TESTING)
         target_compile_options(vibris-job-protocol-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-action-schema-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-profile-matrix-workflow-tests PRIVATE /W4 /permissive-)
+        target_compile_options(vibris-paired-benchmark-tests PRIVATE /W4 /permissive-)
     endif()
 
     add_custom_target(mcp-tests
@@ -214,6 +219,7 @@ if(BUILD_TESTING)
                 vibris-grpc-source-ownership-tests vibris-grpc-accepted-resume-tests)
     add_dependencies(mcp-tests vibris-job-protocol-tests vibris-action-schema-tests)
     add_dependencies(mcp-tests vibris-profile-matrix-workflow-tests)
+    add_dependencies(mcp-tests vibris-paired-benchmark-tests)
 
     add_test(
         NAME descriptor-dump
@@ -331,6 +337,13 @@ if(BUILD_TESTING)
     add_test(NAME ActionSchemaRejectsForbiddenAndDuplicateTools COMMAND vibris-action-schema-tests)
     add_test(NAME ProfileMatrixCheckpointResume COMMAND vibris-profile-matrix-workflow-tests)
     set_tests_properties(ProfileMatrixCheckpointResume PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
+    foreach(scenario
+            PairedOrderStrategies
+            PairedAggregation
+            MeasuredNoiseFloorRejection
+            PairedMismatchGuards)
+        add_test(NAME ${scenario} COMMAND vibris-paired-benchmark-tests ${scenario})
+    endforeach()
 
     function(add_stdio_mcp_probe test_name)
         add_test(

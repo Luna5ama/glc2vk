@@ -2,6 +2,7 @@
 
 #include "config_document.hpp"
 #include "job_protocol.hpp"
+#include "paired_benchmark.hpp"
 
 #include <algorithm>
 #include <array>
@@ -688,12 +689,15 @@ Json retry_arguments(const Json& arguments, const ProfileCaseState& state, std::
         if (arguments.contains(field)) result[field] = arguments.at(field);
     }
     if (arguments.contains("__vibris_preset")) result["__vibris_preset"] = arguments.at("__vibris_preset");
+    if (arguments.contains("__vibris_workflow_id")) {
+        result["__vibris_workflow_id"] = arguments.at("__vibris_workflow_id");
+    }
     if (!state.spec.source.is_null()) result["source"] = state.spec.source;
     if (!state.spec.config.is_null()) result["config"] = state.spec.config;
     result["__vibris_case_id"] = state.spec.case_id;
     result["__vibris_source_id"] = state.spec.source_id;
     result["__vibris_config_id"] = state.spec.config_id;
-    result["__vibris_result_kind"] = arguments.at("recipe");
+    result["__vibris_result_kind"] = arguments.value("__vibris_result_kind", arguments.at("recipe"));
     result["__vibris_attempt"] = attempt;
     result["__vibris_previous_attempts"] = state.attempts;
     return result;
@@ -1040,6 +1044,18 @@ ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& ar
                     first_attempt = false;
                     if (!std::holds_alternative<Json>(outcome)) return outcome;
                     return profile_result(std::get<Json>(outcome), attempt, config_, matrix);
+                });
+        }
+        if (recipe == "benchmark_ab") {
+            const auto workflow_id = detail::generate_uuid();
+            return run_paired_benchmark(arguments, workflow_id, config_.default_warmup_frames,
+                [this, &server, &context, &control](const Json& profile_arguments) -> ToolOutcome {
+                    return retry_profile(profile_arguments, false, config_.default_warmup_frames,
+                        [this, &server, &context, &control](const Json& attempt, bool) -> ToolOutcome {
+                            auto outcome = submit_once("vibris_run_recipe", attempt, server, context, control);
+                            if (!std::holds_alternative<Json>(outcome)) return outcome;
+                            return profile_result(std::get<Json>(outcome), attempt, config_, false);
+                        });
                 });
         }
         auto outcome = submit_once(tool_name, arguments, server, context, control);
