@@ -97,6 +97,20 @@ internal class SourceActivator(
     fun isActive(source: SourceRegistry.Lease): Boolean = sources.isActive(source)
 
     @Synchronized
+    @Throws(Failure::class)
+    fun retainActive(): SourceRegistry.Lease? = try {
+        sources.retainActive()
+    } catch (failure: SourceRegistry.Failure) {
+        ready = false
+        throw Failure(failure.code, failure.message, failure)
+    }
+
+    @Synchronized
+    fun releaseRetained(source: SourceRegistry.Lease) {
+        sources.releaseRetained(source)
+    }
+
+    @Synchronized
     override fun close() {
         if (closed) {
             return

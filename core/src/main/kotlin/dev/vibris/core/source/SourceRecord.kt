@@ -26,8 +26,15 @@ class SourceRecord(
 
     @Synchronized
     fun retain() {
-        requireState(SourceState.VALIDATED, SourceState.QUEUED, SourceState.ACTIVATING, SourceState.ACTIVE)
+        requireState(
+            SourceState.VALIDATED,
+            SourceState.QUEUED,
+            SourceState.ACTIVATING,
+            SourceState.ACTIVE,
+            SourceState.RELEASED_ACTIVE,
+        )
         referencesValue++
+        if (stateValue == SourceState.RELEASED_ACTIVE) stateValue = SourceState.ACTIVE
     }
 
     @Synchronized

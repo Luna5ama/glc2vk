@@ -105,6 +105,7 @@ std::optional<Json> recovered_profile_job(const proto::ServerHello& server, cons
         input >> document;
         if (!input || !document.is_object() || document.value("artifact_schema_version", 0) != 1 ||
             !document.contains("raw_action_results") || !document.at("raw_action_results").is_array() ||
+            !document.contains("benchmark_barriers") || !document.at("benchmark_barriers").is_array() ||
             !document.contains("previous_attempts") || !document.at("previous_attempts").is_array() ||
             document.value("attempt", std::uint32_t{}) == 0) {
             return std::nullopt;
@@ -136,6 +137,7 @@ std::optional<Json> recovered_profile_job(const proto::ServerHello& server, cons
                     {"diagnostics", Json::array()},
                     {"comparison", nullptr},
                     {"action_results", document.at("raw_action_results")},
+                    {"benchmark_barriers", document.at("benchmark_barriers")},
                     {"timings", Json::object()},
                     {"frame_ids", Json::array()},
                     {"artifacts", Json::array({std::move(artifact)})},
@@ -243,6 +245,14 @@ Json incomplete_provenance_error(std::string_view case_id) {
             {"details", {{"case_id", case_id}}}};
 }
 
+Json incomplete_barriers_error(std::string_view case_id) {
+    return {{"success", false},
+            {"error_code", "BENCHMARK_BARRIER_FAILED"},
+            {"message", "The benchmark case did not prove isolation and final state restoration."},
+            {"retryable", false},
+            {"details", {{"case_id", case_id}}}};
+}
+
 struct ProfileCounts final {
     std::size_t requested = 0;
     std::size_t passed = 0;
@@ -273,7 +283,8 @@ Json profile_artifacts(const Json& job) {
 
 void append_profile_case(const Json& job, Json& cases, ProfileCounts& counts, const Json& arguments,
     std::size_t warmup_frames, std::string case_id, std::string source_id, std::string config_id,
-    std::size_t first_action, std::size_t last_action, bool matrix, std::string_view detail) {
+    std::size_t first_action, std::size_t last_action, bool matrix, bool explicit_identity,
+    std::string_view detail) {
     const bool full = detail == "full";
     const bool include_metrics = detail != "summary";
     Json action_results = Json::array();
@@ -283,7 +294,11 @@ void append_profile_case(const Json& job, Json& cases, ProfileCounts& counts, co
     bool metrics_seen = false;
     for (const auto& action : job.at("action_results")) {
         const auto index = action.at("action_index").get<std::size_t>();
-        if (index < first_action || index >= last_action) continue;
+        const auto action_case = action.value("case_id", std::string{});
+        if (explicit_identity ? action_case != case_id :
+            (!action_case.empty() ? action_case != case_id : index < first_action || index >= last_action)) {
+            continue;
+        }
         if (failed_action(action) && error.is_null()) error = action.at("result");
         if (action.at("kind") == "load_shader" && action.at("result").is_object()) {
             const auto found = action.at("result").find("provenance");
@@ -300,12 +315,20 @@ void append_profile_case(const Json& job, Json& cases, ProfileCounts& counts, co
         action_results.push_back(std::move(mapped));
     }
 
+    Json barriers = Json::array();
+    bool restored = !explicit_identity;
+    for (const auto& receipt : job.value("benchmark_barriers", Json::array())) {
+        if (receipt.value("case_id", std::string{}) != case_id) continue;
+        if (receipt.value("stage", std::string{}) == "state_restored") restored = true;
+        barriers.push_back(receipt);
+    }
+
     ++counts.requested;
     const bool has_metrics = !metrics.is_null();
     const bool has_provenance = provenance.is_object() && provenance.value("complete", false);
     if (has_metrics) ++counts.with_metrics;
     const bool failed = !error.is_null();
-    const bool incomplete = !failed && (!has_metrics || !has_provenance);
+    const bool incomplete = !failed && (!has_metrics || !has_provenance || !restored);
     const char* status = "passed";
     if (failed) {
         ++counts.failed;
@@ -313,8 +336,9 @@ void append_profile_case(const Json& job, Json& cases, ProfileCounts& counts, co
     } else if (incomplete) {
         ++counts.incomplete;
         status = "incomplete";
-        error = has_metrics ? incomplete_provenance_error(case_id) : no_gpu_samples_error(
-            case_id, metrics_seen ? "empty_gpu_timings" : "missing_gpu_metrics_action");
+        error = !has_metrics ? no_gpu_samples_error(
+            case_id, metrics_seen ? "empty_gpu_timings" : "missing_gpu_metrics_action") :
+            (!has_provenance ? incomplete_provenance_error(case_id) : incomplete_barriers_error(case_id));
     } else {
         ++counts.passed;
     }
@@ -328,7 +352,8 @@ void append_profile_case(const Json& job, Json& cases, ProfileCounts& counts, co
               {"frames", arguments.at("frames")},
               {"warmup_frames", warmup_frames},
               {"metrics", std::move(visible_metrics)},
-              {"provenance", std::move(provenance)}};
+              {"provenance", std::move(provenance)},
+              {"barriers", std::move(barriers)}};
     if (full) {
         item["action_results"] = std::move(action_results);
         item["artifacts"] = case_artifacts(job, item.at("case_id").get<std::string>(), matrix);
@@ -339,7 +364,7 @@ void append_profile_case(const Json& job, Json& cases, ProfileCounts& counts, co
 void append_full_job_metadata(const Json& job, Json& result) {
     constexpr std::array fields{
         "diagnostics", "comparison", "timings", "frame_ids", "artifacts",
-        "artifact_groups", "manifest_path", "recovered_from_artifact", "recovered_attempt",
+        "artifact_groups", "benchmark_barriers", "manifest_path", "recovered_from_artifact", "recovered_attempt",
         "recovered_previous_attempts",
     };
     for (const auto* field : fields) {
@@ -351,6 +376,7 @@ void append_full_job_metadata(const Json& job, Json& result) {
 Json profile_result(Json job, const Json& arguments, const SessionConfig& config, bool matrix) {
     const auto detail = arguments.value("result_detail", std::string("metrics"));
     const auto warmup = arguments.value("warmup_frames", config.default_warmup_frames);
+    const bool explicit_identity = arguments.contains("__vibris_workflow_id");
     Json cases = Json::array();
     ProfileCounts counts;
     if (matrix) {
@@ -362,7 +388,8 @@ Json profile_result(Json job, const Json& arguments, const SessionConfig& config
                 const auto config_id = shader_config.get<std::string>();
                 const auto first = case_index * case_size;
                 append_profile_case(job, cases, counts, arguments, warmup,
-                    source_id + "--" + config_id, source_id, config_id, first, first + case_size, true, detail);
+                    source_id + "--" + config_id, source_id, config_id, first, first + case_size,
+                    true, explicit_identity, detail);
                 ++case_index;
             }
         }
@@ -371,7 +398,7 @@ Json profile_result(Json job, const Json& arguments, const SessionConfig& config
             arguments.value("__vibris_case_id", std::string("source--config")),
             arguments.value("__vibris_source_id", std::string("source")),
             arguments.value("__vibris_config_id", std::string("config")),
-            0, std::numeric_limits<std::size_t>::max(), false, detail);
+            0, std::numeric_limits<std::size_t>::max(), false, explicit_identity, detail);
     }
 
     Json result{
@@ -419,7 +446,8 @@ Json matrix_result(Json job, const Json& arguments) {
             Json error = nullptr;
             for (const auto& action : job.at("action_results")) {
                 const auto index = action.at("action_index").get<std::size_t>();
-                if (index < first || index >= last) continue;
+                const auto action_case = action.value("case_id", std::string{});
+                if (!action_case.empty() ? action_case != case_id : index < first || index >= last) continue;
                 auto mapped = action;
                 mapped["action_index"] = index - first;
                 if (failed_action(action) && error.is_null()) error = action.at("result");

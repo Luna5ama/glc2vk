@@ -3,6 +3,7 @@ package dev.vibris.core
 import dev.vibris.protocol.v1.ActionResult
 import dev.vibris.protocol.v1.ArtifactFormat
 import dev.vibris.protocol.v1.ArtifactKind
+import dev.vibris.protocol.v1.BenchmarkBarrierReceipt
 import dev.vibris.protocol.v1.JobActionKind
 import dev.vibris.protocol.v1.SubmitJob
 import java.nio.charset.StandardCharsets
@@ -35,9 +36,10 @@ internal object ProfileResultArtifacts {
         submission: SubmitJob,
         transaction: ArtifactManager.JobTransaction,
         actionResults: List<ActionResult>,
+        barriers: List<BenchmarkBarrierReceipt> = emptyList(),
     ): List<GeneratedArtifact> {
         if (!requested(submission)) return emptyList()
-        val document = document(submission, actionResults)
+        val document = document(submission, actionResults, barriers)
         val outputs = ArrayList<GeneratedArtifact>()
         if (submission.resultArtifacts.json) {
             write(transaction, JSON_FILE, document.toString() + "\n")
@@ -64,7 +66,11 @@ internal object ProfileResultArtifacts {
         return outputs
     }
 
-    internal fun document(submission: SubmitJob, actionResults: List<ActionResult>): JsonObject {
+    internal fun document(
+        submission: SubmitJob,
+        actionResults: List<ActionResult>,
+        barriers: List<BenchmarkBarrierReceipt> = emptyList(),
+    ): JsonObject {
         val actions = submission.actions.actionsList
         val orderedResults = actionResults.sortedBy { it.actionIndex }
         val loadIndices = actions.indices.filter { actions[it].hasLoadShader() }
@@ -76,7 +82,7 @@ internal object ProfileResultArtifacts {
             loadIndices.forEachIndexed { caseIndex, firstAction ->
                 val lastAction = loadIndices.getOrNull(caseIndex + 1) ?: actions.size
                 val load = actions[firstAction].loadShader
-                val related = orderedResults.filter { it.actionIndex >= firstAction && it.actionIndex < lastAction }
+                val related = orderedResults.filter { it.caseId == load.caseId }
                 val parsed = related.map { it to parse(it.json) }
                 val failure = parsed.firstOrNull { (_, payload) -> isFailed(payload) }?.second
                 val provenance = parsed.firstOrNull { (result, _) ->
@@ -133,6 +139,9 @@ internal object ProfileResultArtifacts {
                         } ?: JsonNull,
                     )
                     put("provenance", provenance ?: JsonNull)
+                    put("barriers", buildJsonArray {
+                        barriers.filter { it.caseId == load.caseId }.forEach { add(barrier(it)) }
+                    })
                     put("action_results", buildJsonArray {
                         parsed.filter { (result, _) ->
                             result.kind != JobActionKind.JOB_ACTION_KIND_GET_GPU_METRICS
@@ -176,6 +185,7 @@ internal object ProfileResultArtifacts {
             put("failed", failedCount)
             put("incomplete", incomplete)
             put("cases", cases)
+            put("benchmark_barriers", buildJsonArray { barriers.forEach { add(barrier(it)) } })
             put("raw_action_results", buildJsonArray {
                 orderedResults.forEach { result -> add(actionResult(result, parse(result.json), 0)) }
             })
@@ -250,9 +260,20 @@ internal object ProfileResultArtifacts {
     private fun actionResult(result: ActionResult, payload: JsonElement, baseIndex: Int): JsonObject =
         buildJsonObject {
             put("action_index", result.actionIndex - baseIndex)
+            put("case_id", result.caseId)
             put("kind", result.kind.name.removePrefix("JOB_ACTION_KIND_").lowercase())
             put("result", payload)
         }
+
+    private fun barrier(receipt: BenchmarkBarrierReceipt): JsonObject = buildJsonObject {
+        put("case_id", receipt.caseId)
+        put("stage", receipt.stage.name.removePrefix("BENCHMARK_BARRIER_STAGE_").lowercase())
+        put("ordinal", receipt.ordinal)
+        put("source_uuid", receipt.sourceUuid)
+        put("config_sha256", receipt.configSha256)
+        put("shader_generation", receipt.shaderGeneration)
+        put("detail", receipt.detail)
+    }
 
     private fun parse(value: String): JsonElement =
         if (value.isBlank()) JsonObject(emptyMap()) else Json.parseToJsonElement(value)

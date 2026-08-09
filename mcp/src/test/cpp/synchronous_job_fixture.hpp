@@ -4,6 +4,7 @@
 
 #include <grpcpp/grpcpp.h>
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -278,13 +279,16 @@ private:
                 csv_artifact->set_path((artifact_directory / "profile-result.csv").string());
             }
             std::size_t payload_index = 0;
+            std::string current_case_id;
             for (int action_index = 0; action_index < job.actions().actions_size(); ++action_index) {
                 const auto& action = job.actions().actions(action_index);
                 if (action.has_load_shader()) {
                     const auto& load = action.load_shader();
+                    current_case_id = load.case_id();
                     auto* action_result = result->add_action_results();
                     action_result->set_action_index(action_index);
                     action_result->set_kind(proto::JOB_ACTION_KIND_LOAD_SHADER);
+                    action_result->set_case_id(current_case_id);
                     action_result->set_json(Json{{"success", true},
                                                 {"case_id", load.case_id()},
                                                 {"source", load.source_id()},
@@ -299,7 +303,27 @@ private:
                 auto* action_result = result->add_action_results();
                 action_result->set_action_index(action_index);
                 action_result->set_kind(proto::JOB_ACTION_KIND_GET_GPU_METRICS);
+                action_result->set_case_id(current_case_id);
                 action_result->set_json(*payload);
+            }
+            if (job.has_benchmark_case()) {
+                constexpr std::array stages{
+                    proto::BENCHMARK_BARRIER_STAGE_SOURCE_PUBLISHED,
+                    proto::BENCHMARK_BARRIER_STAGE_CONFIG_APPLIED,
+                    proto::BENCHMARK_BARRIER_STAGE_SHADER_RELOADED,
+                    proto::BENCHMARK_BARRIER_STAGE_SHADER_GENERATION_CONFIRMED,
+                    proto::BENCHMARK_BARRIER_STAGE_WARMUP_STARTED,
+                    proto::BENCHMARK_BARRIER_STAGE_WARMUP_COMPLETED,
+                    proto::BENCHMARK_BARRIER_STAGE_SAMPLE_STARTED,
+                    proto::BENCHMARK_BARRIER_STAGE_SAMPLE_COMPLETED,
+                    proto::BENCHMARK_BARRIER_STAGE_STATE_RESTORED,
+                };
+                for (std::size_t index = 0; index < stages.size(); ++index) {
+                    auto* receipt = result->add_benchmark_barriers();
+                    receipt->set_case_id(job.benchmark_case().case_id());
+                    receipt->set_stage(stages[index]);
+                    receipt->set_ordinal(static_cast<std::uint32_t>(index + 1));
+                }
             }
             if (!stream->Write(completed)) return {grpc::StatusCode::UNAVAILABLE, "terminal write failed"};
             ++terminal_writes_;

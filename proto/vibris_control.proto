@@ -211,6 +211,9 @@ enum ErrorCode {
     CANCELLED = 28;
     SERVER_RESTARTED = 29;
     INTERNAL_ERROR = 30;
+    BENCHMARK_STATE_UNAVAILABLE = 31;
+    BENCHMARK_RESTORE_FAILED = 32;
+    BENCHMARK_BARRIER_FAILED = 33;
 }
 
 message PreparedSourceRef {
@@ -271,12 +274,18 @@ message SubmitJob {
     repeated NamedShaderConfig shader_configs = 9;
     ResultArtifactOptions result_artifacts = 10;
     BenchmarkProvenance benchmark_provenance = 11;
+    BenchmarkCase benchmark_case = 12;
 }
 
 message BenchmarkProvenance {
     string preset_id = 1;
     string preset_version = 2;
     string preset_display_name = 3;
+}
+
+message BenchmarkCase {
+    string workflow_id = 1;
+    string case_id = 2;
 }
 
 message ResultArtifactOptions {
@@ -490,6 +499,7 @@ message JobResult {
     string manifest_path = 7;
     repeated ActionResult action_results = 8;
     repeated ArtifactGroup artifact_groups = 9;
+    repeated BenchmarkBarrierReceipt benchmark_barriers = 10;
 }
 
 message ArtifactGroup {
@@ -502,6 +512,30 @@ message ActionResult {
     uint32 action_index = 1;
     JobActionKind kind = 2;
     string json = 3;
+    string case_id = 4;
+}
+
+enum BenchmarkBarrierStage {
+    BENCHMARK_BARRIER_STAGE_UNSPECIFIED = 0;
+    BENCHMARK_BARRIER_STAGE_SOURCE_PUBLISHED = 1;
+    BENCHMARK_BARRIER_STAGE_CONFIG_APPLIED = 2;
+    BENCHMARK_BARRIER_STAGE_SHADER_RELOADED = 3;
+    BENCHMARK_BARRIER_STAGE_SHADER_GENERATION_CONFIRMED = 4;
+    BENCHMARK_BARRIER_STAGE_WARMUP_STARTED = 5;
+    BENCHMARK_BARRIER_STAGE_WARMUP_COMPLETED = 6;
+    BENCHMARK_BARRIER_STAGE_SAMPLE_STARTED = 7;
+    BENCHMARK_BARRIER_STAGE_SAMPLE_COMPLETED = 8;
+    BENCHMARK_BARRIER_STAGE_STATE_RESTORED = 9;
+}
+
+message BenchmarkBarrierReceipt {
+    string case_id = 1;
+    BenchmarkBarrierStage stage = 2;
+    uint32 ordinal = 3;
+    string source_uuid = 4;
+    string config_sha256 = 5;
+    uint64 shader_generation = 6;
+    string detail = 7;
 }
 
 message JobTimings {

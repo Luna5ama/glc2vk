@@ -232,12 +232,34 @@ void async_status_cancel_and_resume_preserve_receipts() {
         "Resume after cancellation duplicated or lost a completed case.");
 }
 
+void wrong_case_identity_is_rejected_without_advancing() {
+    WorkspaceFixture workspace;
+    std::size_t calls = 0;
+    std::string workflow_id;
+    ProfileMatrixWorkflow workflow(workspace.worktree(), std::string(workspace_id),
+        [&](ProfileMatrixCaseExecution execution) -> ToolOutcome {
+            ++calls;
+            workflow_id = execution.arguments.at("__vibris_workflow_id").get<std::string>();
+            auto response = std::get<Json>(success(execution));
+            response.at("cases").front()["case_id"] = "source--config-1024";
+            return response;
+        });
+    const auto paused = std::get<Json>(workflow.start(matrix(3), config()));
+    require(paused.at("workflow_state") == "paused" && paused.at("receipt_count") == 0 && calls == 1,
+        "A mismatched case receipt advanced the profile matrix.");
+    require(paused.at("last_error").at("error_code") == "PROFILE_CHECKPOINT_ERROR",
+        "A mismatched case receipt did not fail closed with a checkpoint error.");
+    require(workflow_id == paused.at("job_id").get<std::string>(),
+        "The isolated case did not carry the durable profile workflow identity.");
+}
+
 }
 
 int main() {
     try {
         interruption_after_17_resumes_at_18();
         async_status_cancel_and_resume_preserve_receipts();
+        wrong_case_identity_is_rejected_without_advancing();
         std::cout << "PASS ProfileMatrixCheckpointResume\n";
         return 0;
     } catch (const std::exception& error) {

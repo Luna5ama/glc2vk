@@ -31,11 +31,7 @@ internal object BenchmarkProvenance {
         val settingsJson: JsonElement = settings?.let { values ->
             buildJsonObject { values.toSortedMap().forEach { (key, value) -> put(key, value) } }
         } ?: JsonNull
-        val shaderIdentity = buildJsonObject {
-            put("mode", if (settings == null) "preserve" else "explicit")
-            put("settings_known", settings != null)
-            put("effective_settings", settingsJson)
-        }
+        val shaderIdentity = shaderIdentity(settings, settingsJson)
         val patched = inspection["patched_shader"] as? JsonObject ?: buildJsonObject {
             put("available", false)
             put("reason", "runtime_did_not_report_patched_shader_identity")
@@ -90,6 +86,20 @@ internal object BenchmarkProvenance {
             })
         }
     }
+
+    fun shaderConfigHash(settings: Map<String, String>): String {
+        val settingsJson = buildJsonObject {
+            settings.toSortedMap().forEach { (key, value) -> put(key, value) }
+        }
+        return sha256(shaderIdentity(settings, settingsJson))
+    }
+
+    private fun shaderIdentity(settings: Map<String, String>?, settingsJson: JsonElement): JsonObject =
+        buildJsonObject {
+            put("mode", if (settings == null) "preserve" else "explicit")
+            put("settings_known", settings != null)
+            put("effective_settings", settingsJson)
+        }
 
     private fun context(value: SceneContext): JsonObject = buildJsonObject {
         put("save_id", value.saveId)

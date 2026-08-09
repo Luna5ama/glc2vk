@@ -35,6 +35,7 @@ class ProfileResultArtifactsTest {
         val actionResults = listOf(
             ActionResult.newBuilder()
                 .setActionIndex(0)
+                .setCaseId("dev--spawn")
                 .setKind(JobActionKind.JOB_ACTION_KIND_LOAD_SHADER)
                 .setJson(
                     """
@@ -50,6 +51,7 @@ class ProfileResultArtifactsTest {
                 .build(),
             ActionResult.newBuilder()
                 .setActionIndex(2)
+                .setCaseId("dev--spawn")
                 .setKind(JobActionKind.JOB_ACTION_KIND_GET_GPU_METRICS)
                 .setJson(
                     """{"gpuTimings":{"composite18_total":{"avg":7000000,"p50":6800000},"shadowcomp0":{"avg":120000}}}""",
@@ -109,6 +111,80 @@ class ProfileResultArtifactsTest {
         assertEquals(jsonPath.parent, csvPath.parent)
         assertTrue(manager.usedBytes() > Files.size(jsonPath) + Files.size(csvPath))
     }
+
+    @Test
+    fun explicitCaseIdentityPrevents128_512_1024MetricShift() {
+        val submission = multiCaseSubmission()
+        val actionResults = buildList {
+            listOf("128", "512", "1024").forEachIndexed { index, config ->
+                add(
+                    ActionResult.newBuilder()
+                        .setActionIndex(index * 3)
+                        .setCaseId("source--$config")
+                        .setKind(JobActionKind.JOB_ACTION_KIND_LOAD_SHADER)
+                        .setJson(
+                            """{"success":true,"provenance":{"complete":true,"case_hash":"$config"}}""",
+                        )
+                        .build(),
+                )
+            }
+            add(metricResult(2, "source--1024", 1_024_000))
+            add(metricResult(5, "source--128", 128_000))
+            add(metricResult(8, "source--512", 512_000))
+        }
+
+        val cases = ProfileResultArtifacts.document(submission, actionResults)
+            .getValue("cases").jsonArray.associateBy {
+                it.jsonObject.getValue("case_id").jsonPrimitive.content
+            }
+
+        assertEquals(128_000.0, average(cases.getValue("source--128").jsonObject))
+        assertEquals(512_000.0, average(cases.getValue("source--512").jsonObject))
+        assertEquals(1_024_000.0, average(cases.getValue("source--1024").jsonObject))
+        assertTrue(cases.values.all { it.jsonObject.getValue("status").jsonPrimitive.content == "passed" })
+    }
+
+    private fun multiCaseSubmission(): SubmitJob {
+        val job = SubmitJob.newBuilder()
+            .setRequestId("identity-matrix")
+            .setWorkspaceId(WORKSPACE_ID)
+            .setResultArtifacts(
+                ResultArtifactOptions.newBuilder().setJson(true).setKind("profile_matrix").setAttempt(1),
+            )
+        val actions = ActionSequence.newBuilder()
+        listOf("128", "512", "1024").forEach { config ->
+            actions.addActionsForCase(config)
+        }
+        return job.setActions(actions).build()
+    }
+
+    private fun ActionSequence.Builder.addActionsForCase(config: String) {
+        addActions(
+            Action.newBuilder().setLoadShader(
+                LoadShader.newBuilder()
+                    .setSourceUuid("22222222-2222-4222-8222-222222222222")
+                    .setSourceId("source")
+                    .setConfigId(config)
+                    .setCaseId("source--$config"),
+            ),
+        )
+        addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(2)))
+        addActions(Action.newBuilder().setGetGpuMetrics(GetGpuMetrics.newBuilder().setFrames(3)))
+    }
+
+    private fun metricResult(actionIndex: Int, caseId: String, average: Long): ActionResult =
+        ActionResult.newBuilder()
+            .setActionIndex(actionIndex)
+            .setCaseId(caseId)
+            .setKind(JobActionKind.JOB_ACTION_KIND_GET_GPU_METRICS)
+            .setJson("""{"gpuTimings":{"pass":{"avg":$average}}}""")
+            .build()
+
+    private fun average(case: kotlinx.serialization.json.JsonObject): Double = case
+        .getValue("metrics").jsonObject
+        .getValue("gpuTimings").jsonObject
+        .getValue("pass").jsonObject
+        .getValue("avg").jsonPrimitive.double
 
     private fun submission(): SubmitJob = SubmitJob.newBuilder()
         .setRequestId("profile-request")

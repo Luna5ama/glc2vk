@@ -183,6 +183,22 @@ internal class SourceRegistry @JvmOverloads constructor(
     fun activeUuid(): String = activeSource?.uuid ?: ""
 
     @Synchronized
+    @Throws(Failure::class)
+    fun retainActive(): Lease? {
+        val active = activeSource ?: return null
+        requireOwned(active)
+        val before = active.record.state()
+        active.record.retain()
+        record(active, before, active.record.state())
+        return active
+    }
+
+    @Synchronized
+    fun releaseRetained(lease: Lease) {
+        release(lease, true)
+    }
+
+    @Synchronized
     fun isActive(lease: Lease): Boolean = activeSource === lease && lease.record.active()
 
     fun cleanup(leases: List<Lease>) {

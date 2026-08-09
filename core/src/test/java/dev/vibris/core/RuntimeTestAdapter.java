@@ -21,11 +21,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Consumer;
 
 final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     final List<String> events = new ArrayList<>();
     final ArrayDeque<ReloadResult> reloads = new ArrayDeque<>();
+    final ArrayDeque<CompletionStage<ReloadResult>> reloadStages = new ArrayDeque<>();
     final ArrayDeque<String> actionResponses = new ArrayDeque<>();
+    final ArrayDeque<CompletionStage<String>> actionStages = new ArrayDeque<>();
     final ArrayDeque<RuntimeException> captureFailures = new ArrayDeque<>();
     final ArrayDeque<RuntimeException> captureFailuresAfterWrite = new ArrayDeque<>();
     final ArrayDeque<Map<String, byte[]>> captureFileBatches = new ArrayDeque<>();
@@ -37,9 +40,12 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     CaptureResult patchedShaderResult = new CaptureResult(0, List.of());
     final Map<String, byte[]> patchedShaderFiles = new LinkedHashMap<>();
     Map<String, String> lastShaderConfig;
+    final List<Map<String, String>> shaderConfigs = new ArrayList<>();
     SceneContext lastContext;
+    final List<SceneContext> contexts = new ArrayList<>();
     List<ScenePreset> presets = List.of();
     Runnable beforeReloadResult = () -> {};
+    Consumer<RuntimeAction> actionObserver = ignored -> {};
     RuntimeException closeFailure;
     int closeCount;
 
@@ -60,6 +66,7 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     ) {
         events.add("context");
         lastContext = context;
+        contexts.add(context);
         return completed(cancellation, ContextApplyResult.success(context));
     }
 
@@ -69,7 +76,9 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     ) {
         events.add("reload");
         lastShaderConfig = config;
+        shaderConfigs.add(config == null ? null : Map.copyOf(config));
         beforeReloadResult.run();
+        if (!reloadStages.isEmpty()) return reloadStages.removeFirst();
         ReloadResult result = reloads.isEmpty() ? ReloadResult.success(List.of()) : reloads.removeFirst();
         return completed(cancellation, result);
     }
@@ -94,6 +103,8 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     @Override
     public CompletionStage<String> executeAction(RuntimeAction action) {
         events.add("action:" + action.getClass().getSimpleName());
+        actionObserver.accept(action);
+        if (!actionStages.isEmpty()) return actionStages.removeFirst();
         String response = actionResponses.isEmpty() ? "{}" : actionResponses.removeFirst();
         return CompletableFuture.completedFuture(response);
     }

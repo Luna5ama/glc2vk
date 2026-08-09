@@ -129,6 +129,20 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
         if (firstActivation > 0) {
             throw invalid("Source activation must be the first action.")
         }
+        if (job.submission.hasBenchmarkCase()) {
+            val identity = job.submission.benchmarkCase
+            val loads = steps.filter { it.type == ActionType.LOAD }
+            val samples = steps.filter {
+                it.type == ActionType.RUNTIME && it.runtimeAction?.hasGetGpuMetrics() == true
+            }
+            if (
+                loads.size != 1 || samples.size != 1 ||
+                loads.single().loadShader?.caseId != identity.caseId ||
+                !job.submission.hasResultArtifacts() || job.submission.resultArtifacts.kind != "profile_matrix"
+            ) {
+                throw invalid("An isolated benchmark case must contain exactly one matching load and GPU sample.")
+            }
+        }
         return ActionProgram(java.util.List.copyOf(steps), estimatedBytes)
     }
 

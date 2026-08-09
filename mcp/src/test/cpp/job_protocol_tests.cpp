@@ -421,14 +421,20 @@ void profile_result_artifact_mapping() {
         {"frames", 64},
         {"result_csv", true},
         {"converted_units", Json::array({"us", "ms"})},
+        {"__vibris_workflow_id", "11111111-2222-4333-8444-555555555555"},
+        {"__vibris_case_id", "source--config"},
+        {"__vibris_result_kind", "profile_matrix"},
     };
     const auto message = JobProtocol::request(
         "vibris_run_recipe", arguments, config(), context, sources, "request-profile-artifacts");
     const auto& options = message.submit_job().result_artifacts();
     require(message.submit_job().has_result_artifacts() && options.json() && options.csv() &&
-            options.kind() == "profile" && options.converted_units_size() == 2 &&
+            options.kind() == "profile_matrix" && options.converted_units_size() == 2 &&
             options.converted_units(0) == "us" && options.converted_units(1) == "ms" &&
-            options.attempt() == 1 && options.previous_attempts().empty(),
+            options.attempt() == 1 && options.previous_attempts().empty() &&
+            message.submit_job().has_benchmark_case() &&
+            message.submit_job().benchmark_case().workflow_id() == "11111111-2222-4333-8444-555555555555" &&
+            message.submit_job().benchmark_case().case_id() == "source--config",
         "Profile result artifact options were not copied into SubmitJob.");
 }
 
@@ -818,10 +824,12 @@ void profile_resume_recovers_committed_artifact_without_resubmit() {
         {"attempt", 2},
         {"previous_attempts", Json::array({{{"attempt", 1}, {"status", "failed"},
             {"error_code", "SERVER_OFFLINE"}, {"message", "disconnected"}, {"retryable", true}}})},
+        {"benchmark_barriers", Json::array()},
         {"raw_action_results", Json::array({
-            {{"action_index", 0}, {"kind", "load_shader"}, {"result", {{"success", true},
+            {{"action_index", 0}, {"case_id", "source--config"}, {"kind", "load_shader"},
+             {"result", {{"success", true},
                 {"provenance", {{"complete", true}, {"case_hash", "recovered-case-hash"}}}}}},
-            {{"action_index", 1}, {"kind", "get_gpu_metrics"},
+            {{"action_index", 1}, {"case_id", "source--config"}, {"kind", "get_gpu_metrics"},
              {"result", {{"gpuTimings", {{"composite_total", {{"avg", 7'000'000}}}}}}}},
         })},
     }.dump());

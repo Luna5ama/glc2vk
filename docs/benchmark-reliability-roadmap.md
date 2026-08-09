@@ -45,7 +45,7 @@ Do not restart Minecraft or its launcher unless the user explicitly asks.
 | T04 | P0 | vibris | Retry incomplete matrix cases without rerunning completed cases | Done | feat(mcp): retry incomplete profile cases |
 | T05 | P0 | vibris | Checkpoint matrix cases and expose resumable progress | Done | feat(mcp): checkpoint profile matrix progress |
 | T06 | P0 | vibris | Return exact scene/config/source provenance | Done | feat(mcp): add benchmark case provenance |
-| T07 | P0 | vibris | Enforce case reload barriers, isolation, and final state restoration | Pending | fix(core): isolate benchmark matrix cases |
+| T07 | P0 | vibris | Isolate cases and restore state | Done | fix(core): isolate benchmark matrix cases |
 | T08 | P1 | vibris | Preserve real shader-program timing identity and source metadata | Pending | feat(capture): expose program gpu timings |
 | T09 | P1 | Iris | Emit distinct program timing labels for grouped wrapper programs | Pending | feat(shaderdev): expose per-program gpu timings |
 | T10 | P1 | vibris | Add interleaved repeated A/B benchmarking and noise evaluation | Pending | feat(mcp): add paired benchmark recipe |
@@ -376,3 +376,10 @@ and exact commit title. The Git history is the source of truth for the resulting
   and restart-resume coverage. Verified with .\gradlew.bat build --offline, the CMake release build, focused
   provenance/workflow tests, and the full release CTest suite (53/53 passed). Commit title: feat(mcp): add benchmark
   case provenance.
+- 2026-08-09 - T07 - Added isolated matrix-case transactions with durable workflow/case identity and ordered receipts
+  for source publication, explicit config application, shader reload/generation confirmation, warmup, sampling, and
+  final state restoration. Preserve configs now resolve from the retained pre-matrix snapshot; Core restores the
+  original source/config/scene and resets temporal state before publishing a result, including cancellation paths.
+  Action and artifact mapping now uses explicit case IDs, with fail-closed mismatch and 128/512/1024 metric-shift
+  regressions. Verified with .\gradlew.bat build --offline, the CMake release build, focused isolation/workflow tests,
+  and the full release CTest suite (53/53 passed). Commit title: fix(core): isolate benchmark matrix cases.

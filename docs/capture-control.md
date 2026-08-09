@@ -254,7 +254,7 @@ product under the same scene preset. Both recipes return the same top-level cont
 `profile` is represented by one `source--config` case.
 
 Every case always contains `case_id`, `source_id`, `config_id`, `status`, `error`, `frames`,
-`warmup_frames`, `metrics`, and `provenance`. The top level declares `gpu_timing_unit: "ns"` and reports
+`warmup_frames`, `metrics`, `provenance`, and `barriers`. The top level declares `gpu_timing_unit: "ns"` and reports
 requested, completed, with-metrics, missing, failed, retried, passed, and incomplete counts. Empty GPU samples
 produce a retryable `NO_GPU_SAMPLES` case error instead of a passed result.
 
@@ -272,6 +272,23 @@ The active source UUID and patched-shader generation remain diagnostic activatio
 excluded from `case_hash`, so an identical retry/resume keeps the same case identity. A different source tree,
 effective config, scene, preset, or patched shader changes the case hash. Missing runtime proof returns
 `INCOMPLETE_PROVENANCE`; the case is `incomplete`, never passed.
+
+Each checkpointed `profile_matrix` case is an isolated Core transaction. Before the first case, Core must already own
+an active source and have observed its explicit shader settings and applied scene through a successful Vibris load.
+Otherwise the matrix fails closed with `BENCHMARK_STATE_UNAVAILABLE`, because it cannot prove how to restore the
+pre-matrix runtime state. A config declared with `mode: "preserve"` is resolved to that frozen explicit settings map;
+it does not inherit unreported values from the preceding case.
+
+An isolated case emits this ordered barrier chain: `source_published`, `config_applied`, `shader_reloaded`,
+`shader_generation_confirmed`, `warmup_started`, `warmup_completed`, `sample_started`, `sample_completed`, and
+`state_restored`. The shader-generation receipt binds the sampled case to the inspected patched-shader generation.
+Core restores the retained source, explicit shader settings, full scene context, and reset temporal state before
+publishing the case result, including after cancellation or a case failure. Missing or out-of-order receipts return
+`BENCHMARK_BARRIER_FAILED`; restoration failure returns `BENCHMARK_RESTORE_FAILED` and makes Core not ready.
+
+Every action result also carries its explicit `case_id`. Normalization and durable artifact recovery group results by
+that identity, not by action-array ranges; a receipt for another case pauses the workflow without advancing its
+checkpoint. `profile-result.json` stores the complete barrier receipts with the raw attributed action results.
 
 Profile requests accept an optional `result_detail`:
 
@@ -602,6 +619,9 @@ and the artifact quota. A noisy repository can therefore consume shared admissio
 | `QUEUE_FULL` | Wait for current work; pending calls, source registry, and job queue are bounded. |
 | `NO_GPU_SAMPLES` | The profile case returned no non-empty GPU timing set; retry it or inspect runtime readiness. |
 | `INCOMPLETE_PROVENANCE` | Source, config, scene, or patched-shader identity is incomplete; do not compare. |
+| `BENCHMARK_STATE_UNAVAILABLE` | Load a known source/config/scene through Vibris before starting an isolated matrix. |
+| `BENCHMARK_BARRIER_FAILED` | A case identity or isolation receipt is missing or inconsistent; do not compare. |
+| `BENCHMARK_RESTORE_FAILED` | The retained pre-matrix source/config/scene could not be restored; Core is not ready. |
 | `CAPTURE_RESOURCE_NOT_FOUND` | Choose a logical name from `vibris_get_status.resource_catalog`. |
 | `ARTIFACT_JOB_TOO_LARGE` / `ARTIFACT_QUOTA_EXCEEDED` | Reduce captures or allow reported jobs to become evictable. |
 

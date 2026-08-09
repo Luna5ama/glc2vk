@@ -1,16 +1,21 @@
 package dev.vibris.core;
 
 import dev.vibris.api.ReloadResult;
+import dev.vibris.api.RuntimeAction;
 import dev.vibris.api.TemporalResetResult;
 import dev.vibris.protocol.v1.Action;
 import dev.vibris.protocol.v1.ActionSequence;
 import dev.vibris.protocol.v1.ActivateSource;
+import dev.vibris.protocol.v1.BenchmarkCase;
+import dev.vibris.protocol.v1.BenchmarkBarrierStage;
 import dev.vibris.protocol.v1.BenchmarkProvenance;
 import dev.vibris.protocol.v1.ErrorCode;
+import dev.vibris.protocol.v1.GetGpuMetrics;
 import dev.vibris.protocol.v1.JobStage;
 import dev.vibris.protocol.v1.LoadShader;
 import dev.vibris.protocol.v1.NamedShaderConfig;
 import dev.vibris.protocol.v1.PreparedSourceRef;
+import dev.vibris.protocol.v1.ResultArtifactOptions;
 import dev.vibris.protocol.v1.SceneContext;
 import dev.vibris.protocol.v1.ShaderConfig;
 import dev.vibris.protocol.v1.SubmitJob;
@@ -21,6 +26,11 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -209,6 +219,139 @@ class RuntimeJobExecutorTest {
     }
 
     @Test
+    void isolatedCaseSnapshotsPreserveConfigAndRestoresSourceConfigAndScene() throws Exception {
+        Fixture fixture = new Fixture();
+        Source baseline = fixture.source("baseline");
+        fixture.executor.execute(jobWithLoad(baseline, "32"), ignored -> {});
+        fixture.activator.release(List.of(baseline.lease));
+        Source candidate = fixture.source("candidate");
+        fixture.runtime.events.clear();
+        fixture.runtime.shaderConfigs.clear();
+        fixture.runtime.contexts.clear();
+        fixture.runtime.actionResponses.add(shaderInspection(11));
+        fixture.runtime.actionResponses.add(gpuMetrics(512));
+
+        TerminalResult terminal = fixture.executor.execute(
+            isolatedJob(candidate, "candidate--preserve", null), ignored -> {});
+        fixture.activator.release(List.of(candidate.lease));
+
+        assertEquals(List.of(
+            "link:candidate", "reload", "context", "reset", "action:InspectShader", "frames",
+            "action:GpuMetrics", "link:baseline", "reload", "context", "reset"), fixture.runtime.events);
+        assertEquals(List.of(
+            Map.of("SETTING_SAMPLE_COUNT", "32"),
+            Map.of("SETTING_SAMPLE_COUNT", "32")), fixture.runtime.shaderConfigs);
+        assertEquals("matrix-save", fixture.runtime.contexts.get(0).saveId());
+        assertEquals("save", fixture.runtime.contexts.get(1).saveId());
+        assertEquals(baseline.uuid, fixture.registry.activeUuid());
+        assertFalse(Files.exists(candidate.path));
+        assertEquals(
+            List.of(
+                BenchmarkBarrierStage.BENCHMARK_BARRIER_STAGE_SOURCE_PUBLISHED,
+                BenchmarkBarrierStage.BENCHMARK_BARRIER_STAGE_CONFIG_APPLIED,
+                BenchmarkBarrierStage.BENCHMARK_BARRIER_STAGE_SHADER_RELOADED,
+                BenchmarkBarrierStage.BENCHMARK_BARRIER_STAGE_SHADER_GENERATION_CONFIRMED,
+                BenchmarkBarrierStage.BENCHMARK_BARRIER_STAGE_WARMUP_STARTED,
+                BenchmarkBarrierStage.BENCHMARK_BARRIER_STAGE_WARMUP_COMPLETED,
+                BenchmarkBarrierStage.BENCHMARK_BARRIER_STAGE_SAMPLE_STARTED,
+                BenchmarkBarrierStage.BENCHMARK_BARRIER_STAGE_SAMPLE_COMPLETED,
+                BenchmarkBarrierStage.BENCHMARK_BARRIER_STAGE_STATE_RESTORED),
+            terminal.completed().getResult().getBenchmarkBarriersList().stream()
+                .map(receipt -> receipt.getStage())
+                .toList());
+        assertTrue(terminal.completed().getResult().getActionResultsList().stream()
+            .allMatch(result -> result.getCaseId().equals("candidate--preserve")));
+    }
+
+    @Test
+    void delayedReloadCannotCrossWarmupOrSampleBarrier() throws Exception {
+        Fixture fixture = new Fixture();
+        Source baseline = fixture.source("baseline");
+        fixture.executor.execute(jobWithLoad(baseline, "32"), ignored -> {});
+        fixture.activator.release(List.of(baseline.lease));
+        Source candidate = fixture.source("candidate");
+        fixture.runtime.events.clear();
+        CompletableFuture<ReloadResult> delayed = new CompletableFuture<>();
+        fixture.runtime.reloadStages.add(delayed);
+        fixture.runtime.actionResponses.add(shaderInspection(12));
+        fixture.runtime.actionResponses.add(gpuMetrics(512));
+        CountDownLatch reloadEntered = new CountDownLatch(1);
+        fixture.runtime.beforeReloadResult = reloadEntered::countDown;
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread execution = new Thread(() -> {
+            try {
+                fixture.executor.execute(isolatedJob(candidate, "candidate--512", "512"), ignored -> {});
+            } catch (Throwable throwable) {
+                failure.set(throwable);
+            }
+        });
+
+        execution.start();
+        assertTrue(reloadEntered.await(2, TimeUnit.SECONDS));
+        assertEquals(List.of("link:candidate", "reload"), fixture.runtime.events);
+        delayed.complete(ReloadResult.success(List.of()));
+        execution.join(5_000);
+        fixture.activator.release(List.of(candidate.lease));
+
+        assertFalse(execution.isAlive());
+        assertEquals(null, failure.get());
+        assertTrue(fixture.runtime.events.indexOf("frames") > fixture.runtime.events.indexOf("reload"));
+        assertTrue(fixture.runtime.events.indexOf("action:GpuMetrics") > fixture.runtime.events.indexOf("frames"));
+        assertEquals(baseline.uuid, fixture.registry.activeUuid());
+    }
+
+    @Test
+    void cancellationRestoresBaselineBeforeReturningFailure() throws Exception {
+        Fixture fixture = new Fixture();
+        Source baseline = fixture.source("baseline");
+        fixture.executor.execute(jobWithLoad(baseline, "32"), ignored -> {});
+        fixture.activator.release(List.of(baseline.lease));
+        Source candidate = fixture.source("candidate");
+        CoreJob job = isolatedJob(candidate, "candidate--1024", "1024");
+        CompletableFuture<String> metrics = new CompletableFuture<>();
+        fixture.runtime.actionStages.add(CompletableFuture.completedFuture(shaderInspection(13)));
+        fixture.runtime.actionStages.add(metrics);
+        CountDownLatch sampling = new CountDownLatch(1);
+        fixture.runtime.actionObserver = action -> {
+            if (action instanceof RuntimeAction.GpuMetrics) sampling.countDown();
+        };
+        AtomicReference<RuntimeJobExecutor.Failure> failure = new AtomicReference<>();
+        Thread execution = new Thread(() -> {
+            try {
+                fixture.executor.execute(job, ignored -> {});
+            } catch (RuntimeJobExecutor.Failure expected) {
+                failure.set(expected);
+            }
+        });
+
+        execution.start();
+        assertTrue(sampling.await(2, TimeUnit.SECONDS));
+        job.cancellation.cancel();
+        metrics.completeExceptionally(new CancellationException("cancelled fixture sample"));
+        execution.join(5_000);
+        fixture.activator.release(List.of(candidate.lease));
+
+        assertFalse(execution.isAlive());
+        assertEquals(ErrorCode.CANCELLED, failure.get().code);
+        assertEquals(baseline.uuid, fixture.registry.activeUuid());
+        assertEquals(List.of("link:baseline", "reload", "context", "reset"),
+            fixture.runtime.events.subList(fixture.runtime.events.size() - 4, fixture.runtime.events.size()));
+    }
+
+    @Test
+    void isolatedCaseFailsClosedWithoutRestorableBaseline() throws Exception {
+        Fixture fixture = new Fixture();
+        Source candidate = fixture.source("candidate");
+
+        RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
+            () -> fixture.executor.execute(isolatedJob(candidate, "candidate--512", "512"), ignored -> {}));
+        fixture.activator.release(List.of(candidate.lease));
+
+        assertEquals(ErrorCode.BENCHMARK_STATE_UNAVAILABLE, failure.code);
+        assertTrue(fixture.runtime.events.isEmpty());
+    }
+
+    @Test
     void actionRejectsMismatchedPreparedSourceUuidBeforeActivation() throws Exception {
         Fixture fixture = new Fixture();
         Source source = fixture.source("A");
@@ -339,6 +482,54 @@ class RuntimeJobExecutorTest {
         CoreJob job = new CoreJob(submission, "message", null);
         job.initialize(List.of(source.lease));
         return job;
+    }
+
+    private static CoreJob isolatedJob(Source source, String caseId, String sampleCount) {
+        NamedShaderConfig.Builder config = NamedShaderConfig.newBuilder().setId("config");
+        if (sampleCount == null) {
+            config.setPreserve(true);
+        } else {
+            config.setConfig(ShaderConfig.newBuilder().putValues("SETTING_SAMPLE_COUNT", sampleCount));
+        }
+        SubmitJob submission = SubmitJob.newBuilder()
+            .setRequestId("matrix-request-" + caseId)
+            .setWorkspaceId("11111111-1111-4111-8111-111111111111")
+            .setContext(SceneContext.newBuilder()
+                .setSaveId("matrix-save")
+                .setDimensionId("minecraft:the_nether")
+                .setTimePresetId("midnight")
+                .setWeatherPresetId("rain")
+                .setCameraPresetId("matrix-camera")
+                .setSettingsPresetId("quality")
+                .setResolution(dev.vibris.protocol.v1.Resolution.newBuilder().setWidth(1280).setHeight(720))
+                .setFov(80.0))
+            .setBenchmarkProvenance(BenchmarkProvenance.newBuilder()
+                .setPresetId("matrix").setPresetVersion("2").setPresetDisplayName("Matrix"))
+            .setBenchmarkCase(BenchmarkCase.newBuilder()
+                .setWorkflowId("33333333-3333-4333-8333-333333333333")
+                .setCaseId(caseId))
+            .setResultArtifacts(ResultArtifactOptions.newBuilder()
+                .setJson(true).setKind("profile_matrix").setAttempt(1))
+            .addShaderConfigs(config)
+            .setActions(ActionSequence.newBuilder()
+                .addActions(load(source, "candidate", "config", caseId, false))
+                .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(2)))
+                .addActions(Action.newBuilder().setGetGpuMetrics(GetGpuMetrics.newBuilder().setFrames(3))))
+            .build();
+        CoreJob job = new CoreJob(submission, "message-" + caseId, null);
+        job.initialize(List.of(source.lease));
+        return job;
+    }
+
+    private static String shaderInspection(long generation) {
+        return "{\"status\":\"ok\",\"patched_shader\":{" +
+            "\"available\":true,\"sha256\":\"" + "b".repeat(64) +
+            "\",\"generation\":" + generation + "}}";
+    }
+
+    private static String gpuMetrics(long average) {
+        return "{\"gpuTimings\":{\"composite_total\":{\"avg\":" + average +
+            ",\"p5\":" + average + ",\"p50\":" + average + ",\"p95\":" + average + "}}}";
     }
 
     private static String loadActionJson(TerminalResult terminal) {

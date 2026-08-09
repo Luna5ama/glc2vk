@@ -43,6 +43,21 @@ class SourceStateTest {
     }
 
     @Test
+    void releasedActiveSourceCanBeRetainedForBenchmarkRestoration() {
+        SourceRecord source = new SourceRecord("34c97602-194d-43a3-842a-8896a8b34469", 1);
+        source.queue();
+        source.beginActivation();
+        source.activated();
+        source.release();
+
+        source.retain();
+
+        assertEquals(SourceState.ACTIVE, source.state());
+        assertEquals(1, source.references());
+        assertTrue(source.active());
+    }
+
+    @Test
     void invalidTransitionIsRejected() {
         SourceRecord source = new SourceRecord("0d2f4fd0-eebc-4a8a-94fa-61cae6ed95c8", 1);
 

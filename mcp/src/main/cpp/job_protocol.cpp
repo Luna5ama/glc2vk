@@ -425,10 +425,26 @@ Json action_results(const proto::JobResult& value) {
         Json payload = Json::object();
         if (!action.json().empty()) payload = Json::parse(action.json());
         results.push_back({{"action_index", action.action_index()},
+                           {"case_id", action.case_id()},
                            {"kind", short_name(proto::JobActionKind_Name(action.kind()), "JOB_ACTION_KIND_")},
                            {"result", std::move(payload)}});
     }
     return results;
+}
+
+Json benchmark_barriers(const proto::JobResult& value) {
+    Json result = Json::array();
+    for (const auto& receipt : value.benchmark_barriers()) {
+        result.push_back({{"case_id", receipt.case_id()},
+                          {"stage", short_name(proto::BenchmarkBarrierStage_Name(receipt.stage()),
+                                               "BENCHMARK_BARRIER_STAGE_")},
+                          {"ordinal", receipt.ordinal()},
+                          {"source_uuid", receipt.source_uuid()},
+                          {"config_sha256", receipt.config_sha256()},
+                          {"shader_generation", receipt.shader_generation()},
+                          {"detail", receipt.detail()}});
+    }
+    return result;
 }
 
 ToolOutcome completed(const proto::JobCompleted& completed) {
@@ -444,6 +460,7 @@ ToolOutcome completed(const proto::JobCompleted& completed) {
                 {"diagnostics", diagnostics(value.shader_diagnostics())},
                 {"comparison", comparison(value)},
                 {"action_results", action_results(value)},
+                {"benchmark_barriers", benchmark_barriers(value)},
                 {"timings", {{"started_at_unix_ms", timing.started_at_unix_ms()},
                              {"completed_at_unix_ms", timing.completed_at_unix_ms()},
                              {"queue_ms", timing.queue_ms()}, {"execution_ms", timing.execution_ms()},
@@ -482,6 +499,11 @@ proto::ClientMessage JobProtocol::request(std::string_view tool_name, const Json
         provenance->set_preset_id(preset->at("preset_id").get<std::string>());
         provenance->set_preset_version(preset->at("version").get<std::string>());
         provenance->set_preset_display_name(preset->at("display_name").get<std::string>());
+    }
+    if (const auto workflow = arguments.find("__vibris_workflow_id"); workflow != arguments.end()) {
+        auto* benchmark_case = job->mutable_benchmark_case();
+        benchmark_case->set_workflow_id(workflow->get<std::string>());
+        benchmark_case->set_case_id(arguments.at("__vibris_case_id").get<std::string>());
     }
     for (const auto& source : sources) job->add_sources()->CopyFrom(source);
     if (tool_name == "vibris_run_recipe") recipe(arguments, config, sources, *job);

@@ -215,6 +215,7 @@ Json case_arguments(const Json& document, const Json& spec) {
     result["__vibris_case_id"] = spec.at("case_id");
     result["__vibris_source_id"] = spec.at("source_id");
     result["__vibris_config_id"] = spec.at("config_id");
+    result["__vibris_workflow_id"] = document.at("job_id");
     result["__vibris_result_kind"] = "profile_matrix";
     if (!spec.at("pending_attempts").empty()) {
         result["__vibris_previous_attempts"] = spec.at("pending_attempts");
@@ -611,6 +612,9 @@ void ProfileMatrixWorkflow::execute(std::string job_id, const std::stop_token st
                 checkpoint_error("A profile case returned an invalid normalized result.");
             }
             auto profile_case = response.at("cases").front();
+            if (profile_case.value("case_id", std::string{}) != spec.at("case_id").get<std::string>()) {
+                checkpoint_error("A profile case returned a receipt for a different case identity.");
+            }
             const auto& error = profile_case.at("error");
             if (retry_interruption(error)) {
                 auto attempts = profile_case.value("attempts", Json::array());

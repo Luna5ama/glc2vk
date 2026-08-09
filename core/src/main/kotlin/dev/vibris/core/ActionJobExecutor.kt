@@ -26,7 +26,12 @@ internal class ActionJobExecutor(
     private val owner: RuntimeJobExecutor,
 ) {
     @Throws(RuntimeJobExecutor.Failure::class)
-    fun execute(job: CoreJob, progress: Consumer<JobStage>, deadline: Long): JobResult {
+    fun execute(
+        job: CoreJob,
+        progress: Consumer<JobStage>,
+        deadline: Long,
+        isolation: BenchmarkCaseIsolation? = null,
+    ): JobResult {
         var reload = ReloadResult.success(emptyList())
         val action = captures.prepareActions(job, runtime.getResourceCatalog(), emptyList())
         val prepared = action.prepared
@@ -50,11 +55,12 @@ internal class ActionJobExecutor(
                         when (step.type) {
                             CaptureProgramBuilder.ActionType.LOAD -> {
                                 val load = step.loadShader!!
-                                val loaded = load(job, load, progress, deadline)
+                                val loaded = load(job, load, progress, deadline, isolation)
                                 reload = loaded.reload
                                 diagnostics.addAll(reload.diagnostics)
                                 prepared?.addDiagnostics(reload.diagnostics)
                                 val inspection = inspectShader(job, deadline)
+                                isolation?.shaderGenerationConfirmed(load.sourceUuid, inspection)
                                 actionResults.add(
                                     actionResult(
                                         step.actionIndex,
@@ -74,7 +80,7 @@ internal class ActionJobExecutor(
                             }
                             CaptureProgramBuilder.ActionType.RESET -> owner.reset(job, progress, deadline)
                             CaptureProgramBuilder.ActionType.WAIT ->
-                                owner.waitFrames(job, progress, deadline, step.frames)
+                                owner.waitFrames(job, progress, deadline, step.frames, isolation)
                             CaptureProgramBuilder.ActionType.CAPTURE -> {
                                 if (prepared == null) throw captureUnavailable()
                                 results.add(owner.capture(job, progress, deadline, prepared, step.capture!!))
@@ -102,6 +108,7 @@ internal class ActionJobExecutor(
                             CaptureProgramBuilder.ActionType.RUNTIME -> {
                                 val runtimeAction = step.runtimeAction!!
                                 if (runtimeAction.hasGetGpuMetrics()) {
+                                    isolation?.sampleStarted()
                                     progress.accept(JobStage.JOB_STAGE_SAMPLING)
                                 }
                                 val json = owner.await(
@@ -109,11 +116,13 @@ internal class ActionJobExecutor(
                                     job,
                                     deadline,
                                 )
+                                if (runtimeAction.hasGetGpuMetrics()) isolation?.sampleCompleted()
                                 actionResults.add(
                                     ActionResult.newBuilder()
                                         .setActionIndex(step.actionIndex)
                                         .setKind(RuntimeActionProtocol.kind(runtimeAction))
                                         .setJson(json)
+                                        .setCaseId(currentCase?.caseId.orEmpty())
                                         .build(),
                                 )
                             }
@@ -156,6 +165,8 @@ internal class ActionJobExecutor(
             }
             if (prepared == null) {
                 executeSteps()
+                owner.restoreBenchmarkCase(job, isolation)
+                isolation?.requireComplete()
                 val result = JobResult.newBuilder().setKind(JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE)
                 CaptureProtocolArtifacts.addDiagnostics(result, diagnostics, "")
                 result.addAllActionResults(actionResults)
@@ -163,11 +174,18 @@ internal class ActionJobExecutor(
             }
             prepared.use {
                 executeSteps()
+                owner.restoreBenchmarkCase(job, isolation)
+                isolation?.requireComplete()
                 progress.accept(JobStage.JOB_STAGE_WRITING_ARTIFACTS)
                 probe.event(job.requestId, "WRITING_ARTIFACTS")
                 progress.accept(JobStage.JOB_STAGE_FINALIZING)
                 probe.event(job.requestId, "FINALIZING")
-                val resultArtifacts = ProfileResultArtifacts.write(job.submission, prepared.transaction, actionResults)
+                val resultArtifacts = ProfileResultArtifacts.write(
+                    job.submission,
+                    prepared.transaction,
+                    actionResults,
+                    isolation?.receipts().orEmpty(),
+                )
                 return captures.commit(
                     job,
                     prepared,
@@ -206,13 +224,14 @@ internal class ActionJobExecutor(
         load: dev.vibris.protocol.v1.LoadShader,
         progress: Consumer<JobStage>,
         deadline: Long,
+        isolation: BenchmarkCaseIsolation?,
     ): RuntimeJobExecutor.LoadResult {
         val source = job.sources.firstOrNull { it.uuid().equals(load.sourceUuid, ignoreCase = true) }
             ?: throw RuntimeJobExecutor.Failure(
                 ErrorCode.INVALID_SOURCE_UUID,
                 "Load action references an unprepared source.",
             )
-        return owner.loadShader(job, source, load.configId, progress, deadline)
+        return owner.loadShader(job, source, load.configId, progress, deadline, isolation)
     }
 
     private fun actionResult(
@@ -252,6 +271,7 @@ internal class ActionJobExecutor(
             .setActionIndex(actionIndex)
             .setKind(kind)
             .setJson(payload.toString())
+            .setCaseId(load.caseId)
             .build()
     }
 
