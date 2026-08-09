@@ -75,13 +75,14 @@ proto::ListPresetsResponse presets() {
     preset->set_preset_id("village-rooftop");
     preset->set_display_name("Village rooftop");
     preset->set_version("2");
+    preset->set_preset_sha256(std::string(64, 'a'));
     auto* context = preset->mutable_context();
     context->set_save_id("shader-test-world");
     context->set_dimension_id("minecraft:the_nether");
     context->set_time_preset_id("sunset");
     context->set_weather_preset_id("clear");
     context->set_camera_preset_id("village-rooftop");
-    context->set_fov(60.0);
+    context->set_fov(72.5);
     context->mutable_resolution()->set_width(1920);
     context->mutable_resolution()->set_height(1080);
     context->set_settings_preset_id("quality");
@@ -283,6 +284,7 @@ void default_settings_disambiguates_scene_presets() {
     fallback->set_preset_id("village-rooftop-default");
     fallback->set_display_name("Village rooftop default");
     fallback->set_version("2");
+    fallback->set_preset_sha256(std::string(64, 'b'));
     fallback->mutable_context()->CopyFrom(response.presets(0).context());
     fallback->mutable_context()->set_settings_preset_id("default");
     const auto resolved = SceneContextResolver::resolve(config(), response);

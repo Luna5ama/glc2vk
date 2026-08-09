@@ -13,7 +13,7 @@ namespace proto = ::vibris::control::v1;
 bool matches(const SessionConfig& config, const proto::SceneContext& context) {
     return context.save_id() == config.save_id && context.dimension_id() == config.dimension_id &&
         context.time_preset_id() == config.time_preset_id &&
-        context.camera_preset_id() == config.camera_preset_id;
+        context.camera_preset_id() == config.camera_preset_id && context.fov() == config.fov;
 }
 
 bool complete(const proto::SceneContext& context) {
@@ -23,6 +23,13 @@ bool complete(const proto::SceneContext& context) {
 
 [[noreturn]] void invalid(std::string_view message) {
     throw StateError("INVALID_PRESET", std::string(message), false);
+}
+
+void validate(const proto::ScenePreset& preset) {
+    if (!complete(preset.context()) || preset.preset_id().empty() || preset.version().empty() ||
+        preset.preset_sha256().empty()) {
+        invalid("The matched server preset has incomplete provenance.");
+    }
 }
 
 }
@@ -45,9 +52,20 @@ proto::ScenePreset SceneContextResolver::resolve_preset(
         invalid("The configured scene matches multiple server presets.");
     }
     if (match == nullptr) invalid("The configured scene does not match a server preset.");
-    if (!complete(match->context()) || match->preset_id().empty() || match->version().empty()) {
-        invalid("The matched server preset has incomplete provenance.");
+    validate(*match);
+    return *match;
+}
+
+proto::ScenePreset SceneContextResolver::resolve_preset(
+    std::string_view preset_id, const proto::ListPresetsResponse& response) {
+    const proto::ScenePreset* match = nullptr;
+    for (const auto& preset : response.presets()) {
+        if (preset.preset_id() != preset_id) continue;
+        if (match != nullptr) invalid("The preset identifier is duplicated in the server catalog.");
+        match = &preset;
     }
+    if (match == nullptr) invalid("The requested scene preset was not found.");
+    validate(*match);
     return *match;
 }
 

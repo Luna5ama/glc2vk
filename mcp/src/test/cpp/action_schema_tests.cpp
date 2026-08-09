@@ -215,6 +215,45 @@ void empty_tool_schemas_declare_object_properties() {
     }
 }
 
+void preset_tools_use_typed_schema() {
+    std::size_t dispatches = 0;
+    ToolRegistry registry([&](std::string_view name, const Json&) {
+        ++dispatches;
+        require(name == "vibris_configure" || name == "vibris_list_presets",
+            "Preset schema dispatched an unrelated tool.");
+        return Json{{"accepted", true}};
+    });
+
+    require(std::holds_alternative<Json>(registry.invoke("vibris_configure", {
+        {"kind", "preset"}, {"preset_id", "sky-noon-1"},
+    })), "Typed scene preset configuration was rejected.");
+    require(std::holds_alternative<Json>(registry.invoke("vibris_configure", {
+        {"kind", "preset"}, {"preset_id", "sky-noon-1"}, {"default_warmup_frames", 64},
+    })), "Typed scene preset configuration rejected an explicit warmup.");
+    require(std::holds_alternative<Json>(registry.invoke("vibris_configure", {
+        {"save_id", "world"}, {"dimension_id", "minecraft:overworld"},
+        {"time_preset_id", "sky-noon-1"}, {"camera_preset_id", "sky-noon-1"},
+        {"fov", 70.0}, {"default_warmup_frames", 32},
+    })), "Legacy complete scene configuration was not retained.");
+    require(std::holds_alternative<Json>(registry.invoke("vibris_list_presets", {
+        {"filter", ""}, {"filter_tags", Json::array({"sky", "regression"})},
+    })), "Scene preset discovery rejected valid text and tag filters.");
+
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_configure", {
+        {"kind", "preset"},
+    })), "Typed scene preset configuration accepted a missing preset_id.");
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_configure", {
+        {"kind", "preset"}, {"preset_id", "sky-noon-1"}, {"config", Json::object()},
+    })), "Typed scene preset configuration accepted a shader quality config.");
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_configure", {
+        {"preset_id", "sky-noon-1"},
+    })), "Untyped preset_id configuration bypassed the selector schema.");
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_list_presets", {
+        {"filter_tags", Json::array({1})},
+    })), "Preset tag filtering accepted a non-string tag.");
+    require(dispatches == 4, "Invalid preset arguments reached dispatch.");
+}
+
 void profile_recipe_requires_bounded_future_frames() {
     std::size_t dispatches = 0;
     ToolRegistry registry([&](std::string_view name, const Json& arguments) {
@@ -426,6 +465,7 @@ int main() {
         registry_has_exactly_the_supported_tools();
         registry_exposes_canonical_load_workflows();
         empty_tool_schemas_declare_object_properties();
+        preset_tools_use_typed_schema();
         atomic_action_schemas_reject_invalid_arguments();
         profile_recipe_requires_bounded_future_frames();
         profile_result_detail_schema();

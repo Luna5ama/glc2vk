@@ -37,6 +37,7 @@ class VibrisPresetCatalogTest {
             assertEquals(listOf("current", "existing"), catalog.presets().map { it.presetId })
             assertEquals(listOf("2", "2"), catalog.presets().map { it.version })
             assertEquals(current.context(), catalog.presets().first().context)
+            assertEquals(listOf("baseline"), catalog.presets().last().tags)
             assertEquals(18_234, catalog.resolve(current.context()).tick)
             assertTrue(VibrisPresetCatalog.load(path).validate(current.context()).valid)
             assertFalse(catalog.validate(SceneContext(
@@ -46,6 +47,22 @@ class VibrisPresetCatalogTest {
         } finally {
             directory.toFile().deleteRecursively()
         }
+    }
+
+    @Test
+    fun tagsTheKnownNineteenPresetCatalog() {
+        val ids = listOf(
+            "aerial-perspective-1", "aerial-perspective-2", "aerial-perspective-3", "aerial-perspective-4",
+            "frutiger-1", "mirror-room-1", "mirror-room-2", "night-gi-1", "non-cube-1", "parallax-1",
+            "raster-jungle-1", "shadow-forest-1", "sky-afternoon-1", "sky-dusk-1", "sky-midnight-1",
+            "sky-morning-1", "sky-noon-1", "sky-sunset-1", "spawn",
+        )
+
+        assertEquals(19, ids.size)
+        assertEquals(4, ids.count { "aerial-perspective" in VibrisPresetCatalog.tagsFor(it) })
+        assertEquals(1, ids.count { "raster" in VibrisPresetCatalog.tagsFor(it) })
+        assertEquals(1, ids.count { "shadow" in VibrisPresetCatalog.tagsFor(it) })
+        assertEquals(6, ids.count { "sky" in VibrisPresetCatalog.tagsFor(it) })
     }
 
     private companion object {
@@ -63,7 +80,8 @@ class VibrisPresetCatalogTest {
             "tick":6000,
             "weather":"clear",
             "resolution":[1920,1080],
-            "settings_preset_id":"default"
+            "settings_preset_id":"default",
+            "tags":["baseline"]
           }]
         }"""
     }

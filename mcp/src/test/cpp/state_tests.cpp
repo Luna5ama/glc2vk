@@ -12,6 +12,7 @@
 #include <Windows.h>
 #include <process.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <barrier>
@@ -963,6 +964,86 @@ void process_local_scene_configuration() {
     static_cast<void>(restarted.shutdown());
 }
 
+void typed_preset_discovery_and_configuration() {
+    TempDirectory temp("typed-preset-discovery");
+    fs::create_directories(temp.path() / "shaders");
+    const auto pending_root = temp.path() / "pending";
+    fs::create_directories(pending_root);
+    const auto identity_path = temp.path() / ".vibris" / "workspace.json";
+    write_bytes(identity_path,
+        vibris::mcp::Json{{"schema_version", 1}, {"workspace_id", valid_config().workspace_id}}.dump(2));
+    vibris::mcp::test::BackendStateServer server(
+        pending_root, vibris::mcp::test::PresetCatalogKind::benchmark_19);
+    McpBackend backend(temp.path(), server.target());
+
+    const auto all_outcome = backend.dispatch("vibris_list_presets", {});
+    const auto& all = require_json(all_outcome, "Known preset catalog listing failed.");
+    require(all.at("presets").size() == 19, "Known preset catalog did not contain exactly 19 scenes.");
+    for (const auto& [tag, count] : std::array<std::pair<const char*, std::size_t>, 4>{
+             {{"sky", 6}, {"aerial-perspective", 4}, {"raster", 1}, {"shadow", 1}}}) {
+        const auto filtered_outcome = backend.dispatch(
+            "vibris_list_presets", {{"filter_tags", vibris::mcp::Json::array({tag})}});
+        const auto& filtered = require_json(filtered_outcome, "Preset tag filtering failed.");
+        require(filtered.at("presets").size() == count, "Preset tag filter returned the wrong scene count.");
+        for (const auto& preset : filtered.at("presets")) {
+            require(std::find(preset.at("tags").begin(), preset.at("tags").end(), tag) !=
+                    preset.at("tags").end(),
+                "Preset tag filter returned a scene without the requested tag.");
+        }
+    }
+    const auto combined_outcome = backend.dispatch("vibris_list_presets", {
+        {"filter", "SKY-NOON-1"}, {"filter_tags", vibris::mcp::Json::array({"SKY"})},
+    });
+    const auto& combined = require_json(combined_outcome, "Combined preset filters failed.");
+    if (combined.at("presets").size() != 1 ||
+        combined.at("presets").front().at("preset_id") != "sky-noon-1") {
+        throw std::runtime_error(
+            "Text and tag filters did not combine case-insensitively: " + combined.dump());
+    }
+
+    const auto configured_outcome = backend.dispatch("vibris_configure", {
+        {"kind", "preset"}, {"preset_id", "sky-noon-1"},
+    });
+    const auto& configured = require_json(configured_outcome, "Typed preset configuration failed.");
+    require(configured.at("selector") ==
+            vibris::mcp::Json{{"kind", "preset"}, {"preset_id", "sky-noon-1"}},
+        "Typed preset selector was not returned.");
+    require(configured.at("default_warmup_frames") == 32 &&
+            configured.at("save_id") == "save-sky-noon-1",
+        "Typed preset did not resolve the default warmup or scene identity.");
+    const auto& scene = configured.at("resolved_scene_context");
+    require(scene.at("save_id") == "save-sky-noon-1" &&
+            scene.at("dimension_id") == "minecraft:overworld" &&
+            scene.at("time_preset_id") == "sky-noon-1" &&
+            scene.at("weather_preset_id") == "clear" &&
+            scene.at("camera_preset_id") == "sky-noon-1" && scene.at("fov") == 70.0 &&
+            scene.at("resolution") == vibris::mcp::Json{{"width", 64}, {"height", 64}} &&
+            scene.at("settings_preset_id") == "default",
+        "Typed preset receipt omitted part of the complete resolved scene.");
+    const auto& preset = configured.at("scene_preset");
+    require(preset.at("version") == "2" &&
+            preset.at("preset_sha256") == std::string(64, 'a') &&
+            preset.at("tags") == vibris::mcp::Json::array({"sky"}),
+        "Typed preset receipt omitted version, hash, or tags.");
+
+    const auto current_outcome = backend.dispatch("vibris_get_config", {});
+    const auto& current = require_json(current_outcome, "Configured typed preset was not readable.");
+    require(current.at("configured") == true && current.at("config") == configured,
+        "Get config did not retain the complete typed preset receipt.");
+    const auto validated = server.service().validated();
+    require(validated.size() == 1 && validated.front().weather_preset_id() == "clear" &&
+            validated.front().resolution().width() == 64,
+        "Typed preset validation did not submit the complete resolved context.");
+
+    const auto missing = backend.dispatch("vibris_configure", {
+        {"kind", "preset"}, {"preset_id", "not-in-catalog"},
+    });
+    const auto* failure = std::get_if<vibris::mcp::ToolFailure>(&missing);
+    require(failure != nullptr && failure->code == "INVALID_PRESET" && !failure->retryable,
+        "Unknown typed preset returned the wrong error contract.");
+    static_cast<void>(backend.shutdown());
+}
+
 void tool_metadata_is_process_local() {
     const vibris::mcp::ToolRegistry tools;
     std::size_t matched = 0;
@@ -1008,7 +1089,7 @@ void resource_lists_are_empty() {
 }
 
 using TestCase = std::pair<std::string_view, void (*)()>;
-constexpr std::array<TestCase, 18> test_cases {{
+constexpr std::array<TestCase, 19> test_cases {{
     {"WorkspaceIdentityConcurrentFirstUse", workspace_identity_concurrent_first_use},
     {"WorkspaceIdentityDeterministicPublication", workspace_identity_deterministic_publication},
     {"WorkspaceIdentityIoFailuresCleanup", workspace_identity_io_failures_cleanup},
@@ -1025,6 +1106,7 @@ constexpr std::array<TestCase, 18> test_cases {{
     {"WorkspaceIdentityRejectsActiveWriter", workspace_identity_rejects_active_writer},
     {"SameWorktreeBackendsCoexist", same_worktree_backends_coexist},
     {"ProcessLocalSceneConfiguration", process_local_scene_configuration},
+    {"TypedPresetDiscoveryAndConfiguration", typed_preset_discovery_and_configuration},
     {"ToolMetadataIsProcessLocal", tool_metadata_is_process_local},
     {"ResourceListsAreEmpty", resource_lists_are_empty},
 }};

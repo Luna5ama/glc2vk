@@ -38,12 +38,6 @@ internal object BenchmarkProvenance {
         }
         val sceneContext = context(loaded.context.context)
         val preset = job.submission.benchmarkProvenance
-        val presetIdentity = buildJsonObject {
-            put("preset_id", preset.presetId)
-            put("version", preset.presetVersion)
-            put("display_name", preset.presetDisplayName)
-            put("effective_context", sceneContext)
-        }
         val sourceComplete = reference.requestedRevision.isNotBlank() &&
             reference.resolvedRevision.matches(Regex("[0-9a-fA-F]{40}")) &&
             source.snapshotSha256.matches(Regex("[0-9a-f]{64}"))
@@ -54,7 +48,12 @@ internal object BenchmarkProvenance {
         val sourceHash = sha256(sourceIdentity)
         val configHash = sha256(shaderIdentity)
         val sceneHash = sha256(sceneContext)
-        val presetHash = sha256(presetIdentity)
+        val presetHash = presetHash(
+            preset.presetId,
+            preset.presetVersion,
+            preset.presetDisplayName,
+            sceneContext,
+        )
         val patchedHash = (patched["sha256"] as? JsonPrimitive)?.content.orEmpty()
         val caseHash = sha256(buildJsonObject {
             put("schema_version", 1)
@@ -93,6 +92,21 @@ internal object BenchmarkProvenance {
         }
         return sha256(shaderIdentity(settings, settingsJson))
     }
+
+    fun presetHash(presetId: String, version: String, displayName: String, context: SceneContext): String =
+        presetHash(presetId, version, displayName, context(context))
+
+    private fun presetHash(
+        presetId: String,
+        version: String,
+        displayName: String,
+        sceneContext: JsonObject,
+    ): String = sha256(buildJsonObject {
+        put("preset_id", presetId)
+        put("version", version)
+        put("display_name", displayName)
+        put("effective_context", sceneContext)
+    })
 
     private fun shaderIdentity(settings: Map<String, String>?, settingsJson: JsonElement): JsonObject =
         buildJsonObject {

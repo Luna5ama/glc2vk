@@ -230,20 +230,33 @@ Json definition(const char* name, const char* description, Json input_schema, bo
 
 Json build_definitions() {
     const auto empty = closed_object(Json::object());
-    const auto configure = closed_object(
-        {{"save_id", {{"type", "string"}, {"minLength", 1}}},
-         {"dimension_id", {{"type", "string"}, {"minLength", 1}}},
-         {"time_preset_id", {{"type", "string"}, {"minLength", 1}}},
-         {"camera_preset_id", {{"type", "string"}, {"minLength", 1}}},
-         {"fov", {{"type", "number"}, {"minimum", 1}, {"maximum", 180}}},
-         {"default_warmup_frames", bounded_integer(0, std::numeric_limits<std::uint32_t>::max())}},
-        {"save_id", "dimension_id", "time_preset_id", "camera_preset_id", "fov", "default_warmup_frames"});
+    const auto configure = one_of({
+        closed_object({{"kind", enum_string({"preset"})},
+                       {"preset_id", {{"type", "string"}, {"minLength", 1}}},
+                       {"default_warmup_frames",
+                        bounded_integer(0, std::numeric_limits<std::uint32_t>::max())}},
+                      {"kind", "preset_id"}),
+        closed_object(
+            {{"save_id", {{"type", "string"}, {"minLength", 1}}},
+             {"dimension_id", {{"type", "string"}, {"minLength", 1}}},
+             {"time_preset_id", {{"type", "string"}, {"minLength", 1}}},
+             {"camera_preset_id", {{"type", "string"}, {"minLength", 1}}},
+             {"fov", {{"type", "number"}, {"minimum", 1}, {"maximum", 180}}},
+             {"default_warmup_frames", bounded_integer(0, std::numeric_limits<std::uint32_t>::max())}},
+            {"save_id", "dimension_id", "time_preset_id", "camera_preset_id", "fov",
+             "default_warmup_frames"}),
+    });
     Json definitions = Json::array({
         definition("vibris_get_config", "Read this MCP process's scene configuration and durable worktree ID.",
                    empty, true),
-        definition("vibris_list_presets", "List valid Minecraft scene presets, optionally filtered by text.",
-                   closed_object({{"filter", {{"type", "string"}, {"minLength", 1}}}}), true),
-        definition("vibris_configure", "Validate and set this MCP process's scene configuration until it exits.",
+        definition("vibris_list_presets",
+                   "List Minecraft scene presets, not shader quality profiles. Optional text and tag filters are "
+                   "combined; filter_tags requires every requested tag.",
+                   closed_object({{"filter", {{"type", "string"}}},
+                                  {"filter_tags", string_array(32)}}), true),
+        definition("vibris_configure",
+                   "Validate and set this MCP process's scene configuration until it exits. Prefer the typed "
+                   "{kind: preset, preset_id: ...} form; shader quality remains a separate recipe config.",
                    configure, false),
         definition("vibris_get_status", "Read MCP, server, runtime, queue, resource, and artifact status.", empty,
                    true),

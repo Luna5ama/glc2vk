@@ -53,7 +53,7 @@ class VibrisPresetCatalog private constructor(
     @Synchronized
     fun presets(): List<ScenePreset> = values.values
         .sortedBy { it.id }
-        .map { ScenePreset(it.id, it.id, it.context(), SCHEMA_VERSION.toString()) }
+        .map { ScenePreset(it.id, it.id, it.context(), SCHEMA_VERSION.toString(), effectiveTags(it)) }
 
     @Synchronized
     fun validate(context: SceneContext): ContextValidationResult = try {
@@ -117,7 +117,28 @@ class VibrisPresetCatalog private constructor(
         val weather: String,
         val resolution: SceneContext.Resolution,
         val settingsPresetId: String,
+        val tags: List<String>,
     ) {
+        constructor(
+            id: String,
+            saveId: String,
+            saveName: String,
+            dimensionId: String,
+            x: Double,
+            y: Double,
+            z: Double,
+            yaw: Float,
+            pitch: Float,
+            fov: Double,
+            tick: Long,
+            weather: String,
+            resolution: SceneContext.Resolution,
+            settingsPresetId: String,
+        ) : this(
+            id, saveId, saveName, dimensionId, x, y, z, yaw, pitch, fov, tick, weather, resolution,
+            settingsPresetId, emptyList(),
+        )
+
         init {
             require(id.isNotBlank() && '/' !in id) { "Invalid preset id" }
             require(saveId.isNotBlank() && saveName.isNotBlank() && dimensionId.isNotBlank()) {
@@ -132,6 +153,9 @@ class VibrisPresetCatalog private constructor(
             }
             require(resolution.isSpecified()) { "Preset resolution is unspecified" }
             require(settingsPresetId.isNotBlank()) { "Settings preset is blank" }
+            require(tags.all { it.matches(TAG_PATTERN) } && tags.distinct().size == tags.size) {
+                "Preset tags must be unique lowercase identifiers"
+            }
         }
 
         fun context(): SceneContext = SceneContext(
@@ -148,6 +172,17 @@ class VibrisPresetCatalog private constructor(
 
     companion object {
         private const val SCHEMA_VERSION = 2
+        private val TAG_PATTERN = Regex("[a-z0-9]+(?:-[a-z0-9]+)*")
+
+        internal fun tagsFor(presetId: String): List<String> = buildList {
+            if (presetId.startsWith("sky-")) add("sky")
+            if (presetId.startsWith("aerial-perspective-")) add("aerial-perspective")
+            if (presetId.startsWith("raster-")) add("raster")
+            if (presetId.startsWith("shadow-")) add("shadow")
+        }
+
+        private fun effectiveTags(preset: Preset): List<String> =
+            (preset.tags.ifEmpty { tagsFor(preset.id) }).sorted()
 
         @JvmStatic
         @Throws(IOException::class)
@@ -160,12 +195,13 @@ class VibrisPresetCatalog private constructor(
                 val presets = HashMap<String, Preset>()
                 for (element in array(root, "presets")) {
                     val value = element as JsonObject
+                    val id = string(value, "id")
                     val position = array(value, "position")
                     val resolution = array(value, "resolution")
                     require(position.size == 3) { "Preset position must have three values" }
                     require(resolution.size == 2) { "Preset resolution must have two values" }
                     val preset = Preset(
-                        string(value, "id"),
+                        id,
                         string(value, "save_id"),
                         string(value, "save_name"),
                         string(value, "dimension_id"),
@@ -182,6 +218,7 @@ class VibrisPresetCatalog private constructor(
                             resolution[1].jsonPrimitive.int,
                         ),
                         string(value, "settings_preset_id"),
+                        tags(value, id),
                     )
                     if (presets.putIfAbsent(preset.id, preset) != null) {
                         throw IllegalArgumentException("Duplicate preset id: ${preset.id}")
@@ -200,6 +237,16 @@ class VibrisPresetCatalog private constructor(
             value.getValue(name).jsonPrimitive.content.also {
                 require(it.isNotBlank()) { "Blank preset field: $name" }
             }
+
+        private fun tags(value: JsonObject, presetId: String): List<String> {
+            val element = value["tags"] ?: return tagsFor(presetId)
+            val tags = element as? JsonArray ?: throw IllegalArgumentException("Invalid preset tags")
+            return tags.map { tag ->
+                val primitive = tag as? JsonPrimitive ?: throw IllegalArgumentException("Invalid preset tag")
+                require(primitive.isString) { "Preset tags must be strings" }
+                primitive.content
+            }
+        }
 
         private fun integer(value: JsonObject, name: String): Int = value.getValue(name).jsonPrimitive.int
 
@@ -228,6 +275,9 @@ class VibrisPresetCatalog private constructor(
                             add(JsonPrimitive(preset.resolution.height))
                         })
                         put("settings_preset_id", JsonPrimitive(preset.settingsPresetId))
+                        put("tags", buildJsonArray {
+                            effectiveTags(preset).forEach { add(JsonPrimitive(it)) }
+                        })
                     })
                 })
             }

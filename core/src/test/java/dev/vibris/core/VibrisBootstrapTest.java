@@ -5,6 +5,8 @@ import dev.vibris.api.ScenePreset;
 import dev.vibris.protocol.v1.ErrorCode;
 import dev.vibris.protocol.v1.GetStatusRequest;
 import dev.vibris.protocol.v1.GetStatusResponse;
+import dev.vibris.protocol.v1.ListPresetsRequest;
+import dev.vibris.protocol.v1.ListPresetsResponse;
 import dev.vibris.protocol.v1.ValidateContextRequest;
 import dev.vibris.protocol.v1.ValidateContextResponse;
 import dev.vibris.protocol.v1.VibrisControlGrpc;
@@ -168,6 +170,49 @@ class VibrisBootstrapTest {
 
         assertTrue(bootstrap.ready());
         assertEquals(pending.toAbsolutePath().normalize(), bootstrap.pendingShadersRoot());
+        bootstrap.close();
+    }
+
+    @Test
+    void listPresetsReturnsTagsCompleteContextAndStableHash() throws Exception {
+        Path pending = Files.createDirectory(temp.resolve("preset-pending"));
+        Path artifacts = Files.createDirectory(temp.resolve("preset-artifacts"));
+        Path shaderpack = Files.createDirectory(temp.resolve("preset-shaderpack"));
+        writeServerConfig(temp, pending, artifacts, shaderpack, 50126);
+        AtomicReference<BindableService> captured = new AtomicReference<>();
+        RuntimeTestAdapter runtime = new RuntimeTestAdapter();
+        runtime.presets = List.of(new ScenePreset(
+            "sky-noon-1",
+            "Sky noon",
+            new SceneContext(
+                "shader-test-world",
+                "minecraft:overworld",
+                "sky-noon-1",
+                "clear",
+                "sky-noon-1",
+                70.0,
+                new SceneContext.Resolution(1920, 1080),
+                "default"
+            ),
+            "7",
+            List.of("regression", "sky")
+        ));
+        VibrisBootstrap bootstrap = VibrisBootstrap.start(temp, runtime, (address, service) -> {
+            captured.set(service);
+            return new TestListener();
+        });
+
+        ListPresetsResponse response = listPresets(captured.get());
+
+        assertEquals(1, response.getPresetsCount());
+        var preset = response.getPresets(0);
+        assertEquals("sky-noon-1", preset.getPresetId());
+        assertEquals("7", preset.getVersion());
+        assertEquals(List.of("regression", "sky"), preset.getTagsList());
+        assertTrue(preset.getPresetSha256().matches("[0-9a-f]{64}"));
+        assertEquals("clear", preset.getContext().getWeatherPresetId());
+        assertEquals(1920, preset.getContext().getResolution().getWidth());
+        assertEquals("default", preset.getContext().getSettingsPresetId());
         bootstrap.close();
     }
 
@@ -366,6 +411,31 @@ class VibrisBootstrapTest {
             }
         );
         assertTrue(failure.get() == null, () -> "GetStatus failed: " + failure.get());
+        return response.get();
+    }
+
+    private static ListPresetsResponse listPresets(BindableService service) {
+        AtomicReference<ListPresetsResponse> response = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        ((VibrisControlGrpc.VibrisControlImplBase) service).listPresets(
+            ListPresetsRequest.getDefaultInstance(),
+            new StreamObserver<>() {
+                @Override
+                public void onNext(ListPresetsResponse value) {
+                    response.set(value);
+                }
+
+                @Override
+                public void onError(Throwable throwable) {
+                    failure.set(throwable);
+                }
+
+                @Override
+                public void onCompleted() {
+                }
+            }
+        );
+        assertTrue(failure.get() == null, () -> "ListPresets failed: " + failure.get());
         return response.get();
     }
 

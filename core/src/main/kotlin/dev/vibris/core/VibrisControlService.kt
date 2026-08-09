@@ -123,12 +123,20 @@ class VibrisControlService internal constructor(
             }
             val response = ListPresetsResponse.newBuilder()
             presets.forEach { preset ->
+                val tags = preset.tags.sorted()
                 response.addPresets(
                     ScenePreset.newBuilder()
                         .setPresetId(preset.presetId)
                         .setDisplayName(preset.displayName)
                         .setVersion(preset.version)
-                        .setContext(RuntimeJobContext.toProtocol(preset.context)),
+                        .setContext(RuntimeJobContext.toProtocol(preset.context))
+                        .addAllTags(tags)
+                        .setPresetSha256(BenchmarkProvenance.presetHash(
+                            preset.presetId,
+                            preset.version,
+                            preset.displayName,
+                            preset.context,
+                        )),
                 )
             }
             observer.onNext(response.build())

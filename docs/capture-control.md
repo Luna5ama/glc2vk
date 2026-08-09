@@ -194,12 +194,35 @@ world, time, and camera catalogs:
     "tick": 12000,
     "weather": "clear",
     "resolution": [1920, 1080],
-    "settings_preset_id": "default"
+    "settings_preset_id": "default",
+    "tags": ["sky", "regression"]
   }]
 }
 ```
 
-The configure request uses that same preset ID for `time_preset_id` and `camera_preset_id`.
+`tags` is optional. Catalog entries without it retain compatibility; the standard `sky-*`,
+`aerial-perspective-*`, `raster-*`, and `shadow-*` names receive their corresponding tag automatically. Returned
+presets contain the complete resolved scene, sorted tags, catalog version, and a stable `preset_sha256` over the
+preset identity and effective context.
+
+Prefer the typed configure form. `default_warmup_frames` is optional and defaults to 32:
+
+```json
+{
+  "kind": "preset",
+  "preset_id": "sky-noon-1",
+  "default_warmup_frames": 64
+}
+```
+
+The result, and subsequent `vibris_get_config`, retain the flat compatibility fields and add `selector`,
+`resolved_scene_context`, and `scene_preset`. The resolved context includes save, dimension, time, weather, camera,
+FOV, resolution, and settings preset; `scene_preset` includes ID, display name, version, tags, and `preset_sha256`.
+The legacy complete request using save, dimension, time, camera, FOV, and warmup remains accepted and resolves to the
+same receipt.
+
+Scene presets are not shader quality profiles. Shader settings remain in the independent `config`/`configs` fields of
+recipes and matrices; `preset_id` is accepted only by the typed `vibris_configure` selector.
 
 ## MCP tools
 
@@ -209,8 +232,8 @@ content item and matching structured content.
 | Tool | Arguments | Result |
 |------|-----------|--------|
 | `vibris_get_config` | empty object | configured flag, worktree root, workspace ID, process-local scene config |
-| `vibris_list_presets` | optional non-empty `filter` | matching live preset catalog entries |
-| `vibris_configure` | save, dimension, time, camera, FOV, default warmup frames | validated process-local scene config |
+| `vibris_list_presets` | optional text `filter` and `filter_tags` array | matching live scene presets with context, tags, version, and hash |
+| `vibris_configure` | typed `{kind:"preset", preset_id}` or legacy complete scene | validated process-local scene config and resolved receipt |
 | `vibris_get_status` | empty object | server/runtime state, queue, resources, pending/artifact roots and quota |
 | `vibris_run_recipe` | one recipe form below | synchronous terminal job result and artifact metadata |
 | `vibris_run_actions` | named sources/configs plus up to 64 actions | synchronous terminal job result and artifact metadata |
@@ -219,6 +242,13 @@ content item and matching structured content.
 All low-level capture and shader-debug operations are variants in the `actions` array of `vibris_run_actions`; none is
 advertised as a separate MCP tool. One invocation becomes one `SubmitJob`, and result-bearing actions are returned in
 execution order through `action_results` with their action index, kind, and JSON result.
+
+Preset filters are case-insensitive. Text filtering retains substring behavior, `filter_tags` uses AND semantics, and
+both filters are combined when supplied together. An omitted or empty filter lists the full catalog:
+
+```json
+{"filter":"sky-","filter_tags":["sky"]}
+```
 
 | Action types | Purpose |
 |--------------|---------|

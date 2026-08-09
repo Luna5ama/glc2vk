@@ -250,6 +250,7 @@ if(BUILD_TESTING)
             WorkspaceIdentityRejectsActiveWriter
             SameWorktreeBackendsCoexist
             ProcessLocalSceneConfiguration
+            TypedPresetDiscoveryAndConfiguration
             ToolMetadataIsProcessLocal
             ResourceListsAreEmpty)
         add_test(NAME ${scenario} COMMAND vibris-state-tests ${scenario})

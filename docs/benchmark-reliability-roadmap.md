@@ -49,7 +49,7 @@ Do not restart Minecraft or its launcher unless the user explicitly asks.
 | T08 | P1 | vibris | Preserve real shader-program timing identity and source metadata | Done | feat(capture): expose program gpu timings |
 | T09 | P1 | Iris | Emit distinct program timing labels for grouped wrapper programs | Done | feat(shaderdev): expose per-program gpu timings |
 | T10 | P1 | vibris | Add interleaved repeated A/B benchmarking and noise evaluation | Done | feat(mcp): add paired benchmark recipe |
-| T11 | P2 | vibris | Add typed preset selection, tags, and tag filtering | Pending | feat(mcp): add typed preset filters |
+| T11 | P2 | vibris | Add typed preset selection, tags, and tag filtering | Done | feat(mcp): add typed preset filters |
 | T12 | P2 | vibris/Iris | Add deterministic visual A/B gate and final live acceptance | Pending | feat(core): add benchmark visual gate |
 
 ## Task details
@@ -406,3 +406,11 @@ and exact commit title. The Git history is the source of truth for the resulting
   samples, controls, artifacts, and a comparison table. Verified with `.\gradlew.bat build --offline`, the full
   CMake Release build, focused paired/schema/runner tests (6/6 passed), and the full Release CTest suite (57/57 passed).
   Commit title: feat(mcp): add paired benchmark recipe.
+- 2026-08-09 - T11 - Added schema-validated `{kind:"preset", preset_id}` scene selection while retaining the legacy
+  complete-scene form. Configure and get-config receipts now include the resolved save/dimension/time/weather/camera,
+  FOV, resolution, settings preset, catalog version, tags, and stable preset SHA-256. Preset JSON accepts explicit
+  tags and infers sky, aerial-perspective, raster, and shadow tags for the existing 19-preset naming scheme; discovery
+  supports case-insensitive text filtering plus AND-combined `filter_tags`, including empty text filters. Shader
+  quality configs remain a separate recipe/matrix model. Verified with `.\gradlew.bat build --offline`, the CMake
+  Release build, focused preset/schema/runner tests (4/4 passed), and the full Release CTest suite (58/58 passed).
+  Commit title: feat(mcp): add typed preset filters.

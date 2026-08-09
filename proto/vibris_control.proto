@@ -103,6 +103,8 @@ message ScenePreset {
     string display_name = 2;
     SceneContext context = 3;
     string version = 4;
+    repeated string tags = 5;
+    string preset_sha256 = 6;
 }
 
 message ValidateContextRequest {

@@ -4,6 +4,7 @@
 
 #include <grpcpp/grpcpp.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -11,12 +12,18 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace vibris::mcp::test {
 
 namespace proto = ::vibris::control::v1;
+
+enum class PresetCatalogKind {
+    process_local,
+    benchmark_19,
+};
 
 struct BackendHello final {
     std::string envelope_workspace_id;
@@ -34,8 +41,9 @@ struct BackendJob final {
 
 class BackendStateService final : public proto::VibrisControl::Service {
 public:
-    explicit BackendStateService(std::filesystem::path pending_root)
-        : pending_root_(std::move(pending_root)) {
+    explicit BackendStateService(
+        std::filesystem::path pending_root, PresetCatalogKind preset_catalog = PresetCatalogKind::process_local)
+        : pending_root_(std::move(pending_root)), preset_catalog_(preset_catalog) {
     }
 
     grpc::Status GetServerInfo(
@@ -50,9 +58,13 @@ public:
 
     grpc::Status ListPresets(
         grpc::ServerContext*, const proto::ListPresetsRequest*, proto::ListPresetsResponse* response) override {
-        add_preset(*response, "scene-a", "save-a", "dimension-a", "time-a", "camera-a");
-        add_preset(*response, "scene-b", "save-b", "dimension-b", "time-b", "camera-b");
-        add_preset(*response, "scene-c", "save-c", "dimension-c", "time-c", "camera-c");
+        if (preset_catalog_ == PresetCatalogKind::benchmark_19) {
+            add_benchmark_presets(*response);
+        } else {
+            add_preset(*response, "scene-a", "save-a", "dimension-a", "time-a", "camera-a", 61.0);
+            add_preset(*response, "scene-b", "save-b", "dimension-b", "time-b", "camera-b", 89.0);
+            add_preset(*response, "scene-c", "save-c", "dimension-c", "time-c", "camera-c", 73.0);
+        }
         return grpc::Status::OK;
     }
 
@@ -138,25 +150,54 @@ public:
         return validated_.size();
     }
 
+    [[nodiscard]] std::vector<proto::SceneContext> validated() const {
+        const std::lock_guard lock(mutex_);
+        return validated_;
+    }
+
 private:
-    static void add_preset(proto::ListPresetsResponse& response, const char* id, const char* save,
-        const char* dimension, const char* time, const char* camera) {
+    static void add_preset(proto::ListPresetsResponse& response, std::string id, std::string save,
+        std::string dimension, std::string time, std::string camera, double fov,
+        std::vector<std::string> tags = {}) {
         auto* preset = response.add_presets();
         preset->set_preset_id(id);
         preset->set_display_name(id);
-        preset->set_version("1");
+        preset->set_version("2");
+        preset->set_preset_sha256(std::string(64, 'a'));
+        for (auto& tag : tags) preset->add_tags(std::move(tag));
         auto* context = preset->mutable_context();
         context->set_save_id(save);
         context->set_dimension_id(dimension);
         context->set_time_preset_id(time);
         context->set_weather_preset_id("clear");
         context->set_camera_preset_id(camera);
+        context->set_fov(fov);
         context->set_settings_preset_id("default");
         context->mutable_resolution()->set_width(64);
         context->mutable_resolution()->set_height(64);
     }
 
+    static void add_benchmark_presets(proto::ListPresetsResponse& response) {
+        constexpr std::array ids{
+            "aerial-perspective-1", "aerial-perspective-2", "aerial-perspective-3", "aerial-perspective-4",
+            "frutiger-1", "mirror-room-1", "mirror-room-2", "night-gi-1", "non-cube-1", "parallax-1",
+            "raster-jungle-1", "shadow-forest-1", "sky-afternoon-1", "sky-dusk-1", "sky-midnight-1",
+            "sky-morning-1", "sky-noon-1", "sky-sunset-1", "spawn",
+        };
+        for (const std::string_view id : ids) {
+            std::vector<std::string> tags;
+            if (id.starts_with("aerial-perspective-")) tags.emplace_back("aerial-perspective");
+            if (id.starts_with("raster-")) tags.emplace_back("raster");
+            if (id.starts_with("shadow-")) tags.emplace_back("shadow");
+            if (id.starts_with("sky-")) tags.emplace_back("sky");
+            const auto value = std::string(id);
+            add_preset(response, value, "save-" + value, "minecraft:overworld", value, value, 70.0,
+                std::move(tags));
+        }
+    }
+
     std::filesystem::path pending_root_;
+    PresetCatalogKind preset_catalog_;
     mutable std::mutex mutex_;
     std::vector<BackendHello> hellos_;
     std::vector<BackendJob> jobs_;
@@ -165,7 +206,9 @@ private:
 
 class BackendStateServer final {
 public:
-    explicit BackendStateServer(const std::filesystem::path& pending_root) : service_(pending_root) {
+    explicit BackendStateServer(const std::filesystem::path& pending_root,
+        PresetCatalogKind preset_catalog = PresetCatalogKind::process_local)
+        : service_(pending_root, preset_catalog) {
         grpc::ServerBuilder builder;
         builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials(), &port_);
         builder.RegisterService(&service_);
