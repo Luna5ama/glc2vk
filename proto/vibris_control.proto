@@ -283,11 +283,13 @@ message ActionSequence {
 }
 
 message Action {
-    reserved 21;
+    reserved 21, 25, 26, 27;
+    reserved "capture_screenshot", "get_shader_status", "get_shader_errors", "schedule_screenshot",
+        "get_screenshot_result";
     oneof action {
         ResetTemporalState reset_temporal_state = 1;
         WaitFrames wait_frames = 2;
-        CaptureScreenshot capture_screenshot = 3;
+        TakeScreenshot take_screenshot = 3;
         CaptureTexture capture_texture = 4;
         CaptureBuffer capture_buffer = 5;
         ActivateSource activate_source = 6;
@@ -295,10 +297,7 @@ message Action {
         EmptyAction get_capture_status = 20;
         CapturePass capture_pass = 22;
         CaptureMulti capture_multi = 23;
-        EmptyAction get_shader_status = 24;
-        EmptyAction get_shader_errors = 25;
-        ScheduleScreenshot schedule_screenshot = 26;
-        EmptyAction get_screenshot_result = 27;
+        EmptyAction inspect_shader = 24;
         GetGpuMetrics get_gpu_metrics = 28;
         EmptyAction list_ssbos = 29;
         DumpSsbo dump_ssbo = 30;
@@ -310,11 +309,14 @@ message Action {
 }
 
 enum JobActionKind {
-    reserved 21;
+    reserved 21, 25, 26, 27;
+    reserved "JOB_ACTION_KIND_CAPTURE_SCREENSHOT", "JOB_ACTION_KIND_GET_SHADER_STATUS",
+        "JOB_ACTION_KIND_GET_SHADER_ERRORS", "JOB_ACTION_KIND_SCHEDULE_SCREENSHOT",
+        "JOB_ACTION_KIND_GET_SCREENSHOT_RESULT";
     JOB_ACTION_KIND_UNSPECIFIED = 0;
     JOB_ACTION_KIND_RESET_TEMPORAL_STATE = 1;
     JOB_ACTION_KIND_WAIT_FRAMES = 2;
-    JOB_ACTION_KIND_CAPTURE_SCREENSHOT = 3;
+    JOB_ACTION_KIND_TAKE_SCREENSHOT = 3;
     JOB_ACTION_KIND_CAPTURE_TEXTURE = 4;
     JOB_ACTION_KIND_CAPTURE_BUFFER = 5;
     JOB_ACTION_KIND_ACTIVATE_SOURCE = 6;
@@ -322,10 +324,7 @@ enum JobActionKind {
     JOB_ACTION_KIND_GET_CAPTURE_STATUS = 20;
     JOB_ACTION_KIND_CAPTURE_PASS = 22;
     JOB_ACTION_KIND_CAPTURE_MULTI = 23;
-    JOB_ACTION_KIND_GET_SHADER_STATUS = 24;
-    JOB_ACTION_KIND_GET_SHADER_ERRORS = 25;
-    JOB_ACTION_KIND_SCHEDULE_SCREENSHOT = 26;
-    JOB_ACTION_KIND_GET_SCREENSHOT_RESULT = 27;
+    JOB_ACTION_KIND_INSPECT_SHADER = 24;
     JOB_ACTION_KIND_GET_GPU_METRICS = 28;
     JOB_ACTION_KIND_LIST_SSBOS = 29;
     JOB_ACTION_KIND_DUMP_SSBO = 30;
@@ -352,9 +351,10 @@ message WaitFrames {
     uint32 frame_count = 1;
 }
 
-message CaptureScreenshot {
+message TakeScreenshot {
     string artifact_name = 1;
     ArtifactFormat format = 2;
+    uint32 after_frames = 3;
 }
 
 message CaptureTexture {
@@ -593,10 +593,6 @@ message CapturePass {
 message CaptureMulti {
     string type = 1;
     optional string path = 2;
-}
-
-message ScheduleScreenshot {
-    uint32 frames = 1;
 }
 
 message GetGpuMetrics {

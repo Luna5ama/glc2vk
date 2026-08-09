@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ArtifactTerminalDeliveryTest {
+    private static final String WORKSPACE_ID = "11111111-1111-4111-8111-111111111111";
     @TempDir
     Path temp;
 
@@ -50,10 +51,10 @@ class ArtifactTerminalDeliveryTest {
             }
         });
 
-        new TerminalDelivery(manager).send(session, completedMessage(committed, "request"), "workspace", "request");
+        new TerminalDelivery(manager).send(session, completedMessage(committed, "request"), WORKSPACE_ID, "request");
 
         assertTrue(observed.get());
-        try (ArtifactManager.JobTransaction ignored = manager.beginJob("workspace", "next", 400)) {
+        try (ArtifactManager.JobTransaction ignored = manager.beginJob(WORKSPACE_ID, "next", 400)) {
             assertFalse(Files.exists(committed.directory()), "successful delivery makes the completed job evictable");
         }
     }
@@ -78,20 +79,20 @@ class ArtifactTerminalDeliveryTest {
             }
         });
 
-        new TerminalDelivery(manager).send(session, completedMessage(committed, "request"), "workspace", "request");
+        new TerminalDelivery(manager).send(session, completedMessage(committed, "request"), WORKSPACE_ID, "request");
 
         assertFalse(session.connected());
         assertThrows(ArtifactManager.QuotaExceededException.class,
-            () -> manager.beginJob("workspace", "blocked", 400));
+            () -> manager.beginJob(WORKSPACE_ID, "blocked", 400));
         clock.advance(ArtifactManager.UNREPORTED_TTL);
-        try (ArtifactManager.JobTransaction ignored = manager.beginJob("workspace", "after-ttl", 400)) {
+        try (ArtifactManager.JobTransaction ignored = manager.beginJob(WORKSPACE_ID, "after-ttl", 400)) {
             assertFalse(Files.exists(committed.directory()));
         }
     }
 
     private static ArtifactManager.CommittedJob commit(ArtifactManager manager, String requestId, int bytes)
         throws Exception {
-        try (ArtifactManager.JobTransaction job = manager.beginJob("workspace", requestId, bytes)) {
+        try (ArtifactManager.JobTransaction job = manager.beginJob(WORKSPACE_ID, requestId, bytes)) {
             try (OutputStream output = job.open("payload.bin")) {
                 output.write(new byte[bytes]);
             }
@@ -102,7 +103,7 @@ class ArtifactTerminalDeliveryTest {
     private static ServerMessage completedMessage(ArtifactManager.CommittedJob committed, String requestId) {
         JobResult result = JobResult.newBuilder().setManifestPath(committed.manifest().toString()).build();
         return TerminalResult.completed(JobCompleted.newBuilder()
-            .setRequestId(requestId).setResult(result).build()).message("message", requestId, "workspace");
+            .setRequestId(requestId).setResult(result).build()).message("message", requestId, WORKSPACE_ID);
     }
 
     private static boolean hasTemporaryDirectory(Path root) {

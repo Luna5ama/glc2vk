@@ -6,13 +6,17 @@
 #include "synchronous_job_fixture.hpp"
 #include "synchronous_job_runner.hpp"
 #include "workspace_source_fixture.hpp"
+#include "workspace_artifact_link.hpp"
 
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <filesystem>
 #include <future>
+#include <fstream>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -31,6 +35,7 @@ using vibris::mcp::SessionConfig;
 using vibris::mcp::StateError;
 using vibris::mcp::SynchronousJobRunner;
 using vibris::mcp::ToolFailure;
+using vibris::mcp::ToolOutcome;
 using vibris::mcp::test::TerminalJobServer;
 using vibris::mcp::test::TempDirectory;
 using vibris::mcp::test::WorkspaceFixture;
@@ -141,7 +146,7 @@ private:
 void request_mapping() {
     const std::vector sources{source("11111111-1111-4111-8111-111111111111")};
     const Json arguments{
-        {"recipe", "reload_and_capture"},
+        {"recipe", "load_and_screenshot"},
         {"screenshot_format", "png"},
         {"config", {{"SETTING_SAMPLE_COUNT", 32}, {"SETTING_CLOUDS", false}}},
     };
@@ -167,13 +172,12 @@ void request_mapping() {
             job.context().resolution().width() == 1920 && job.context().resolution().height() == 1080 &&
             job.context().fov() == 72.5,
         "Full matched preset context was not copied with the configured FOV override.");
-    require(job.has_actions() && job.actions().actions_size() == 4 &&
+    require(job.has_actions() && job.actions().actions_size() == 2 &&
             job.actions().actions(0).has_load_shader() &&
             job.actions().actions(0).load_shader().source_uuid() == sources.front().uuid() &&
-            job.actions().actions(1).has_reset_temporal_state() &&
-            job.actions().actions(2).wait_frames().frame_count() == 19 &&
-            job.actions().actions(3).capture_screenshot().format() == proto::ARTIFACT_FORMAT_PNG,
-        "reload_and_capture was not expanded into runtime actions.");
+            job.actions().actions(1).take_screenshot().after_frames() == 19 &&
+            job.actions().actions(1).take_screenshot().format() == proto::ARTIFACT_FORMAT_PNG,
+        "load_and_screenshot was not expanded into runtime actions.");
     require(job.timeouts().queue_timeout_ms() == 60'000 && job.timeouts().execution_timeout_ms() == 120'000 &&
             job.timeouts().total_timeout_ms() == 180'000,
         "SubmitJob timeout defaults were not mapped exactly.");
@@ -191,12 +195,12 @@ void remaining_execution_mappings() {
          {"textures", Json::array({"colortex5"})}, {"buffers", Json::array({"debugSsbo"})}},
         config(), context, one_source, "request-debug");
     const auto& debug_actions = debug.submit_job().actions();
-    require(debug_actions.actions_size() == 6 &&
+    require(debug_actions.actions_size() == 5 &&
             debug_actions.actions(0).load_shader().source_uuid() == one_source.front().uuid() &&
-            debug_actions.actions(2).wait_frames().frame_count() == 5 &&
-            debug_actions.actions(3).capture_screenshot().artifact_name() == "screenshot" &&
-            debug_actions.actions(4).capture_texture().logical_name() == "colortex5" &&
-            debug_actions.actions(5).capture_buffer().logical_name() == "debugSsbo",
+            debug_actions.actions(1).wait_frames().frame_count() == 5 &&
+            debug_actions.actions(2).take_screenshot().artifact_name() == "screenshot" &&
+            debug_actions.actions(3).capture_texture().logical_name() == "colortex5" &&
+            debug_actions.actions(4).capture_buffer().logical_name() == "debugSsbo",
         "capture_debug_bundle was not expanded into runtime actions.");
 
     const std::vector two_sources{source("44444444-4444-4444-8444-444444444444"),
@@ -210,14 +214,14 @@ void remaining_execution_mappings() {
                                     {{"type", "buffer"}, {"name", "debugSsbo"}}})}},
         config(), context, two_sources, "request-ab");
     const auto& ab_actions = ab.submit_job().actions();
-    require(ab_actions.actions_size() == 13 &&
+    require(ab_actions.actions_size() == 11 &&
             ab_actions.actions(0).load_shader().source_uuid() == two_sources[0].uuid() &&
-            ab_actions.actions(3).capture_screenshot().format() == proto::ARTIFACT_FORMAT_PNG &&
-            ab_actions.actions(4).capture_texture().format() == proto::ARTIFACT_FORMAT_PNG &&
-            ab_actions.actions(5).capture_buffer().format() == proto::ARTIFACT_FORMAT_BIN &&
-            ab_actions.actions(6).load_shader().source_uuid() == two_sources[1].uuid() &&
-            ab_actions.actions(12).compare_captures().baseline_label() == "baseline" &&
-            ab_actions.actions(12).compare_captures().candidate_label() == "candidate",
+            ab_actions.actions(2).take_screenshot().format() == proto::ARTIFACT_FORMAT_PNG &&
+            ab_actions.actions(3).capture_texture().format() == proto::ARTIFACT_FORMAT_PNG &&
+            ab_actions.actions(4).capture_buffer().format() == proto::ARTIFACT_FORMAT_BIN &&
+            ab_actions.actions(5).load_shader().source_uuid() == two_sources[1].uuid() &&
+            ab_actions.actions(10).compare_captures().baseline_label() == "baseline" &&
+            ab_actions.actions(10).compare_captures().candidate_label() == "candidate",
         "ab_compare was not expanded into runtime actions.");
 
     const Json action_arguments{
@@ -225,9 +229,8 @@ void remaining_execution_mappings() {
         {"configs", Json::array({{{"id", "quality"}, {"values", Json::object()}}})},
         {"actions", Json::array({
             {{"type", "load_shader"}, {"source", "candidate"}, {"config", "quality"}},
-            {{"type", "reset_temporal_state"}},
             {{"type", "wait_frames"}, {"frames", 3}},
-            {{"type", "capture_screenshot"}, {"artifact_name", "beauty"}},
+            {{"type", "take_screenshot"}, {"artifact_name", "beauty"}},
             {{"type", "capture_texture"}, {"name", "colortex5"}, {"format", "raw"},
              {"artifact_name", "texture"}},
             {{"type", "capture_buffer"}, {"name", "debugSsbo"}, {"format", "bin"},
@@ -236,12 +239,12 @@ void remaining_execution_mappings() {
     const auto actions = JobProtocol::request(
         "vibris_run_actions", action_arguments, config(), context, one_source, "request-actions");
     const auto& sequence = actions.submit_job().actions();
-    require(sequence.actions_size() == 6 && sequence.actions(0).has_load_shader() &&
-            sequence.actions(1).has_reset_temporal_state() &&
-            sequence.actions(2).wait_frames().frame_count() == 3 &&
-            sequence.actions(3).capture_screenshot().format() == proto::ARTIFACT_FORMAT_PNG &&
-            sequence.actions(4).capture_texture().logical_name() == "colortex5" &&
-            sequence.actions(5).capture_buffer().artifact_name() == "buffer",
+    require(sequence.actions_size() == 5 && sequence.actions(0).has_load_shader() &&
+            sequence.actions(0).load_shader().continue_on_failure() &&
+            sequence.actions(1).wait_frames().frame_count() == 3 &&
+            sequence.actions(2).take_screenshot().format() == proto::ARTIFACT_FORMAT_PNG &&
+            sequence.actions(3).capture_texture().logical_name() == "colortex5" &&
+            sequence.actions(4).capture_buffer().artifact_name() == "buffer",
         "Allowed action sequence was not mapped exactly.");
 }
 
@@ -331,12 +334,12 @@ void synchronous_submit_case(std::string_view tool_name, const Json& arguments, 
     const auto& result = std::get<Json>(outcome);
     require(result.at("success") == true && result.at("frame_ids").at(0) == 901 &&
             result.at("timings").at("total_ms") == 17 &&
-            result.at("kind") == (actions ? "action_sequence" : "reload_and_capture"),
+            result.at("kind") == (actions ? "action_sequence" : "load_and_screenshot"),
         "Synchronous runner returned before or lost the terminal result.");
     if (actions) {
         require(result.at("action_results").size() == 1 &&
                 result.at("action_results").at(0).at("action_index") == 1 &&
-                result.at("action_results").at(0).at("kind") == "get_shader_status",
+                result.at("action_results").at(0).at("kind") == "inspect_shader",
             "Explicit shader load changed the public action result index.");
     }
     require(server.valid_submit() && server.submit_jobs() == 1 && server.terminal_writes() == 1,
@@ -346,12 +349,12 @@ void synchronous_submit_case(std::string_view tool_name, const Json& arguments, 
 }
 
 void synchronous_submit_waits_for_terminal() {
-    synchronous_submit_case("vibris_run_recipe", {{"recipe", "reload_and_capture"}}, false);
+    synchronous_submit_case("vibris_run_recipe", {{"recipe", "load_and_screenshot"}}, false);
     synchronous_submit_case("vibris_run_actions",
         {{"sources", Json::array({{{"id", "source"}, {"kind", "workspace"}}})},
          {"configs", Json::array({{{"id", "config"}, {"mode", "preserve"}}})},
          {"actions", Json::array({{{"type", "load_shader"}, {"source", "source"}, {"config", "config"}},
-                                  {{"type", "get_shader_status"}}})}}, true);
+                                  {{"type", "inspect_shader"}}})}}, true);
 }
 
 void matrix_expands_named_source_config_product() {
@@ -367,8 +370,7 @@ void matrix_expands_named_source_config_product() {
                                  {{"id", "spline"}, {"values", {{"SETTING_PARALLAX_MODE", 4}}}}})},
         {"matrix", {{"sources", Json::array({"base", "candidate"})},
                     {"configs", Json::array({"steep", "spline"})}}},
-        {"actions", Json::array({{{"type", "reset_temporal_state"}},
-                                  {{"type", "get_gpu_metrics"}, {"frames", 64}}})},
+        {"actions", Json::array({{{"type", "get_gpu_metrics"}, {"frames", 64}}})},
     };
 
     const auto message = JobProtocol::request(
@@ -376,21 +378,21 @@ void matrix_expands_named_source_config_product() {
     const auto& job = message.submit_job();
 
     require(job.sources_size() == 2 && job.shader_configs_size() == 2 &&
-            job.actions().actions_size() == 12,
+            job.actions().actions_size() == 8,
         "Matrix did not keep two sources/configs or expand four cases.");
     require(job.actions().actions(0).load_shader().source_id() == "base" &&
             job.actions().actions(0).load_shader().config_id() == "steep" &&
             job.actions().actions(0).load_shader().continue_on_failure() &&
-            job.actions().actions(3).load_shader().config_id() == "spline" &&
-            job.actions().actions(6).load_shader().source_id() == "candidate" &&
-            job.actions().actions(9).load_shader().case_id() == "candidate--spline",
+            job.actions().actions(2).load_shader().config_id() == "spline" &&
+            job.actions().actions(4).load_shader().source_id() == "candidate" &&
+            job.actions().actions(6).load_shader().case_id() == "candidate--spline",
         "Matrix expansion order or load references changed.");
 }
 
 void source_free_runtime_actions_mapping() {
     const auto context = SceneContextResolver::resolve(config(), presets());
     const Json arguments{{"actions", Json::array({
-        {{"type", "get_shader_status"}},
+        {{"type", "inspect_shader"}},
         {{"type", "get_gpu_metrics"}, {"frames", 12}},
     })}};
 
@@ -399,7 +401,7 @@ void source_free_runtime_actions_mapping() {
     const auto& sequence = message.submit_job().actions();
 
     require(message.submit_job().sources().empty() && sequence.actions_size() == 2 &&
-            sequence.actions(0).has_get_shader_status() &&
+            sequence.actions(0).has_inspect_shader() &&
             sequence.actions(1).get_gpu_metrics().frames() == 12,
         "Source-free runtime controls were not encoded as one action sequence.");
 }
@@ -413,7 +415,7 @@ void title_screen_runtime_can_prepare_source_for_world_loading_job() {
     hello.mutable_limits()->set_max_source_files(128);
     vibris::mcp::SourceHandler sources(fixture.worktree());
 
-    sources.prepare("vibris_run_recipe", {{"recipe", "reload_and_capture"}}, hello);
+    sources.prepare("vibris_run_recipe", {{"recipe", "load_and_screenshot"}}, hello);
     const auto references = sources.bind_latest("title-screen-request");
 
     require(references.size() == 1 && !references.front().uuid().empty(),
@@ -441,7 +443,7 @@ void synchronous_submit_resumes_after_acceptance() {
     client.start();
     const auto context = SceneContextResolver::resolve(config(), presets());
     const auto outcome = SynchronousJobRunner(client, sources, config()).run(
-        "vibris_run_recipe", {{"recipe", "reload_and_capture"}}, hello, context);
+        "vibris_run_recipe", {{"recipe", "load_and_screenshot"}}, hello, context);
     const auto stats = client.stats();
     client.shutdown();
     server.shutdown();
@@ -473,7 +475,7 @@ void synchronous_submit_has_local_total_deadline() {
     client.start();
     const auto context = SceneContextResolver::resolve(config(), presets());
     const auto outcome = SynchronousJobRunner(client, sources, config(), 75ms).run(
-        "vibris_run_recipe", {{"recipe", "reload_and_capture"}}, hello, context);
+        "vibris_run_recipe", {{"recipe", "load_and_screenshot"}}, hello, context);
     const auto stats = client.stats();
     client.shutdown();
     server.shutdown();
@@ -578,7 +580,7 @@ void grpc_shutdown_does_not_start_operations_after_cq_shutdown() {
         job->mutable_actions()->add_actions()->mutable_activate_source()->set_source_uuid("missing-source");
         job->mutable_actions()->add_actions()->mutable_reset_temporal_state();
         job->mutable_actions()->add_actions()->mutable_wait_frames()->set_frame_count(1);
-        job->mutable_actions()->add_actions()->mutable_capture_screenshot()->set_artifact_name("screenshot");
+        job->mutable_actions()->add_actions()->mutable_take_screenshot()->set_artifact_name("screenshot");
         require(client.submit(std::move(request), [&](const grpc::Status& status,
             const proto::ServerMessage& message) {
             {
@@ -632,7 +634,7 @@ void completed_mapping() {
     artifact->set_path(artifact_path);
     auto* status = result->add_action_results();
     status->set_action_index(1);
-    status->set_kind(proto::JOB_ACTION_KIND_GET_SHADER_STATUS);
+    status->set_kind(proto::JOB_ACTION_KIND_INSPECT_SHADER);
     status->set_json(R"({"loaded":true})");
     auto* metrics = result->add_action_results();
     metrics->set_action_index(2);
@@ -655,7 +657,7 @@ void completed_mapping() {
         "Absolute artifact or manifest paths were not preserved.");
     require(mapped.at("action_results").size() == 2 &&
             mapped.at("action_results").at(0).at("action_index") == 1 &&
-            mapped.at("action_results").at(0).at("kind") == "get_shader_status" &&
+            mapped.at("action_results").at(0).at("kind") == "inspect_shader" &&
             mapped.at("action_results").at(0).at("result").at("loaded") == true &&
             mapped.at("action_results").at(1).at("kind") == "get_gpu_metrics" &&
             mapped.at("action_results").at(1).at("result").at("p50") == 1.25,
@@ -692,6 +694,127 @@ void failed_mapping() {
         "JobFailed did not preserve structured compile failure details.");
 }
 
+void workspace_artifact_link_mapping() {
+    WorkspaceFixture fixture;
+    std::filesystem::create_directory(fixture.worktree() / ".vibris");
+    const std::string workspace_id = "11111111-1111-4111-8111-111111111111";
+    const auto target = fixture.pending().parent_path() / "artifact-store" / workspace_id;
+    const auto request = target / "request-directory";
+    std::filesystem::create_directories(request);
+    const auto manifest = request / "manifest.json";
+    const auto artifact = request / "capture.png";
+    const auto log = request / "shader.log";
+    std::ofstream(manifest) << "{}";
+    std::ofstream(artifact) << "png";
+    std::ofstream(log) << "log";
+
+    ToolOutcome outcome = Json{{"manifest_path", manifest.string()},
+        {"artifacts", Json::array({{{"path", artifact.string()}}})},
+        {"diagnostics", Json::array({{{"log_path", log.string()}}})}};
+    vibris::mcp::WorkspaceArtifactLink(fixture.worktree(), workspace_id).rewrite(outcome);
+
+    const auto link = fixture.worktree() / ".vibris" / "artifact";
+    std::error_code error;
+    require(std::filesystem::equivalent(link, target, error) && !error,
+        "Artifact link does not target the workspace ID directory.");
+    const auto& mapped = std::get<Json>(outcome);
+    require(std::filesystem::path(mapped.at("manifest_path").get<std::string>()) ==
+            link / "request-directory" / "manifest.json" &&
+            std::filesystem::path(mapped.at("artifacts").at(0).at("path").get<std::string>()) ==
+            link / "request-directory" / "capture.png" &&
+            std::filesystem::path(mapped.at("diagnostics").at(0).at("log_path").get<std::string>()) ==
+            link / "request-directory" / "shader.log",
+        "Artifact-bearing paths were not rewritten through .vibris/artifact.");
+
+    error.clear();
+    std::filesystem::remove(link, error);
+    require(!error, "Unable to remove the test artifact link.");
+    const auto stale_target = fixture.pending().parent_path() / "stale-artifact-store";
+    std::filesystem::create_directory(stale_target);
+    std::filesystem::create_directory_symlink(stale_target, link);
+    ToolOutcome stale = Json{{"artifacts", Json::array({{{"path", artifact.string()}}})}};
+    vibris::mcp::WorkspaceArtifactLink(fixture.worktree(), workspace_id).rewrite(stale);
+    error.clear();
+    require(std::filesystem::equivalent(link, target, error) && !error,
+        "A stale artifact directory link was not replaced.");
+
+    error.clear();
+    std::filesystem::remove(link, error);
+    require(!error, "Unable to remove the replaced artifact link.");
+    std::filesystem::create_directory(link);
+    ToolOutcome occupied = Json{{"artifacts", Json::array({{{"path", artifact.string()}}})}};
+    try {
+        vibris::mcp::WorkspaceArtifactLink(fixture.worktree(), workspace_id).rewrite(occupied);
+        throw std::runtime_error("Occupied .vibris/artifact did not fail fast.");
+    } catch (const StateError& state_error) {
+        require(state_error.code() == "ARTIFACT_LINK_ERROR",
+            "Occupied .vibris/artifact returned the wrong error code.");
+    }
+}
+
+void workspace_artifact_link_concurrent_first_use() {
+    WorkspaceFixture fixture;
+    std::filesystem::create_directory(fixture.worktree() / ".vibris");
+    const std::string workspace_id = "22222222-2222-4222-8222-222222222222";
+    const auto target = fixture.pending().parent_path() / "artifact-store" / workspace_id;
+    const auto request = target / "request-directory";
+    std::filesystem::create_directories(request);
+    const auto artifact = request / "capture.png";
+    std::ofstream(artifact) << "png";
+    ToolOutcome first = Json{{"artifacts", Json::array({{{"path", artifact.string()}}})}};
+    ToolOutcome second = first;
+    std::exception_ptr first_error;
+    std::exception_ptr second_error;
+    std::thread first_thread([&] {
+        try { vibris::mcp::WorkspaceArtifactLink(fixture.worktree(), workspace_id).rewrite(first); }
+        catch (...) { first_error = std::current_exception(); }
+    });
+    std::thread second_thread([&] {
+        try { vibris::mcp::WorkspaceArtifactLink(fixture.worktree(), workspace_id).rewrite(second); }
+        catch (...) { second_error = std::current_exception(); }
+    });
+    first_thread.join();
+    second_thread.join();
+    require(!first_error && !second_error,
+        "Concurrent MCP instances did not converge on one workspace artifact link.");
+}
+
+void workspace_artifact_link_without_canonical_support() {
+    char* configured_root_value = nullptr;
+    std::size_t configured_root_length = 0;
+    if (_dupenv_s(&configured_root_value, &configured_root_length, "VIBRIS_NONCANONICAL_TEST_ROOT") != 0) {
+        throw std::runtime_error("Unable to read VIBRIS_NONCANONICAL_TEST_ROOT.");
+    }
+    const std::unique_ptr<char, decltype(&std::free)> configured_root(configured_root_value, &std::free);
+    if (configured_root == nullptr || configured_root_length <= 1) return;
+
+    const auto root = std::filesystem::path(configured_root.get());
+    const std::string workspace_id = "33333333-3333-4333-8333-333333333333";
+    const auto target = root / workspace_id;
+    const auto request = target / "request-directory";
+    std::error_code cleanup_error;
+    std::filesystem::remove_all(root, cleanup_error);
+    std::filesystem::create_directories(request);
+    const auto artifact = request / "capture.png";
+    std::ofstream(artifact) << "png";
+
+    try {
+        WorkspaceFixture fixture;
+        std::filesystem::create_directory(fixture.worktree() / ".vibris");
+        ToolOutcome outcome = Json{{"artifacts", Json::array({{{"path", artifact.string()}}})}};
+        vibris::mcp::WorkspaceArtifactLink(fixture.worktree(), workspace_id).rewrite(outcome);
+        const auto& mapped = std::get<Json>(outcome);
+        require(std::filesystem::path(mapped.at("artifacts").at(0).at("path").get<std::string>()) ==
+                fixture.worktree() / ".vibris" / "artifact" / "request-directory" / "capture.png",
+            "Artifact path on a non-canonical filesystem was not rewritten through the workspace link.");
+    } catch (...) {
+        std::filesystem::remove_all(root, cleanup_error);
+        throw;
+    }
+    std::filesystem::remove_all(root, cleanup_error);
+    require(!cleanup_error, "Unable to remove the non-canonical filesystem fixture.");
+}
+
 }
 
 int main() {
@@ -713,6 +836,9 @@ int main() {
         completed_mapping();
         artifact_free_completed_mapping();
         failed_mapping();
+        workspace_artifact_link_mapping();
+        workspace_artifact_link_concurrent_first_use();
+        workspace_artifact_link_without_canonical_support();
         std::cout << "PASS SynchronousRecipeResultMapping\n";
         return 0;
     } catch (const std::exception& error) {

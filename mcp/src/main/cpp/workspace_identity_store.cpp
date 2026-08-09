@@ -1,7 +1,6 @@
 #include "workspace_identity_store.hpp"
 
 #include "config_document.hpp"
-#include "session_config.hpp"
 #include "state_error.hpp"
 
 #define WIN32_LEAN_AND_MEAN
@@ -230,32 +229,6 @@ std::string parse_identity(std::string_view text) {
     }
 }
 
-std::optional<std::string> parse_legacy(std::string_view text) {
-    if (text.empty()) {
-        return std::nullopt;
-    }
-    try {
-        const auto document = parse_json_without_duplicate_keys(text);
-        if (!document.is_object() || !document.contains("schema_version") ||
-            !document.at("schema_version").is_number_unsigned() ||
-            document.at("schema_version").get<std::uint64_t>() != 1 || !document.contains("workspace_id") ||
-            !document.at("workspace_id").is_string()) {
-            return std::nullopt;
-        }
-        auto workspace_id = document.at("workspace_id").get<std::string>();
-        if (!detail::is_uuid(workspace_id)) {
-            return std::nullopt;
-        }
-        return workspace_id;
-    } catch (const DuplicateKeyError&) {
-        return std::nullopt;
-    } catch (const JsonDepthError&) {
-        return std::nullopt;
-    } catch (const Json::exception&) {
-        return std::nullopt;
-    }
-}
-
 std::string serialize_identity(std::string_view workspace_id) {
     return Json{{"schema_version", 1}, {"workspace_id", workspace_id}}.dump(2);
 }
@@ -394,14 +367,13 @@ void detail::WorkspaceIdentityIoHooks::after(WorkspaceIdentityIoOperation, const
     const std::filesystem::path&, bool, std::uint32_t) noexcept {
 }
 
-WorkspaceIdentityStore::WorkspaceIdentityStore(
-    std::filesystem::path identity_path, std::filesystem::path legacy_config_path)
-    : identity_path_(std::move(identity_path)), legacy_config_path_(std::move(legacy_config_path)) {
+WorkspaceIdentityStore::WorkspaceIdentityStore(std::filesystem::path identity_path)
+    : identity_path_(std::move(identity_path)) {
 }
 
 WorkspaceIdentityStore::WorkspaceIdentityStore(std::filesystem::path identity_path,
-    std::filesystem::path legacy_config_path, detail::WorkspaceIdentityIoHooks& hooks)
-    : identity_path_(std::move(identity_path)), legacy_config_path_(std::move(legacy_config_path)), hooks_(&hooks) {
+    detail::WorkspaceIdentityIoHooks& hooks)
+    : identity_path_(std::move(identity_path)), hooks_(&hooks) {
 }
 
 const std::filesystem::path& WorkspaceIdentityStore::path() const noexcept {
@@ -409,16 +381,10 @@ const std::filesystem::path& WorkspaceIdentityStore::path() const noexcept {
 }
 
 std::string WorkspaceIdentityStore::load_or_create() const {
-    if (identity_path_.parent_path().lexically_normal() != legacy_config_path_.parent_path().lexically_normal()) {
-        invalid_identity();
-    }
     StateDirectoryGuard state_directory(identity_path_.parent_path());
     static_cast<void>(state_directory);
     if (const auto existing = load_existing()) {
         return *existing;
-    }
-    if (const auto legacy = load_legacy()) {
-        return publish(*legacy);
     }
     return publish(detail::generate_uuid());
 }
@@ -459,17 +425,6 @@ std::optional<std::string> WorkspaceIdentityStore::load_existing_after_publish_l
         Sleep(1);
         ++retries;
     }
-}
-
-std::optional<std::string> WorkspaceIdentityStore::load_legacy() const {
-    const auto file = read_state_file(legacy_config_path_, "legacy session config");
-    if (file.kind == StateFileKind::busy) {
-        state_io_error("The legacy session config is busy.");
-    }
-    if (file.kind != StateFileKind::content) {
-        return std::nullopt;
-    }
-    return parse_legacy(file.content);
 }
 
 std::string WorkspaceIdentityStore::publish(std::string workspace_id) const {

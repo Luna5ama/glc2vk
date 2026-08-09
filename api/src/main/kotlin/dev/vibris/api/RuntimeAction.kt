@@ -4,10 +4,7 @@ sealed interface RuntimeAction {
     data object CaptureStatus : RuntimeAction
     data class CapturePass(val pass: String, val path: String?) : RuntimeAction
     data class CaptureMulti(val type: String, val path: String?) : RuntimeAction
-    data object ShaderStatus : RuntimeAction
-    data object ShaderErrors : RuntimeAction
-    data class ScheduleScreenshot(val frames: Int) : RuntimeAction
-    data object ScreenshotResult : RuntimeAction
+    data object InspectShader : RuntimeAction
     data class GpuMetrics(val frames: Int) : RuntimeAction
     data object ListSsbos : RuntimeAction
     data class DumpSsbo(val index: Int) : RuntimeAction

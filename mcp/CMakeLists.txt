@@ -103,6 +103,7 @@ target_link_libraries(vibris-control-client PRIVATE vibris_control_protocol nloh
 
 add_library(vibris_mcp_core STATIC
     src/main/cpp/config_document.cpp
+    src/main/cpp/workspace_artifact_link.cpp
     src/main/cpp/workspace_identity_store.cpp
     src/main/cpp/commit_extractor.cpp
     src/main/cpp/git_repository.cpp
@@ -227,7 +228,7 @@ if(BUILD_TESTING)
             WorkspaceIdentityRetriesOnlyPublicationLoser
             WorkspaceIdentityBlocksTempSubstitution
             WorkspaceIdentityPreservesCreateCollision
-            WorkspaceIdentityLegacyMigration
+            WorkspaceIdentityDoesNotMigrateCodexState
             WorkspaceIdentityRejectsDuplicateKeys
             WorkspaceIdentityEnforcesJsonDepth
             WorkspaceIdentityClassifiesNonregularState

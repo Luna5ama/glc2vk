@@ -17,9 +17,19 @@ internal object ShaderReloadFailure {
             ?: "Shader reload failed."
         return try {
             val artifact = logs.writeShaderLog(job.workspaceId, job.requestId, reload.diagnostics)
-            RuntimeJobExecutor.Failure(ErrorCode.SHADER_COMPILE_FAILED, message, artifact)
+            RuntimeJobExecutor.Failure(
+                ErrorCode.SHADER_COMPILE_FAILED,
+                message,
+                java.util.List.of(artifact),
+                reload.diagnostics,
+            )
         } catch (_: IOException) {
-            RuntimeJobExecutor.Failure(ErrorCode.SHADER_COMPILE_FAILED, message)
+            RuntimeJobExecutor.Failure(
+                ErrorCode.SHADER_COMPILE_FAILED,
+                message,
+                java.util.List.of(),
+                reload.diagnostics,
+            )
         }
     }
 }

@@ -334,7 +334,7 @@ function New-AcceptanceMessages
             params = [ordered] @{
                 name = "vibris_run_recipe"
                 arguments = [ordered] @{
-                    recipe = "reload_and_capture"
+                    recipe = "load_and_screenshot"
                     source = @{ kind = "commit"; revision = [string] $job.revision }
                     warmup_frames = [int] $job.warmup_frames
                     screenshot_format = "png"

@@ -25,14 +25,7 @@ class CaptureActionExecutor(
         RuntimeAction.CaptureStatus -> captureStatus()
         is RuntimeAction.CapturePass -> queuePass(action)
         is RuntimeAction.CaptureMulti -> queueMulti(action)
-        RuntimeAction.ShaderStatus -> shader.status()
-        RuntimeAction.ShaderErrors -> shader.errorsJson()
-        is RuntimeAction.ScheduleScreenshot -> buildJsonObject {
-            shader.scheduleScreenshot(action.frames)
-            put("scheduled", true)
-            put("frames", action.frames)
-        }
-        RuntimeAction.ScreenshotResult -> shader.screenshotResult()
+        RuntimeAction.InspectShader -> shader.inspect()
         is RuntimeAction.GpuMetrics -> error("GPU metrics are asynchronous")
         RuntimeAction.ListSsbos -> shader.storageBuffersJson()
         is RuntimeAction.DumpSsbo -> shader.dumpStorageBuffer(action.index)

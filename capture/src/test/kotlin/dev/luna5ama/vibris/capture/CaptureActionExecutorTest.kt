@@ -6,7 +6,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.nio.file.Path
-import java.util.function.Consumer
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -40,7 +39,6 @@ class CaptureActionExecutorTest {
     private class EmptyHost(private val root: Path) : ShaderDebugHost {
         override fun shaderPackName(): String? = null
         override fun reloadShaders() = Unit
-        override fun captureScreenshot(onSaved: Consumer<Path>) = Unit
         override fun gameDirectory() = root
         override fun debugShadersEnabled() = false
         override fun storageBuffers() = emptyList<StorageBufferInfo>()

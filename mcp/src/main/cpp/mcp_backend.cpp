@@ -16,6 +16,7 @@
 #include "state_error.hpp"
 #include "synchronous_job_runner.hpp"
 #include "workspace_binding.hpp"
+#include "workspace_artifact_link.hpp"
 #include "workspace_identity_store.hpp"
 
 namespace vibris::mcp {
@@ -46,13 +47,13 @@ std::string bounded(std::string value) {
 
 class McpBackend::Impl final {
 public:
-    Impl(std::optional<std::filesystem::path> workspace_root, std::string server_address)
-        : binding_(resolve_workspace(std::move(workspace_root))),
-          workspace_id_(
-              WorkspaceIdentityStore(binding_.identity_path, binding_.legacy_config_path).load_or_create()),
+    explicit Impl(std::string server_address)
+        : binding_(resolve_workspace()),
+          workspace_id_(WorkspaceIdentityStore(binding_.identity_path).load_or_create()),
           server_address_(std::move(server_address)),
           process_id_(detail::generate_uuid()),
-          source_handler_(binding_.root) {}
+          source_handler_(binding_.root),
+          artifact_link_(binding_.root, workspace_id_) {}
 
     ToolOutcome dispatch(std::string_view name, const Json& arguments) {
         try {
@@ -176,8 +177,10 @@ private:
                             throw StateError(
                                 "SERVER_NOT_READY", "The local Vibris server did not provide server info.", true);
                         }
-                        return SynchronousJobRunner(client(), source_handler_, *config_).run(
+                        auto outcome = SynchronousJobRunner(client(), source_handler_, *config_).run(
                             name, arguments, response.server(), context);
+                        artifact_link_.rewrite(outcome);
+                        return outcome;
                     });
             });
     }
@@ -214,13 +217,14 @@ private:
     std::string process_id_;
     std::optional<SessionConfig> config_;
     SourceHandler source_handler_;
+    WorkspaceArtifactLink artifact_link_;
     std::unique_ptr<GrpcClient> grpc_;
     GrpcClientStats aggregate_{};
     bool used_client_ = false;
 };
 
-McpBackend::McpBackend(std::optional<std::filesystem::path> workspace_root, std::string server_address)
-    : impl_(std::make_unique<Impl>(std::move(workspace_root), std::move(server_address))) {}
+McpBackend::McpBackend(std::string server_address)
+    : impl_(std::make_unique<Impl>(std::move(server_address))) {}
 
 McpBackend::~McpBackend() = default;
 

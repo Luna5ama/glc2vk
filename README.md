@@ -84,5 +84,5 @@ See [docs/capture-control.md](docs/capture-control.md) for the complete MCP buil
 shader profiling, capture recipes, artifacts, and troubleshooting guide.
 
 For normal Codex use, track `.codex/config.toml` in each shader repository and point it at the packaged
-`build\delivery\vibris-mcp.exe`. Leave both `cwd` and `--workspace-root` unset so each Codex task discovers its own Git
-worktree from the task cwd; this supports concurrent tasks, linked worktrees, and independent shader repositories.
+`build\delivery\vibris-mcp.exe`. Leave `cwd` unset so each Codex task discovers its own Git worktree from the task cwd;
+this supports concurrent tasks, linked worktrees, and independent shader repositories.

@@ -186,8 +186,6 @@ function Start-ProbeMcp
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $Exe
     $startInfo.Arguments = [string]::Join(' ', @(
-        ConvertTo-ProbeArgument "--workspace-root"
-        ConvertTo-ProbeArgument $Workspace
         ConvertTo-ProbeArgument "--server-address"
         ConvertTo-ProbeArgument "127.0.0.1:$Port"
     ))

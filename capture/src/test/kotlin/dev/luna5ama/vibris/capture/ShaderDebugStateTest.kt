@@ -5,7 +5,6 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.nio.file.Path
-import java.util.function.Consumer
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -21,7 +20,9 @@ class ShaderDebugStateTest {
             repeat(101) { index ->
                 control.recordError("type", "file", "message", "trace", index.toLong())
             }
-            val errors = control.errorsJson()["errors"]!!.jsonArray
+            val inspection = control.inspect()
+            val errors = inspection["errors"]!!.jsonArray
+            assertFalse(inspection["pack_loaded"]!!.jsonPrimitive.content.toBoolean())
             assertEquals(100, errors.size)
             assertEquals("1", errors.first().jsonObject["timestamp"]!!.jsonPrimitive.content)
             assertEquals("100", errors.last().jsonObject["timestamp"]!!.jsonPrimitive.content)
@@ -57,7 +58,6 @@ class ShaderDebugStateTest {
     private class EmptyHost(private val root: Path) : ShaderDebugHost {
         override fun shaderPackName(): String? = null
         override fun reloadShaders() = Unit
-        override fun captureScreenshot(onSaved: Consumer<Path>) = Unit
         override fun gameDirectory() = root
         override fun debugShadersEnabled() = false
         override fun storageBuffers() = emptyList<StorageBufferInfo>()

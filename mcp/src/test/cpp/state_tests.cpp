@@ -34,12 +34,50 @@
 #include <vector>
 
 namespace fs = std::filesystem;
-using vibris::mcp::McpBackend;
 using vibris::mcp::SessionConfig;
 using vibris::mcp::StateError;
-using vibris::mcp::WorkspaceIdentityStore;
 
 namespace {
+
+class WorkspaceIdentityStore final {
+public:
+    WorkspaceIdentityStore(fs::path identity_path, const fs::path&)
+        : store_(std::move(identity_path)) {}
+
+    WorkspaceIdentityStore(fs::path identity_path, const fs::path&,
+        vibris::mcp::detail::WorkspaceIdentityIoHooks& hooks)
+        : store_(std::move(identity_path), hooks) {}
+
+    [[nodiscard]] std::string load_or_create() const { return store_.load_or_create(); }
+
+private:
+    vibris::mcp::WorkspaceIdentityStore store_;
+};
+
+class McpBackend final {
+public:
+    McpBackend(const fs::path& root, std::string address)
+        : original_(fs::current_path()) {
+        fs::current_path(root);
+        backend_ = std::make_unique<vibris::mcp::McpBackend>(std::move(address));
+    }
+
+    ~McpBackend() {
+        backend_.reset();
+        std::error_code ignored;
+        fs::current_path(original_, ignored);
+    }
+
+    [[nodiscard]] vibris::mcp::ToolOutcome dispatch(std::string_view name, const vibris::mcp::Json& arguments) {
+        return backend_->dispatch(name, arguments);
+    }
+
+    [[nodiscard]] std::optional<vibris::mcp::GrpcClientStats> shutdown() { return backend_->shutdown(); }
+
+private:
+    fs::path original_;
+    std::unique_ptr<vibris::mcp::McpBackend> backend_;
+};
 
 void initialize_git_repository(const fs::path& repository);
 
@@ -616,37 +654,17 @@ void workspace_identity_preserves_create_collision() {
         "Exhausted collision retry published an identity or left an owned temp.");
 }
 
-void workspace_identity_legacy_migration() {
-    TempDirectory migrated("identity-legacy-valid");
-    const auto migrated_identity = migrated.path() / ".codex" / "vibris-workspace.json";
+void workspace_identity_does_not_migrate_codex_state() {
+    TempDirectory migrated("identity-no-legacy-migration");
+    const auto migrated_identity = migrated.path() / ".vibris" / "workspace.json";
     const auto migrated_legacy = migrated.path() / ".codex" / "vibris-session.json";
     const auto legacy_bytes = vibris::mcp::detail::serialize_config(valid_config());
     write_bytes(migrated_legacy, legacy_bytes);
     const auto adopted = WorkspaceIdentityStore(migrated_identity, migrated_legacy).load_or_create();
-    require(adopted == valid_config().workspace_id, "Valid legacy workspace ID was not adopted.");
-    require(read_bytes(migrated_legacy) == legacy_bytes, "Legacy migration rewrote the session file.");
-
-    TempDirectory invalid_legacy("identity-legacy-invalid");
-    const auto generated_identity = invalid_legacy.path() / ".codex" / "vibris-workspace.json";
-    const auto invalid_legacy_path = invalid_legacy.path() / ".codex" / "vibris-session.json";
-    const std::string invalid_legacy_bytes = R"({"schema_version":1,"workspace_id":"not-a-uuid"})";
-    write_bytes(invalid_legacy_path, invalid_legacy_bytes);
-    const auto generated = WorkspaceIdentityStore(generated_identity, invalid_legacy_path).load_or_create();
-    require(vibris::mcp::detail::is_uuid(generated), "Invalid legacy session did not produce a new UUID.");
-    require(read_bytes(invalid_legacy_path) == invalid_legacy_bytes, "Invalid legacy session was rewritten.");
-
-    TempDirectory malformed("identity-malformed");
-    const auto malformed_identity = malformed.path() / ".codex" / "vibris-workspace.json";
-    const auto missing_legacy = malformed.path() / ".codex" / "vibris-session.json";
-    const std::string malformed_bytes = R"({"schema_version":1,"workspace_id":"not-a-uuid","extra":true})";
-    write_bytes(malformed_identity, malformed_bytes);
-    const auto error = capture_state_error([&] {
-        static_cast<void>(WorkspaceIdentityStore(malformed_identity, missing_legacy).load_or_create());
-    });
-    require(error.code == "INVALID_CONFIG", "Malformed identity returned the wrong code.");
-    require(!error.retryable, "Malformed identity must not be retryable.");
-    require(error.message_size <= 512, "Malformed identity error was not bounded.");
-    require(read_bytes(malformed_identity) == malformed_bytes, "Malformed identity was replaced.");
+    require(adopted != valid_config().workspace_id && vibris::mcp::detail::is_uuid(adopted),
+        "The former Codex session state was still used as a migration source.");
+    require(read_bytes(migrated_legacy) == legacy_bytes,
+        "Ignoring former Codex session state changed that file.");
 }
 
 void workspace_identity_rejects_duplicate_keys() {
@@ -691,25 +709,6 @@ void workspace_identity_enforces_json_depth() {
         return "{\"schema_version\":1,\"workspace_id\":\"" + expected_id +
             "\",\"extra\":" + nested_value(nested_containers) + "}";
     };
-
-    TempDirectory exact_legacy("legacy-depth-exact");
-    const auto exact_identity = exact_legacy.path() / ".codex" / "vibris-workspace.json";
-    const auto exact_legacy_path = exact_legacy.path() / ".codex" / "vibris-session.json";
-    const auto exact_bytes = document(maximum_depth - 1);
-    write_bytes(exact_legacy_path, exact_bytes);
-    const auto adopted = WorkspaceIdentityStore(exact_identity, exact_legacy_path).load_or_create();
-    require(adopted == expected_id, "Exact-depth legacy identity was not accepted.");
-    require(read_bytes(exact_legacy_path) == exact_bytes, "Exact-depth legacy state was rewritten.");
-
-    TempDirectory over_legacy("legacy-depth-over");
-    const auto generated_identity = over_legacy.path() / ".codex" / "vibris-workspace.json";
-    const auto over_legacy_path = over_legacy.path() / ".codex" / "vibris-session.json";
-    const auto over_bytes = document(maximum_depth);
-    write_bytes(over_legacy_path, over_bytes);
-    const auto generated = WorkspaceIdentityStore(generated_identity, over_legacy_path).load_or_create();
-    require(generated != expected_id && vibris::mcp::detail::is_uuid(generated),
-        "Over-depth legacy identity was accepted as a migration source.");
-    require(read_bytes(over_legacy_path) == over_bytes, "Over-depth legacy state was rewritten.");
 
     for (const auto nested_containers : {maximum_depth - 1, maximum_depth}) {
         TempDirectory identity_temp("identity-depth");
@@ -779,20 +778,6 @@ void workspace_identity_rejects_reparse_state() {
         "Reparse workspace identity returned the wrong error contract.");
     require(read_bytes(identity_target) == identity_target_bytes, "Reparse workspace identity target changed.");
 
-    TempDirectory legacy_link("legacy-file-link");
-    const auto legacy_state = legacy_link.path() / ".codex";
-    const auto legacy_target = legacy_link.path() / "legacy-target.json";
-    const auto legacy_target_bytes = vibris::mcp::detail::serialize_config(valid_config());
-    write_bytes(legacy_target, legacy_target_bytes);
-    fs::create_directories(legacy_state);
-    link_error.clear();
-    fs::create_symlink(legacy_target, legacy_state / "vibris-session.json", link_error);
-    require(!link_error, "Unable to create the legacy-file reparse fixture.");
-    const auto generated = WorkspaceIdentityStore(legacy_state / "vibris-workspace.json",
-        legacy_state / "vibris-session.json").load_or_create();
-    require(generated != valid_config().workspace_id && vibris::mcp::detail::is_uuid(generated),
-        "Reparse legacy state was treated as a migration source.");
-    require(read_bytes(legacy_target) == legacy_target_bytes, "Reparse legacy state target changed.");
 }
 
 void workspace_identity_maps_access_errors() {
@@ -810,19 +795,6 @@ void workspace_identity_maps_access_errors() {
             "Workspace identity access failure returned the wrong error contract.");
     }
 
-    TempDirectory legacy_temp("legacy-access-error");
-    const auto generated_identity = legacy_temp.path() / ".codex" / "vibris-workspace.json";
-    const auto legacy_path_locked = legacy_temp.path() / ".codex" / "vibris-session.json";
-    write_bytes(legacy_path_locked, vibris::mcp::detail::serialize_config(valid_config()));
-    {
-        TestHandle locked(CreateFileW(legacy_path_locked.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL, nullptr));
-        const auto error = capture_state_error([&] {
-            static_cast<void>(WorkspaceIdentityStore(generated_identity, legacy_path_locked).load_or_create());
-        });
-        require(error.code == "CONFIG_IO_ERROR" && error.retryable,
-            "Legacy state access failure returned the wrong error contract.");
-    }
 }
 
 void workspace_identity_rejects_active_writer() {
@@ -838,18 +810,6 @@ void workspace_identity_rejects_active_writer() {
     require(error.code == "CONFIG_IO_ERROR" && error.retryable && error.message_size <= 512,
         "Active identity writer did not produce a bounded retryable I/O error.");
 
-    TempDirectory legacy_temp("legacy-active-writer");
-    const auto generated_identity = legacy_temp.path() / ".codex" / "vibris-workspace.json";
-    const auto active_legacy = legacy_temp.path() / ".codex" / "vibris-session.json";
-    write_bytes(active_legacy, vibris::mcp::detail::serialize_config(valid_config()));
-    TestHandle legacy_writer(CreateFileW(active_legacy.c_str(), GENERIC_WRITE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
-    const auto legacy_error = capture_state_error([&] {
-        static_cast<void>(WorkspaceIdentityStore(generated_identity, active_legacy).load_or_create());
-    });
-    require(legacy_error.code == "CONFIG_IO_ERROR" && legacy_error.retryable &&
-            legacy_error.message_size <= 512,
-        "Active legacy writer did not produce a bounded retryable I/O error.");
 }
 
 void same_worktree_backends_coexist() {
@@ -883,10 +843,9 @@ void process_local_scene_configuration() {
     fs::create_directories(temp.path() / "shaders");
     const auto pending_root = temp.path() / "pending";
     fs::create_directories(pending_root);
-    const auto legacy_path = temp.path() / ".codex" / "vibris-session.json";
-    const auto identity_path = temp.path() / ".codex" / "vibris-workspace.json";
-    const auto legacy_bytes = vibris::mcp::detail::serialize_config(valid_config());
-    write_bytes(legacy_path, legacy_bytes);
+    const auto identity_path = temp.path() / ".vibris" / "workspace.json";
+    write_bytes(identity_path,
+        vibris::mcp::Json{{"schema_version", 1}, {"workspace_id", valid_config().workspace_id}}.dump(2));
     vibris::mcp::test::BackendStateServer server(pending_root);
     std::optional<vibris::mcp::GrpcClientStats> first_stats;
     std::optional<vibris::mcp::GrpcClientStats> second_stats;
@@ -902,7 +861,7 @@ void process_local_scene_configuration() {
         const auto& second_config = require_json(second_config_outcome, "Second backend did not expose local config.");
         require(first_config.at("workspace_id") == valid_config().workspace_id &&
                 second_config.at("workspace_id") == valid_config().workspace_id,
-            "Same-root backends did not share the migrated durable identity.");
+            "Same-root backends did not share the durable identity.");
         require(!first_config.at("configured").get<bool>() && first_config.at("config").is_null() &&
                 !second_config.at("configured").get<bool>() && second_config.at("config").is_null(),
             "Same-root backends did not start with empty process-local scenes.");
@@ -927,11 +886,11 @@ void process_local_scene_configuration() {
         require(scene_a.at("save_id") == "save-a" && scene_b.at("save_id") == "save-b" &&
                 scene_a.at("fov") == 61.0 && scene_b.at("fov") == 89.0,
             "Same-root backends did not keep distinct process-local scenes.");
-        require(read_bytes(identity_path) == identity_bytes && read_bytes(legacy_path) == legacy_bytes,
-            "Configuration changed durable identity or legacy bytes.");
+        require(read_bytes(identity_path) == identity_bytes,
+            "Configuration changed the durable identity.");
 
         const vibris::mcp::Json actions {
-            {"actions", vibris::mcp::Json::array({{{"type", "get_shader_status"}}})}};
+            {"actions", vibris::mcp::Json::array({{{"type", "inspect_shader"}}})}};
         static_cast<void>(require_json(first.dispatch("vibris_run_actions", actions),
             "First backend action job failed."));
         static_cast<void>(require_json(second.dispatch("vibris_run_actions", actions),
@@ -942,8 +901,8 @@ void process_local_scene_configuration() {
             "First backend did not replace its process-local scene.");
         static_cast<void>(require_json(first.dispatch("vibris_run_actions", actions),
             "First backend action job after reconfigure failed."));
-        require(read_bytes(identity_path) == identity_bytes && read_bytes(legacy_path) == legacy_bytes,
-            "Runtime jobs changed durable identity or legacy bytes.");
+        require(read_bytes(identity_path) == identity_bytes,
+            "Runtime jobs changed the durable identity.");
 
         first_stats = first.shutdown();
         second_stats = second.shutdown();
@@ -998,8 +957,9 @@ void process_local_scene_configuration() {
     require(restart_status.at("workspace_id") == valid_config().workspace_id &&
             !restart_status.at("configured").get<bool>(),
         "Restart preconfigure status did not expose an unconfigured durable identity.");
-    require(read_bytes(legacy_path) == legacy_bytes,
-        "Restart rewrote the legacy scene file.");
+    require(read_bytes(identity_path) ==
+            vibris::mcp::Json{{"schema_version", 1}, {"workspace_id", valid_config().workspace_id}}.dump(2),
+        "Restart rewrote the durable identity.");
     static_cast<void>(restarted.shutdown());
 }
 
@@ -1056,7 +1016,7 @@ constexpr std::array<TestCase, 18> test_cases {{
     {"WorkspaceIdentityRetriesOnlyPublicationLoser", workspace_identity_retries_only_publication_loser},
     {"WorkspaceIdentityBlocksTempSubstitution", workspace_identity_blocks_temp_substitution},
     {"WorkspaceIdentityPreservesCreateCollision", workspace_identity_preserves_create_collision},
-    {"WorkspaceIdentityLegacyMigration", workspace_identity_legacy_migration},
+    {"WorkspaceIdentityDoesNotMigrateCodexState", workspace_identity_does_not_migrate_codex_state},
     {"WorkspaceIdentityRejectsDuplicateKeys", workspace_identity_rejects_duplicate_keys},
     {"WorkspaceIdentityEnforcesJsonDepth", workspace_identity_enforces_json_depth},
     {"WorkspaceIdentityClassifiesNonregularState", workspace_identity_classifies_nonregular_state},

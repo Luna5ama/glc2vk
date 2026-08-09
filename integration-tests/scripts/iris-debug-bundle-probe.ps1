@@ -121,7 +121,7 @@ try
     $sourceA = New-IrisPreparedSource -Scope $scope -Source $sourceRoot
     $bundleActions = @(
         [ordered] @{ type = "wait_frames"; frames = 2 },
-        [ordered] @{ type = "capture_screenshot"; format = "png"; artifact_name = "beauty" },
+        [ordered] @{ type = "take_screenshot"; format = "png"; artifact_name = "beauty" },
         [ordered] @{ type = "capture_texture"; name = "colortex0"; format = "raw"; artifact_name = "colortex0" },
         [ordered] @{ type = "capture_texture"; name = "depthtex0"; format = "raw"; artifact_name = "depthtex0" },
         [ordered] @{ type = "capture_buffer"; name = "radiance_cache"; format = "bin"; artifact_name = "radiance_cache" }

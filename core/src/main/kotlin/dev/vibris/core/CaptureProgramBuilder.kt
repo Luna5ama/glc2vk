@@ -61,7 +61,13 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                     if (action.waitFrames.frameCount <= 0) throw invalid("Frame count must be positive.")
                     steps.add(ActionStep.waitFrames(actionIndex, action.waitFrames.frameCount))
                 }
-                action.hasCaptureScreenshot() || action.hasCaptureTexture() || action.hasCaptureBuffer() -> {
+                action.hasTakeScreenshot() || action.hasCaptureTexture() || action.hasCaptureBuffer() -> {
+                    val afterFrames = if (action.hasTakeScreenshot()) action.takeScreenshot.afterFrames else 0
+                    if (afterFrames < 0) throw invalid("Screenshot frame delay is too large.")
+                    if (afterFrames > 0) {
+                        flushGroup()
+                        steps.add(ActionStep.waitFrames(actionIndex, afterFrames))
+                    }
                     if (group.isEmpty()) groupActionIndex = actionIndex
                     CapturePlanBuilder.addAction(group, action, catalog)
                 }

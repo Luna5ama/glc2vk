@@ -117,11 +117,8 @@ class FakeRuntimeAdapter : VibrisRuntimeAdapter {
             RuntimeAction.CaptureStatus -> "{\"pending\":false,\"active\":false,\"saving\":false}"
             is RuntimeAction.CapturePass -> "{\"ok\":true,\"path\":\"capture-pass\"}"
             is RuntimeAction.CaptureMulti -> "{\"ok\":true,\"path\":\"capture-multi\"}"
-            RuntimeAction.ShaderStatus -> "{\"loaded\":true,\"pack\":\"vibris\"}"
-            RuntimeAction.ShaderErrors -> "{\"errors\":[]}"
-            is RuntimeAction.ScheduleScreenshot ->
-                "{\"scheduled\":true,\"frames\":${action.frames}}"
-            RuntimeAction.ScreenshotResult -> "{\"path\":null}"
+            RuntimeAction.InspectShader ->
+                "{\"status\":\"ok\",\"pack_loaded\":true,\"shaderpack\":\"vibris\",\"errors\":[]}"
             is RuntimeAction.GpuMetrics ->
                 "{\"avg\":1.0,\"p5\":0.9,\"p50\":1.0,\"p95\":1.1}"
             RuntimeAction.ListSsbos -> "{\"buffers\":[]}"

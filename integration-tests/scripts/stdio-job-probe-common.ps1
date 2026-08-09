@@ -99,8 +99,9 @@ function Start-G007Mcp
 
     $start = [System.Diagnostics.ProcessStartInfo]::new()
     $start.FileName = [System.IO.Path]::GetFullPath($Exe)
-    $arguments = @("--workspace-root", $WorkspaceRoot, "--server-address", "127.0.0.1:$script:IrisPort")
+    $arguments = @("--server-address", "127.0.0.1:$script:IrisPort")
     $start.Arguments = [string]::Join(" ", @($arguments | ForEach-Object { ConvertTo-CoreArgument $_ }))
+    $start.WorkingDirectory = [System.IO.Path]::GetFullPath($WorkspaceRoot)
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
     $start.RedirectStandardInput = $true

@@ -5,7 +5,7 @@ import dev.vibris.protocol.v1.Action;
 import dev.vibris.protocol.v1.ActivateSource;
 import dev.vibris.protocol.v1.ActionSequence;
 import dev.vibris.protocol.v1.ArtifactFormat;
-import dev.vibris.protocol.v1.CaptureScreenshot;
+import dev.vibris.protocol.v1.TakeScreenshot;
 import dev.vibris.protocol.v1.CompareCaptures;
 import dev.vibris.protocol.v1.CaptureBuffer;
 import dev.vibris.protocol.v1.CaptureTexture;
@@ -32,7 +32,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ActionSequenceSurfaceTest {
-    private static final String WORKSPACE = "action-sequence-tests";
+    private static final String WORKSPACE = "22222222-2222-4222-8222-222222222222";
+    private static final String COMPETITOR_WORKSPACE = "33333333-3333-4333-8333-333333333333";
 
     @TempDir
     Path temporaryDirectory;
@@ -47,7 +48,7 @@ final class ActionSequenceSurfaceTest {
                 .addActions(activate(reloadSource))
                 .addActions(reset())
                 .addActions(waitFrames(2))
-                .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
+                .addActions(Action.newBuilder().setTakeScreenshot(TakeScreenshot.newBuilder()
                     .setArtifactName("screenshot").setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)))).build());
             JobCompleted reload = client.awaitCompleted("reload");
 
@@ -65,7 +66,7 @@ final class ActionSequenceSurfaceTest {
                 .addActions(activate(bundleSource))
                 .addActions(reset())
                 .addActions(waitFrames(2))
-                .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
+                .addActions(Action.newBuilder().setTakeScreenshot(TakeScreenshot.newBuilder()
                     .setArtifactName("screenshot").setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)))
                 .addActions(Action.newBuilder().setCaptureTexture(CaptureTexture.newBuilder()
                     .setLogicalName("colortex0").setArtifactName("colortex0")
@@ -91,7 +92,7 @@ final class ActionSequenceSurfaceTest {
         fixture.runtime.releaseBaselineCapture = new CountDownLatch(1);
         try (VibrisBootstrap bootstrap = fixture.start();
              IntegrationHarness.Client abClient = new IntegrationHarness.Client(bootstrap.port(), WORKSPACE);
-             IntegrationHarness.Client competitor = new IntegrationHarness.Client(bootstrap.port(), "competitor")) {
+             IntegrationHarness.Client competitor = new IntegrationHarness.Client(bootstrap.port(), COMPETITOR_WORKSPACE)) {
             IntegrationHarness.Source sourceA = IntegrationHarness.createSource(fixture.pendingRoot, "A");
             IntegrationHarness.Source sourceB = IntegrationHarness.createSource(fixture.pendingRoot, "B");
             IntegrationHarness.Source sourceC = IntegrationHarness.createSource(fixture.pendingRoot, "C");
@@ -101,12 +102,12 @@ final class ActionSequenceSurfaceTest {
                 .addActions(activate(sourceA.reference()))
                 .addActions(reset())
                 .addActions(waitFrames(1))
-                .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
+                .addActions(Action.newBuilder().setTakeScreenshot(TakeScreenshot.newBuilder()
                     .setArtifactName("a-0").setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)))
                 .addActions(activate(sourceB.reference()))
                 .addActions(reset())
                 .addActions(waitFrames(1))
-                .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
+                .addActions(Action.newBuilder().setTakeScreenshot(TakeScreenshot.newBuilder()
                     .setArtifactName("b-0").setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)))
                 .addActions(Action.newBuilder().setCompareCaptures(CompareCaptures.newBuilder()
                     .setBaselineCaptureIndex(0).setCandidateCaptureIndex(1)
@@ -122,7 +123,7 @@ final class ActionSequenceSurfaceTest {
             assertTrue(fixture.runtime.baselineCaptureStarted.await(
                 IntegrationHarness.WAIT.toMillis(), TimeUnit.MILLISECONDS));
 
-            competitor.submit(SubmitJob.newBuilder().setRequestId("competitor").setWorkspaceId("competitor")
+            competitor.submit(SubmitJob.newBuilder().setRequestId("competitor").setWorkspaceId(COMPETITOR_WORKSPACE)
                 .setContext(IntegrationHarness.context("competitor")).addSources(sourceC.reference())
                 .setActions(ActionSequence.newBuilder().addActions(activate(sourceC.reference())))
                 .setTimeouts(timeouts()).build());

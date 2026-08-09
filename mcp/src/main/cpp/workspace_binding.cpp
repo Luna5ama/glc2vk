@@ -248,32 +248,23 @@ bool is_git_worktree_root(const fs::path& root) {
 
 } // namespace
 
-WorkspaceBinding resolve_workspace(std::optional<std::filesystem::path> workspace_root) {
-    fs::path root;
-    if (workspace_root) {
-        root = canonical_directory(*workspace_root);
-        if (!is_git_worktree_root(root)) {
-            throw StateError(kInvalidWorktreeCode, "Explicit workspace root is not a Git worktree.");
+WorkspaceBinding resolve_workspace() {
+    std::error_code error;
+    const auto current_path = fs::current_path(error);
+    if (error) {
+        throw StateError(kInvalidWorktreeCode, "Current directory is unavailable.");
+    }
+    auto root = canonical_directory(current_path);
+    while (!is_git_worktree_root(root)) {
+        const auto parent = root.parent_path();
+        if (parent == root) {
+            throw StateError(kInvalidWorktreeCode, "No Git worktree contains the current directory.");
         }
-    } else {
-        std::error_code error;
-        const auto current_path = fs::current_path(error);
-        if (error) {
-            throw StateError(kInvalidWorktreeCode, "Current directory is unavailable.");
-        }
-        root = canonical_directory(current_path);
-        while (!is_git_worktree_root(root)) {
-            const auto parent = root.parent_path();
-            if (parent == root) {
-                throw StateError(kInvalidWorktreeCode, "No Git worktree contains the current directory.");
-            }
-            root = parent;
-        }
+        root = parent;
     }
     return {
         root,
-        root / ".codex" / "vibris-workspace.json",
-        root / ".codex" / "vibris-session.json",
+        root / ".vibris" / "workspace.json",
     };
 }
 

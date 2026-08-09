@@ -16,8 +16,8 @@ $tempRoot = Join-Path $tempBase "ulw-v1-g002-c001"
 $tempCreated = $false
 $port = 55061
 $workspace = [System.IO.Path]::GetFullPath($WorkspaceRoot)
-$configDirectory = Join-Path $workspace ".codex"
-$configPath = Join-Path $configDirectory "vibris-session.json"
+$configDirectory = Join-Path $workspace ".vibris"
+$configPath = Join-Path $configDirectory "workspace.json"
 $configDirectoryExisted = Test-Path -LiteralPath $configDirectory -PathType Container
 $configExisted = Test-Path -LiteralPath $configPath -PathType Leaf
 $configBytes = if ($configExisted) { [System.IO.File]::ReadAllBytes($configPath) } else { $null }
@@ -101,8 +101,8 @@ function Invoke-Mcp
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $Exe
-    $startInfo.Arguments = "--workspace-root $(ConvertTo-QuotedArgument $workspace) " +
-        "--server-address 127.0.0.1:$port"
+    $startInfo.Arguments = "--server-address 127.0.0.1:$port"
+    $startInfo.WorkingDirectory = $workspace
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardInput = $true

@@ -2,7 +2,6 @@ package dev.luna5ama.vibris.capture
 
 import kotlinx.serialization.json.JsonObject
 import java.nio.file.Path
-import java.util.function.Consumer
 
 data class StorageBufferInfo(val index: Int, val glId: Int)
 
@@ -30,8 +29,6 @@ interface ShaderDebugHost {
 
     @Throws(Exception::class)
     fun reloadShaders()
-
-    fun captureScreenshot(onSaved: Consumer<Path>)
 
     fun gameDirectory(): Path
 

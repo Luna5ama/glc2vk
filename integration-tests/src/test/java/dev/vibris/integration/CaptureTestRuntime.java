@@ -8,6 +8,7 @@ import dev.vibris.api.ContextApplyResult;
 import dev.vibris.api.ReloadResult;
 import dev.vibris.api.ResourceCatalog;
 import dev.vibris.api.RuntimeStatus;
+import dev.vibris.api.RuntimeAction;
 import dev.vibris.api.SceneContext;
 import dev.vibris.api.TemporalResetResult;
 import dev.vibris.api.VibrisRuntimeAdapter;
@@ -80,6 +81,15 @@ final class CaptureTestRuntime implements VibrisRuntimeAdapter {
     public CompletionStage<TemporalResetResult> resetTemporalState(CancellationToken cancellation) {
         events.add("reset:" + active);
         return CompletableFuture.completedFuture(new TemporalResetResult(true));
+    }
+
+    @Override
+    public CompletionStage<String> executeAction(RuntimeAction action) {
+        if (action == RuntimeAction.InspectShader.INSTANCE) {
+            return CompletableFuture.completedFuture(
+                "{\"status\":\"ok\",\"pack_loaded\":true,\"shaderpack\":\"vibris\",\"errors\":[]}");
+        }
+        return VibrisRuntimeAdapter.super.executeAction(action);
     }
 
     @Override

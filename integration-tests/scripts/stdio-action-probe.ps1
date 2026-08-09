@@ -66,7 +66,7 @@ try
     }
     $actionKinds = @($allowed.action_results | ForEach-Object { $_.kind })
     $expectedActionKinds = @(
-        "get_shader_status", "get_shader_errors", "get_gpu_metrics",
+        "inspect_shader", "get_gpu_metrics",
         "list_textures", "list_ssbos", "list_patched_shaders"
     )
     if ([string]::Join("`n", $actionKinds) -cne [string]::Join("`n", $expectedActionKinds))

@@ -19,29 +19,13 @@ $repoB = [System.IO.Path]::GetFullPath((Join-Path $criterionRoot "independent-re
 $tempCreated = $false
 $forcedStops = 0
 
-function ConvertTo-QuotedArgument
-{
-    param([string] $Value)
-
-    $escaped = [regex]::Replace($Value, '(\\*)"', '$1$1\"')
-    $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
-    return '"' + $escaped + '"'
-}
-
 function Start-Mcp
 {
-    param(
-        [Parameter(Mandatory)] [string] $WorkingDirectory,
-        [string] $WorkspaceOverride
-    )
+    param([Parameter(Mandatory)] [string] $WorkingDirectory)
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $Exe
     $startInfo.WorkingDirectory = $WorkingDirectory
-    if (-not [string]::IsNullOrWhiteSpace($WorkspaceOverride))
-    {
-        $startInfo.Arguments = "--workspace-root $(ConvertTo-QuotedArgument $WorkspaceOverride)"
-    }
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardInput = $true
@@ -255,7 +239,7 @@ function Get-IdentityBytes
 {
     param([string] $Repository)
 
-    $identityPath = Join-Path $Repository ".codex\vibris-workspace.json"
+    $identityPath = Join-Path $Repository ".vibris\workspace.json"
     if (-not (Test-Path -LiteralPath $identityPath -PathType Leaf))
     {
         throw "Missing durable identity: $identityPath"
@@ -324,8 +308,7 @@ try
     $nestedA1 = Join-Path $repoA "nested\task-one"
     $nestedA2 = Join-Path $repoA "nested\task-two"
     $nestedB = Join-Path $repoB "nested\task-independent"
-    $invalidRoot = Join-Path $criterionRoot "not-a-worktree"
-    foreach ($directory in @($nestedA1, $nestedA2, $nestedB, $invalidRoot))
+    foreach ($directory in @($nestedA1, $nestedA2, $nestedB))
     {
         [void] (New-Item -ItemType Directory -Path $directory -Force)
     }
@@ -362,31 +345,6 @@ try
     }
     $identityB = Get-IdentityBytes -Repository $repoB
 
-    $override = Start-Mcp -WorkingDirectory $nestedB -WorkspaceOverride $repoA
-    Invoke-Initialize -Owned $override -Id "override-init"
-    Assert-ToolList -Owned $override -Id "override-tools"
-    $overrideId = Assert-UnconfiguredBinding -Owned $override -Id "override-config" -ExpectedRoot $repoA
-    if ($overrideId -cne $idA1)
-    {
-        throw "Explicit workspace override did not take precedence over cwd."
-    }
-
-    $invalid = Start-Mcp -WorkingDirectory $nestedB -WorkspaceOverride $invalidRoot
-    $invalidStdout = $invalid.Process.StandardOutput.ReadToEndAsync()
-    if (-not $invalid.Process.WaitForExit($TimeoutSeconds * 1000))
-    {
-        throw "Invalid explicit root did not fail within $TimeoutSeconds seconds."
-    }
-    $invalid.Process.WaitForExit()
-    $invalid.Closed = $true
-    if ($invalid.Process.ExitCode -eq 0 -or -not [string]::IsNullOrWhiteSpace($invalidStdout.Result) -or
-        $invalid.Stderr.Result -notmatch "INVALID_WORKTREE" -or $invalid.Stderr.Result.Length -gt 4096)
-    {
-        throw "Invalid explicit root did not produce a bounded nonzero INVALID_WORKTREE failure."
-    }
-    Assert-IdentityBytes -Repository $repoA -Expected $identityA -Context "invalid explicit root"
-    Assert-IdentityBytes -Repository $repoB -Expected $identityB -Context "invalid explicit root"
-
     Send-Request -Owned $first -Line $oversizedLine
     $oversizedResponse = Read-Response -Owned $first
     Assert-Response -Response $oversizedResponse -Id "oversize-config"
@@ -405,12 +363,12 @@ try
         throw "Same-worktree processes changed identity after bounded failures."
     }
 
-    foreach ($owned in @($override, $independent, $second, $first))
+    foreach ($owned in @($independent, $second, $first))
     {
         Close-Mcp -Owned $owned
     }
     Write-Output ("PASS same_root_concurrent=true same_id=$idA1 independent_id=$idB " +
-        "override_precedence=true invalid_root_bounded=true oversized_bounded=true identity_preserved=true")
+        "oversized_bounded=true identity_preserved=true")
 }
 finally
 {

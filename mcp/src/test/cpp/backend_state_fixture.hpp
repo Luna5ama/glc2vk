@@ -113,7 +113,7 @@ public:
             for (int index = 0; index < request.submit_job().actions().actions_size(); ++index) {
                 auto* action = result->add_action_results();
                 action->set_action_index(static_cast<std::uint32_t>(index));
-                action->set_kind(proto::JOB_ACTION_KIND_GET_SHADER_STATUS);
+                action->set_kind(proto::JOB_ACTION_KIND_INSPECT_SHADER);
                 action->set_json("{}");
             }
             if (!stream->Write(completed)) {

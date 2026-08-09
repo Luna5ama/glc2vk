@@ -2,6 +2,7 @@ package dev.vibris.core
 
 import dev.vibris.api.CaptureResult
 import dev.vibris.api.ReloadResult
+import dev.vibris.api.RuntimeAction
 import dev.vibris.api.VibrisRuntimeAdapter
 import dev.vibris.protocol.v1.AbComparisonResult
 import dev.vibris.protocol.v1.ActionResult
@@ -11,7 +12,11 @@ import dev.vibris.protocol.v1.JobResultKind
 import dev.vibris.protocol.v1.JobStage
 import java.io.IOException
 import java.util.function.Consumer
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 
 internal class ActionJobExecutor(
@@ -48,11 +53,14 @@ internal class ActionJobExecutor(
                                 reload = load(job, load, progress, deadline)
                                 diagnostics.addAll(reload.diagnostics)
                                 prepared?.addDiagnostics(reload.diagnostics)
+                                val inspection = inspectShader(job, deadline)
                                 actionResults.add(
                                     actionResult(
                                         step.actionIndex,
                                         dev.vibris.protocol.v1.JobActionKind.JOB_ACTION_KIND_LOAD_SHADER,
                                         load,
+                                        reload,
+                                        inspection,
                                         null,
                                     ),
                                 )
@@ -101,6 +109,8 @@ internal class ActionJobExecutor(
                                 step.actionIndex,
                                 RuntimeActionProtocol.kind(input),
                                 load,
+                                null,
+                                null,
                                 failure,
                             ),
                         )
@@ -111,7 +121,7 @@ internal class ActionJobExecutor(
                         val input = job.submission.actions.getActions(step.actionIndex)
                         val failure = RuntimeJobExecutor.Failure(ErrorCode.INTERNAL_ERROR, exception.message)
                         actionResults.add(
-                            actionResult(step.actionIndex, RuntimeActionProtocol.kind(input), load, failure),
+                            actionResult(step.actionIndex, RuntimeActionProtocol.kind(input), load, null, null, failure),
                         )
                         caseFailed = true
                     }
@@ -174,13 +184,27 @@ internal class ActionJobExecutor(
         actionIndex: Int,
         kind: dev.vibris.protocol.v1.JobActionKind,
         load: dev.vibris.protocol.v1.LoadShader,
+        reload: ReloadResult?,
+        inspection: JsonObject?,
         failure: RuntimeJobExecutor.Failure?,
     ): ActionResult {
+        val reloadDiagnostics = reload?.diagnostics ?: failure?.diagnostics.orEmpty()
         val payload = buildJsonObject {
             put("success", failure == null)
             put("case_id", load.caseId)
             put("source", load.sourceId)
             put("config", load.configId)
+            inspection?.forEach { (key, value) -> put(key, value) }
+            put("diagnostics", buildJsonArray {
+                reloadDiagnostics.forEach { diagnostic ->
+                    add(buildJsonObject {
+                        put("severity", diagnostic.severity.name.lowercase())
+                        put("source", diagnostic.source)
+                        put("line", diagnostic.line)
+                        put("message", diagnostic.message)
+                    })
+                }
+            })
             if (failure != null) {
                 put("error_code", failure.code.name.removePrefix("ERROR_CODE_"))
                 put("message", failure.message ?: "Action failed.")
@@ -193,6 +217,11 @@ internal class ActionJobExecutor(
             .setJson(payload.toString())
             .build()
     }
+
+    private fun inspectShader(job: CoreJob, deadline: Long): JsonObject =
+        Json.parseToJsonElement(
+            owner.await(runtime.executeAction(RuntimeAction.InspectShader), job, deadline),
+        ).jsonObject
 
     private fun captureUnavailable() = RuntimeJobExecutor.Failure(
         ErrorCode.CAPTURE_FAILED,

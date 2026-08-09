@@ -20,6 +20,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CoreAdversarialTest {
+    private static final String EDGE_WORKSPACE_ID = "22222222-2222-4222-8222-222222222222";
+    private static final String RACE_WORKSPACE_ID = "33333333-3333-4333-8333-333333333333";
+    private static final String RESUME_WORKSPACE_ID = "44444444-4444-4444-8444-444444444444";
+
     @TempDir
     Path temp;
 
@@ -28,7 +32,7 @@ class CoreAdversarialTest {
         Path pending = temp.resolve("pending");
         Path artifacts = temp.resolve("artifacts");
         try (FakeVibrisServer server = FakeVibrisServer.start(0, pending, artifacts);
-             IntegrationHarness.Client client = new IntegrationHarness.Client(server, "edge")) {
+             IntegrationHarness.Client client = new IntegrationHarness.Client(server, EDGE_WORKSPACE_ID)) {
             IntegrationHarness.Probe probe = new IntegrationHarness.Probe(server);
             probe.pauseExecution();
 
@@ -91,8 +95,8 @@ class CoreAdversarialTest {
         Path pending = temp.resolve("pending-validation-race");
         try (FakeVibrisServer server = FakeVibrisServer.start(
                  0, pending, temp.resolve("artifacts-validation-race"));
-             IntegrationHarness.Client first = new IntegrationHarness.Client(server, "race-workspace");
-             IntegrationHarness.Client duplicate = new IntegrationHarness.Client(server, "race-workspace")) {
+             IntegrationHarness.Client first = new IntegrationHarness.Client(server, RACE_WORKSPACE_ID);
+             IntegrationHarness.Client duplicate = new IntegrationHarness.Client(server, RACE_WORKSPACE_ID)) {
             IntegrationHarness.Probe probe = new IntegrationHarness.Probe(server);
             probe.pauseExecution();
             IntegrationHarness.Source source = IntegrationHarness.createSource(pending, "validation-race");
@@ -107,7 +111,7 @@ class CoreAdversarialTest {
                 .setTotalBytes(source.reference().getTotalBytes() + extraBytes)
                 .build();
             SubmitJob job = IntegrationHarness.job(
-                "validation-race", "race-workspace", IntegrationHarness.context("validation-race"),
+                "validation-race", RACE_WORKSPACE_ID, IntegrationHarness.context("validation-race"),
                 reference, 5_000, 1);
 
             first.submit(job);
@@ -123,7 +127,7 @@ class CoreAdversarialTest {
     }
 
     private static SubmitJob newJob(Path pending, String id, long timeoutMs, int frames) throws Exception {
-        return newJob(pending, id, "edge", timeoutMs, frames);
+        return newJob(pending, id, EDGE_WORKSPACE_ID, timeoutMs, frames);
     }
 
     private static SubmitJob newJob(Path pending, String id, String workspaceId, long timeoutMs, int frames)
@@ -136,14 +140,14 @@ class CoreAdversarialTest {
     private static void assertDisconnectResume(FakeVibrisServer server, Path pending,
                                                IntegrationHarness.Probe probe) throws Exception {
         probe.pauseExecution();
-        IntegrationHarness.Client first = new IntegrationHarness.Client(server, "resume-workspace");
-        SubmitJob job = newJob(pending, "resume-job", "resume-workspace", 5_000, 1_000);
+        IntegrationHarness.Client first = new IntegrationHarness.Client(server, RESUME_WORKSPACE_ID);
+        SubmitJob job = newJob(pending, "resume-job", RESUME_WORKSPACE_ID, 5_000, 1_000);
         first.submit(job);
         first.awaitAccepted("resume-job");
         first.awaitProgress("resume-job", JobStage.JOB_STAGE_WARMING_UP);
         first.disconnect();
 
-        try (IntegrationHarness.Client resumed = new IntegrationHarness.Client(server, "resume-workspace")) {
+        try (IntegrationHarness.Client resumed = new IntegrationHarness.Client(server, RESUME_WORKSPACE_ID)) {
             assertEquals(JobState.JOB_STATE_RUNNING, resumed.resume("resume-job").getState());
             probe.resumeExecution();
             resumed.awaitCompleted("resume-job");
@@ -151,7 +155,7 @@ class CoreAdversarialTest {
             assertEquals(1, probe.executionCount("resume-job"));
             resumed.disconnect();
         }
-        try (IntegrationHarness.Client replay = new IntegrationHarness.Client(server, "resume-workspace")) {
+        try (IntegrationHarness.Client replay = new IntegrationHarness.Client(server, RESUME_WORKSPACE_ID)) {
             assertEquals(JobState.JOB_STATE_COMPLETED, replay.resume("resume-job").getState());
             replay.awaitCompleted("resume-job");
         }

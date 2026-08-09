@@ -34,20 +34,22 @@ class RuntimeJobExecutorTest {
     Path pending;
 
     @Test
-    void activatesAndReloadsBeforeContextAndExplicitFrames() throws Exception {
+    void loadResetsTemporalStateAfterApplyingContext() throws Exception {
         Fixture fixture = new Fixture();
         Source source = fixture.source("A");
         List<JobStage> progress = new ArrayList<>();
 
-        fixture.executor.execute(job(source.lease), progress::add);
+        fixture.executor.execute(jobWithLoad(source), progress::add);
         fixture.activator.release(List.of(source.lease));
 
-        assertEquals(List.of("link:A", "reload", "context", "frames"), fixture.runtime.events);
+        assertEquals(List.of("link:A", "reload", "context", "reset", "action:InspectShader", "frames"),
+            fixture.runtime.events);
         assertEquals(List.of(
             JobStage.JOB_STAGE_ACTIVATING_SOURCE,
             JobStage.JOB_STAGE_RELOADING_SHADERS,
             JobStage.JOB_STAGE_LOADING_WORLD,
             JobStage.JOB_STAGE_APPLYING_CONTEXT,
+            JobStage.JOB_STAGE_RESETTING_TEMPORAL_STATE,
             JobStage.JOB_STAGE_WARMING_UP), progress);
         assertEquals(source.uuid, fixture.registry.activeUuid());
         assertEquals(Map.of("SETTING_SAMPLE_COUNT", "32"), fixture.runtime.lastShaderConfig);
@@ -142,9 +144,13 @@ class RuntimeJobExecutorTest {
         fixture.runtime.reloads.add(ReloadResult.failurePreservingActiveState(List.of(error("bad config"))));
         fixture.runtime.reloads.add(ReloadResult.success(List.of()));
         fixture.runtime.reloads.add(ReloadResult.success(List.of()));
+        fixture.runtime.actionResponses.add(
+            "{\"status\":\"ok\",\"pack_loaded\":true,\"shaderpack\":\"vibris\",\"errors\":[]}");
+        fixture.runtime.actionResponses.add(
+            "{\"status\":\"ok\",\"pack_loaded\":true,\"shaderpack\":\"vibris\",\"errors\":[]}");
         SubmitJob submission = SubmitJob.newBuilder()
             .setRequestId("matrix-request")
-            .setWorkspaceId("workspace")
+            .setWorkspaceId("11111111-1111-4111-8111-111111111111")
             .setContext(SceneContext.newBuilder().setSaveId("save")
                 .setDimensionId("minecraft:overworld").setFov(70.0))
             .addShaderConfigs(NamedShaderConfig.newBuilder().setId("bad")
@@ -165,13 +171,16 @@ class RuntimeJobExecutorTest {
 
         assertEquals(List.of(
             "link:A", "reload", "detach",
-            "link:A", "reload", "context", "frames",
-            "link:B", "reload", "context", "frames"), fixture.runtime.events);
+            "link:A", "reload", "context", "reset", "action:InspectShader", "frames",
+            "link:B", "reload", "context", "reset", "action:InspectShader", "frames"), fixture.runtime.events);
         var actionResults = terminal.completed().getResult().getActionResultsList();
         assertEquals(3, actionResults.size());
         assertTrue(actionResults.get(0).getJson().contains("\"success\":false"));
         assertTrue(actionResults.get(0).getJson().contains("SHADER_COMPILE_FAILED"));
+        assertTrue(actionResults.get(0).getJson().contains("bad config"));
         assertTrue(actionResults.get(1).getJson().contains("\"success\":true"));
+        assertTrue(actionResults.get(1).getJson().contains("\"pack_loaded\":true"));
+        assertTrue(actionResults.get(1).getJson().contains("\"diagnostics\":[]"));
         assertTrue(actionResults.get(2).getJson().contains("source-b--good"));
         assertEquals(sourceB.uuid, fixture.registry.activeUuid());
     }
@@ -251,7 +260,7 @@ class RuntimeJobExecutorTest {
     private static CoreJob job(SourceRegistry.Lease source) {
         SubmitJob submission = SubmitJob.newBuilder()
             .setRequestId("request")
-            .setWorkspaceId("workspace")
+            .setWorkspaceId("11111111-1111-4111-8111-111111111111")
             .setContext(SceneContext.newBuilder()
                 .setSaveId("save")
                 .setDimensionId("minecraft:overworld")
@@ -276,6 +285,25 @@ class RuntimeJobExecutorTest {
             .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(3)))).build();
         CoreJob job = new CoreJob(submission, "message", null);
         job.initialize(List.of(source));
+        return job;
+    }
+
+    private static CoreJob jobWithLoad(Source source) {
+        SubmitJob submission = SubmitJob.newBuilder()
+            .setRequestId("request")
+            .setWorkspaceId("11111111-1111-4111-8111-111111111111")
+            .setContext(SceneContext.newBuilder()
+                .setSaveId("save")
+                .setDimensionId("minecraft:overworld")
+                .setFov(70.0))
+            .addShaderConfigs(NamedShaderConfig.newBuilder().setId("config")
+                .setConfig(ShaderConfig.newBuilder().putValues("SETTING_SAMPLE_COUNT", "32")))
+            .setActions(ActionSequence.newBuilder()
+                .addActions(load(source, "source", "config", "source--config", false))
+                .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(3))))
+            .build();
+        CoreJob job = new CoreJob(submission, "message", null);
+        job.initialize(List.of(source.lease));
         return job;
     }
 

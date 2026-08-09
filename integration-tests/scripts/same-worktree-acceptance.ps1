@@ -681,13 +681,13 @@ try
     }
 
     $firstJob = New-SameTool -Id 5 -Name "vibris_run_recipe" -Arguments ([ordered] @{
-        recipe = "reload_and_capture"
+        recipe = "load_and_screenshot"
         source = [ordered] @{ kind = "workspace" }
         warmup_frames = 32
         screenshot_format = "png"
     })
     $secondJob = New-SameTool -Id 15 -Name "vibris_run_recipe" -Arguments ([ordered] @{
-        recipe = "reload_and_capture"
+        recipe = "load_and_screenshot"
         source = [ordered] @{ kind = "workspace" }
         warmup_frames = 2
         screenshot_format = "png"

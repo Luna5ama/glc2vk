@@ -5,14 +5,13 @@ import dev.vibris.protocol.v1.Action;
 import dev.vibris.protocol.v1.ActionSequence;
 import dev.vibris.protocol.v1.ActivateSource;
 import dev.vibris.protocol.v1.ArtifactFormat;
-import dev.vibris.protocol.v1.CaptureScreenshot;
+import dev.vibris.protocol.v1.TakeScreenshot;
 import dev.vibris.protocol.v1.JobCompleted;
 import dev.vibris.protocol.v1.JobResultKind;
 import dev.vibris.protocol.v1.JobTimeouts;
 import dev.vibris.protocol.v1.PreparedSourceRef;
 import dev.vibris.protocol.v1.ResetTemporalState;
 import dev.vibris.protocol.v1.SubmitJob;
-import dev.vibris.protocol.v1.WaitFrames;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -23,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
 final class ActionSurfaceTest {
-    private static final String WORKSPACE = "action-tests";
+    private static final String WORKSPACE = "11111111-1111-4111-8111-111111111111";
 
     @TempDir
     Path temporaryDirectory;
@@ -41,12 +40,10 @@ final class ActionSurfaceTest {
                 .addActions(Action.newBuilder().setActivateSource(
                     ActivateSource.newBuilder().setSourceUuid(source.getUuid())))
                 .addActions(Action.newBuilder().setResetTemporalState(ResetTemporalState.getDefaultInstance()))
-                .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(1)))
-                .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
-                    .setArtifactName("first").setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)))
-                .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(2)))
-                .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
-                    .setArtifactName("second").setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)))
+                .addActions(Action.newBuilder().setTakeScreenshot(TakeScreenshot.newBuilder()
+                    .setArtifactName("first").setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setAfterFrames(1)))
+                .addActions(Action.newBuilder().setTakeScreenshot(TakeScreenshot.newBuilder()
+                    .setArtifactName("second").setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setAfterFrames(2)))
                 .build();
             client.submit(submission("sequence", source).setActions(actions).build());
             JobCompleted completed = client.awaitCompleted("sequence");
@@ -70,11 +67,10 @@ final class ActionSurfaceTest {
 
             List<String> supported = Action.getDescriptor().getOneofs().getFirst().getFields().stream()
                 .map(field -> field.getName()).toList();
-            assertEquals(List.of("reset_temporal_state", "wait_frames", "capture_screenshot",
+            assertEquals(List.of("reset_temporal_state", "wait_frames", "take_screenshot",
                 "capture_texture", "capture_buffer", "activate_source", "compare_captures",
                 "get_capture_status", "capture_pass", "capture_multi",
-                "get_shader_status", "get_shader_errors", "schedule_screenshot",
-                "get_screenshot_result", "get_gpu_metrics", "list_ssbos", "dump_ssbo",
+                "inspect_shader", "get_gpu_metrics", "list_ssbos", "dump_ssbo",
                 "list_textures", "dump_texture", "list_patched_shaders", "load_shader"), supported);
             assertFalse(supported.stream().anyMatch(name -> name.contains("shell") || name.contains("renderdoc") ||
                 name.contains("path")));

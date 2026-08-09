@@ -103,7 +103,7 @@ Json recipe_schema() {
                        {"warmup_frames", frames},
                        {"frames", metric_frames}},
                       {"recipe", "sources", "configs", "matrix", "frames"}),
-        closed_object({{"recipe", enum_string({"reload_and_capture"})},
+        closed_object({{"recipe", enum_string({"load_and_screenshot"})},
                        {"source", source_schema()},
                        {"config", config},
                        {"warmup_frames", frames},
@@ -135,14 +135,22 @@ Json action_schema() {
     const auto empty_action = [](const char* type) {
         return closed_object({{"type", enum_string({type})}}, {"type"});
     };
+    auto load_shader = closed_object({{"type", enum_string({"load_shader"})},
+                                      {"source", {{"type", "string"}, {"minLength", 1}}},
+                                      {"config", {{"type", "string"}, {"minLength", 1}}}},
+                                     {"type", "source", "config"});
+    load_shader["description"] =
+        "Closes any open screen, hides the HUD, loads the selected source and config, reloads the shader pipeline, "
+        "applies the configured scene, resets temporal counters, and returns the resulting shader state, errors, "
+        "and structured reload diagnostics.";
     return one_of({
-        empty_action("reset_temporal_state"),
         closed_object({{"type", enum_string({"wait_frames"})},
                        {"frames", bounded_integer(1, std::numeric_limits<std::uint32_t>::max())}},
                       {"type", "frames"}),
-        closed_object({{"type", enum_string({"capture_screenshot"})},
+        closed_object({{"type", enum_string({"take_screenshot"})},
                        {"format", enum_string({"png"})},
-                       {"artifact_name", artifact_name}},
+                       {"artifact_name", artifact_name},
+                       {"after_frames", bounded_integer(0, std::numeric_limits<std::int32_t>::max())}},
                       {"type"}),
         closed_object({{"type", enum_string({"capture_texture"})},
                        {"name", resource_name},
@@ -155,19 +163,13 @@ Json action_schema() {
                        {"artifact_name", artifact_name}},
                       {"type", "name", "format", "artifact_name"}),
         empty_action("get_capture_status"),
-        closed_object({{"type", enum_string({"load_shader"})},
-                       {"source", {{"type", "string"}, {"minLength", 1}}},
-                       {"config", {{"type", "string"}, {"minLength", 1}}}},
-                      {"type", "source", "config"}),
+        load_shader,
         closed_object({{"type", enum_string({"capture_pass"})},
                        {"pass", resource_name}, {"path", resource_name}}, {"type", "pass"}),
         closed_object({{"type", enum_string({"capture_multi"})},
                        {"capture_type", enum_string({"prepare", "begin", "deferred", "composite"})},
                        {"path", resource_name}}, {"type", "capture_type"}),
-        empty_action("get_shader_status"),
-        empty_action("get_shader_errors"),
-        closed_object({{"type", enum_string({"schedule_screenshot"})}, {"frames", frames}}, {"type"}),
-        empty_action("get_screenshot_result"),
+        empty_action("inspect_shader"),
         closed_object({{"type", enum_string({"get_gpu_metrics"})}, {"frames", frames}}, {"type", "frames"}),
         empty_action("list_ssbos"),
         closed_object({{"type", enum_string({"dump_ssbo"})}, {"index", index}}, {"type", "index"}),
@@ -207,7 +209,8 @@ Json build_definitions() {
         definition("vibris_get_status", "Read MCP, server, runtime, queue, resource, and artifact status.", empty,
                    true),
         definition("vibris_run_recipe",
-                   "Run a standard shader workflow and return its terminal result.",
+                   "Run a standard shader workflow and return its terminal result. load_and_screenshot loads one "
+                   "shader source and config, waits for the requested warmup frames, and saves a screenshot.",
                    recipe_schema(), false),
         definition("vibris_run_actions",
                    "Run one ordered shader action sequence with explicitly named sources and configs.",
@@ -216,7 +219,8 @@ Json build_definitions() {
                                   {"actions", {{"type", "array"}, {"items", action_schema()}, {"maxItems", 64}}}},
                                  {"actions"}), false),
         definition("vibris_run_matrix",
-                   "Run one action template for every selected source and config combination and return per-case results.",
+                   "Run the action template for every selected source and config combination. Each combination "
+                   "automatically begins with load_shader; do not include load_shader in the action template.",
                    closed_object({{"sources", named_sources_schema()},
                                   {"configs", named_configs_schema()},
                                   {"matrix", matrix_axes_schema()},

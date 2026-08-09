@@ -90,10 +90,11 @@ void add_action(const Json& value, proto::ActionSequence* sequence) {
         action->mutable_reset_temporal_state();
     } else if (type == "wait_frames") {
         action->mutable_wait_frames()->set_frame_count(value.at("frames").get<std::uint32_t>());
-    } else if (type == "capture_screenshot") {
-        auto* capture = action->mutable_capture_screenshot();
+    } else if (type == "take_screenshot") {
+        auto* capture = action->mutable_take_screenshot();
         capture->set_artifact_name(value.value("artifact_name", std::string{"beauty"}));
         capture->set_format(artifact_format(value.value("format", std::string{"png"})));
+        capture->set_after_frames(value.value("after_frames", std::uint32_t{}));
     } else if (type == "capture_texture") {
         auto* capture = action->mutable_capture_texture();
         capture->set_logical_name(value.at("name").get<std::string>());

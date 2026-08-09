@@ -16,8 +16,8 @@ internal object CapturePlanBuilder {
         catalog: ResourceCatalog,
     ) {
         when {
-            action.hasCaptureScreenshot() -> {
-                val capture = action.captureScreenshot
+            action.hasTakeScreenshot() -> {
+                val capture = action.takeScreenshot
                 targets.add(
                     screenshot(
                         catalog,

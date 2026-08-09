@@ -36,9 +36,9 @@ try
     $bundle = Get-G007ToolPayload (Get-G007Response -Responses $responses -Id 4)
     Assert-G007CompletedResult -Scope $scope -Payload $reload
     Assert-G007CompletedResult -Scope $scope -Payload $bundle
-    if ($reload.kind -cne "reload_and_capture" -or @($reload.frame_ids).Count -ne 1)
+    if ($reload.kind -cne "load_and_screenshot" -or @($reload.frame_ids).Count -ne 1)
     {
-        throw "reload_and_capture did not return one final capture frame."
+        throw "load_and_screenshot did not return one final screenshot frame."
     }
     $names = @($bundle.artifacts | ForEach-Object { $_.file_name })
     $expected = @("screenshot.png", "colortex0.raw", "depthtex0.raw", "radiance_cache.bin",

@@ -17,7 +17,7 @@ import dev.vibris.protocol.v1.ActionSequence;
 import dev.vibris.protocol.v1.ActivateSource;
 import dev.vibris.protocol.v1.ArtifactFormat;
 import dev.vibris.protocol.v1.ArtifactMetadata;
-import dev.vibris.protocol.v1.CaptureScreenshot;
+import dev.vibris.protocol.v1.TakeScreenshot;
 import dev.vibris.protocol.v1.CaptureBuffer;
 import dev.vibris.protocol.v1.CaptureTexture;
 import dev.vibris.protocol.v1.ErrorCode;
@@ -48,7 +48,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class IrisCaptureTest {
-    private static final String WORKSPACE = "iris-capture";
+    private static final String WORKSPACE = "44444444-4444-4444-8444-444444444444";
     private static final long FRAME_ID = 77;
     private static final byte[] PNG_SIGNATURE = {
         (byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
@@ -123,7 +123,7 @@ final class IrisCaptureTest {
             .addActions(Action.newBuilder().setActivateSource(
                 ActivateSource.newBuilder().setSourceUuid(source.getUuid())))
             .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(2)))
-            .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
+            .addActions(Action.newBuilder().setTakeScreenshot(TakeScreenshot.newBuilder()
                 .setArtifactName("beauty").setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)));
         textures.forEach(name -> actions.addActions(Action.newBuilder().setCaptureTexture(CaptureTexture.newBuilder()
             .setLogicalName(name).setArtifactName(name).setFormat(ArtifactFormat.ARTIFACT_FORMAT_RAW))));

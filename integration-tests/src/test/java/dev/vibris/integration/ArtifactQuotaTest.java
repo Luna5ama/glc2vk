@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ArtifactQuotaTest {
     private static final String PROBE_ROOT = "VIBRIS_ARTIFACT_PROBE_ROOT";
+    private static final String WORKSPACE_ID = "11111111-1111-4111-8111-111111111111";
 
     @TempDir
     Path temp;
@@ -38,8 +39,8 @@ class ArtifactQuotaTest {
         ArtifactManager writer = new ArtifactManager(root, 1_048_576);
         ArtifactManager.CommittedJob oldest = commit(writer, "oldest", 16);
         ArtifactManager.CommittedJob newest = commit(writer, "newest", 16);
-        writer.markReported("workspace", "oldest");
-        writer.markReported("workspace", "newest");
+        writer.markReported(WORKSPACE_ID, "oldest");
+        writer.markReported(WORKSPACE_ID, "newest");
         addSparsePadding(oldest.directory(), 65_536);
         addSparsePadding(newest.directory(), 32_768);
         Files.setLastModifiedTime(oldest.manifest(), FileTime.fromMillis(1_000));
@@ -63,8 +64,8 @@ class ArtifactQuotaTest {
         assertEquals(quota, writer.quotaBytes());
         ArtifactManager.CommittedJob oldest = commit(writer, "oldest", 1);
         ArtifactManager.CommittedJob newest = commit(writer, "newest", 1);
-        writer.markReported("workspace", "oldest");
-        writer.markReported("workspace", "newest");
+        writer.markReported(WORKSPACE_ID, "oldest");
+        writer.markReported(WORKSPACE_ID, "newest");
         replaceWithSparseFile(oldest.artifacts().get("payload.bin"), 2L * 1024 * 1024 * 1024);
         replaceWithSparseFile(newest.artifacts().get("payload.bin"), 3L * 1024 * 1024 * 1024 / 2);
         Files.setLastModifiedTime(oldest.manifest(), FileTime.fromMillis(1_000));
@@ -78,20 +79,20 @@ class ArtifactQuotaTest {
         assertFalse(Files.exists(oldest.directory()));
         assertTrue(Files.isDirectory(newest.directory()));
         ArtifactManager.CommittedJob unreported = commit(manager, "unreported", 16);
-        try (ArtifactManager.JobTransaction active = manager.beginJob("workspace", "active", 2L * 1024 * 1024 * 1024)) {
+        try (ArtifactManager.JobTransaction active = manager.beginJob(WORKSPACE_ID, "active", 2L * 1024 * 1024 * 1024)) {
             Path activeTemporary = onlyTemporaryDirectory(root);
             assertFalse(Files.exists(newest.directory()));
             assertTrue(Files.isDirectory(unreported.directory()));
             assertThrows(ArtifactManager.QuotaExceededException.class,
-                () -> manager.beginJob("workspace", "blocked-active", 2L * 1024 * 1024 * 1024));
+                () -> manager.beginJob(WORKSPACE_ID, "blocked-active", 2L * 1024 * 1024 * 1024));
             assertTrue(Files.isDirectory(activeTemporary));
         }
         assertThrows(ArtifactManager.JobTooLargeException.class,
-            () -> manager.beginJob("workspace", "oversized", quota + 1));
+            () -> manager.beginJob(WORKSPACE_ID, "oversized", quota + 1));
 
         ArtifactManager.CommittedJob ordered;
         try (ArtifactManager.JobTransaction finalizing = manager.beginJob(
-            "workspace", "ordered", 1024L * 1024 * 1024)) {
+            WORKSPACE_ID, "ordered", 1024L * 1024 * 1024)) {
             OutputStream output = finalizing.open("payload.bin");
             output.write(new byte[16]);
             assertThrows(java.io.IOException.class, finalizing::commit);
@@ -112,7 +113,7 @@ class ArtifactQuotaTest {
                 commitThread.start();
                 awaitBlocked(commitThread);
                 assertThrows(ArtifactManager.QuotaExceededException.class,
-                    () -> manager.beginJob("workspace", "blocked-finalizing", quota));
+                    () -> manager.beginJob(WORKSPACE_ID, "blocked-finalizing", quota));
                 assertTrue(Files.isDirectory(temporary));
             }
             commitThread.join(5_000);
@@ -132,10 +133,10 @@ class ArtifactQuotaTest {
     void activeAndUnreportedJobsAreProtectedFromQuotaTrim() throws Exception {
         ArtifactManager manager = new ArtifactManager(temp.resolve("protected"), 2_048);
         ArtifactManager.CommittedJob eligible = commit(manager, "eligible", 700);
-        manager.markReported("workspace", "eligible");
+        manager.markReported(WORKSPACE_ID, "eligible");
         ArtifactManager.CommittedJob unreported = commit(manager, "unreported", 700);
 
-        try (ArtifactManager.JobTransaction active = manager.beginJob("workspace", "active", 500)) {
+        try (ArtifactManager.JobTransaction active = manager.beginJob(WORKSPACE_ID, "active", 500)) {
             assertFalse(Files.exists(eligible.directory()));
             assertTrue(Files.isDirectory(unreported.directory()));
             assertTrue(hasTemporaryDirectory(manager.root()));
@@ -148,13 +149,13 @@ class ArtifactQuotaTest {
         commit(manager, "unreported", 700);
 
         assertThrows(ArtifactManager.QuotaExceededException.class,
-            () -> manager.beginJob("workspace", "blocked", 500));
+            () -> manager.beginJob(WORKSPACE_ID, "blocked", 500));
         assertFalse(hasTemporaryDirectory(manager.root()));
     }
 
     private static ArtifactManager.CommittedJob commit(ArtifactManager manager, String requestId, int bytes)
         throws Exception {
-        try (ArtifactManager.JobTransaction job = manager.beginJob("workspace", requestId, bytes)) {
+        try (ArtifactManager.JobTransaction job = manager.beginJob(WORKSPACE_ID, requestId, bytes)) {
             try (OutputStream output = job.open("payload.bin")) {
                 output.write(new byte[bytes]);
             }

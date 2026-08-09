@@ -128,17 +128,15 @@ paths.
 Putting the same table in global `~/.codex/config.toml` is supported, but it makes Vibris appear in Codex tasks for
 unrelated Git repositories too. Prefer the tracked project file when only shader repositories should expose the server.
 
-For CI or a manual shell launch outside the worktree, retain the explicit override:
+For CI or a manual shell launch, start the MCP with its current directory inside the worktree:
 
 ```powershell
-I:\code\vibris\build\delivery\vibris-mcp.exe `
-  --workspace-root I:\code\shaderpack-worktree `
-  --server-address 127.0.0.1:50051
+Set-Location I:\code\shaderpack-worktree
+I:\code\vibris\build\delivery\vibris-mcp.exe --server-address 127.0.0.1:50051
 ```
 
-`--workspace-root` must be a real Git worktree containing a `shaders` directory. If it is omitted, the MCP searches
-upward from its current directory. The server address must be the loopback endpoint published by the running Iris
-instance; `127.0.0.1:50051` is the default.
+The MCP always searches upward from its current directory; there is no workspace-root override. The server address must
+be the loopback endpoint published by the running Iris instance; `127.0.0.1:50051` is the default.
 
 On Windows, packaged-client integration probes attach a window guard to the owned Iris runtime. It minimizes that
 runtime's visible windows without activating them and fails the probe if Iris reaches the foreground, so automated
@@ -149,7 +147,7 @@ thread joins, and prepared sources still owned by the MCP are removed.
 
 ## Worktree configuration
 
-On first use, the MCP atomically creates `.codex/vibris-workspace.json` with the durable identity shared by concurrent
+On first use, the MCP atomically creates `.vibris/workspace.json` with the durable identity shared by concurrent
 MCP processes for that one worktree:
 
 ```json
@@ -159,15 +157,11 @@ MCP processes for that one worktree:
 }
 ```
 
-A valid legacy `.codex/vibris-session.json` contributes only its schema-v1 UUID when this identity is first created; the
-legacy file is not rewritten and its old scene fields are not loaded. Invalid legacy content is ignored for migration
-and a new UUID is generated.
-
-Both generated state files belong in the shader repository's `.gitignore`:
+Vibris does not read or migrate the former `.codex/vibris-session.json` state. The worktree-local Vibris state directory
+belongs in the shader repository's `.gitignore`:
 
 ```gitignore
-.codex/vibris-workspace.json
-.codex/vibris-session.json
+/.vibris/
 ```
 
 Do not ignore `.codex/config.toml`; it is the tracked project configuration that linked worktrees inherit.
@@ -228,11 +222,10 @@ execution order through `action_results` with their action index, kind, and JSON
 
 | Action types | Purpose |
 |--------------|---------|
-| `reset_temporal_state`, `wait_frames` | control temporal history and rendered-frame waits |
-| `capture_screenshot`, `capture_texture`, `capture_buffer` | write same-frame managed artifacts |
+| `wait_frames` | wait for rendered frames |
+| `take_screenshot`, `capture_texture`, `capture_buffer` | optionally wait for rendered frames, then write managed artifacts |
 | `get_capture_status`, `capture_pass`, `capture_multi` | inspect or queue compute and OpenGL raster draw captures; raster replay uses `vibris-replay-gl` |
-| `load_shader`, `get_shader_status`, `get_shader_errors` | load a named source/config pair and inspect it |
-| `schedule_screenshot`, `get_screenshot_result` | schedule and locate an asynchronous host screenshot |
+| `load_shader`, `inspect_shader` | load a named source/config pair with diagnostics, or inspect current shader state |
 | `get_gpu_metrics` | measure GPU pass timings over its next required `frames` |
 | `list_ssbos`, `dump_ssbo` | inspect or dump SSBOs by binding index |
 | `list_textures`, `dump_texture` | inspect or dump textures by logical name or OpenGL ID |
@@ -272,8 +265,9 @@ resolved inside the game directory; paths escaping it are rejected.
 ### Shader config
 
 Single-source recipes accept an optional top-level `config`. Action and matrix requests declare reusable named configs;
-`load_shader` references one config by ID. Boolean, number, and printable ASCII string values are converted to Iris
-`KEY=VALUE` properties before the shader load:
+`load_shader` references one config by ID. It closes any open screen, hides the HUD, loads the selected source and
+config, reloads the shader pipeline, applies the configured scene, and resets temporal counters. Boolean, number, and
+printable ASCII string values are converted to Iris `KEY=VALUE` properties before the shader load:
 
 ```json
 {
@@ -355,19 +349,18 @@ and execute action sequences only; no recipe enum or recipe decoder exists in th
 `profile_matrix` accepts `sources`, `configs`, and `matrix` axes in the same form as `vibris_run_matrix`, then profiles
 every selected source/config combination. A failed combination is recorded and later combinations continue.
 
-### Reload and capture
+### Load and screenshot
 
 ```json
 {
-  "recipe": "reload_and_capture",
+  "recipe": "load_and_screenshot",
   "source": {"kind": "workspace"},
   "warmup_frames": 32,
   "screenshot_format": "png"
 }
 ```
 
-Activates the source, applies the configured context, reloads shaders, waits the requested frames, and captures one
-final screenshot.
+Loads the source and config, waits the requested frames, and saves one screenshot.
 
 ### Capture a debug bundle
 
@@ -405,7 +398,7 @@ texture raw/PNG, and buffer BIN. The result includes comparison metrics and the 
 
 ## Custom actions
 
-The full action set is listed in the MCP table above. Same-frame artifacts use `capture_screenshot`,
+The full action set is listed in the MCP table above. Managed artifacts use `take_screenshot`,
 `capture_texture`, and `capture_buffer`; live debug resource dumps
 use `dump_texture` and `dump_ssbo`, so their ownership and result semantics remain unambiguous.
 
@@ -415,8 +408,7 @@ use `dump_texture` and `dump_ssbo`, so their ownership and result semantics rema
   "configs": [{"id":"parallax","values":{"SETTING_PARALLAX_MODE":0}}],
   "actions": [
     {"type": "load_shader", "source": "candidate", "config": "parallax"},
-    {"type": "get_shader_status"},
-    {"type": "get_shader_errors"},
+    {"type": "take_screenshot", "after_frames": 32, "format": "png", "artifact_name": "beauty"},
     {"type": "get_gpu_metrics", "frames": 120},
     {"type": "list_textures"},
     {"type": "list_ssbos"}
@@ -424,7 +416,14 @@ use `dump_texture` and `dump_ssbo`, so their ownership and result semantics rema
 }
 ```
 
-`load_shader` requires explicit source and config IDs. Sequences without `load_shader` operate on the current runtime.
+`take_screenshot` waits `after_frames` rendered frames, captures the final framebuffer, and does not complete until the
+PNG is committed as a managed artifact. The delay defaults to zero, so no scheduling or result-poll action is needed.
+
+`load_shader` requires explicit source and config IDs. Its action result contains `success`, the requested source/config
+identity, the post-load `pack_loaded` and `shaderpack` state, current shader `errors`, structured reload `diagnostics`,
+and a compile-log path on failure. A failed explicit load is returned as a failed action result and skips later actions
+in that source/config case. Use `inspect_shader` only when inspecting the current runtime without loading a source.
+Sequences without `load_shader` operate on the current runtime.
 A/B recipes may also add an internal capture-comparison action. The configured scene is applied when a shader is
 loaded. Actions never expose shell execution, arbitrary source paths, or external process
 hooks. Managed artifact names are safe flat file-name segments, and optional compute-capture paths must stay within the
@@ -433,7 +432,8 @@ game directory.
 ## Matrix actions
 
 `vibris_run_matrix` executes one action template for the source-major Cartesian product selected by `matrix.sources`
-and `matrix.configs`. Each case begins with an internal `load_shader`; artifact names are prefixed with the case ID.
+and `matrix.configs`. Each combination automatically begins with `load_shader`; do not include `load_shader` in the
+action template. Artifact names are prefixed with the case ID.
 Shader or action failures are returned on that case and execution continues with the next case. Transport, source
 preparation, cancellation, and server failures remain job-global.
 
@@ -443,9 +443,15 @@ A completed job reports `success`, kind, diagnostics, timings, frame IDs, artifa
 `manifest_path`. Each artifact records its absolute path, byte count, media type, format, kind, and resource metadata
 when applicable. Binary data stays on disk.
 
-Artifacts are written below configured `artifact_root` as `<artifact_root>/<workspace UUID>/<request UUID>`. A job
+Artifacts are written below configured `artifact_root` with the exact workspace ID as the first directory:
+`<artifact_root>/<workspace_id>/<request directory>`. A job
 writes to a sibling `.tmp` directory and becomes visible only after its manifest and files are atomically committed.
 Startup recovers valid committed jobs and removes abandoned temporary directories.
+
+When an MCP receives a terminal response containing artifact, manifest, or diagnostic-log paths, it ensures that
+`.vibris/artifact` is a directory link to `<artifact_root>/<workspace_id>` and rewrites every returned path through that
+link. This keeps artifact paths inside the worktree permission boundary. A missing or stale link is created or replaced;
+if `.vibris/artifact` is occupied by a normal file or directory, the tool fails with `ARTIFACT_LINK_ERROR`.
 
 The default artifact quota is 3 GiB. Before reserving a new job, the manager evicts the oldest reported jobs until the
 reservation fits. A single job larger than the quota fails; completed results remain protected until reported to the MCP

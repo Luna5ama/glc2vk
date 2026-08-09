@@ -18,6 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ArtifactManagerTest {
+    private static final String WORKSPACE_ID = "11111111-1111-4111-8111-111111111111";
     @TempDir
     Path temp;
 
@@ -26,7 +27,7 @@ class ArtifactManagerTest {
         ArtifactManager manager = new ArtifactManager(temp.resolve("artifacts"), 4_096);
 
         ArtifactManager.CommittedJob committed;
-        try (ArtifactManager.JobTransaction job = manager.beginJob("workspace", "request", 7)) {
+        try (ArtifactManager.JobTransaction job = manager.beginJob(WORKSPACE_ID, "request", 7)) {
             try (OutputStream output = job.open("payload.bin")) {
                 output.write("payload".getBytes(StandardCharsets.UTF_8));
             }
@@ -37,6 +38,7 @@ class ArtifactManagerTest {
 
         assertFalse(hasTemporaryDirectory(manager.root()));
         assertTrue(Files.isDirectory(committed.directory()));
+        assertEquals(WORKSPACE_ID, committed.directory().getParent().getFileName().toString());
         assertEquals("payload", Files.readString(committed.artifacts().get("payload.bin")));
         assertTrue(Files.isRegularFile(committed.manifest()));
         assertTrue(Files.readString(committed.manifest()).contains("\"payload.bin\""));
@@ -49,14 +51,14 @@ class ArtifactManagerTest {
     void artifactNamesCollideCaseInsensitivelyAndUseCreateNew() throws Exception {
         ArtifactManager manager = new ArtifactManager(temp.resolve("names"), 4_096);
 
-        try (ArtifactManager.JobTransaction job = manager.beginJob("workspace", "request", 0)) {
+        try (ArtifactManager.JobTransaction job = manager.beginJob(WORKSPACE_ID, "request", 0)) {
             try (OutputStream ignored = job.open("Payload.bin")) {
                 assertThrows(java.io.IOException.class, () -> job.open("payload.BIN"));
                 assertThrows(java.io.IOException.class, () -> job.open("MANIFEST.JSON"));
             }
         }
 
-        try (ArtifactManager.JobTransaction job = manager.beginJob("workspace", "foreign", 0)) {
+        try (ArtifactManager.JobTransaction job = manager.beginJob(WORKSPACE_ID, "foreign", 0)) {
             Path temporary = onlyTemporaryDirectory(manager.root());
             Files.writeString(temporary.resolve("payload.bin"), "foreign");
             assertThrows(java.nio.file.FileAlreadyExistsException.class, () -> job.open("payload.bin"));
@@ -67,7 +69,7 @@ class ArtifactManagerTest {
     void commitRejectsMissingExpectedArtifactBeforeManifestAndRename() throws Exception {
         ArtifactManager manager = new ArtifactManager(temp.resolve("expected"), 4_096);
 
-        try (ArtifactManager.JobTransaction job = manager.beginJob("workspace", "request", 7)) {
+        try (ArtifactManager.JobTransaction job = manager.beginJob(WORKSPACE_ID, "request", 7)) {
             try (OutputStream output = job.open("shader.log")) {
                 output.write("success".getBytes(StandardCharsets.UTF_8));
             }
@@ -85,7 +87,7 @@ class ArtifactManagerTest {
     void commitRejectsReplacedOrResizedArtifactFiles() throws Exception {
         ArtifactManager manager = new ArtifactManager(temp.resolve("tampered"), 4_096);
 
-        try (ArtifactManager.JobTransaction job = manager.beginJob("workspace", "replaced", 7)) {
+        try (ArtifactManager.JobTransaction job = manager.beginJob(WORKSPACE_ID, "replaced", 7)) {
             try (OutputStream output = job.open("payload.bin")) {
                 output.write("payload".getBytes(StandardCharsets.UTF_8));
             }
@@ -95,7 +97,7 @@ class ArtifactManagerTest {
             assertThrows(java.io.IOException.class, job::commit);
         }
 
-        try (ArtifactManager.JobTransaction job = manager.beginJob("workspace", "resized", 8)) {
+        try (ArtifactManager.JobTransaction job = manager.beginJob(WORKSPACE_ID, "resized", 8)) {
             try (OutputStream output = job.open("payload.bin")) {
                 output.write("payload".getBytes(StandardCharsets.UTF_8));
             }
@@ -109,7 +111,7 @@ class ArtifactManagerTest {
     void manifestCreationDoesNotReplaceAnExistingEntry() throws Exception {
         ArtifactManager manager = new ArtifactManager(temp.resolve("manifest"), 4_096);
 
-        try (ArtifactManager.JobTransaction job = manager.beginJob("workspace", "request", 7)) {
+        try (ArtifactManager.JobTransaction job = manager.beginJob(WORKSPACE_ID, "request", 7)) {
             try (OutputStream output = job.open("payload.bin")) {
                 output.write("payload".getBytes(StandardCharsets.UTF_8));
             }
@@ -127,9 +129,9 @@ class ArtifactManagerTest {
         ArtifactManager manager = new ArtifactManager(temp.resolve("artifacts"), 256);
 
         assertThrows(ArtifactManager.JobTooLargeException.class,
-            () -> manager.beginJob("workspace", "estimated", 257));
+            () -> manager.beginJob(WORKSPACE_ID, "estimated", 257));
 
-        try (ArtifactManager.JobTransaction job = manager.beginJob("workspace", "written", 0);
+        try (ArtifactManager.JobTransaction job = manager.beginJob(WORKSPACE_ID, "written", 0);
              OutputStream output = job.open("payload.bin")) {
             assertThrows(ArtifactManager.JobTooLargeException.class, () -> output.write(new byte[257]));
         }
@@ -139,7 +141,7 @@ class ArtifactManagerTest {
     void shaderLogCompatibilityUsesCommittedArtifact() throws Exception {
         ArtifactManager manager = new ArtifactManager(temp.resolveSibling("artifacts"));
 
-        var artifact = manager.writeShaderLog("workspace", "request", List.of(
+        var artifact = manager.writeShaderLog(WORKSPACE_ID, "request", List.of(
             new ReloadResult.Diagnostic(ReloadResult.Severity.ERROR, "composite.fsh", 17, "compile failed")));
 
         assertEquals("shader.log", artifact.getFileName());

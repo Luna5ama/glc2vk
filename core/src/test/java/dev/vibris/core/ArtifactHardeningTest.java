@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ArtifactHardeningTest {
+    private static final String WORKSPACE_ID = "11111111-1111-4111-8111-111111111111";
     @TempDir
     Path temp;
 
@@ -36,7 +37,7 @@ class ArtifactHardeningTest {
         Files.move(root, displaced);
         Files.createDirectory(root);
 
-        assertThrows(IOException.class, () -> manager.beginJob("workspace", "request", 0));
+        assertThrows(IOException.class, () -> manager.beginJob(WORKSPACE_ID, "request", 0));
         assertTrue(Files.isDirectory(root));
         assertTrue(Files.isDirectory(displaced));
     }
@@ -44,7 +45,7 @@ class ArtifactHardeningTest {
     @Test
     void workspaceIdentityReplacementStopsFinalizeAndCleanup() throws Exception {
         ArtifactManager manager = new ArtifactManager(temp.resolve("artifacts"), 4_096);
-        ArtifactManager.JobTransaction job = manager.beginJob("workspace", "request", 7);
+        ArtifactManager.JobTransaction job = manager.beginJob(WORKSPACE_ID, "request", 7);
         try (OutputStream output = job.open("payload.bin")) {
             output.write(new byte[7]);
         }
@@ -96,10 +97,10 @@ class ArtifactHardeningTest {
         ArtifactManager.CommittedJob protectedJob = commit(manager, "protected", 600);
 
         assertThrows(ArtifactManager.QuotaExceededException.class,
-            () -> manager.beginJob("workspace", "blocked", 400));
+            () -> manager.beginJob(WORKSPACE_ID, "blocked", 400));
 
         clock.advance(ArtifactManager.UNREPORTED_TTL);
-        try (ArtifactManager.JobTransaction ignored = manager.beginJob("workspace", "eligible", 400)) {
+        try (ArtifactManager.JobTransaction ignored = manager.beginJob(WORKSPACE_ID, "eligible", 400)) {
             assertFalse(Files.exists(protectedJob.directory()));
         }
     }
@@ -126,7 +127,7 @@ class ArtifactHardeningTest {
 
     private static ArtifactManager.CommittedJob commit(ArtifactManager manager, String requestId, int bytes)
         throws Exception {
-        try (ArtifactManager.JobTransaction job = manager.beginJob("workspace", requestId, bytes)) {
+        try (ArtifactManager.JobTransaction job = manager.beginJob(WORKSPACE_ID, requestId, bytes)) {
             try (OutputStream output = job.open("payload.bin")) {
                 output.write(new byte[bytes]);
             }

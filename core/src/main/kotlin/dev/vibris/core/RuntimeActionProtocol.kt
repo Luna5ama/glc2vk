@@ -12,10 +12,7 @@ internal object RuntimeActionProtocol {
         Action.ActionCase.GET_CAPTURE_STATUS,
         Action.ActionCase.CAPTURE_PASS,
         Action.ActionCase.CAPTURE_MULTI,
-        Action.ActionCase.GET_SHADER_STATUS,
-        Action.ActionCase.GET_SHADER_ERRORS,
-        Action.ActionCase.SCHEDULE_SCREENSHOT,
-        Action.ActionCase.GET_SCREENSHOT_RESULT,
+        Action.ActionCase.INSPECT_SHADER,
         Action.ActionCase.GET_GPU_METRICS,
         Action.ActionCase.LIST_SSBOS,
         Action.ActionCase.DUMP_SSBO,
@@ -38,11 +35,7 @@ internal object RuntimeActionProtocol {
             require(command.type in captureTypes) { "type is unsupported" }
             RuntimeAction.CaptureMulti(command.type, command.pathOrNull())
         }
-        Action.ActionCase.GET_SHADER_STATUS -> RuntimeAction.ShaderStatus
-        Action.ActionCase.GET_SHADER_ERRORS -> RuntimeAction.ShaderErrors
-        Action.ActionCase.SCHEDULE_SCREENSHOT ->
-            RuntimeAction.ScheduleScreenshot(action.scheduleScreenshot.frames.requirePositive("frames"))
-        Action.ActionCase.GET_SCREENSHOT_RESULT -> RuntimeAction.ScreenshotResult
+        Action.ActionCase.INSPECT_SHADER -> RuntimeAction.InspectShader
         Action.ActionCase.GET_GPU_METRICS ->
             RuntimeAction.GpuMetrics(action.getGpuMetrics.frames.requireRange("frames", 1, 10_000))
         Action.ActionCase.LIST_SSBOS -> RuntimeAction.ListSsbos
@@ -65,7 +58,7 @@ internal object RuntimeActionProtocol {
     fun kind(action: Action): JobActionKind = when (action.actionCase) {
         Action.ActionCase.RESET_TEMPORAL_STATE -> JobActionKind.JOB_ACTION_KIND_RESET_TEMPORAL_STATE
         Action.ActionCase.WAIT_FRAMES -> JobActionKind.JOB_ACTION_KIND_WAIT_FRAMES
-        Action.ActionCase.CAPTURE_SCREENSHOT -> JobActionKind.JOB_ACTION_KIND_CAPTURE_SCREENSHOT
+        Action.ActionCase.TAKE_SCREENSHOT -> JobActionKind.JOB_ACTION_KIND_TAKE_SCREENSHOT
         Action.ActionCase.CAPTURE_TEXTURE -> JobActionKind.JOB_ACTION_KIND_CAPTURE_TEXTURE
         Action.ActionCase.CAPTURE_BUFFER -> JobActionKind.JOB_ACTION_KIND_CAPTURE_BUFFER
         Action.ActionCase.ACTIVATE_SOURCE -> JobActionKind.JOB_ACTION_KIND_ACTIVATE_SOURCE
@@ -73,10 +66,7 @@ internal object RuntimeActionProtocol {
         Action.ActionCase.GET_CAPTURE_STATUS -> JobActionKind.JOB_ACTION_KIND_GET_CAPTURE_STATUS
         Action.ActionCase.CAPTURE_PASS -> JobActionKind.JOB_ACTION_KIND_CAPTURE_PASS
         Action.ActionCase.CAPTURE_MULTI -> JobActionKind.JOB_ACTION_KIND_CAPTURE_MULTI
-        Action.ActionCase.GET_SHADER_STATUS -> JobActionKind.JOB_ACTION_KIND_GET_SHADER_STATUS
-        Action.ActionCase.GET_SHADER_ERRORS -> JobActionKind.JOB_ACTION_KIND_GET_SHADER_ERRORS
-        Action.ActionCase.SCHEDULE_SCREENSHOT -> JobActionKind.JOB_ACTION_KIND_SCHEDULE_SCREENSHOT
-        Action.ActionCase.GET_SCREENSHOT_RESULT -> JobActionKind.JOB_ACTION_KIND_GET_SCREENSHOT_RESULT
+        Action.ActionCase.INSPECT_SHADER -> JobActionKind.JOB_ACTION_KIND_INSPECT_SHADER
         Action.ActionCase.GET_GPU_METRICS -> JobActionKind.JOB_ACTION_KIND_GET_GPU_METRICS
         Action.ActionCase.LIST_SSBOS -> JobActionKind.JOB_ACTION_KIND_LIST_SSBOS
         Action.ActionCase.DUMP_SSBO -> JobActionKind.JOB_ACTION_KIND_DUMP_SSBO

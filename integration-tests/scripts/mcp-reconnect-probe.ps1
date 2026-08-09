@@ -226,8 +226,7 @@ try
     $server = Start-FakeServer -Ordinal 1
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $Exe
-    $startInfo.Arguments = "--workspace-root `"$resolvedWorkspace`" " +
-        "--server-address 127.0.0.1:$($fixture.serverPort)"
+    $startInfo.Arguments = "--server-address 127.0.0.1:$($fixture.serverPort)"
     $startInfo.WorkingDirectory = $resolvedWorkspace
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true

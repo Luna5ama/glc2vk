@@ -73,7 +73,7 @@ internal class ArtifactManager internal constructor(
         }
 
         verifyRootIdentity()
-        val workspace = rootValue.resolve(segment("workspace", workspaceId))
+        val workspace = rootValue.resolve(workspaceSegment(workspaceId))
         val directory = workspace.resolve(segment("request", requestId))
         val temporary = directory.resolveSibling(directory.fileName.toString() + ".tmp")
         OwnedPathIdentity.createDirectoriesSafely(workspace)
@@ -109,7 +109,7 @@ internal class ArtifactManager internal constructor(
 
     @Synchronized
     fun markReported(workspaceId: String, requestId: String) {
-        val workspace = rootValue.resolve(segment("workspace", workspaceId))
+        val workspace = rootValue.resolve(workspaceSegment(workspaceId))
         val directory = workspace.resolve(segment("request", requestId))
         unreported.remove(directory)
     }
@@ -318,5 +318,17 @@ internal class ArtifactManager internal constructor(
 
         private fun segment(kind: String, value: String): String =
             UUID.nameUUIDFromBytes((kind + '\u0000' + value).toByteArray(StandardCharsets.UTF_8)).toString()
+
+        private fun workspaceSegment(value: String): String {
+            val parsed = try {
+                UUID.fromString(value)
+            } catch (exception: IllegalArgumentException) {
+                throw IllegalArgumentException("workspace ID must be a canonical UUID", exception)
+            }
+            require(parsed.toString().equals(value, ignoreCase = true)) {
+                "workspace ID must be a canonical UUID"
+            }
+            return parsed.toString()
+        }
     }
 }

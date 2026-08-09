@@ -135,7 +135,7 @@ try
     $prepared = New-IrisPreparedSource -Scope $scope -Source $sourceRoot
     $actions = @(
         [ordered] @{ type = "wait_frames"; frames = 2 },
-        [ordered] @{ type = "capture_screenshot"; format = $Screenshot; artifact_name = "beauty" },
+        [ordered] @{ type = "take_screenshot"; format = $Screenshot; artifact_name = "beauty" },
         [ordered] @{ type = "capture_texture"; name = $Texture; format = "raw"; artifact_name = $Texture },
         [ordered] @{ type = "capture_buffer"; name = $Buffer; format = "bin"; artifact_name = $Buffer }
     )

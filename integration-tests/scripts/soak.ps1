@@ -312,7 +312,7 @@ try
         {
             $response = Invoke-ProbeMcpTool -Process $mcp.Process -Id "soak-job-$iteration" `
                 -Name "vibris_run_recipe" -Arguments @{
-                    recipe = "reload_and_capture"
+                    recipe = "load_and_screenshot"
                     source = @{ kind = "workspace" }
                     warmup_frames = 0
                     screenshot_format = "png"

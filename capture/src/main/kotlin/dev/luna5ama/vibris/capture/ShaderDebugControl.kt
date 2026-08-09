@@ -18,9 +18,6 @@ class ShaderDebugControl @JvmOverloads constructor(
 ) {
     private val errorLock = Any()
     private val errors = ArrayDeque<ShaderDebugError>()
-    private val screenshotLock = Any()
-    private var screenshotFrames = 0
-    @Volatile private var lastScreenshotPath: Path? = null
     private val passStack: ThreadLocal<ArrayDeque<String>> = ThreadLocal.withInitial { ArrayDeque() }
     private val timingStack: ThreadLocal<ArrayDeque<Boolean>> = ThreadLocal.withInitial { ArrayDeque() }
     private val metrics = GpuTimingMetrics()
@@ -39,6 +36,8 @@ class ShaderDebugControl @JvmOverloads constructor(
             put("shaderpack", "unknown")
         }
     }
+
+    fun inspect(): JsonObject = JsonObject(status() + ("errors" to errorJson()))
 
     fun reload(): JsonObject {
         clearErrors()
@@ -76,29 +75,9 @@ class ShaderDebugControl @JvmOverloads constructor(
 
     fun clearErrors() = synchronized(errorLock) { errors.clear() }
 
-    fun errorsJson(): JsonObject = buildJsonObject { put("errors", errorJson()) }
-
     fun errorList(): List<ShaderDebugError> = errorSnapshot()
 
-    fun scheduleScreenshot(frames: Int) {
-        require(frames > 0) { "frames must be positive" }
-        synchronized(screenshotLock) { screenshotFrames = frames }
-    }
-
-    fun tickFrame() {
-        val capture = synchronized(screenshotLock) {
-            if (screenshotFrames == 0) false else {
-                screenshotFrames--
-                screenshotFrames == 0
-            }
-        }
-        if (capture) host.captureScreenshot { lastScreenshotPath = it }
-        metrics.finishFrame()
-    }
-
-    fun screenshotResult(): JsonObject = buildJsonObject {
-        put("path", lastScreenshotPath?.let { JsonPrimitive(it.toString()) } ?: JsonNull)
-    }
+    fun tickFrame() = metrics.finishFrame()
 
     fun captureMetrics(frames: Int): CompletionStage<JsonObject> =
         metrics.capture(frames).thenApply(::metricsJson)

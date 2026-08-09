@@ -40,9 +40,8 @@ public:
 
 class WorkspaceIdentityStore final {
 public:
-    WorkspaceIdentityStore(std::filesystem::path identity_path, std::filesystem::path legacy_config_path);
-    WorkspaceIdentityStore(std::filesystem::path identity_path, std::filesystem::path legacy_config_path,
-        detail::WorkspaceIdentityIoHooks& hooks);
+    explicit WorkspaceIdentityStore(std::filesystem::path identity_path);
+    WorkspaceIdentityStore(std::filesystem::path identity_path, detail::WorkspaceIdentityIoHooks& hooks);
 
     [[nodiscard]] const std::filesystem::path& path() const noexcept;
     [[nodiscard]] std::string load_or_create() const;
@@ -50,11 +49,9 @@ public:
 private:
     [[nodiscard]] std::optional<std::string> load_existing() const;
     [[nodiscard]] std::optional<std::string> load_existing_after_publish_loss() const;
-    [[nodiscard]] std::optional<std::string> load_legacy() const;
     [[nodiscard]] std::string publish(std::string workspace_id) const;
 
     std::filesystem::path identity_path_;
-    std::filesystem::path legacy_config_path_;
     detail::WorkspaceIdentityIoHooks* hooks_ = nullptr;
 };
 

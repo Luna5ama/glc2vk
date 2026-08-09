@@ -56,7 +56,7 @@ void scale_timeouts(proto::SubmitJob& job) {
     for (const auto& action : job.actions().actions()) {
         if (action.has_wait_frames()) rendered_frames += action.wait_frames().frame_count();
         else if (action.has_get_gpu_metrics()) rendered_frames += action.get_gpu_metrics().frames();
-        else if (action.has_schedule_screenshot()) rendered_frames += action.schedule_screenshot().frames();
+        else if (action.has_take_screenshot()) rendered_frames += action.take_screenshot().after_frames();
     }
     constexpr std::uint64_t setup_ms = 60'000;
     constexpr std::uint64_t ms_per_frame = 1'000;
@@ -108,33 +108,27 @@ void load(proto::ActionSequence& sequence, const proto::PreparedSourceRef& sourc
     action->set_continue_on_failure(continue_on_failure);
 }
 
-void reset(proto::ActionSequence& sequence) {
-    add_action(sequence)->mutable_reset_temporal_state();
-}
-
 void wait(proto::ActionSequence& sequence, std::uint32_t frames) {
     if (frames != 0) add_action(sequence)->mutable_wait_frames()->set_frame_count(frames);
 }
 
-void reload_recipe(const Json& arguments, const SessionConfig& config,
+void load_and_screenshot_recipe(const Json& arguments, const SessionConfig& config,
     std::span<const proto::PreparedSourceRef> sources, proto::ActionSequence& sequence) {
     require_sources(sources, 1);
     load(sequence, sources.front(), "source", "config", "source--config");
-    reset(sequence);
-    wait(sequence, arguments.value("warmup_frames", config.default_warmup_frames));
-    auto* capture = add_action(sequence)->mutable_capture_screenshot();
+    auto* capture = add_action(sequence)->mutable_take_screenshot();
     capture->set_artifact_name("screenshot");
     capture->set_format(format(arguments.value("screenshot_format", std::string("png"))));
+    capture->set_after_frames(arguments.value("warmup_frames", config.default_warmup_frames));
 }
 
 void debug_recipe(const Json& arguments, const SessionConfig& config,
     std::span<const proto::PreparedSourceRef> sources, proto::ActionSequence& sequence) {
     require_sources(sources, 1);
     load(sequence, sources.front(), "source", "config", "source--config");
-    reset(sequence);
     wait(sequence, arguments.value("warmup_frames", config.default_warmup_frames));
     if (arguments.value("screenshot", false)) {
-        auto* capture = add_action(sequence)->mutable_capture_screenshot();
+        auto* capture = add_action(sequence)->mutable_take_screenshot();
         capture->set_artifact_name("screenshot");
         capture->set_format(proto::ARTIFACT_FORMAT_PNG);
     }
@@ -157,7 +151,7 @@ void debug_recipe(const Json& arguments, const SessionConfig& config,
 void add_ab_capture(proto::ActionSequence& sequence, const Json& capture, std::string artifact_name) {
     const auto type = capture.at("type").get<std::string>();
     if (type == "screenshot") {
-        auto* value = add_action(sequence)->mutable_capture_screenshot();
+        auto* value = add_action(sequence)->mutable_take_screenshot();
         value->set_artifact_name(std::move(artifact_name));
         value->set_format(format(capture.value("format", std::string("png"))));
         return;
@@ -181,14 +175,12 @@ void ab_recipe(const Json& arguments, const SessionConfig& config,
     require_sources(sources, 2);
     const auto warmup = arguments.value("warmup_frames", config.default_warmup_frames);
     load(sequence, sources[0], "a", "config", "a--config");
-    reset(sequence);
     wait(sequence, warmup);
     std::size_t index = 0;
     for (const auto& capture : arguments.at("captures")) {
         add_ab_capture(sequence, capture, "a-" + std::to_string(index++));
     }
     load(sequence, sources[1], "b", "config", "b--config");
-    reset(sequence);
     wait(sequence, warmup);
     index = 0;
     for (const auto& capture : arguments.at("captures")) {
@@ -205,7 +197,6 @@ void profile_recipe(const Json& arguments, const SessionConfig& config,
     std::span<const proto::PreparedSourceRef> sources, proto::ActionSequence& sequence) {
     require_sources(sources, 1);
     load(sequence, sources.front(), "source", "config", "source--config");
-    reset(sequence);
     wait(sequence, arguments.value("warmup_frames", config.default_warmup_frames));
     add_action(sequence)->mutable_get_gpu_metrics()->set_frames(arguments.at("frames").get<std::uint32_t>());
 }
@@ -219,13 +210,15 @@ void recipe(const Json& arguments, const SessionConfig& config,
     if (kind != "profile_matrix") recipe_config(arguments, job);
     if (kind == "profile") return profile_recipe(arguments, config, sources, *job.mutable_actions());
     if (kind == "profile_matrix") {
-        Json template_actions = Json::array({{{"type", "reset_temporal_state"}}});
+        Json template_actions = Json::array();
         const auto warmup = arguments.value("warmup_frames", config.default_warmup_frames);
         if (warmup != 0) template_actions.push_back({{"type", "wait_frames"}, {"frames", warmup}});
         template_actions.push_back({{"type", "get_gpu_metrics"}, {"frames", arguments.at("frames")}});
         return matrix(arguments, sources, template_actions, job);
     }
-    if (kind == "reload_and_capture") return reload_recipe(arguments, config, sources, *job.mutable_actions());
+    if (kind == "load_and_screenshot") {
+        return load_and_screenshot_recipe(arguments, config, sources, *job.mutable_actions());
+    }
     if (kind == "capture_debug_bundle") return debug_recipe(arguments, config, sources, *job.mutable_actions());
     if (kind == "ab_compare") return ab_recipe(arguments, config, sources, *job.mutable_actions());
     throw std::invalid_argument("unsupported recipe");
@@ -257,11 +250,12 @@ void append_actions(const Json& inputs, const SourceMap& sources, proto::ActionS
             action->mutable_reset_temporal_state();
         } else if (type == "wait_frames") {
             action->mutable_wait_frames()->set_frame_count(input.at("frames").get<std::uint32_t>());
-        } else if (type == "capture_screenshot") {
-            auto* value = action->mutable_capture_screenshot();
+        } else if (type == "take_screenshot") {
+            auto* value = action->mutable_take_screenshot();
             value->set_format(format(input.value("format", std::string("png"))));
             value->set_artifact_name(std::string(artifact_prefix) +
                 input.value("artifact_name", std::string("screenshot")));
+            value->set_after_frames(input.value("after_frames", std::uint32_t{0}));
         } else if (type == "capture_texture") {
             auto* value = action->mutable_capture_texture();
             value->set_logical_name(input.at("name").get<std::string>());
@@ -282,6 +276,7 @@ void append_actions(const Json& inputs, const SourceMap& sources, proto::ActionS
             load_action->set_source_id(source_id);
             load_action->set_config_id(input.at("config").get<std::string>());
             load_action->set_case_id(source_id + "--" + load_action->config_id());
+            load_action->set_continue_on_failure(true);
         } else if (type == "capture_pass") {
             auto* value = action->mutable_capture_pass();
             value->set_pass(input.at("pass").get<std::string>());
@@ -290,11 +285,7 @@ void append_actions(const Json& inputs, const SourceMap& sources, proto::ActionS
             auto* value = action->mutable_capture_multi();
             value->set_type(input.at("capture_type").get<std::string>());
             if (input.contains("path")) value->set_path(input.at("path").get<std::string>());
-        } else if (type == "get_shader_status") action->mutable_get_shader_status();
-        else if (type == "get_shader_errors") action->mutable_get_shader_errors();
-        else if (type == "schedule_screenshot") {
-            action->mutable_schedule_screenshot()->set_frames(input.value("frames", std::uint32_t{1}));
-        } else if (type == "get_screenshot_result") action->mutable_get_screenshot_result();
+        } else if (type == "inspect_shader") action->mutable_inspect_shader();
         else if (type == "get_gpu_metrics") {
             action->mutable_get_gpu_metrics()->set_frames(input.at("frames").get<std::uint32_t>());
         } else if (type == "list_ssbos") action->mutable_list_ssbos();

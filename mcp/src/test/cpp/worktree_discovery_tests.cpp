@@ -190,10 +190,8 @@ void require_path_equal(const fs::path& actual, const fs::path& expected, const 
 }
 
 void require_identity_paths(const WorkspaceBinding& binding, const char* scenario) {
-    require(binding.identity_path == binding.root / ".codex" / "vibris-workspace.json",
+    require(binding.identity_path == binding.root / ".vibris" / "workspace.json",
         std::string(scenario) + ": wrong workspace identity path.");
-    require(binding.legacy_config_path == binding.root / ".codex" / "vibris-session.json",
-        std::string(scenario) + ": wrong legacy config path.");
 }
 
 template <typename Callable>
@@ -278,48 +276,6 @@ void independent_repositories_remain_distinct() {
         "IndependentRepositories: distinct repositories collapsed to one root.");
 }
 
-void explicit_root_is_canonical_and_overrides_cwd() {
-    TempDirectory cwd_worktree;
-    TempDirectory explicit_fixture;
-    const auto initial_explicit_worktree = explicit_fixture.path() / "explicit";
-    const auto explicit_worktree = explicit_fixture.path() / L"explicit & \u5b89\u5168";
-    initialize_repository(cwd_worktree.path());
-    initialize_repository(initial_explicit_worktree);
-    fs::rename(initial_explicit_worktree, explicit_worktree);
-    fs::create_directories(cwd_worktree.path() / "nested");
-    fs::create_directories(explicit_worktree / "canonical-child");
-    const auto noncanonical_explicit = explicit_worktree / "canonical-child" / "..";
-
-    CurrentDirectoryGuard cwd;
-    cwd.set(cwd_worktree.path() / "nested");
-    const auto binding = resolve_workspace(noncanonical_explicit);
-
-    require_path_equal(binding.root, explicit_worktree, "ExplicitOverrideCanonical");
-    require_identity_paths(binding, "ExplicitOverrideCanonical");
-    require(binding.root != fs::canonical(cwd_worktree.path()),
-        "ExplicitOverridePrecedence: cwd incorrectly won over the explicit root.");
-}
-
-void malformed_roots_are_rejected() {
-    TempDirectory ordinary_directory;
-    require_invalid_worktree(
-        [&] { static_cast<void>(resolve_workspace(ordinary_directory.path())); },
-        "ExplicitOrdinaryDirectory");
-    require_invalid_worktree(
-        [&] { static_cast<void>(resolve_workspace(ordinary_directory.path() / "missing")); },
-        "ExplicitNonexistentDirectory");
-}
-
-bool accepts_explicit(const fs::path& root) {
-    try {
-        static_cast<void>(resolve_workspace(root));
-        return true;
-    } catch (const StateError& error) {
-        require(error.code() == kInvalidWorktreeCode, "FakeMarkerExplicit: wrong structured error code.");
-        return false;
-    }
-}
-
 bool accepts_implicit(const fs::path& root) {
     const auto nested = root / "nested";
     fs::create_directory(nested);
@@ -343,35 +299,35 @@ void fake_git_markers_are_rejected() {
     TempDirectory fake_gitdir_file;
     std::ofstream(fake_gitdir_file.path() / ".git") << "gitdir: ../missing-git-dir\n";
 
-    const auto directory_explicit = accepts_explicit(fake_directory.path());
     const auto directory_implicit = accepts_implicit(fake_directory.path());
-    const auto file_explicit = accepts_explicit(fake_gitdir_file.path());
     const auto file_implicit = accepts_implicit(fake_gitdir_file.path());
 
-    require(!directory_explicit && !directory_implicit && !file_explicit && !file_implicit,
-        "FakeGitMarkers: fake_directory_explicit=" + std::to_string(directory_explicit) +
-        " fake_directory_implicit=" + std::to_string(directory_implicit) +
-        " fake_gitdir_file_explicit=" + std::to_string(file_explicit) +
+    require(!directory_implicit && !file_implicit,
+        "FakeGitMarkers: fake_directory_implicit=" + std::to_string(directory_implicit) +
         " fake_gitdir_file_implicit=" + std::to_string(file_implicit) + ".");
 }
 
 void malformed_and_nonworktree_gitdir_targets_are_rejected() {
     TempDirectory malformed;
     std::ofstream(malformed.path() / ".git") << "not a gitdir\n";
+    CurrentDirectoryGuard cwd;
+    cwd.set(malformed.path());
     require_invalid_worktree(
-        [&] { static_cast<void>(resolve_workspace(malformed.path())); }, "MalformedGitdirFile");
+        [&] { static_cast<void>(resolve_workspace()); }, "MalformedGitdirFile");
 
     TempDirectory nonworktree;
     const auto ordinary_target = nonworktree.path() / "ordinary-target";
     fs::create_directory(ordinary_target);
     std::ofstream(nonworktree.path() / ".git") << "gitdir: " << ordinary_target.string() << '\n';
+    cwd.set(nonworktree.path());
     require_invalid_worktree(
-        [&] { static_cast<void>(resolve_workspace(nonworktree.path())); }, "NonworktreeGitdirTarget");
+        [&] { static_cast<void>(resolve_workspace()); }, "NonworktreeGitdirTarget");
 
     TempDirectory bare_repository;
     run_git({L"init", L"--bare", L"--quiet", (bare_repository.path() / ".git").wstring()});
+    cwd.set(bare_repository.path());
     require_invalid_worktree(
-        [&] { static_cast<void>(resolve_workspace(bare_repository.path())); }, "BareRepositoryMarker");
+        [&] { static_cast<void>(resolve_workspace()); }, "BareRepositoryMarker");
 }
 
 void path_spoofed_git_is_ignored() {
@@ -390,8 +346,10 @@ void path_spoofed_git_is_ignored() {
     EnvironmentVariableGuard path_guard(L"PATH", fake_bin.wstring() + L";" + *original_path);
     EnvironmentVariableGuard pid_file_guard(kDelayedGitPidFileVariable, pid_file.wstring());
 
+    CurrentDirectoryGuard cwd;
+    cwd.set(repository);
     const auto started = std::chrono::steady_clock::now();
-    const auto binding = resolve_workspace(repository);
+    const auto binding = resolve_workspace();
     const auto elapsed = std::chrono::steady_clock::now() - started;
     require_path_equal(binding.root, repository, "PathSpoofedGitIgnored");
     require(elapsed < std::chrono::milliseconds(2500) && !fs::exists(pid_file),
@@ -413,16 +371,13 @@ void cwd_outside_any_worktree_is_rejected() {
 int main() {
     if (const auto fixture_exit = run_delayed_git_fixture()) return *fixture_exit;
 
-    static_assert(std::is_same_v<decltype(&resolve_workspace),
-        WorkspaceBinding (*)(std::optional<fs::path>)>,
-        "Workspace routing must remain one immutable process-start root or explicit override.");
+    static_assert(std::is_same_v<decltype(&resolve_workspace), WorkspaceBinding (*)()>,
+        "Workspace routing must be derived from the MCP process working directory.");
 
     try {
         nested_cwd_discovers_dirty_worktree();
         linked_worktree_git_file_is_accepted();
         independent_repositories_remain_distinct();
-        explicit_root_is_canonical_and_overrides_cwd();
-        malformed_roots_are_rejected();
         fake_git_markers_are_rejected();
         malformed_and_nonworktree_gitdir_targets_are_rejected();
         path_spoofed_git_is_ignored();

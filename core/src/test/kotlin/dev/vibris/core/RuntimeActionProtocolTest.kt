@@ -6,7 +6,7 @@ import dev.vibris.protocol.v1.CaptureMulti
 import dev.vibris.protocol.v1.CapturePass
 import dev.vibris.protocol.v1.DumpTexture
 import dev.vibris.protocol.v1.GetGpuMetrics
-import dev.vibris.protocol.v1.ScheduleScreenshot
+import dev.vibris.protocol.v1.EmptyAction
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
@@ -38,6 +38,11 @@ class RuntimeActionProtocolTest {
                 .build(),
         )
         assertEquals(RuntimeAction.GpuMetrics(17), metrics)
+
+        val inspection = RuntimeActionProtocol.toApi(
+            Action.newBuilder().setInspectShader(EmptyAction.getDefaultInstance()).build(),
+        )
+        assertEquals(RuntimeAction.InspectShader, inspection)
     }
 
     @Test
@@ -51,11 +56,6 @@ class RuntimeActionProtocolTest {
         assertInvalid(
             Action.newBuilder()
                 .setCaptureMulti(CaptureMulti.newBuilder().setType("unknown"))
-                .build(),
-        )
-        assertInvalid(
-            Action.newBuilder()
-                .setScheduleScreenshot(ScheduleScreenshot.getDefaultInstance())
                 .build(),
         )
         assertInvalid(

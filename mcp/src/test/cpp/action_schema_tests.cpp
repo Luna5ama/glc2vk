@@ -25,7 +25,8 @@ void schema_rejects_before_dispatch() {
         ++dispatches;
         return Json{{"accepted", true}};
     });
-    const std::array forbidden{"run_shell", "load_source", "reload_shaderpack", "renderdoc_capture"};
+    const std::array forbidden{
+        "run_shell", "load_source", "reload_shaderpack", "renderdoc_capture", "reset_temporal_state"};
     for (const auto* type : forbidden) {
         const Json arguments{{"actions", Json::array({{{"type", type}}})}};
         const auto result = registry.invoke("vibris_run_actions", arguments);
@@ -33,11 +34,11 @@ void schema_rejects_before_dispatch() {
         require(error != nullptr && error->code == InvocationErrorCode::InvalidArguments,
             "Forbidden action was not rejected by schema validation.");
     }
-    const Json absolute{{"actions", Json::array({{{"type", "capture_screenshot"},
+    const Json absolute{{"actions", Json::array({{{"type", "take_screenshot"},
                                                    {"artifact_name", "C:\\outside\\capture.png"}}})}};
     require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_actions", absolute)),
         "Absolute artifact path was not rejected.");
-    const Json nested{{"actions", Json::array({{{"type", "capture_screenshot"},
+    const Json nested{{"actions", Json::array({{{"type", "take_screenshot"},
                                                  {"artifact_name", "nested/capture"}}})}};
     require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_actions", nested)),
         "Nested artifact path was not rejected by the flat-name grammar.");
@@ -88,8 +89,12 @@ void atomic_action_schemas_reject_invalid_arguments() {
         "Capture pass accepted a missing pass name.");
     require(std::holds_alternative<InvocationError>(
                 registry.invoke("vibris_run_actions", {{"actions", Json::array({
-                    {{"type", "schedule_screenshot"}, {"frames", 0}}})}})),
-        "Screenshot scheduling accepted zero frames.");
+                    {{"type", "take_screenshot"}, {"after_frames", -1}}})}})),
+        "Screenshot accepted a negative delay.");
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_run_actions", {{"actions", Json::array({
+                    {{"type", "take_screenshot"}, {"after_frames", 2'147'483'648LL}}})}})),
+        "Screenshot accepted a delay outside the runtime integer range.");
     require(std::holds_alternative<InvocationError>(
                 registry.invoke("vibris_run_actions", {{"actions", Json::array({
                     {{"type", "get_gpu_metrics"}}})}})),
@@ -139,6 +144,44 @@ void atomic_action_schemas_reject_invalid_arguments() {
                     {"config", {{"SETTING_SAMPLE_COUNT", 32}}}, {"actions", Json::array()}})),
         "Source-free actions silently accepted an unused top-level shader config.");
     require(dispatches == 2, "Invalid debug arguments reached dispatch.");
+}
+
+void registry_exposes_canonical_load_workflows() {
+    std::size_t dispatches = 0;
+    ToolRegistry registry([&](std::string_view, const Json&) {
+        ++dispatches;
+        return Json{{"accepted", true}};
+    });
+    require(std::holds_alternative<Json>(registry.invoke(
+        "vibris_run_recipe", {{"recipe", "load_and_screenshot"}})),
+        "Canonical screenshot recipe was rejected.");
+    require(std::holds_alternative<InvocationError>(registry.invoke(
+        "vibris_run_recipe", {{"recipe", "reload_and_capture"}})),
+        "Legacy reload recipe remained exposed in the MCP schema.");
+    require(dispatches == 1, "Rejected legacy recipe reached dispatch.");
+
+    bool load_description = false;
+    bool matrix_description = false;
+    for (const auto& definition : registry.definitions()) {
+        const auto name = definition.at("name").get<std::string>();
+        if (name == "vibris_run_actions") {
+            const auto& variants = definition.at("inputSchema").at("properties")
+                .at("actions").at("items").at("oneOf");
+            for (const auto& variant : variants) {
+                if (!variant.contains("description")) continue;
+                const auto description = variant.at("description").get<std::string>();
+                load_description = description.find("Closes any open screen") != std::string::npos &&
+                    description.find("hides the HUD") != std::string::npos &&
+                    description.find("resets temporal counters") != std::string::npos;
+            }
+        } else if (name == "vibris_run_matrix") {
+            const auto description = definition.at("description").get<std::string>();
+            matrix_description = description.find("automatically begins with load_shader") != std::string::npos &&
+                description.find("do not include load_shader in the action template") != std::string::npos;
+        }
+    }
+    require(load_description, "load_shader did not describe its atomic view and temporal guarantees.");
+    require(matrix_description, "Matrix did not describe its implicit load_shader action.");
 }
 
 void empty_tool_schemas_declare_object_properties() {
@@ -227,6 +270,7 @@ int main() {
     try {
         schema_rejects_before_dispatch();
         registry_has_exactly_the_supported_tools();
+        registry_exposes_canonical_load_workflows();
         empty_tool_schemas_declare_object_properties();
         atomic_action_schemas_reject_invalid_arguments();
         profile_recipe_requires_bounded_future_frames();

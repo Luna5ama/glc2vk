@@ -120,6 +120,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             activateSource(job, source, config, progress, deadline)
         }
         applyContext(job, progress, deadline)
+        reset(job, progress, deadline)
         return reload
     }
 
@@ -243,14 +244,16 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     @Throws(Failure::class)
     fun <T> await(stage: CompletionStage<T>, job: CoreJob, deadline: Long): T = awaiter.await(stage, job, deadline)
 
-    class Failure private constructor(
+    class Failure internal constructor(
         @JvmField val code: ErrorCode,
         message: String?,
         @JvmField val artifacts: List<ArtifactMetadata>,
+        @JvmField val diagnostics: List<ReloadResult.Diagnostic>,
     ) : Exception(message) {
-        constructor(code: ErrorCode, message: String?) : this(code, message, java.util.List.of())
+        constructor(code: ErrorCode, message: String?) :
+            this(code, message, java.util.List.of(), java.util.List.of())
 
         constructor(code: ErrorCode, message: String?, artifact: ArtifactMetadata) :
-            this(code, message, java.util.List.of(artifact))
+            this(code, message, java.util.List.of(artifact), java.util.List.of())
     }
 }

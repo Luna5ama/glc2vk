@@ -7,7 +7,7 @@ import dev.vibris.protocol.v1.ActionSequence;
 import dev.vibris.protocol.v1.ActivateSource;
 import dev.vibris.protocol.v1.ArtifactFormat;
 import dev.vibris.protocol.v1.ArtifactKind;
-import dev.vibris.protocol.v1.CaptureScreenshot;
+import dev.vibris.protocol.v1.TakeScreenshot;
 import dev.vibris.protocol.v1.CaptureBuffer;
 import dev.vibris.protocol.v1.CaptureTexture;
 import dev.vibris.protocol.v1.ErrorCode;
@@ -108,8 +108,8 @@ class RuntimeJobExecutorCaptureTest {
         fixture.runtime.catalog = new ResourceCatalog(List.of(screenshot));
         fixture.runtime.captureResult = new CaptureResult(1, Map.of("screenshot", screenshot));
         fixture.runtime.captureFiles.put("screenshot.png", new byte[128]);
-        ActionSequence actions = ActionSequence.newBuilder().addActions(Action.newBuilder().setCaptureScreenshot(
-            CaptureScreenshot.newBuilder().setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)
+        ActionSequence actions = ActionSequence.newBuilder().addActions(Action.newBuilder().setTakeScreenshot(
+            TakeScreenshot.newBuilder().setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)
                 .setArtifactName("screenshot"))).build();
 
         RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
@@ -130,8 +130,8 @@ class RuntimeJobExecutorCaptureTest {
             "final", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 1, 16);
         fixture.runtime.catalog = new ResourceCatalog(List.of(screenshot));
         fixture.runtime.captureResult = new CaptureResult(1, Map.of("screenshot", screenshot));
-        ActionSequence actions = ActionSequence.newBuilder().addActions(Action.newBuilder().setCaptureScreenshot(
-            CaptureScreenshot.newBuilder().setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)
+        ActionSequence actions = ActionSequence.newBuilder().addActions(Action.newBuilder().setTakeScreenshot(
+            TakeScreenshot.newBuilder().setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)
                 .setArtifactName("screenshot"))).build();
 
         RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
@@ -161,22 +161,36 @@ class RuntimeJobExecutorCaptureTest {
     }
 
     @Test
+    void rejectsScreenshotDelayOutsideRuntimeIntRange() throws Exception {
+        Fixture fixture = new Fixture();
+        ActionSequence actions = ActionSequence.newBuilder().addActions(Action.newBuilder().setTakeScreenshot(
+            TakeScreenshot.newBuilder().setAfterFrames(-1))).build();
+
+        RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
+            () -> fixture.executor.execute(fixture.job(actions), ignored -> {}));
+
+        assertEquals(ErrorCode.CAPTURE_FAILED, failure.code);
+        assertFalse(fixture.runtime.events.contains("frames"));
+        assertFalse(fixture.runtime.events.contains("capture"));
+    }
+
+    @Test
     void executesRuntimeActionsInOrderAndReturnsTypedResults() throws Exception {
         Fixture fixture = new Fixture();
         fixture.runtime.actionResponses.add("{\"loaded\":true}");
         fixture.runtime.actionResponses.add("{\"p50\":1.25}");
         ActionSequence actions = ActionSequence.newBuilder()
-            .addActions(Action.newBuilder().setGetShaderStatus(EmptyAction.getDefaultInstance()))
+            .addActions(Action.newBuilder().setInspectShader(EmptyAction.getDefaultInstance()))
             .addActions(Action.newBuilder().setGetGpuMetrics(GetGpuMetrics.newBuilder().setFrames(8)))
             .build();
 
         TerminalResult terminal = fixture.executor.execute(fixture.job(actions), ignored -> {});
 
-        assertEquals(List.of("link:A", "reload", "context", "action:ShaderStatus", "action:GpuMetrics"),
+        assertEquals(List.of("link:A", "reload", "context", "action:InspectShader", "action:GpuMetrics"),
             fixture.runtime.events);
         assertEquals(List.of(1, 2), terminal.completed().getResult().getActionResultsList().stream()
             .map(result -> result.getActionIndex()).toList());
-        assertEquals(List.of(JobActionKind.JOB_ACTION_KIND_GET_SHADER_STATUS,
+        assertEquals(List.of(JobActionKind.JOB_ACTION_KIND_INSPECT_SHADER,
                 JobActionKind.JOB_ACTION_KIND_GET_GPU_METRICS),
             terminal.completed().getResult().getActionResultsList().stream()
                 .map(result -> result.getKind()).toList());
@@ -197,10 +211,10 @@ class RuntimeJobExecutorCaptureTest {
         fixture.runtime.captureFileBatches.add(Map.of("case-b--screenshot.png", new byte[]{1, 2, 3}));
         ActionSequence actions = ActionSequence.newBuilder()
             .addActions(load(fixture.source, "config-a", "case-a"))
-            .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
+            .addActions(Action.newBuilder().setTakeScreenshot(TakeScreenshot.newBuilder()
                 .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setArtifactName("case-a--screenshot")))
             .addActions(load(fixture.source, "config-b", "case-b"))
-            .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
+            .addActions(Action.newBuilder().setTakeScreenshot(TakeScreenshot.newBuilder()
                 .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setArtifactName("case-b--screenshot")))
             .build();
 
@@ -218,9 +232,8 @@ class RuntimeJobExecutorCaptureTest {
 
     private static ActionSequence bundleActions() {
         return ActionSequence.newBuilder()
-            .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(2)))
-            .addActions(Action.newBuilder().setCaptureScreenshot(CaptureScreenshot.newBuilder()
-                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setArtifactName("screenshot")))
+            .addActions(Action.newBuilder().setTakeScreenshot(TakeScreenshot.newBuilder()
+                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setArtifactName("screenshot").setAfterFrames(2)))
             .addActions(Action.newBuilder().setCaptureTexture(CaptureTexture.newBuilder().setLogicalName("colortex0")
                 .setFormat(ArtifactFormat.ARTIFACT_FORMAT_RAW).setArtifactName("colortex0")))
             .addActions(Action.newBuilder().setCaptureBuffer(CaptureBuffer.newBuilder().setLogicalName("radiance_cache")
@@ -259,7 +272,8 @@ class RuntimeJobExecutorCaptureTest {
                     ActivateSource.newBuilder().setSourceUuid(source.uuid())))
                 .addAllActions(actions.getActionsList())
                 .build();
-            SubmitJob submission = SubmitJob.newBuilder().setRequestId("request").setWorkspaceId("workspace")
+            SubmitJob submission = SubmitJob.newBuilder().setRequestId("request")
+                .setWorkspaceId("11111111-1111-4111-8111-111111111111")
                 .setContext(SceneContext.newBuilder().setSaveId("save")
                     .setDimensionId("minecraft:overworld").setFov(70.0))
                 .setActions(sequence).build();
@@ -269,7 +283,8 @@ class RuntimeJobExecutorCaptureTest {
         }
 
         CoreJob matrixJob(ActionSequence actions) {
-            SubmitJob submission = SubmitJob.newBuilder().setRequestId("matrix").setWorkspaceId("workspace")
+            SubmitJob submission = SubmitJob.newBuilder().setRequestId("matrix")
+                .setWorkspaceId("11111111-1111-4111-8111-111111111111")
                 .setContext(SceneContext.newBuilder().setSaveId("save")
                     .setDimensionId("minecraft:overworld").setFov(70.0))
                 .addShaderConfigs(NamedShaderConfig.newBuilder().setId("config-a")

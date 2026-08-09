@@ -51,9 +51,10 @@ private:
                 ? fs::path(hello_.pending_shaders_root()) / job.sources(0).uuid()
                 : fs::path{};
             const bool execution_matches = job.has_actions() &&
-                job.actions().actions_size() == (expected_actions_ ? 2 : 4) &&
+                job.actions().actions_size() == 2 &&
                 job.actions().actions(0).has_load_shader() &&
-                (!expected_actions_ || job.actions().actions(1).has_get_shader_status());
+                (expected_actions_ ? job.actions().actions(1).has_inspect_shader()
+                                   : job.actions().actions(1).has_take_screenshot());
             valid_submit_.store(!source_path.empty() && execution_matches &&
                 job.context().weather_preset_id() == "clear" &&
                 job.context().settings_preset_id() == "quality" && job.context().resolution().width() == 1920 &&
@@ -81,7 +82,7 @@ private:
             if (expected_actions_) {
                 auto* action_result = result->add_action_results();
                 action_result->set_action_index(1);
-                action_result->set_kind(proto::JOB_ACTION_KIND_GET_SHADER_STATUS);
+                action_result->set_kind(proto::JOB_ACTION_KIND_INSPECT_SHADER);
                 action_result->set_json(R"({"loaded":true})");
             }
             auto* artifact = result->add_artifacts();

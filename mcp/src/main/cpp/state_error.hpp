@@ -13,6 +13,7 @@ inline constexpr std::string_view kInvalidConfigCode = "INVALID_CONFIG";
 inline constexpr std::string_view kConfigIoErrorCode = "CONFIG_IO_ERROR";
 inline constexpr std::string_view kRequestTooLargeCode = "REQUEST_TOO_LARGE";
 inline constexpr std::string_view kStateIoErrorCode = "STATE_IO_ERROR";
+inline constexpr std::string_view kArtifactLinkErrorCode = "ARTIFACT_LINK_ERROR";
 
 class StateError final : public std::runtime_error {
 public:
