@@ -266,6 +266,14 @@ message SubmitJob {
     JobTimeouts timeouts = 7;
     ShaderConfig shader_config = 8;
     repeated NamedShaderConfig shader_configs = 9;
+    ResultArtifactOptions result_artifacts = 10;
+}
+
+message ResultArtifactOptions {
+    bool json = 1;
+    bool csv = 2;
+    string kind = 3;
+    repeated string converted_units = 4;
 }
 
 message ShaderConfig {
@@ -542,6 +550,7 @@ enum ArtifactKind {
     ARTIFACT_KIND_HEATMAP = 6;
     ARTIFACT_KIND_MANIFEST = 7;
     ARTIFACT_KIND_PATCHED_SHADER = 8;
+    ARTIFACT_KIND_PROFILE_RESULT = 9;
 }
 
 enum ArtifactFormat {
@@ -553,6 +562,7 @@ enum ArtifactFormat {
     ARTIFACT_FORMAT_BIN = 4;
     ARTIFACT_FORMAT_TEXT = 5;
     ARTIFACT_FORMAT_JSON = 6;
+    ARTIFACT_FORMAT_CSV = 7;
 }
 
 message ResourceDescriptor {

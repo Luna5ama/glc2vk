@@ -362,6 +362,24 @@ void synchronous_submit_waits_for_terminal() {
                                   {{"type", "inspect_shader"}}})}}, true);
 }
 
+void profile_result_artifact_mapping() {
+    const auto context = SceneContextResolver::resolve(config(), presets());
+    const std::vector sources{source("88888888-8888-4888-8888-888888888888")};
+    const Json arguments{
+        {"recipe", "profile"},
+        {"frames", 64},
+        {"result_csv", true},
+        {"converted_units", Json::array({"us", "ms"})},
+    };
+    const auto message = JobProtocol::request(
+        "vibris_run_recipe", arguments, config(), context, sources, "request-profile-artifacts");
+    const auto& options = message.submit_job().result_artifacts();
+    require(message.submit_job().has_result_artifacts() && options.json() && options.csv() &&
+            options.kind() == "profile" && options.converted_units_size() == 2 &&
+            options.converted_units(0) == "us" && options.converted_units(1) == "ms",
+        "Profile result artifact options were not copied into SubmitJob.");
+}
+
 ToolOutcome synchronous_metrics_job(
     const Json& arguments, std::vector<std::optional<std::string>> metric_payloads) {
     WorkspaceFixture fixture;
@@ -455,7 +473,9 @@ void profile_result_detail_contract() {
             summary_case.at("status") == "passed" && summary_case.at("error").is_null() &&
             summary_case.at("frames") == 32 && summary_case.at("warmup_frames") == 0 &&
             summary_case.at("metrics").is_null() && !summary.contains("action_results") &&
-            !summary_case.contains("action_results") && count_occurrences(summary.dump(), "gpuTimings") == 0,
+            !summary_case.contains("action_results") && count_occurrences(summary.dump(), "gpuTimings") == 0 &&
+            summary.at("artifacts").size() == 1 &&
+            summary.at("artifacts").at(0).at("file_name") == "profile-result.json",
         "Summary profile result did not match the compact case contract.");
 
     auto metrics_arguments = base_arguments;
@@ -481,6 +501,37 @@ void profile_result_detail_contract() {
             full_case.at("metrics").at("gpuTimings").contains("composite_total") &&
             count_occurrences(full.dump(), "gpuTimings") == 1,
         "Full profile result duplicated GPU timings or lost non-metric action details.");
+}
+
+void profile_metric_filters_and_converted_units() {
+    const Json arguments{
+        {"recipe", "profile"},
+        {"source", {{"kind", "workspace"}}},
+        {"config", Json::object()},
+        {"warmup_frames", 0},
+        {"frames", 32},
+        {"metric_filter", Json::array({"composite*", "begin3_a"})},
+        {"statistics", Json::array({"avg"})},
+        {"converted_units", Json::array({"us", "ms"})},
+        {"result_csv", true},
+    };
+    const auto outcome = synchronous_metrics_job(arguments, {
+        R"({"gpuTimings":{"composite18_total":{"avg":7000000,"p50":6800000},"begin3_a":{"avg":103381,"p95":110000},"shadowcomp0":{"avg":120000}}})",
+    });
+    const auto& result = std::get<Json>(outcome);
+    const auto& timings = result.at("cases").at(0).at("metrics").at("gpuTimings");
+    require(timings.size() == 2 && timings.contains("composite18_total") && timings.contains("begin3_a") &&
+            !timings.contains("shadowcomp0"),
+        "Profile metric wildcard filtering returned an unrequested pass.");
+    const auto& composite = timings.at("composite18_total");
+    require(composite.size() == 3 && composite.at("avg") == 7'000'000 &&
+            composite.at("avg_us") == 7'000.0 && composite.at("avg_ms") == 7.0 &&
+            !composite.contains("p50") && result.at("gpu_timing_unit") == "ns" &&
+            result.at("metric_filter") == arguments.at("metric_filter") &&
+            result.at("statistics") == arguments.at("statistics") &&
+            result.at("artifacts").size() == 2 &&
+            result.at("artifacts").at(1).at("file_name") == "profile-result.csv",
+        "Profile statistic filtering, raw nanoseconds, conversions, or artifact paths were lost.");
 }
 
 void profile_matrix_reports_incomplete_cases() {
@@ -1026,6 +1077,7 @@ int main() {
     try {
         request_mapping();
         remaining_execution_mappings();
+        profile_result_artifact_mapping();
         matrix_expands_named_source_config_product();
         incomplete_preset_rejected();
         default_settings_disambiguates_scene_presets();
@@ -1035,6 +1087,7 @@ int main() {
         synchronous_submit_waits_for_terminal();
         profile_requires_nonempty_gpu_samples();
         profile_result_detail_contract();
+        profile_metric_filters_and_converted_units();
         profile_matrix_reports_incomplete_cases();
         profile_matrix_38_cases_requires_all_metrics();
         title_screen_runtime_can_prepare_source_for_world_loading_job();

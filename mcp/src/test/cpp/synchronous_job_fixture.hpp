@@ -185,7 +185,9 @@ private:
             for (const auto& action : job.actions().actions()) {
                 if (action.has_get_gpu_metrics()) ++metric_actions;
             }
-            valid_submit_.store(metric_actions == metric_payloads_.size());
+            valid_submit_.store(metric_actions == metric_payloads_.size() && job.has_result_artifacts() &&
+                job.result_artifacts().json() &&
+                (job.result_artifacts().kind() == "profile" || job.result_artifacts().kind() == "profile_matrix"));
 
             proto::ServerMessage accepted;
             accepted.set_request_id(request.request_id());
@@ -201,6 +203,25 @@ private:
             completed.mutable_job_completed()->set_request_id(request.request_id());
             auto* result = completed.mutable_job_completed()->mutable_result();
             result->set_kind(proto::JOB_RESULT_KIND_ACTION_SEQUENCE);
+            const auto artifact_directory = fs::absolute(fs::path(hello_.artifact_root()) /
+                job.workspace_id() / job.request_id());
+            result->set_manifest_path((artifact_directory / "manifest.json").string());
+            auto* json_artifact = result->add_artifacts();
+            json_artifact->set_artifact_id("profile-json");
+            json_artifact->set_file_name("profile-result.json");
+            json_artifact->set_kind(proto::ARTIFACT_KIND_PROFILE_RESULT);
+            json_artifact->set_format(proto::ARTIFACT_FORMAT_JSON);
+            json_artifact->set_media_type("application/json");
+            json_artifact->set_path((artifact_directory / "profile-result.json").string());
+            if (job.result_artifacts().csv()) {
+                auto* csv_artifact = result->add_artifacts();
+                csv_artifact->set_artifact_id("profile-csv");
+                csv_artifact->set_file_name("profile-result.csv");
+                csv_artifact->set_kind(proto::ARTIFACT_KIND_PROFILE_RESULT);
+                csv_artifact->set_format(proto::ARTIFACT_FORMAT_CSV);
+                csv_artifact->set_media_type("text/csv; charset=utf-8");
+                csv_artifact->set_path((artifact_directory / "profile-result.csv").string());
+            }
             std::size_t payload_index = 0;
             for (int action_index = 0; action_index < job.actions().actions_size(); ++action_index) {
                 const auto& action = job.actions().actions(action_index);
@@ -269,6 +290,7 @@ private:
         result.mutable_protocol_version()->set_major(1);
         result.set_ready(true);
         result.set_pending_shaders_root(fs::absolute(pending_root).string());
+        result.set_artifact_root(fs::absolute(pending_root.parent_path() / "artifacts").string());
         result.mutable_limits()->set_max_source_bytes(1024 * 1024);
         result.mutable_limits()->set_max_source_files(128);
         return result;

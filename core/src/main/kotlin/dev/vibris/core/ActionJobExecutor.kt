@@ -153,7 +153,15 @@ internal class ActionJobExecutor(
                 probe.event(job.requestId, "WRITING_ARTIFACTS")
                 progress.accept(JobStage.JOB_STAGE_FINALIZING)
                 probe.event(job.requestId, "FINALIZING")
-                return captures.commit(job, prepared, completedCapturePlans, results, comparison).toBuilder()
+                val resultArtifacts = ProfileResultArtifacts.write(job.submission, prepared.transaction, actionResults)
+                return captures.commit(
+                    job,
+                    prepared,
+                    completedCapturePlans,
+                    results,
+                    comparison,
+                    resultArtifacts,
+                ).toBuilder()
                     .addAllActionResults(actionResults)
                     .build()
             }

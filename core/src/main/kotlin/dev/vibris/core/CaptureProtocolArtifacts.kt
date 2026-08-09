@@ -28,6 +28,7 @@ internal class CaptureProtocolArtifacts {
         transaction: ArtifactManager.JobTransaction,
         diagnostics: List<ReloadResult.Diagnostic>,
         comparison: AbComparisonResult?,
+        additionalArtifacts: List<GeneratedArtifact>,
     ): JobResult {
         if (plans.size != captured.size) {
             throw RuntimeJobExecutor.Failure(
@@ -38,7 +39,7 @@ internal class CaptureProtocolArtifacts {
         for (index in plans.indices) {
             validateResult(plans[index], captured[index])
         }
-        val committed = transaction.commit(expectedArtifacts(plans, comparison != null))
+        val committed = transaction.commit(expectedArtifacts(plans, comparison != null, additionalArtifacts))
         val result = JobResult.newBuilder()
             .setKind(JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE)
             .setManifestPath(committed.manifest().toString())
@@ -67,6 +68,18 @@ internal class CaptureProtocolArtifacts {
         }
         if (comparison != null) {
             addComparison(job, committed, result, comparison, plans.first(), captured.first())
+        }
+        for (artifact in additionalArtifacts) {
+            result.addArtifacts(
+                fileArtifact(
+                    job,
+                    artifact.fileName,
+                    artifact.kind,
+                    artifact.format,
+                    artifact.mediaType,
+                    requireArtifact(committed, artifact.fileName),
+                ),
+            )
         }
         result.addArtifacts(
             fileArtifact(
@@ -120,6 +133,7 @@ internal class CaptureProtocolArtifacts {
         private fun expectedArtifacts(
             plans: List<CapturePlan>,
             comparison: Boolean,
+            additionalArtifacts: List<GeneratedArtifact>,
         ): Set<String> {
             val expected = LinkedHashSet<String>()
             expected.add("shader.log")
@@ -132,6 +146,7 @@ internal class CaptureProtocolArtifacts {
                 expected.add(AbArtifactComparator.METRICS_FILE)
                 expected.addAll(AbArtifactComparator.heatmapFiles(plans.first()))
             }
+            additionalArtifacts.forEach { expected.add(it.fileName) }
             return expected
         }
 

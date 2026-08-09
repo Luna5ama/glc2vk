@@ -33,7 +33,7 @@ internal class CaptureJobExecutor(
         val comparisonPlans = program.steps
             .filter { it.type == CaptureProgramBuilder.ActionType.CAPTURE }
             .map { it.capture!! }
-        val prepared = if (captures.isEmpty()) {
+        val prepared = if (captures.isEmpty() && !ProfileResultArtifacts.requested(job.submission)) {
             null
         } else {
             prepare(job, captures, comparisonPlans, program.estimatedBytes, diagnostics)
@@ -85,6 +85,7 @@ internal class CaptureJobExecutor(
         plans: List<CapturePlan>,
         captured: List<CaptureResult>,
         comparison: AbComparisonResult?,
+        additionalArtifacts: List<GeneratedArtifact> = emptyList(),
     ): JobResult {
         try {
             prepared.writeShaderLog()
@@ -95,6 +96,7 @@ internal class CaptureJobExecutor(
                 prepared.transaction,
                 prepared.diagnostics,
                 comparison,
+                additionalArtifacts,
             )
         } catch (exception: Exception) {
             throw failure(exception)

@@ -267,6 +267,18 @@ void profile_result_detail_schema() {
         require(std::holds_alternative<Json>(registry.invoke("vibris_run_recipe", matrix_request)),
             "Profile matrix rejected a supported result detail.");
     }
+    auto filtered_profile = profile;
+    filtered_profile["metric_filter"] = Json::array({"shadowcomp*", "composite18_total"});
+    filtered_profile["statistics"] = Json::array({"avg", "p50"});
+    filtered_profile["converted_units"] = Json::array({"us", "ms"});
+    filtered_profile["result_csv"] = true;
+    require(std::holds_alternative<Json>(registry.invoke("vibris_run_recipe", filtered_profile)),
+        "Profile rejected valid metric filters or artifact options.");
+    auto filtered_matrix = matrix;
+    filtered_matrix["metric_filter"] = Json::array({"begin3_a"});
+    filtered_matrix["statistics"] = Json::array({"p95"});
+    require(std::holds_alternative<Json>(registry.invoke("vibris_run_recipe", filtered_matrix)),
+        "Profile matrix rejected valid metric filters.");
     auto invalid_profile = profile;
     invalid_profile["result_detail"] = "verbose";
     require(std::holds_alternative<InvocationError>(
@@ -277,7 +289,17 @@ void profile_result_detail_schema() {
     require(std::holds_alternative<InvocationError>(
                 registry.invoke("vibris_run_recipe", invalid_matrix)),
         "Profile matrix accepted an unsupported result detail.");
-    require(dispatches == 6, "Invalid result detail reached dispatch.");
+    auto invalid_statistic = profile;
+    invalid_statistic["statistics"] = Json::array({"median"});
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_run_recipe", invalid_statistic)),
+        "Profile accepted an unsupported statistic.");
+    auto invalid_unit = profile;
+    invalid_unit["converted_units"] = Json::array({"seconds"});
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_run_recipe", invalid_unit)),
+        "Profile accepted an unsupported converted unit.");
+    require(dispatches == 8, "Invalid profile output options reached dispatch.");
 }
 
 void matrix_schema_requires_named_sources_configs_and_axes() {

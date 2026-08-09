@@ -28,6 +28,9 @@ Json bounded_integer(std::uint64_t minimum, std::uint64_t maximum) {
 Json string_array(std::size_t maximum) {
     return Json{{"type", "array"}, {"items", {{"type", "string"}, {"minLength", 1}}}, {"maxItems", maximum}};
 }
+Json enum_array(std::initializer_list<const char*> values, std::size_t maximum) {
+    return Json{{"type", "array"}, {"items", enum_string(values)}, {"maxItems", maximum}, {"uniqueItems", true}};
+}
 Json one_of(std::initializer_list<Json> schemas) { return Json{{"type", "object"}, {"oneOf", schemas}}; }
 Json source_schema() {
     return one_of({
@@ -88,6 +91,9 @@ Json recipe_schema() {
     const auto frames = bounded_integer(0, std::numeric_limits<std::uint32_t>::max());
     const auto metric_frames = bounded_integer(1, 10'000);
     const auto result_detail = enum_string({"summary", "metrics", "full"});
+    const auto metric_filter = string_array(256);
+    const auto statistics = enum_array({"avg", "p5", "p50", "p95"}, 4);
+    const auto converted_units = enum_array({"us", "ms"}, 2);
     const Json config{{"type", "object"}};
     return one_of({
         closed_object({{"recipe", enum_string({"profile"})},
@@ -95,7 +101,11 @@ Json recipe_schema() {
                        {"config", config},
                        {"warmup_frames", frames},
                        {"frames", metric_frames},
-                       {"result_detail", result_detail}},
+                       {"result_detail", result_detail},
+                       {"metric_filter", metric_filter},
+                       {"statistics", statistics},
+                       {"converted_units", converted_units},
+                       {"result_csv", {{"type", "boolean"}}}},
                       {"recipe", "frames"}),
         closed_object({{"recipe", enum_string({"profile_matrix"})},
                        {"sources", named_sources_schema()},
@@ -103,7 +113,11 @@ Json recipe_schema() {
                        {"matrix", matrix_axes_schema()},
                        {"warmup_frames", frames},
                        {"frames", metric_frames},
-                       {"result_detail", result_detail}},
+                       {"result_detail", result_detail},
+                       {"metric_filter", metric_filter},
+                       {"statistics", statistics},
+                       {"converted_units", converted_units},
+                       {"result_csv", {{"type", "boolean"}}}},
                       {"recipe", "sources", "configs", "matrix", "frames"}),
         closed_object({{"recipe", enum_string({"load_and_screenshot"})},
                        {"source", source_schema()},

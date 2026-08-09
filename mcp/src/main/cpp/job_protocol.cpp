@@ -198,6 +198,16 @@ void profile_recipe(const Json& arguments, const SessionConfig& config,
     add_action(sequence)->mutable_get_gpu_metrics()->set_frames(arguments.at("frames").get<std::uint32_t>());
 }
 
+void profile_artifacts(const Json& arguments, std::string kind, proto::SubmitJob& job) {
+    auto* options = job.mutable_result_artifacts();
+    options->set_json(true);
+    options->set_csv(arguments.value("result_csv", false));
+    options->set_kind(std::move(kind));
+    for (const auto& unit : arguments.value("converted_units", Json::array())) {
+        options->add_converted_units(unit.get<std::string>());
+    }
+}
+
 void matrix(const Json& arguments, std::span<const proto::PreparedSourceRef> prepared,
     const Json& template_actions, proto::SubmitJob& job);
 
@@ -205,8 +215,12 @@ void recipe(const Json& arguments, const SessionConfig& config,
     std::span<const proto::PreparedSourceRef> sources, proto::SubmitJob& job) {
     const auto kind = arguments.at("recipe").get<std::string>();
     if (kind != "profile_matrix") recipe_config(arguments, job);
-    if (kind == "profile") return profile_recipe(arguments, config, sources, *job.mutable_actions());
+    if (kind == "profile") {
+        profile_artifacts(arguments, kind, job);
+        return profile_recipe(arguments, config, sources, *job.mutable_actions());
+    }
     if (kind == "profile_matrix") {
+        profile_artifacts(arguments, kind, job);
         Json template_actions = Json::array();
         const auto warmup = arguments.value("warmup_frames", config.default_warmup_frames);
         if (warmup != 0) template_actions.push_back({{"type", "wait_frames"}, {"frames", warmup}});

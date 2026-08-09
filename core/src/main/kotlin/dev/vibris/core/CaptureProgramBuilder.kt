@@ -15,6 +15,16 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
     @Throws(RuntimeJobExecutor.Failure::class)
     fun actions(job: CoreJob, catalog: ResourceCatalog): ActionProgram {
         if (job.submission.actions.actionsCount.toLong() > expandedActionLimit) throw invalid("Action limit exceeded.")
+        if (job.submission.hasResultArtifacts()) {
+            val options = job.submission.resultArtifacts
+            if ((!options.json && !options.csv) ||
+                options.kind !in setOf("profile", "profile_matrix") ||
+                options.convertedUnitsList.any { it != "us" && it != "ms" } ||
+                options.convertedUnitsList.distinct().size != options.convertedUnitsCount
+            ) {
+                throw invalid("Result artifact options are invalid.")
+            }
+        }
         val steps = ArrayList<ActionStep>()
         val group = ArrayList<CapturePlan.Target>()
         val artifactNames = HashSet<String>()

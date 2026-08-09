@@ -3,6 +3,7 @@
 #include "config_document.hpp"
 #include "job_protocol.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <condition_variable>
@@ -51,6 +52,73 @@ bool has_gpu_samples(const Json& result) {
     return timings != result.end() && timings->is_object() && !timings->empty();
 }
 
+bool wildcard_match(std::string_view pattern, std::string_view value) {
+    std::size_t pattern_index = 0;
+    std::size_t value_index = 0;
+    std::size_t star = std::string_view::npos;
+    std::size_t retry = 0;
+    while (value_index < value.size()) {
+        if (pattern_index < pattern.size() && pattern[pattern_index] == value[value_index]) {
+            ++pattern_index;
+            ++value_index;
+        } else if (pattern_index < pattern.size() && pattern[pattern_index] == '*') {
+            star = pattern_index++;
+            retry = value_index;
+        } else if (star != std::string_view::npos) {
+            pattern_index = star + 1;
+            value_index = ++retry;
+        } else {
+            return false;
+        }
+    }
+    while (pattern_index < pattern.size() && pattern[pattern_index] == '*') ++pattern_index;
+    return pattern_index == pattern.size();
+}
+
+bool selected_metric(const Json& arguments, std::string_view name) {
+    const auto filter = arguments.find("metric_filter");
+    if (filter == arguments.end()) return true;
+    for (const auto& pattern : *filter) {
+        if (wildcard_match(pattern.get_ref<const std::string&>(), name)) return true;
+    }
+    return false;
+}
+
+bool selected_statistic(const Json& arguments, std::string_view name) {
+    const auto filter = arguments.find("statistics");
+    if (filter == arguments.end()) return true;
+    return std::ranges::any_of(*filter, [name](const Json& statistic) {
+        return statistic.get_ref<const std::string&>() == name;
+    });
+}
+
+Json filtered_metrics(const Json& metrics, const Json& arguments) {
+    Json result = metrics;
+    Json filtered_timings = Json::object();
+    for (const auto& [metric_name, statistics] : metrics.at("gpuTimings").items()) {
+        if (!selected_metric(arguments, metric_name)) continue;
+        if (!statistics.is_object()) {
+            filtered_timings[metric_name] = statistics;
+            continue;
+        }
+        Json filtered_statistics = Json::object();
+        for (const auto& [statistic, value] : statistics.items()) {
+            if (!selected_statistic(arguments, statistic)) continue;
+            filtered_statistics[statistic] = value;
+            if (!value.is_number()) continue;
+            const auto nanoseconds = value.get<double>();
+            for (const auto& unit : arguments.value("converted_units", Json::array())) {
+                const auto& name = unit.get_ref<const std::string&>();
+                if (name == "us") filtered_statistics[statistic + "_us"] = nanoseconds / 1'000.0;
+                if (name == "ms") filtered_statistics[statistic + "_ms"] = nanoseconds / 1'000'000.0;
+            }
+        }
+        filtered_timings[metric_name] = std::move(filtered_statistics);
+    }
+    result["gpuTimings"] = std::move(filtered_timings);
+    return result;
+}
+
 Json no_gpu_samples_error(std::string_view case_id, std::string_view reason) {
     return {{"success", false},
             {"error_code", "NO_GPU_SAMPLES"},
@@ -75,6 +143,14 @@ Json case_artifacts(const Json& job, std::string_view case_id, bool matrix) {
                 std::string(case_id) + "--")) {
             result.push_back(artifact);
         }
+    }
+    return result;
+}
+
+Json profile_artifacts(const Json& job) {
+    Json result = Json::array();
+    for (const auto& artifact : job.at("artifacts")) {
+        if (artifact.at("kind") == "profile_result") result.push_back(artifact);
     }
     return result;
 }
@@ -121,7 +197,7 @@ void append_profile_case(const Json& job, Json& cases, ProfileCounts& counts, co
         ++counts.passed;
     }
 
-    Json visible_metrics = include_metrics && has_metrics ? std::move(metrics) : Json(nullptr);
+    Json visible_metrics = include_metrics && has_metrics ? filtered_metrics(metrics, arguments) : Json(nullptr);
     Json item{{"case_id", std::move(case_id)},
               {"source_id", std::move(source_id)},
               {"config_id", std::move(config_id)},
@@ -178,6 +254,9 @@ Json profile_result(Json job, const Json& arguments, const SessionConfig& config
             (counts.failed == 0 ? "completed" : "completed_with_failures")},
         {"result_detail", detail},
         {"gpu_timing_unit", "ns"},
+        {"metric_filter", arguments.value("metric_filter", Json(nullptr))},
+        {"statistics", arguments.value("statistics", Json(nullptr))},
+        {"converted_units", arguments.value("converted_units", Json::array())},
         {"requested_cases", counts.requested},
         {"completed_cases", counts.passed + counts.failed},
         {"cases_with_metrics", counts.with_metrics},
@@ -188,6 +267,7 @@ Json profile_result(Json job, const Json& arguments, const SessionConfig& config
         {"failed", counts.failed},
         {"incomplete", counts.incomplete},
         {"cases", std::move(cases)},
+        {"artifacts", profile_artifacts(job)},
     };
     if (detail == "full") append_full_job_metadata(job, result);
     return result;

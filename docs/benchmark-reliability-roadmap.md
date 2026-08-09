@@ -41,7 +41,7 @@ Do not restart Minecraft or its launcher unless the user explicitly asks.
 | T00 | P0 | vibris | Persist roadmap and isolated worktree protocol | Done | docs: add benchmark reliability roadmap |
 | T01 | P0 | vibris | Fail closed on missing GPU samples and report completeness counters | Done | fix(mcp): fail incomplete gpu profile results |
 | T02 | P0 | vibris | Normalize compact profile result schema and explicit timing units | Done | feat(mcp): normalize profile result contract |
-| T03 | P1 | vibris | Add pass/statistic filters and publish full results as an artifact | Pending | feat(mcp): add filtered profile output |
+| T03 | P1 | vibris | Add pass/statistic filters and publish full results as an artifact | Done | feat(mcp): add filtered profile output |
 | T04 | P0 | vibris | Retry incomplete matrix cases without rerunning completed cases | Pending | feat(mcp): retry incomplete profile cases |
 | T05 | P0 | vibris | Checkpoint matrix cases and expose resumable progress | Pending | feat(mcp): checkpoint profile matrix progress |
 | T06 | P0 | vibris | Return effective scene/config/source provenance for every case | Pending | feat(mcp): add benchmark case provenance |
@@ -341,3 +341,9 @@ and exact commit title. The Git history is the source of truth for the resulting
   Verified by building vibris-job-protocol-tests and vibris-action-schema-tests, then running CTest cases
   SynchronousRecipeResultMapping and ActionSchemaRejectsForbiddenAndDuplicateTools (2/2 passed).
   Commit title: feat(mcp): normalize profile result contract.
+- 2026-08-09 - T03 - Added wildcard metric/pass filters, avg/p5/p50/p95 statistic filters, and optional us/ms
+  derived values while retaining raw nanoseconds. Every profile now writes an unfiltered full profile-result.json,
+  with optional flattened CSV, inside the existing core ArtifactManager transaction; compact responses return those
+  artifact paths. Added protocol, schema, mapping, filtering, conversion, manifest, quota, and recovery-data tests.
+  Verified with .\gradlew.bat :vibris-core:test, CMake release build, and the full release CTest suite (51/51 passed).
+  Commit title: feat(mcp): add filtered profile output.

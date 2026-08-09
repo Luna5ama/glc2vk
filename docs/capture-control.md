@@ -267,8 +267,21 @@ Profile requests accept an optional `result_detail`:
 | `full` | metrics plus non-metric per-case action results, artifacts, and terminal job metadata |
 
 The raw `get_gpu_metrics` action result is never repeated in `action_results`; GPU timings live only under the case
-`metrics` field. This direct in-game path replaces project-local wrappers for routine profiling. Compute capture and
-external replay/Nsight analysis remain separate diagnostic workflows.
+`metrics` field. Every profile job also publishes an unfiltered `profile-result.json` through the normal artifact
+transaction. The JSON contains the complete normalized cases and raw action results, so a compact or truncated MCP
+response can be recovered without rerunning Minecraft. Set `result_csv: true` to publish a flattened
+`profile-result.csv` beside it. Compact responses keep these result artifacts in their top-level `artifacts` array;
+their paths are rewritten through the workspace `.vibris/artifact` link like other artifacts. Both files share the
+job manifest, quota, rollback, ownership, and unreported-result protection boundary.
+
+Use `metric_filter` to select timing names in the MCP response. Each entry is an exact name or a `*` wildcard pattern,
+so `shadowcomp*` and `composite18_total` can be requested together. Use `statistics` to select any of `avg`, `p5`,
+`p50`, and `p95`. These filters do not remove data from `profile-result.json`. Raw values always remain nanoseconds;
+`converted_units` may contain `us`, `ms`, or both to add suffixed derived values such as `avg_us` and `avg_ms` without
+replacing `avg`. CSV always has `value_ns` and adds `value_us` or `value_ms` columns when requested.
+
+This direct in-game path replaces project-local wrappers for routine profiling. Compute capture and external
+replay/Nsight analysis remain separate diagnostic workflows.
 
 Example request:
 
@@ -279,7 +292,11 @@ Example request:
   "config": {"SETTING_GI_SPATIAL_REUSE_COUNT": 14},
   "warmup_frames": 32,
   "frames": 120,
-  "result_detail": "metrics"
+  "result_detail": "metrics",
+  "metric_filter": ["composite18_total", "shadowcomp*"],
+  "statistics": ["avg", "p50"],
+  "converted_units": ["us", "ms"],
+  "result_csv": true
 }
 ```
 
@@ -367,7 +384,11 @@ and execute action sequences only; no recipe enum or recipe decoder exists in th
   "config": {"SETTING_PARALLAX_MODE": 4},
   "warmup_frames": 32,
   "frames": 120,
-  "result_detail": "metrics"
+  "result_detail": "metrics",
+  "metric_filter": ["composite18_total", "shadowcomp*"],
+  "statistics": ["avg", "p50"],
+  "converted_units": ["us"],
+  "result_csv": true
 }
 ```
 
