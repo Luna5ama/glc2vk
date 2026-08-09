@@ -9,6 +9,7 @@ import dev.vibris.protocol.v1.GetGpuMetrics
 import dev.vibris.protocol.v1.JobActionKind
 import dev.vibris.protocol.v1.LoadShader
 import dev.vibris.protocol.v1.ResultArtifactOptions
+import dev.vibris.protocol.v1.ResultAttemptDiagnostic
 import dev.vibris.protocol.v1.SubmitJob
 import dev.vibris.protocol.v1.WaitFrames
 import java.nio.file.Files
@@ -76,6 +77,12 @@ class ProfileResultArtifactsTest {
         assertEquals(7_000.0, composite.getValue("avg_us").jsonPrimitive.double)
         assertEquals(7.0, composite.getValue("avg_ms").jsonPrimitive.double)
         assertEquals("passed", case.getValue("status").jsonPrimitive.content)
+        assertEquals(2, document.getValue("attempt").jsonPrimitive.content.toInt())
+        assertEquals(
+            "NO_GPU_SAMPLES",
+            document.getValue("previous_attempts").jsonArray.single().jsonObject
+                .getValue("error_code").jsonPrimitive.content,
+        )
         assertEquals(2, document.getValue("raw_action_results").jsonArray.size)
 
         val csvPath = Path.of(result.artifactsList.single { it.fileName == ProfileResultArtifacts.CSV_FILE }.path)
@@ -101,7 +108,16 @@ class ProfileResultArtifactsTest {
                 .setCsv(true)
                 .setKind("profile_matrix")
                 .addConvertedUnits("us")
-                .addConvertedUnits("ms"),
+                .addConvertedUnits("ms")
+                .setAttempt(2)
+                .addPreviousAttempts(
+                    ResultAttemptDiagnostic.newBuilder()
+                        .setAttempt(1)
+                        .setStatus("incomplete")
+                        .setErrorCode("NO_GPU_SAMPLES")
+                        .setMessage("missing samples")
+                        .setRetryable(true),
+                ),
         )
         .setActions(
             ActionSequence.newBuilder()

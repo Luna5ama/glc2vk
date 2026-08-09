@@ -37,6 +37,7 @@ using vibris::mcp::StateError;
 using vibris::mcp::SynchronousJobRunner;
 using vibris::mcp::ToolFailure;
 using vibris::mcp::ToolOutcome;
+using vibris::mcp::test::MetricsJobService;
 using vibris::mcp::test::MetricsJobServer;
 using vibris::mcp::test::TerminalJobServer;
 using vibris::mcp::test::TempDirectory;
@@ -376,14 +377,24 @@ void profile_result_artifact_mapping() {
     const auto& options = message.submit_job().result_artifacts();
     require(message.submit_job().has_result_artifacts() && options.json() && options.csv() &&
             options.kind() == "profile" && options.converted_units_size() == 2 &&
-            options.converted_units(0) == "us" && options.converted_units(1) == "ms",
+            options.converted_units(0) == "us" && options.converted_units(1) == "ms" &&
+            options.attempt() == 1 && options.previous_attempts().empty(),
         "Profile result artifact options were not copied into SubmitJob.");
 }
 
-ToolOutcome synchronous_metrics_job(
-    const Json& arguments, std::vector<std::optional<std::string>> metric_payloads) {
+struct MetricsRun final {
+    ToolOutcome outcome;
+    std::vector<std::vector<std::string>> submitted_case_ids;
+    std::vector<std::uint32_t> submitted_attempts;
+    std::vector<std::size_t> submitted_previous_attempt_counts;
+    std::size_t terminal_writes;
+};
+
+MetricsRun synchronous_metrics_jobs(
+    const Json& arguments, MetricsJobService::Plans plans,
+    std::vector<std::optional<proto::ErrorCode>> job_failures = {}) {
     WorkspaceFixture fixture;
-    MetricsJobServer server(fixture.pending(), std::move(metric_payloads));
+    MetricsJobServer server(fixture.pending(), std::move(plans), std::move(job_failures));
     vibris::mcp::SourceHandler sources(fixture.worktree());
     vibris::mcp::GrpcClient client({
         .target = "127.0.0.1:" + std::to_string(server.port()),
@@ -399,14 +410,25 @@ ToolOutcome synchronous_metrics_job(
     auto outcome = SynchronousJobRunner(client, sources, config()).run(
         "vibris_run_recipe", arguments, server.server_hello(), context);
     const auto stats = client.stats();
+    auto submitted_case_ids = server.submitted_case_ids();
+    auto submitted_attempts = server.submitted_attempts();
+    auto submitted_previous_attempt_counts = server.submitted_previous_attempt_counts();
+    const auto terminal_writes = server.terminal_writes();
     client.shutdown();
     server.shutdown();
 
-    require(server.valid_submit() && server.terminal_writes() == 1,
+    require(server.valid_submit(),
         "Metrics fixture did not receive the expected GPU metric actions.");
     require(stats.pending_requests == 0 && vibris::mcp::test::pending_has_no_sources(fixture.pending()),
         "Metrics completion left pending registry or source ownership behind.");
-    return outcome;
+    return {std::move(outcome), std::move(submitted_case_ids), std::move(submitted_attempts),
+            std::move(submitted_previous_attempt_counts), terminal_writes};
+}
+
+ToolOutcome synchronous_metrics_job(
+    const Json& arguments, std::vector<std::optional<std::string>> metric_payloads) {
+    return std::move(synchronous_metrics_jobs(
+        arguments, MetricsJobService::Plans{std::move(metric_payloads)}).outcome);
 }
 
 std::size_t count_occurrences(const std::string& value, std::string_view needle) {
@@ -426,6 +448,7 @@ void profile_requires_nonempty_gpu_samples() {
         {"config", Json::object()},
         {"warmup_frames", 0},
         {"frames", 32},
+        {"max_retries", 0},
     };
 
     const auto missing = synchronous_metrics_job(arguments, {std::nullopt});
@@ -549,6 +572,7 @@ void profile_matrix_reports_incomplete_cases() {
                     {"configs", Json::array({"success", "empty", "null", "missing", "failed"})}}},
         {"warmup_frames", 0},
         {"frames", 64},
+        {"max_retries", 0},
     };
     const auto outcome = synchronous_metrics_job(arguments, {
         R"({"gpuTimings":{"composite_total":{"avg":7000000}}})",
@@ -583,6 +607,131 @@ void profile_matrix_reports_incomplete_cases() {
         "Missing and explicitly failed profile cases were not distinguished.");
 }
 
+void profile_matrix_retries_only_retryable_cases() {
+    const Json arguments{
+        {"recipe", "profile_matrix"},
+        {"sources", Json::array({{{"id", "source"}, {"kind", "workspace"}}})},
+        {"configs", Json::array({
+            {{"id", "completed"}, {"values", Json::object()}},
+            {{"id", "exhausted"}, {"values", Json::object()}},
+            {{"id", "recovered"}, {"values", Json::object()}},
+            {{"id", "runtime-recovered"}, {"values", Json::object()}},
+        })},
+        {"matrix", {{"sources", Json::array({"source"})},
+                    {"configs", Json::array({"completed", "exhausted", "recovered", "runtime-recovered"})}}},
+        {"warmup_frames", 0},
+        {"frames", 64},
+    };
+    const std::optional<std::string> samples =
+        R"({"gpuTimings":{"composite_total":{"avg":7000000}}})";
+    const std::optional<std::string> empty = R"({"gpuTimings":{}})";
+    const std::optional<std::string> runtime_failure =
+        R"({"success":false,"error_code":"INTERNAL_ERROR","message":"runtime failed"})";
+    auto run = synchronous_metrics_jobs(arguments, MetricsJobService::Plans{
+        {samples, empty, empty, runtime_failure},
+        {empty},
+        {empty},
+        {samples},
+        {samples},
+    });
+    const auto& result = std::get<Json>(run.outcome);
+    const auto& completed = result.at("cases").at(0);
+    const auto& exhausted = result.at("cases").at(1);
+    const auto& recovered = result.at("cases").at(2);
+    const auto& runtime_recovered = result.at("cases").at(3);
+
+    require(result.at("success") == false && result.at("status") == "incomplete" &&
+            result.at("requested_cases") == 4 && result.at("passed") == 3 &&
+            result.at("incomplete") == 1 && result.at("retried_cases") == 3 &&
+            result.at("total_attempts") == 8 && result.at("max_retries") == 2 &&
+            result.at("job_attempts").size() == 5 && result.at("artifacts").size() == 5,
+        "Profile retry aggregation lost final counters or per-attempt artifacts.");
+    require(completed.at("status") == "passed" && completed.at("attempt_count") == 1 &&
+            completed.at("retry_exhausted") == false && completed.at("attempts").size() == 1,
+        "A completed profile case was retried or lost its single receipt.");
+    require(exhausted.at("status") == "incomplete" && exhausted.at("attempt_count") == 3 &&
+            exhausted.at("retry_exhausted") == true && exhausted.at("attempts").size() == 3 &&
+            exhausted.at("attempts").at(2).at("error").at("error_code") == "NO_GPU_SAMPLES",
+        "Exhausted profile retries were not retained as an explicit incomplete result.");
+    require(recovered.at("status") == "passed" && recovered.at("attempt_count") == 2 &&
+            recovered.at("retry_exhausted") == false && recovered.at("attempts").at(0).at("status") == "incomplete" &&
+            recovered.at("attempts").at(1).at("status") == "passed",
+        "An empty first attempt did not recover or a preceding exhausted case stopped later work.");
+    require(runtime_recovered.at("status") == "passed" && runtime_recovered.at("attempt_count") == 2 &&
+            runtime_recovered.at("attempts").at(0).at("error").at("error_code") == "INTERNAL_ERROR" &&
+            runtime_recovered.at("attempts").at(0).at("retryable") == true,
+        "A retryable runtime action error was not retried to success.");
+    require(run.terminal_writes == 5 &&
+            run.submitted_case_ids == std::vector<std::vector<std::string>>{
+                {"source--completed", "source--exhausted", "source--recovered", "source--runtime-recovered"},
+                {"source--exhausted"},
+                {"source--exhausted"},
+                {"source--recovered"},
+                {"source--runtime-recovered"},
+            } &&
+            run.submitted_attempts == std::vector<std::uint32_t>{1, 2, 3, 2, 2} &&
+            run.submitted_previous_attempt_counts == std::vector<std::size_t>{0, 1, 2, 1, 1},
+        "Retry submissions reran completed cases or omitted bounded attempt history.");
+    require(result.at("artifacts").at(0).at("case_ids").size() == 4 &&
+            result.at("artifacts").at(1).at("case_ids") == Json::array({"source--exhausted"}) &&
+            result.at("artifacts").at(4).at("attempt") == 2,
+        "Per-attempt artifacts were not attributable to their retry case.");
+}
+
+void profile_retries_retryable_job_failure() {
+    const Json arguments{
+        {"recipe", "profile"},
+        {"source", {{"kind", "workspace"}}},
+        {"config", Json::object()},
+        {"warmup_frames", 0},
+        {"frames", 32},
+    };
+    const std::optional<std::string> samples =
+        R"({"gpuTimings":{"composite_total":{"avg":7000000}}})";
+    auto run = synchronous_metrics_jobs(
+        arguments,
+        MetricsJobService::Plans{{samples}, {samples}},
+        {proto::ErrorCode::SERVER_NOT_READY, std::nullopt});
+    const auto& result = std::get<Json>(run.outcome);
+    const auto& profile_case = result.at("cases").at(0);
+    require(result.at("success") == true && result.at("retried_cases") == 1 &&
+            result.at("total_attempts") == 2 && result.at("artifacts").size() == 1 &&
+            profile_case.at("status") == "passed" && profile_case.at("attempt_count") == 2 &&
+            profile_case.at("attempts").at(0).at("error").at("error_code") == "SERVER_NOT_READY" &&
+            profile_case.at("attempts").at(0).at("retryable") == true &&
+            profile_case.at("attempts").at(1).at("status") == "passed",
+        "A retryable terminal job failure did not recover with its attempt receipt intact.");
+    require(run.terminal_writes == 2 &&
+            run.submitted_case_ids == std::vector<std::vector<std::string>>{
+                {"source--config"}, {"source--config"},
+            } &&
+            run.submitted_attempts == std::vector<std::uint32_t>{1, 2} &&
+            run.submitted_previous_attempt_counts == std::vector<std::size_t>{0, 1},
+        "Retryable job failure did not submit exactly one bounded single-case retry.");
+}
+
+void profile_does_not_retry_nonretryable_failure() {
+    const Json arguments{
+        {"recipe", "profile"},
+        {"source", {{"kind", "workspace"}}},
+        {"config", Json::object()},
+        {"warmup_frames", 0},
+        {"frames", 32},
+    };
+    const std::optional<std::string> compile_failure =
+        R"({"success":false,"error_code":"SHADER_COMPILE_FAILED","message":"compile failed"})";
+    auto run = synchronous_metrics_jobs(arguments, MetricsJobService::Plans{{compile_failure}});
+    const auto& result = std::get<Json>(run.outcome);
+    const auto& profile_case = result.at("cases").at(0);
+    require(result.at("success") == false && result.at("status") == "completed_with_failures" &&
+            result.at("retried_cases") == 0 && result.at("total_attempts") == 1 &&
+            profile_case.at("status") == "failed" && profile_case.at("attempt_count") == 1 &&
+            profile_case.at("retry_exhausted") == false &&
+            profile_case.at("attempts").at(0).at("retryable") == false &&
+            run.terminal_writes == 1 && run.submitted_attempts == std::vector<std::uint32_t>{1},
+        "A non-retryable profile failure was resubmitted or mislabeled as exhausted.");
+}
+
 void profile_matrix_38_cases_requires_all_metrics() {
     Json configs = Json::array();
     Json config_axis = Json::array();
@@ -601,6 +750,7 @@ void profile_matrix_38_cases_requires_all_metrics() {
         {"matrix", {{"sources", Json::array({"source"})}, {"configs", std::move(config_axis)}}},
         {"warmup_frames", 0},
         {"frames", 64},
+        {"max_retries", 0},
     };
 
     const auto outcome = synchronous_metrics_job(arguments, std::move(payloads));
@@ -1089,6 +1239,9 @@ int main() {
         profile_result_detail_contract();
         profile_metric_filters_and_converted_units();
         profile_matrix_reports_incomplete_cases();
+        profile_matrix_retries_only_retryable_cases();
+        profile_retries_retryable_job_failure();
+        profile_does_not_retry_nonretryable_failure();
         profile_matrix_38_cases_requires_all_metrics();
         title_screen_runtime_can_prepare_source_for_world_loading_job();
         synchronous_submit_resumes_after_acceptance();

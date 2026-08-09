@@ -8,6 +8,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -16,6 +17,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace vibris::mcp {
 namespace {
@@ -243,7 +245,10 @@ Json profile_result(Json job, const Json& arguments, const SessionConfig& config
             }
         }
     } else {
-        append_profile_case(job, cases, counts, arguments, warmup, "source--config", "source", "config",
+        append_profile_case(job, cases, counts, arguments, warmup,
+            arguments.value("__vibris_case_id", std::string("source--config")),
+            arguments.value("__vibris_source_id", std::string("source")),
+            arguments.value("__vibris_config_id", std::string("config")),
             0, std::numeric_limits<std::size_t>::max(), false, detail);
     }
 
@@ -316,6 +321,285 @@ Json matrix_result(Json job, const Json& arguments) {
     return job;
 }
 
+struct ProfileCaseSpec final {
+    std::string case_id;
+    std::string source_id;
+    std::string config_id;
+    Json source = nullptr;
+    Json config = nullptr;
+};
+
+struct ProfileCaseState final {
+    ProfileCaseSpec spec;
+    Json value = nullptr;
+    Json attempts = Json::array();
+};
+
+const Json& named_value(const Json& values, std::string_view id, std::string_view kind) {
+    const auto found = std::ranges::find_if(values, [id](const Json& value) {
+        return value.at("id").get_ref<const std::string&>() == id;
+    });
+    if (found == values.end()) throw std::invalid_argument(std::string(kind) + " ID is not declared");
+    return *found;
+}
+
+std::vector<ProfileCaseState> profile_cases(const Json& arguments, bool matrix) {
+    std::vector<ProfileCaseState> result;
+    if (!matrix) {
+        ProfileCaseSpec spec{
+            arguments.value("__vibris_case_id", std::string("source--config")),
+            arguments.value("__vibris_source_id", std::string("source")),
+            arguments.value("__vibris_config_id", std::string("config")),
+        };
+        if (arguments.contains("source")) spec.source = arguments.at("source");
+        if (arguments.contains("config")) spec.config = arguments.at("config");
+        result.push_back({std::move(spec)});
+        return result;
+    }
+    for (const auto& source_axis : arguments.at("matrix").at("sources")) {
+        const auto source_id = source_axis.get<std::string>();
+        auto source = named_value(arguments.at("sources"), source_id, "source");
+        source.erase("id");
+        for (const auto& config_axis : arguments.at("matrix").at("configs")) {
+            const auto config_id = config_axis.get<std::string>();
+            const auto& named_config = named_value(arguments.at("configs"), config_id, "config");
+            result.push_back({ProfileCaseSpec{
+                source_id + "--" + config_id,
+                source_id,
+                config_id,
+                source,
+                named_config.contains("values") ? named_config.at("values") : Json(nullptr),
+            }});
+        }
+    }
+    return result;
+}
+
+Json failure_error(const ToolFailure& failure) {
+    return { {"success", false},
+             {"error_code", failure.code},
+             {"message", failure.message},
+             {"retryable", failure.retryable},
+             {"details", failure.details} };
+}
+
+bool retryable_error(const Json& error) {
+    if (!error.is_object()) return false;
+    const auto code = error.value("error_code", std::string{});
+    constexpr std::array retryable_codes{
+        "NO_GPU_SAMPLES", "SERVER_OFFLINE", "SERVER_RESTARTED", "SERVER_NOT_READY",
+        "QUEUE_FULL", "QUEUE_TIMEOUT", "EXECUTION_TIMEOUT", "WORLD_LOAD_FAILED",
+        "SOURCE_ACTIVATION_FAILED", "INTERNAL_ERROR", "CAPTURE_FAILED",
+    };
+    if (std::ranges::find(retryable_codes, code) != retryable_codes.end()) return true;
+    return error.value("retryable", false);
+}
+
+Json failed_profile_case(
+    const ProfileCaseSpec& spec, const Json& arguments, std::size_t default_warmup, Json error) {
+    return {{"case_id", spec.case_id},
+            {"source_id", spec.source_id},
+            {"config_id", spec.config_id},
+            {"status", "failed"},
+            {"error", std::move(error)},
+            {"frames", arguments.at("frames")},
+            {"warmup_frames", arguments.value("warmup_frames", default_warmup)},
+            {"metrics", nullptr}};
+}
+
+const Json* find_profile_case(const Json& result, std::string_view case_id) {
+    const auto cases = result.find("cases");
+    if (cases == result.end() || !cases->is_array()) return nullptr;
+    const auto found = std::ranges::find_if(*cases, [case_id](const Json& value) {
+        return value.at("case_id").get_ref<const std::string&>() == case_id;
+    });
+    return found == cases->end() ? nullptr : &*found;
+}
+
+Json missing_profile_case(const ProfileCaseSpec& spec, const Json& arguments, std::size_t default_warmup) {
+    auto result = failed_profile_case(spec, arguments, default_warmup,
+        no_gpu_samples_error(spec.case_id, "missing_case_result"));
+    result["status"] = "incomplete";
+    return result;
+}
+
+Json collect_artifacts(const Json& source, std::size_t attempt, const Json& case_ids, Json& artifacts) {
+    Json ids = Json::array();
+    const auto found = source.find("artifacts");
+    if (found == source.end() || !found->is_array()) return ids;
+    for (const auto& value : *found) {
+        auto artifact = value;
+        artifact["attempt"] = attempt;
+        artifact["case_ids"] = case_ids;
+        const auto id = artifact.value("artifact_id", artifact.value("file_name", std::string{}));
+        if (!id.empty()) ids.push_back(id);
+        artifacts.push_back(std::move(artifact));
+    }
+    return ids;
+}
+
+Json attempt_record(std::size_t attempt, const Json& profile_case, Json artifact_ids) {
+    const auto& error = profile_case.at("error");
+    return {{"attempt", attempt},
+            {"status", profile_case.at("status")},
+            {"retryable", retryable_error(error)},
+            {"error", error},
+            {"artifact_ids", std::move(artifact_ids)}};
+}
+
+Json job_attempt_record(std::size_t attempt, const Json& case_ids, std::string status, Json error,
+    Json artifact_ids, const Json* terminal) {
+    Json result{{"attempt", attempt},
+                {"case_ids", case_ids},
+                {"status", std::move(status)},
+                {"error", std::move(error)},
+                {"artifact_ids", std::move(artifact_ids)}};
+    if (terminal != nullptr && terminal->contains("timings")) result["timings"] = terminal->at("timings");
+    return result;
+}
+
+Json retry_arguments(const Json& arguments, const ProfileCaseState& state, std::size_t attempt) {
+    Json result{{"recipe", "profile"}, {"frames", arguments.at("frames")}};
+    constexpr std::array copied_fields{
+        "warmup_frames", "result_detail", "metric_filter", "statistics", "converted_units", "result_csv",
+    };
+    for (const auto* field : copied_fields) {
+        if (arguments.contains(field)) result[field] = arguments.at(field);
+    }
+    if (!state.spec.source.is_null()) result["source"] = state.spec.source;
+    if (!state.spec.config.is_null()) result["config"] = state.spec.config;
+    result["__vibris_case_id"] = state.spec.case_id;
+    result["__vibris_source_id"] = state.spec.source_id;
+    result["__vibris_config_id"] = state.spec.config_id;
+    result["__vibris_result_kind"] = arguments.at("recipe");
+    result["__vibris_attempt"] = attempt;
+    result["__vibris_previous_attempts"] = state.attempts;
+    return result;
+}
+
+bool case_has_metrics(const Json& profile_case) {
+    if (profile_case.at("status") == "passed") return true;
+    const auto metrics = profile_case.find("metrics");
+    return metrics != profile_case.end() && has_gpu_samples(*metrics);
+}
+
+using ProfileAttempt = std::function<ToolOutcome(const Json&, bool)>;
+
+Json retry_profile(
+    const Json& arguments, bool matrix, std::size_t default_warmup, const ProfileAttempt& submit) {
+    auto states = profile_cases(arguments, matrix);
+    const auto max_retries = arguments.value("max_retries", std::size_t{2});
+    Json artifacts = Json::array();
+    Json job_attempts = Json::array();
+    Json aggregate = Json::object();
+    bool aggregate_initialized = false;
+
+    Json initial_arguments = arguments;
+    initial_arguments["__vibris_attempt"] = 1;
+    const auto initial_outcome = submit(initial_arguments, matrix);
+    Json all_case_ids = Json::array();
+    for (const auto& state : states) all_case_ids.push_back(state.spec.case_id);
+    if (const auto* result = std::get_if<Json>(&initial_outcome)) {
+        aggregate = *result;
+        aggregate_initialized = true;
+        const auto artifact_ids = collect_artifacts(*result, 1, all_case_ids, artifacts);
+        job_attempts.push_back(job_attempt_record(
+            1, all_case_ids, result->at("status").get<std::string>(), nullptr, artifact_ids, result));
+        for (auto& state : states) {
+            const auto* profile_case = find_profile_case(*result, state.spec.case_id);
+            state.value = profile_case == nullptr ?
+                missing_profile_case(state.spec, arguments, default_warmup) : *profile_case;
+            state.attempts.push_back(attempt_record(1, state.value, artifact_ids));
+        }
+    } else {
+        const auto& failure = std::get<ToolFailure>(initial_outcome);
+        const auto error = failure_error(failure);
+        const auto artifact_ids = collect_artifacts(failure.details, 1, all_case_ids, artifacts);
+        job_attempts.push_back(job_attempt_record(1, all_case_ids, "failed", error, artifact_ids, nullptr));
+        for (auto& state : states) {
+            state.value = failed_profile_case(state.spec, arguments, default_warmup, error);
+            state.attempts.push_back(attempt_record(1, state.value, artifact_ids));
+        }
+    }
+
+    for (auto& state : states) {
+        while (retryable_error(state.value.at("error")) && state.attempts.size() <= max_retries) {
+            const auto attempt = state.attempts.size() + 1;
+            const auto outcome = submit(retry_arguments(arguments, state, attempt), false);
+            const Json case_ids = Json::array({state.spec.case_id});
+            if (const auto* result = std::get_if<Json>(&outcome)) {
+                if (!aggregate_initialized) {
+                    aggregate = *result;
+                    aggregate_initialized = true;
+                }
+                const auto artifact_ids = collect_artifacts(*result, attempt, case_ids, artifacts);
+                job_attempts.push_back(job_attempt_record(
+                    attempt, case_ids, result->at("status").get<std::string>(), nullptr, artifact_ids, result));
+                const auto* profile_case = find_profile_case(*result, state.spec.case_id);
+                state.value = profile_case == nullptr ?
+                    missing_profile_case(state.spec, arguments, default_warmup) : *profile_case;
+                state.attempts.push_back(attempt_record(attempt, state.value, artifact_ids));
+            } else {
+                const auto& failure = std::get<ToolFailure>(outcome);
+                const auto error = failure_error(failure);
+                const auto artifact_ids = collect_artifacts(failure.details, attempt, case_ids, artifacts);
+                job_attempts.push_back(
+                    job_attempt_record(attempt, case_ids, "failed", error, artifact_ids, nullptr));
+                state.value = failed_profile_case(state.spec, arguments, default_warmup, error);
+                state.attempts.push_back(attempt_record(attempt, state.value, artifact_ids));
+            }
+        }
+    }
+
+    if (!aggregate_initialized) {
+        aggregate = {{"result_detail", arguments.value("result_detail", std::string("metrics"))},
+                     {"gpu_timing_unit", "ns"},
+                     {"metric_filter", arguments.value("metric_filter", Json(nullptr))},
+                     {"statistics", arguments.value("statistics", Json(nullptr))},
+                     {"converted_units", arguments.value("converted_units", Json::array())}};
+    }
+
+    std::size_t passed = 0;
+    std::size_t failed = 0;
+    std::size_t incomplete = 0;
+    std::size_t with_metrics = 0;
+    std::size_t retried = 0;
+    std::size_t total_attempts = 0;
+    Json cases = Json::array();
+    for (auto& state : states) {
+        const auto status = state.value.at("status").get<std::string>();
+        if (status == "passed") ++passed;
+        else if (status == "failed") ++failed;
+        else ++incomplete;
+        if (case_has_metrics(state.value)) ++with_metrics;
+        if (state.attempts.size() > 1) ++retried;
+        total_attempts += state.attempts.size();
+        state.value["attempt_count"] = state.attempts.size();
+        state.value["retry_exhausted"] = retryable_error(state.value.at("error")) &&
+            state.attempts.size() == max_retries + 1;
+        state.value["attempts"] = std::move(state.attempts);
+        cases.push_back(std::move(state.value));
+    }
+    aggregate["success"] = passed == states.size();
+    aggregate["kind"] = matrix ? "profile_matrix" : "profile";
+    aggregate["status"] = incomplete != 0 ? "incomplete" : (failed == 0 ? "completed" : "completed_with_failures");
+    aggregate["requested_cases"] = states.size();
+    aggregate["completed_cases"] = passed + failed;
+    aggregate["cases_with_metrics"] = with_metrics;
+    aggregate["missing_cases"] = states.size() - with_metrics;
+    aggregate["failed_cases"] = failed;
+    aggregate["retried_cases"] = retried;
+    aggregate["total_attempts"] = total_attempts;
+    aggregate["max_retries"] = max_retries;
+    aggregate["passed"] = passed;
+    aggregate["failed"] = failed;
+    aggregate["incomplete"] = incomplete;
+    aggregate["cases"] = std::move(cases);
+    aggregate["artifacts"] = std::move(artifacts);
+    aggregate["job_attempts"] = std::move(job_attempts);
+    return aggregate;
+}
+
 }
 
 SynchronousJobRunner::SynchronousJobRunner(
@@ -325,7 +609,7 @@ SynchronousJobRunner::SynchronousJobRunner(
     if (maximum_wait_.count() < 0) throw std::invalid_argument("maximum wait must not be negative");
 }
 
-ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& arguments,
+ToolOutcome SynchronousJobRunner::submit_once(std::string_view tool_name, const Json& arguments,
     const proto::ServerHello& server, const proto::SceneContext& context) {
     const auto request_id = detail::generate_uuid();
     sources_.prepare(tool_name, arguments, server);
@@ -371,25 +655,34 @@ ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& ar
         sources_.retire(request_id);
         if (!status.ok()) return transport_failure(status);
         if (!terminal) throw std::logic_error("gRPC completed without a terminal job message");
-        auto outcome = JobProtocol::terminal(*terminal);
-        if (tool_name == "vibris_run_recipe" && std::holds_alternative<Json>(outcome)) {
-            const auto recipe = arguments.at("recipe").get<std::string>();
-            if (recipe == "profile") {
-                return profile_result(std::get<Json>(outcome), arguments, config_, false);
-            }
-            if (recipe == "profile_matrix") {
-                return profile_result(std::get<Json>(outcome), arguments, config_, true);
-            }
-            std::get<Json>(outcome)["kind"] = recipe;
-        }
-        if (tool_name == "vibris_run_matrix" && std::holds_alternative<Json>(outcome)) {
-            return matrix_result(std::get<Json>(outcome), arguments);
-        }
-        return outcome;
+        return JobProtocol::terminal(*terminal);
     } catch (...) {
         sources_.retire(request_id);
         throw;
     }
+}
+
+ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& arguments,
+    const proto::ServerHello& server, const proto::SceneContext& context) {
+    if (tool_name == "vibris_run_recipe") {
+        const auto recipe = arguments.at("recipe").get<std::string>();
+        if (recipe == "profile" || recipe == "profile_matrix") {
+            return retry_profile(arguments, recipe == "profile_matrix", config_.default_warmup_frames,
+                [this, &server, &context](const Json& attempt, bool matrix) -> ToolOutcome {
+                    auto outcome = submit_once("vibris_run_recipe", attempt, server, context);
+                    if (!std::holds_alternative<Json>(outcome)) return outcome;
+                    return profile_result(std::get<Json>(outcome), attempt, config_, matrix);
+                });
+        }
+        auto outcome = submit_once(tool_name, arguments, server, context);
+        if (auto* result = std::get_if<Json>(&outcome)) (*result)["kind"] = recipe;
+        return outcome;
+    }
+    auto outcome = submit_once(tool_name, arguments, server, context);
+    if (tool_name == "vibris_run_matrix" && std::holds_alternative<Json>(outcome)) {
+        return matrix_result(std::get<Json>(outcome), arguments);
+    }
+    return outcome;
 }
 
 }

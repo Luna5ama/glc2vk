@@ -274,6 +274,16 @@ message ResultArtifactOptions {
     bool csv = 2;
     string kind = 3;
     repeated string converted_units = 4;
+    uint32 attempt = 5;
+    repeated ResultAttemptDiagnostic previous_attempts = 6;
+}
+
+message ResultAttemptDiagnostic {
+    uint32 attempt = 1;
+    string status = 2;
+    string error_code = 3;
+    string message = 4;
+    bool retryable = 5;
 }
 
 message ShaderConfig {

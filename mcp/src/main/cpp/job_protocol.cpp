@@ -78,7 +78,7 @@ void config_values(const Json& values, proto::ShaderConfig& config) {
 
 void recipe_config(const Json& arguments, proto::SubmitJob& job) {
     auto* named = job.add_shader_configs();
-    named->set_id("config");
+    named->set_id(arguments.value("__vibris_config_id", std::string("config")));
     if (arguments.contains("config")) config_values(arguments.at("config"), *named->mutable_config());
     else named->set_preserve(true);
 }
@@ -193,7 +193,12 @@ void ab_recipe(const Json& arguments, const SessionConfig& config,
 void profile_recipe(const Json& arguments, const SessionConfig& config,
     std::span<const proto::PreparedSourceRef> sources, proto::ActionSequence& sequence) {
     require_sources(sources, 1);
-    load(sequence, sources.front(), "source", "config", "source--config");
+    load(
+        sequence,
+        sources.front(),
+        arguments.value("__vibris_source_id", std::string("source")),
+        arguments.value("__vibris_config_id", std::string("config")),
+        arguments.value("__vibris_case_id", std::string("source--config")));
     wait(sequence, arguments.value("warmup_frames", config.default_warmup_frames));
     add_action(sequence)->mutable_get_gpu_metrics()->set_frames(arguments.at("frames").get<std::uint32_t>());
 }
@@ -202,9 +207,21 @@ void profile_artifacts(const Json& arguments, std::string kind, proto::SubmitJob
     auto* options = job.mutable_result_artifacts();
     options->set_json(true);
     options->set_csv(arguments.value("result_csv", false));
-    options->set_kind(std::move(kind));
+    options->set_kind(arguments.value("__vibris_result_kind", kind));
+    options->set_attempt(arguments.value("__vibris_attempt", std::uint32_t{1}));
     for (const auto& unit : arguments.value("converted_units", Json::array())) {
         options->add_converted_units(unit.get<std::string>());
+    }
+    for (const auto& diagnostic : arguments.value("__vibris_previous_attempts", Json::array())) {
+        auto* output = options->add_previous_attempts();
+        output->set_attempt(diagnostic.at("attempt").get<std::uint32_t>());
+        output->set_status(diagnostic.at("status").get<std::string>());
+        output->set_retryable(diagnostic.value("retryable", false));
+        const auto error = diagnostic.find("error");
+        if (error != diagnostic.end() && error->is_object()) {
+            output->set_error_code(error->value("error_code", std::string{}));
+            output->set_message(error->value("message", std::string{}));
+        }
     }
 }
 

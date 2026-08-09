@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -156,11 +157,27 @@ private:
 
 class MetricsJobService final : public proto::VibrisControl::Service {
 public:
-    MetricsJobService(proto::ServerHello hello, std::vector<std::optional<std::string>> metric_payloads)
-        : hello_(std::move(hello)), metric_payloads_(std::move(metric_payloads)) {}
+    using Payloads = std::vector<std::optional<std::string>>;
+    using Plans = std::vector<Payloads>;
+
+    MetricsJobService(
+        proto::ServerHello hello, Plans plans, std::vector<std::optional<proto::ErrorCode>> job_failures = {})
+        : hello_(std::move(hello)), plans_(std::move(plans)), job_failures_(std::move(job_failures)) {}
 
     [[nodiscard]] bool valid_submit() const noexcept { return valid_submit_.load(); }
     [[nodiscard]] std::size_t terminal_writes() const noexcept { return terminal_writes_.load(); }
+    [[nodiscard]] std::vector<std::vector<std::string>> submitted_case_ids() const {
+        std::scoped_lock lock(mutex_);
+        return submitted_case_ids_;
+    }
+    [[nodiscard]] std::vector<std::uint32_t> submitted_attempts() const {
+        std::scoped_lock lock(mutex_);
+        return submitted_attempts_;
+    }
+    [[nodiscard]] std::vector<std::size_t> submitted_previous_attempt_counts() const {
+        std::scoped_lock lock(mutex_);
+        return submitted_previous_attempt_counts_;
+    }
 
 private:
     grpc::Status Control(grpc::ServerContext*,
@@ -181,13 +198,28 @@ private:
             }
             if (!request.has_submit_job()) return {grpc::StatusCode::INVALID_ARGUMENT, "SUBMIT_JOB_REQUIRED"};
             const auto& job = request.submit_job();
+            const auto job_index = submit_jobs_.fetch_add(1);
+            if (job_index >= plans_.size()) {
+                valid_submit_.store(false);
+                return {grpc::StatusCode::INVALID_ARGUMENT, "UNEXPECTED_SUBMIT_JOB"};
+            }
+            const auto& metric_payloads = plans_[job_index];
             std::size_t metric_actions = 0;
+            std::vector<std::string> case_ids;
             for (const auto& action : job.actions().actions()) {
                 if (action.has_get_gpu_metrics()) ++metric_actions;
+                if (action.has_load_shader()) case_ids.push_back(action.load_shader().case_id());
             }
-            valid_submit_.store(metric_actions == metric_payloads_.size() && job.has_result_artifacts() &&
-                job.result_artifacts().json() &&
-                (job.result_artifacts().kind() == "profile" || job.result_artifacts().kind() == "profile_matrix"));
+            {
+                std::scoped_lock lock(mutex_);
+                submitted_case_ids_.push_back(std::move(case_ids));
+                submitted_attempts_.push_back(job.result_artifacts().attempt());
+                submitted_previous_attempt_counts_.push_back(job.result_artifacts().previous_attempts_size());
+            }
+            const bool valid = metric_actions == metric_payloads.size() && job.has_result_artifacts() &&
+                job.result_artifacts().json() && job.result_artifacts().attempt() > 0 &&
+                (job.result_artifacts().kind() == "profile" || job.result_artifacts().kind() == "profile_matrix");
+            valid_submit_.store(valid_submit_.load() && valid);
 
             proto::ServerMessage accepted;
             accepted.set_request_id(request.request_id());
@@ -196,6 +228,19 @@ private:
 
             for (const auto& source : job.sources()) {
                 fs::remove_all(fs::path(hello_.pending_shaders_root()) / source.uuid());
+            }
+
+            if (job_index < job_failures_.size() && job_failures_[job_index].has_value()) {
+                proto::ServerMessage failed;
+                failed.set_request_id(request.request_id());
+                auto* terminal = failed.mutable_job_failed();
+                terminal->set_request_id(request.request_id());
+                terminal->mutable_error()->set_code(*job_failures_[job_index]);
+                terminal->mutable_error()->set_message("retryable fixture failure");
+                terminal->mutable_error()->set_retryable(true);
+                if (!stream->Write(failed)) return {grpc::StatusCode::UNAVAILABLE, "terminal write failed"};
+                ++terminal_writes_;
+                continue;
             }
 
             proto::ServerMessage completed;
@@ -237,7 +282,7 @@ private:
                     continue;
                 }
                 if (!action.has_get_gpu_metrics()) continue;
-                const auto& payload = metric_payloads_.at(payload_index++);
+                const auto& payload = metric_payloads.at(payload_index++);
                 if (!payload.has_value()) continue;
                 auto* action_result = result->add_action_results();
                 action_result->set_action_index(action_index);
@@ -246,21 +291,33 @@ private:
             }
             if (!stream->Write(completed)) return {grpc::StatusCode::UNAVAILABLE, "terminal write failed"};
             ++terminal_writes_;
-            return grpc::Status::OK;
         }
         return grpc::Status::OK;
     }
 
     proto::ServerHello hello_;
-    std::vector<std::optional<std::string>> metric_payloads_;
-    std::atomic_bool valid_submit_ = false;
+    Plans plans_;
+    std::vector<std::optional<proto::ErrorCode>> job_failures_;
+    mutable std::mutex mutex_;
+    std::vector<std::vector<std::string>> submitted_case_ids_;
+    std::vector<std::uint32_t> submitted_attempts_;
+    std::vector<std::size_t> submitted_previous_attempt_counts_;
+    std::atomic_bool valid_submit_ = true;
+    std::atomic<std::size_t> submit_jobs_ = 0;
     std::atomic<std::size_t> terminal_writes_ = 0;
 };
 
 class MetricsJobServer final {
 public:
     MetricsJobServer(const fs::path& pending_root, std::vector<std::optional<std::string>> metric_payloads)
-        : hello_(hello(pending_root)), service_(hello_, std::move(metric_payloads)) {
+        : MetricsJobServer(pending_root, MetricsJobService::Plans{std::move(metric_payloads)}) {}
+
+    MetricsJobServer(const fs::path& pending_root, MetricsJobService::Plans plans)
+        : MetricsJobServer(pending_root, std::move(plans), {}) {}
+
+    MetricsJobServer(const fs::path& pending_root, MetricsJobService::Plans plans,
+        std::vector<std::optional<proto::ErrorCode>> job_failures)
+        : hello_(hello(pending_root)), service_(hello_, std::move(plans), std::move(job_failures)) {
         grpc::ServerBuilder builder;
         builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials(), &port_);
         builder.RegisterService(&service_);
@@ -276,6 +333,15 @@ public:
     [[nodiscard]] const proto::ServerHello& server_hello() const noexcept { return hello_; }
     [[nodiscard]] bool valid_submit() const noexcept { return service_.valid_submit(); }
     [[nodiscard]] std::size_t terminal_writes() const noexcept { return service_.terminal_writes(); }
+    [[nodiscard]] std::vector<std::vector<std::string>> submitted_case_ids() const {
+        return service_.submitted_case_ids();
+    }
+    [[nodiscard]] std::vector<std::uint32_t> submitted_attempts() const {
+        return service_.submitted_attempts();
+    }
+    [[nodiscard]] std::vector<std::size_t> submitted_previous_attempt_counts() const {
+        return service_.submitted_previous_attempt_counts();
+    }
 
     void shutdown() {
         if (!server_) return;

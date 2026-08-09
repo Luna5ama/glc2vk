@@ -42,7 +42,7 @@ Do not restart Minecraft or its launcher unless the user explicitly asks.
 | T01 | P0 | vibris | Fail closed on missing GPU samples and report completeness counters | Done | fix(mcp): fail incomplete gpu profile results |
 | T02 | P0 | vibris | Normalize compact profile result schema and explicit timing units | Done | feat(mcp): normalize profile result contract |
 | T03 | P1 | vibris | Add pass/statistic filters and publish full results as an artifact | Done | feat(mcp): add filtered profile output |
-| T04 | P0 | vibris | Retry incomplete matrix cases without rerunning completed cases | Pending | feat(mcp): retry incomplete profile cases |
+| T04 | P0 | vibris | Retry incomplete matrix cases without rerunning completed cases | Done | feat(mcp): retry incomplete profile cases |
 | T05 | P0 | vibris | Checkpoint matrix cases and expose resumable progress | Pending | feat(mcp): checkpoint profile matrix progress |
 | T06 | P0 | vibris | Return effective scene/config/source provenance for every case | Pending | feat(mcp): add benchmark case provenance |
 | T07 | P0 | vibris | Enforce case reload barriers, isolation, and final state restoration | Pending | fix(core): isolate benchmark matrix cases |
@@ -347,3 +347,11 @@ and exact commit title. The Git history is the source of truth for the resulting
   artifact paths. Added protocol, schema, mapping, filtering, conversion, manifest, quota, and recovery-data tests.
   Verified with .\gradlew.bat :vibris-core:test, CMake release build, and the full release CTest suite (51/51 passed).
   Commit title: feat(mcp): add filtered profile output.
+- 2026-08-09 - T04 - Added bounded per-case retries (default 2, maximum 5) for NO_GPU_SAMPLES and retryable
+  transport/runtime failures. Completed and non-retryable cases are retained while only affected matrix cases are
+  resubmitted as single profiles; each final case reports ordered attempt diagnostics, attempt_count, and explicit
+  retry exhaustion, while all terminal-attempt artifacts remain attributable by attempt and case ID. Added schema,
+  protocol, core artifact, empty-sample recovery, retryable job failure, non-retryable failure, continuation, and
+  exhaustion coverage. Verified with .\gradlew.bat :vibris-core:test, CMake release build, focused retry/schema CTest
+  cases (2/2 passed), and the full release CTest suite (51/51 passed). Commit title: feat(mcp): retry incomplete
+  profile cases.

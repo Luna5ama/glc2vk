@@ -139,6 +139,18 @@ internal object ProfileResultArtifacts {
         val requested = loadIndices.size
         return buildJsonObject {
             put("artifact_schema_version", 1)
+            put("attempt", submission.resultArtifacts.attempt)
+            put("previous_attempts", buildJsonArray {
+                submission.resultArtifacts.previousAttemptsList.forEach { diagnostic ->
+                    add(buildJsonObject {
+                        put("attempt", diagnostic.attempt)
+                        put("status", diagnostic.status)
+                        put("error_code", diagnostic.errorCode)
+                        put("message", diagnostic.message)
+                        put("retryable", diagnostic.retryable)
+                    })
+                }
+            })
             put("success", failedCount == 0 && incomplete == 0)
             put("kind", submission.resultArtifacts.kind)
             put(

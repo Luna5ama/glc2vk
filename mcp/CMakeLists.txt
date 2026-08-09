@@ -319,7 +319,7 @@ if(BUILD_TESTING)
     set_tests_properties(AcceptedRequestResumesAfterDisconnect PROPERTIES RUN_SERIAL TRUE TIMEOUT 30)
 
     add_test(NAME SynchronousRecipeResultMapping COMMAND vibris-job-protocol-tests)
-    set_tests_properties(SynchronousRecipeResultMapping PROPERTIES RUN_SERIAL TRUE TIMEOUT 30)
+    set_tests_properties(SynchronousRecipeResultMapping PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
     add_test(NAME ActionSchemaRejectsForbiddenAndDuplicateTools COMMAND vibris-action-schema-tests)
 
     function(add_stdio_mcp_probe test_name)

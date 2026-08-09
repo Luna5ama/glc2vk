@@ -20,7 +20,13 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
             if ((!options.json && !options.csv) ||
                 options.kind !in setOf("profile", "profile_matrix") ||
                 options.convertedUnitsList.any { it != "us" && it != "ms" } ||
-                options.convertedUnitsList.distinct().size != options.convertedUnitsCount
+                options.convertedUnitsList.distinct().size != options.convertedUnitsCount ||
+                options.attempt == 0 ||
+                options.previousAttemptsCount > 5 ||
+                options.previousAttemptsList.any {
+                    it.attempt == 0 || it.attempt >= options.attempt || it.status.isBlank()
+                } ||
+                options.previousAttemptsList.map { it.attempt }.distinct().size != options.previousAttemptsCount
             ) {
                 throw invalid("Result artifact options are invalid.")
             }

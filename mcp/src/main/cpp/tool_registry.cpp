@@ -94,6 +94,7 @@ Json recipe_schema() {
     const auto metric_filter = string_array(256);
     const auto statistics = enum_array({"avg", "p5", "p50", "p95"}, 4);
     const auto converted_units = enum_array({"us", "ms"}, 2);
+    const auto max_retries = bounded_integer(0, 5);
     const Json config{{"type", "object"}};
     return one_of({
         closed_object({{"recipe", enum_string({"profile"})},
@@ -105,6 +106,7 @@ Json recipe_schema() {
                        {"metric_filter", metric_filter},
                        {"statistics", statistics},
                        {"converted_units", converted_units},
+                       {"max_retries", max_retries},
                        {"result_csv", {{"type", "boolean"}}}},
                       {"recipe", "frames"}),
         closed_object({{"recipe", enum_string({"profile_matrix"})},
@@ -117,6 +119,7 @@ Json recipe_schema() {
                        {"metric_filter", metric_filter},
                        {"statistics", statistics},
                        {"converted_units", converted_units},
+                       {"max_retries", max_retries},
                        {"result_csv", {{"type", "boolean"}}}},
                       {"recipe", "sources", "configs", "matrix", "frames"}),
         closed_object({{"recipe", enum_string({"load_and_screenshot"})},

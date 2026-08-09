@@ -272,6 +272,7 @@ void profile_result_detail_schema() {
     filtered_profile["statistics"] = Json::array({"avg", "p50"});
     filtered_profile["converted_units"] = Json::array({"us", "ms"});
     filtered_profile["result_csv"] = true;
+    filtered_profile["max_retries"] = 5;
     require(std::holds_alternative<Json>(registry.invoke("vibris_run_recipe", filtered_profile)),
         "Profile rejected valid metric filters or artifact options.");
     auto filtered_matrix = matrix;
@@ -299,6 +300,11 @@ void profile_result_detail_schema() {
     require(std::holds_alternative<InvocationError>(
                 registry.invoke("vibris_run_recipe", invalid_unit)),
         "Profile accepted an unsupported converted unit.");
+    auto invalid_retries = profile;
+    invalid_retries["max_retries"] = 6;
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_run_recipe", invalid_retries)),
+        "Profile accepted an unbounded retry count.");
     require(dispatches == 8, "Invalid profile output options reached dispatch.");
 }
 

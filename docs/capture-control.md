@@ -280,6 +280,21 @@ so `shadowcomp*` and `composite18_total` can be requested together. Use `statist
 `converted_units` may contain `us`, `ms`, or both to add suffixed derived values such as `avg_us` and `avg_ms` without
 replacing `avg`. CSV always has `value_ns` and adds `value_us` or `value_ms` columns when requested.
 
+Both profile recipes retry each retryable case independently. `max_retries` is bounded from 0 through 5 and defaults
+to 2, so a case has at most three attempts by default. The first `profile_matrix` submission still runs the requested
+matrix in order. After its terminal result, only cases ending in `NO_GPU_SAMPLES`, an explicit `retryable: true` error,
+or a retryable transport/runtime code are resubmitted as single-case profiles. Passed and non-retryable cases are not
+submitted again, and exhausting one case does not stop later retryable cases. Retryable codes currently include
+`SERVER_OFFLINE`, `SERVER_RESTARTED`, `SERVER_NOT_READY`, `QUEUE_FULL`, `QUEUE_TIMEOUT`, `EXECUTION_TIMEOUT`,
+`WORLD_LOAD_FAILED`, `SOURCE_ACTIVATION_FAILED`, `INTERNAL_ERROR`, and `CAPTURE_FAILED`.
+
+Each final case contains `attempt_count`, `retry_exhausted`, and a compact ordered `attempts` array. The top level adds
+`total_attempts`, the configured `max_retries`, and `job_attempts`; `retried_cases` counts cases with more than one
+attempt. Result artifacts from every terminal attempt are retained in the top-level `artifacts` array and annotated
+with their attempt number and case IDs. Retry artifacts also embed prior attempt diagnostics in `profile-result.json`.
+This is in-memory retry orchestration: persistent per-case checkpoints, partial reads, and restart-safe resume are a
+separate workflow and are not implied by these fields.
+
 This direct in-game path replaces project-local wrappers for routine profiling. Compute capture and external
 replay/Nsight analysis remain separate diagnostic workflows.
 
@@ -296,6 +311,7 @@ Example request:
   "metric_filter": ["composite18_total", "shadowcomp*"],
   "statistics": ["avg", "p50"],
   "converted_units": ["us", "ms"],
+  "max_retries": 2,
   "result_csv": true
 }
 ```
@@ -388,6 +404,7 @@ and execute action sequences only; no recipe enum or recipe decoder exists in th
   "metric_filter": ["composite18_total", "shadowcomp*"],
   "statistics": ["avg", "p50"],
   "converted_units": ["us"],
+  "max_retries": 2,
   "result_csv": true
 }
 ```
