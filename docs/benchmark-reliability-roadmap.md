@@ -47,7 +47,7 @@ Do not restart Minecraft or its launcher unless the user explicitly asks.
 | T06 | P0 | vibris | Return exact scene/config/source provenance | Done | feat(mcp): add benchmark case provenance |
 | T07 | P0 | vibris | Isolate cases and restore state | Done | fix(core): isolate benchmark matrix cases |
 | T08 | P1 | vibris | Preserve real shader-program timing identity and source metadata | Done | feat(capture): expose program gpu timings |
-| T09 | P1 | Iris | Emit distinct program timing labels for grouped wrapper programs | Pending | feat(shaderdev): expose per-program gpu timings |
+| T09 | P1 | Iris | Emit distinct program timing labels for grouped wrapper programs | Done | feat(shaderdev): expose per-program gpu timings |
 | T10 | P1 | vibris | Add interleaved repeated A/B benchmarking and noise evaluation | Pending | feat(mcp): add paired benchmark recipe |
 | T11 | P2 | vibris | Add typed preset selection, tags, and tag filtering | Pending | feat(mcp): add typed preset filters |
 | T12 | P2 | vibris/Iris | Add deterministic visual A/B gate and final live acceptance | Pending | feat(core): add benchmark visual gate |
@@ -390,3 +390,10 @@ and exact commit title. The Git history is the source of truth for the resulting
   under one wrapper plus `GenerateSkyViewLUT.comp.glsl` source/program selection. Verified with
   `.\gradlew.bat build --offline`, the CMake Release build, focused Capture/Core/native tests, and the full Release
   CTest suite (53/53 passed). Commit title: feat(capture): expose program gpu timings.
+- 2026-08-09 - T09 - Iris compute dispatches now emit their real program ID, the source-map file containing the
+  active `main`, and cached direct-dimension or indirect-offset metadata through `GpuTimingProgram`; existing
+  aggregate dispatch overloads remain available. Fixture coverage preserves `begin1_a/b`, `begin2_a/b`, `begin3_a`,
+  `composite13_a`, and `composite34`, and distinguishes `GenerateSkyViewLUT.comp.glsl` and `DirectLighting.glsl` from
+  their wrapper work. Verified with `ComputeProgramTimingTest` (3/3 passed),
+  `.\gradlew.bat :common:test :fabric:build --offline`, and `.\gradlew.bat build --offline`. Iris implementation
+  commit: bac171f611a29909ba547f5b7da21b7f2495ab9e. Commit title: feat(shaderdev): expose per-program gpu timings.
