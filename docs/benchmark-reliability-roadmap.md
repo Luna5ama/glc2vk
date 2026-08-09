@@ -39,7 +39,7 @@ Do not restart Minecraft or its launcher unless the user explicitly asks.
 | ID | Priority | Repository | Task | Status | Commit title |
 |---|---|---|---|---|---|
 | T00 | P0 | vibris | Persist roadmap and isolated worktree protocol | Done | docs: add benchmark reliability roadmap |
-| T01 | P0 | vibris | Fail closed on missing GPU samples and report completeness counters | Pending | fix(mcp): fail incomplete gpu profile results |
+| T01 | P0 | vibris | Fail closed on missing GPU samples and report completeness counters | Done | fix(mcp): fail incomplete gpu profile results |
 | T02 | P0 | vibris | Normalize compact profile result schema and explicit timing units | Pending | feat(mcp): normalize profile result contract |
 | T03 | P1 | vibris | Add pass/statistic filters and publish full results as an artifact | Pending | feat(mcp): add filtered profile output |
 | T04 | P0 | vibris | Retry incomplete matrix cases without rerunning completed cases | Pending | feat(mcp): retry incomplete profile cases |
@@ -327,3 +327,10 @@ and exact commit title. The Git history is the source of truth for the resulting
 - 2026-08-09 - T00 - Roadmap created, rebased onto 50b0d22, and assigned to the original I:\code\vibris
   worktree. Verified with git status --short --branch, git diff --cached --check, and staged-diff inspection.
   Commit title: docs: add benchmark reliability roadmap.
+- 2026-08-09 - T01 - Added retryable NO_GPU_SAMPLES failures for single profiles; matrix cases with empty,
+  null, or missing gpuTimings are incomplete instead of passed; explicit action failures remain failed; summaries
+  report requested/completed/with-metrics/missing/failed/retried counts. Fixed the profile-matrix case-size
+  off-by-one needed for correct attribution. Verified by building vibris-job-protocol-tests and
+  vibris-action-schema-tests, then running CTest cases SynchronousRecipeResultMapping and
+  ActionSchemaRejectsForbiddenAndDuplicateTools (2/2 passed), including an exact 38-case missing-result
+  regression. Commit title: fix(mcp): fail incomplete gpu profile results.

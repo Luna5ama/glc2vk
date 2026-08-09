@@ -9,9 +9,11 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace vibris::mcp::test {
 
@@ -149,6 +151,120 @@ private:
     int port_ = 0;
     proto::ServerHello hello_;
     TerminalJobService service_;
+    std::unique_ptr<grpc::Server> server_;
+};
+
+class MetricsJobService final : public proto::VibrisControl::Service {
+public:
+    MetricsJobService(proto::ServerHello hello, std::vector<std::optional<std::string>> metric_payloads)
+        : hello_(std::move(hello)), metric_payloads_(std::move(metric_payloads)) {}
+
+    [[nodiscard]] bool valid_submit() const noexcept { return valid_submit_.load(); }
+    [[nodiscard]] std::size_t terminal_writes() const noexcept { return terminal_writes_.load(); }
+
+private:
+    grpc::Status Control(grpc::ServerContext*,
+        grpc::ServerReaderWriter<proto::ServerMessage, proto::ClientMessage>* stream) override {
+        bool greeted = false;
+        proto::ClientMessage request;
+        while (stream->Read(&request)) {
+            if (!greeted) {
+                if (!request.has_client_hello()) return {grpc::StatusCode::INVALID_ARGUMENT, "CLIENT_HELLO_REQUIRED"};
+                greeted = true;
+                proto::ServerMessage response;
+                response.mutable_protocol_version()->set_major(1);
+                response.set_message_id(request.message_id());
+                response.set_workspace_id(request.workspace_id());
+                response.mutable_server_hello()->CopyFrom(hello_);
+                if (!stream->Write(response)) return {grpc::StatusCode::UNAVAILABLE, "hello write failed"};
+                continue;
+            }
+            if (!request.has_submit_job()) return {grpc::StatusCode::INVALID_ARGUMENT, "SUBMIT_JOB_REQUIRED"};
+            const auto& job = request.submit_job();
+            std::size_t metric_actions = 0;
+            for (const auto& action : job.actions().actions()) {
+                if (action.has_get_gpu_metrics()) ++metric_actions;
+            }
+            valid_submit_.store(metric_actions == metric_payloads_.size());
+
+            proto::ServerMessage accepted;
+            accepted.set_request_id(request.request_id());
+            accepted.mutable_job_accepted()->set_request_id(request.request_id());
+            if (!stream->Write(accepted)) return {grpc::StatusCode::UNAVAILABLE, "accepted write failed"};
+
+            for (const auto& source : job.sources()) {
+                fs::remove_all(fs::path(hello_.pending_shaders_root()) / source.uuid());
+            }
+
+            proto::ServerMessage completed;
+            completed.set_request_id(request.request_id());
+            completed.mutable_job_completed()->set_request_id(request.request_id());
+            auto* result = completed.mutable_job_completed()->mutable_result();
+            result->set_kind(proto::JOB_RESULT_KIND_ACTION_SEQUENCE);
+            std::size_t payload_index = 0;
+            for (int action_index = 0; action_index < job.actions().actions_size(); ++action_index) {
+                if (!job.actions().actions(action_index).has_get_gpu_metrics()) continue;
+                const auto& payload = metric_payloads_.at(payload_index++);
+                if (!payload.has_value()) continue;
+                auto* action_result = result->add_action_results();
+                action_result->set_action_index(action_index);
+                action_result->set_kind(proto::JOB_ACTION_KIND_GET_GPU_METRICS);
+                action_result->set_json(*payload);
+            }
+            if (!stream->Write(completed)) return {grpc::StatusCode::UNAVAILABLE, "terminal write failed"};
+            ++terminal_writes_;
+            return grpc::Status::OK;
+        }
+        return grpc::Status::OK;
+    }
+
+    proto::ServerHello hello_;
+    std::vector<std::optional<std::string>> metric_payloads_;
+    std::atomic_bool valid_submit_ = false;
+    std::atomic<std::size_t> terminal_writes_ = 0;
+};
+
+class MetricsJobServer final {
+public:
+    MetricsJobServer(const fs::path& pending_root, std::vector<std::optional<std::string>> metric_payloads)
+        : hello_(hello(pending_root)), service_(hello_, std::move(metric_payloads)) {
+        grpc::ServerBuilder builder;
+        builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials(), &port_);
+        builder.RegisterService(&service_);
+        server_ = builder.BuildAndStart();
+        if (!server_ || port_ == 0) throw std::runtime_error("failed to bind metrics fixture server");
+    }
+
+    MetricsJobServer(const MetricsJobServer&) = delete;
+    MetricsJobServer& operator=(const MetricsJobServer&) = delete;
+    ~MetricsJobServer() { shutdown(); }
+
+    [[nodiscard]] int port() const noexcept { return port_; }
+    [[nodiscard]] const proto::ServerHello& server_hello() const noexcept { return hello_; }
+    [[nodiscard]] bool valid_submit() const noexcept { return service_.valid_submit(); }
+    [[nodiscard]] std::size_t terminal_writes() const noexcept { return service_.terminal_writes(); }
+
+    void shutdown() {
+        if (!server_) return;
+        server_->Shutdown();
+        server_->Wait();
+        server_.reset();
+    }
+
+private:
+    static proto::ServerHello hello(const fs::path& pending_root) {
+        proto::ServerHello result;
+        result.mutable_protocol_version()->set_major(1);
+        result.set_ready(true);
+        result.set_pending_shaders_root(fs::absolute(pending_root).string());
+        result.mutable_limits()->set_max_source_bytes(1024 * 1024);
+        result.mutable_limits()->set_max_source_files(128);
+        return result;
+    }
+
+    int port_ = 0;
+    proto::ServerHello hello_;
+    MetricsJobService service_;
     std::unique_ptr<grpc::Server> server_;
 };
 

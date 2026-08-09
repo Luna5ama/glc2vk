@@ -18,6 +18,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -36,6 +37,7 @@ using vibris::mcp::StateError;
 using vibris::mcp::SynchronousJobRunner;
 using vibris::mcp::ToolFailure;
 using vibris::mcp::ToolOutcome;
+using vibris::mcp::test::MetricsJobServer;
 using vibris::mcp::test::TerminalJobServer;
 using vibris::mcp::test::TempDirectory;
 using vibris::mcp::test::WorkspaceFixture;
@@ -358,6 +360,137 @@ void synchronous_submit_waits_for_terminal() {
          {"configs", Json::array({{{"id", "config"}, {"mode", "preserve"}}})},
          {"actions", Json::array({{{"type", "load_shader"}, {"source", "source"}, {"config", "config"}},
                                   {{"type", "inspect_shader"}}})}}, true);
+}
+
+ToolOutcome synchronous_metrics_job(
+    const Json& arguments, std::vector<std::optional<std::string>> metric_payloads) {
+    WorkspaceFixture fixture;
+    MetricsJobServer server(fixture.pending(), std::move(metric_payloads));
+    vibris::mcp::SourceHandler sources(fixture.worktree());
+    vibris::mcp::GrpcClient client({
+        .target = "127.0.0.1:" + std::to_string(server.port()),
+        .workspace_id = "workspace-id",
+        .mcp_version = "g007-metrics-test",
+        .process_instance_uuid = "g007-metrics-test",
+        .pending_request_limit = 1,
+        .reconnect_delay = 1ms,
+        .unary_deadline = 5s,
+    });
+    client.start();
+    const auto context = SceneContextResolver::resolve(config(), presets());
+    auto outcome = SynchronousJobRunner(client, sources, config()).run(
+        "vibris_run_recipe", arguments, server.server_hello(), context);
+    const auto stats = client.stats();
+    client.shutdown();
+    server.shutdown();
+
+    require(server.valid_submit() && server.terminal_writes() == 1,
+        "Metrics fixture did not receive the expected GPU metric actions.");
+    require(stats.pending_requests == 0 && vibris::mcp::test::pending_has_no_sources(fixture.pending()),
+        "Metrics completion left pending registry or source ownership behind.");
+    return outcome;
+}
+
+void profile_requires_nonempty_gpu_samples() {
+    const Json arguments{
+        {"recipe", "profile"},
+        {"source", {{"kind", "workspace"}}},
+        {"config", Json::object()},
+        {"warmup_frames", 0},
+        {"frames", 32},
+    };
+
+    const auto missing = synchronous_metrics_job(arguments, {std::nullopt});
+    const auto& failure = std::get<ToolFailure>(missing);
+    require(failure.code == "NO_GPU_SAMPLES" && failure.retryable &&
+            failure.details.at("reason") == "missing_gpu_metrics_action" &&
+            failure.details.at("frames") == 32 && failure.details.at("warmup_frames") == 0,
+        "Missing profile metrics did not return structured NO_GPU_SAMPLES.");
+
+    const auto complete = synchronous_metrics_job(
+        arguments, {R"({"gpuTimings":{"composite_total":{"avg":7000000}}})"});
+    const auto& metrics = std::get<Json>(complete);
+    require(metrics.at("gpuTimings").at("composite_total").at("avg") == 7'000'000 &&
+            metrics.at("frames") == 32 && metrics.at("warmup_frames") == 0,
+        "Complete profile metrics were rejected or lost their frame metadata.");
+}
+
+void profile_matrix_reports_incomplete_cases() {
+    const Json arguments{
+        {"recipe", "profile_matrix"},
+        {"sources", Json::array({{{"id", "source"}, {"kind", "workspace"}}})},
+        {"configs", Json::array({
+            {{"id", "success"}, {"values", Json::object()}},
+            {{"id", "empty"}, {"values", Json::object()}},
+            {{"id", "null"}, {"values", Json::object()}},
+            {{"id", "missing"}, {"values", Json::object()}},
+            {{"id", "failed"}, {"values", Json::object()}},
+        })},
+        {"matrix", {{"sources", Json::array({"source"})},
+                    {"configs", Json::array({"success", "empty", "null", "missing", "failed"})}}},
+        {"warmup_frames", 0},
+        {"frames", 64},
+    };
+    const auto outcome = synchronous_metrics_job(arguments, {
+        R"({"gpuTimings":{"composite_total":{"avg":7000000}}})",
+        R"({"gpuTimings":{}})",
+        R"(null)",
+        std::nullopt,
+        R"({"success":false,"error_code":"CAPTURE_FAILED","message":"metrics failed"})",
+    });
+    const auto& result = std::get<Json>(outcome);
+    require(result.at("success") == false && result.at("status") == "incomplete" &&
+            result.at("requested_cases") == 5 && result.at("completed_cases") == 2 &&
+            result.at("cases_with_metrics") == 1 && result.at("missing_cases") == 4 &&
+            result.at("failed_cases") == 1 && result.at("retried_cases") == 0 &&
+            result.at("passed") == 1 && result.at("failed") == 1 && result.at("incomplete") == 3,
+        "Profile matrix completeness counters did not fail closed.");
+
+    const auto& cases = result.at("cases");
+    require(cases.size() == 5 && cases.at(0).at("id") == "source--success" &&
+            cases.at(0).at("status") == "passed" &&
+            cases.at(0).at("metrics").at("gpuTimings").contains("composite_total"),
+        "Successful profile case was not attributed to its source/config.");
+    for (const std::size_t index : {std::size_t{1}, std::size_t{2}, std::size_t{3}}) {
+        require(cases.at(index).at("status") == "incomplete" &&
+                cases.at(index).at("error").at("error_code") == "NO_GPU_SAMPLES" &&
+                cases.at(index).at("error").at("retryable") == true,
+            "Empty profile case was incorrectly reported as passed.");
+    }
+    require(cases.at(3).at("error").at("details").at("reason") == "missing_gpu_metrics_action" &&
+            cases.at(4).at("status") == "failed" &&
+            cases.at(4).at("error").at("error_code") == "CAPTURE_FAILED",
+        "Missing and explicitly failed profile cases were not distinguished.");
+}
+
+void profile_matrix_38_cases_requires_all_metrics() {
+    Json configs = Json::array();
+    Json config_axis = Json::array();
+    std::vector<std::optional<std::string>> payloads;
+    for (int index = 0; index < 38; ++index) {
+        const auto id = "preset-" + std::to_string(index);
+        configs.push_back({{"id", id}, {"values", Json::object()}});
+        config_axis.push_back(id);
+        payloads.emplace_back(R"({"gpuTimings":{"composite_total":{"avg":7000000}}})");
+    }
+    payloads.back() = std::nullopt;
+    const Json arguments{
+        {"recipe", "profile_matrix"},
+        {"sources", Json::array({{{"id", "source"}, {"kind", "workspace"}}})},
+        {"configs", std::move(configs)},
+        {"matrix", {{"sources", Json::array({"source"})}, {"configs", std::move(config_axis)}}},
+        {"warmup_frames", 0},
+        {"frames", 64},
+    };
+
+    const auto outcome = synchronous_metrics_job(arguments, std::move(payloads));
+    const auto& result = std::get<Json>(outcome);
+    require(result.at("success") == false && result.at("status") == "incomplete" &&
+            result.at("requested_cases") == 38 && result.at("completed_cases") == 37 &&
+            result.at("cases_with_metrics") == 37 && result.at("missing_cases") == 1 &&
+            result.at("passed") == 37 && result.at("incomplete") == 1 &&
+            result.at("cases").at(37).at("status") == "incomplete",
+        "A 38-case profile matrix reported success despite a missing metrics case.");
 }
 
 void matrix_expands_named_source_config_product() {
@@ -831,6 +964,9 @@ int main() {
         source_free_runtime_actions_mapping();
         progress_does_not_consume_terminal();
         synchronous_submit_waits_for_terminal();
+        profile_requires_nonempty_gpu_samples();
+        profile_matrix_reports_incomplete_cases();
+        profile_matrix_38_cases_requires_all_metrics();
         title_screen_runtime_can_prepare_source_for_world_loading_job();
         synchronous_submit_resumes_after_acceptance();
         synchronous_submit_has_local_total_deadline();

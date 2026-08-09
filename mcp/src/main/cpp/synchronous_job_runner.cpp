@@ -11,6 +11,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace vibris::mcp {
@@ -36,30 +37,68 @@ ToolFailure transport_failure(const grpc::Status& status) {
     return {"SERVER_OFFLINE", std::move(message), true};
 }
 
-Json profile_result(const Json& job, const Json& arguments, const SessionConfig& config) {
-    for (const auto& action : job.at("action_results")) {
-        if (action.at("kind") != "get_gpu_metrics") continue;
-        auto result = action.at("result");
-        result["frames"] = arguments.at("frames");
-        result["warmup_frames"] = arguments.value("warmup_frames", config.default_warmup_frames);
-        return result;
-    }
-    throw std::logic_error("GPU metrics action result is missing");
-}
-
 bool failed_action(const Json& action) {
     const auto& result = action.at("result");
     return result.is_object() && result.contains("success") && result.at("success").is_boolean() &&
         !result.at("success").get<bool>();
 }
 
+bool has_gpu_samples(const Json& result) {
+    if (!result.is_object()) return false;
+    const auto timings = result.find("gpuTimings");
+    return timings != result.end() && timings->is_object() && !timings->empty();
+}
+
+ToolFailure no_gpu_samples(
+    const Json& arguments, const SessionConfig& config, std::string_view reason, Json result = nullptr) {
+    Json details{{"recipe", "profile"},
+                 {"reason", reason},
+                 {"frames", arguments.at("frames")},
+                 {"warmup_frames", arguments.value("warmup_frames", config.default_warmup_frames)}};
+    if (!result.is_null()) details["result"] = std::move(result);
+    return {"NO_GPU_SAMPLES", "GPU metrics did not return a non-empty gpuTimings object.", true,
+            std::move(details)};
+}
+
+Json no_gpu_samples_error(std::string_view case_id, std::string_view reason) {
+    return {{"success", false},
+            {"error_code", "NO_GPU_SAMPLES"},
+            {"message", "GPU metrics did not return a non-empty gpuTimings object."},
+            {"retryable", true},
+            {"details", {{"case_id", case_id}, {"reason", reason}}}};
+}
+
+ToolFailure action_failure(const Json& result) {
+    return {result.value("error_code", std::string("GPU_METRICS_FAILED")),
+            result.value("message", std::string("GPU metrics action failed.")),
+            result.value("retryable", false), result};
+}
+
+ToolOutcome profile_result(const Json& job, const Json& arguments, const SessionConfig& config) {
+    for (const auto& action : job.at("action_results")) {
+        if (action.at("kind") != "get_gpu_metrics") continue;
+        auto result = action.at("result");
+        if (failed_action(action)) return action_failure(result);
+        if (!has_gpu_samples(result)) {
+            return no_gpu_samples(arguments, config, "empty_gpu_timings", std::move(result));
+        }
+        result["frames"] = arguments.at("frames");
+        result["warmup_frames"] = arguments.value("warmup_frames", config.default_warmup_frames);
+        return result;
+    }
+    return no_gpu_samples(arguments, config, "missing_gpu_metrics_action");
+}
+
 Json matrix_result(Json job, const Json& arguments, const SessionConfig& config, bool profile) {
     const auto warmup = arguments.value("warmup_frames", config.default_warmup_frames);
-    const std::size_t template_size = profile ? (warmup == 0 ? 2 : 3) : arguments.at("actions").size();
+    const std::size_t template_size = profile ? (warmup == 0 ? 1 : 2) : arguments.at("actions").size();
     const std::size_t case_size = template_size + 1;
     Json cases = Json::array();
     std::size_t case_index = 0;
+    std::size_t passed = 0;
     std::size_t failures = 0;
+    std::size_t incomplete = 0;
+    std::size_t cases_with_metrics = 0;
     for (const auto& source : arguments.at("matrix").at("sources")) {
         for (const auto& shader_config : arguments.at("matrix").at("configs")) {
             const auto source_id = source.get<std::string>();
@@ -70,13 +109,17 @@ Json matrix_result(Json job, const Json& arguments, const SessionConfig& config,
             Json results = Json::array();
             Json metrics = nullptr;
             Json error = nullptr;
+            bool metrics_seen = false;
             for (const auto& action : job.at("action_results")) {
                 const auto index = action.at("action_index").get<std::size_t>();
                 if (index < first || index >= last) continue;
                 auto mapped = action;
                 mapped["action_index"] = index - first;
                 if (failed_action(action) && error.is_null()) error = action.at("result");
-                if (action.at("kind") == "get_gpu_metrics") metrics = action.at("result");
+                if (action.at("kind") == "get_gpu_metrics") {
+                    metrics = action.at("result");
+                    metrics_seen = true;
+                }
                 results.push_back(std::move(mapped));
             }
             Json case_artifacts = Json::array();
@@ -85,12 +128,26 @@ Json matrix_result(Json job, const Json& arguments, const SessionConfig& config,
                     case_artifacts.push_back(artifact);
                 }
             }
+            const bool has_metrics = profile && metrics_seen && has_gpu_samples(metrics);
+            if (has_metrics) ++cases_with_metrics;
             const bool failed = !error.is_null();
-            if (failed) ++failures;
+            const bool case_incomplete = profile && !failed && !has_metrics;
+            const char* status = "passed";
+            if (failed) {
+                ++failures;
+                status = "failed";
+            } else if (case_incomplete) {
+                ++incomplete;
+                status = "incomplete";
+                error = no_gpu_samples_error(
+                    case_id, metrics_seen ? "empty_gpu_timings" : "missing_gpu_metrics_action");
+            } else {
+                ++passed;
+            }
             Json item{{"id", case_id},
                       {"source", source_id},
                       {"config", config_id},
-                      {"status", failed ? "failed" : "passed"},
+                      {"status", status},
                       {"error", std::move(error)},
                       {"action_results", std::move(results)},
                       {"artifacts", std::move(case_artifacts)}};
@@ -104,9 +161,20 @@ Json matrix_result(Json job, const Json& arguments, const SessionConfig& config,
         }
     }
     job["kind"] = profile ? "profile_matrix" : "matrix";
-    job["status"] = failures == 0 ? "completed" : "completed_with_failures";
-    job["passed"] = case_index - failures;
+    job["status"] = incomplete != 0 ? "incomplete" :
+        (failures == 0 ? "completed" : "completed_with_failures");
+    job["passed"] = passed;
     job["failed"] = failures;
+    if (profile) {
+        job["success"] = failures == 0 && incomplete == 0;
+        job["incomplete"] = incomplete;
+        job["requested_cases"] = case_index;
+        job["completed_cases"] = passed + failures;
+        job["cases_with_metrics"] = cases_with_metrics;
+        job["missing_cases"] = case_index - cases_with_metrics;
+        job["failed_cases"] = failures;
+        job["retried_cases"] = 0;
+    }
     job["cases"] = std::move(cases);
     return job;
 }
