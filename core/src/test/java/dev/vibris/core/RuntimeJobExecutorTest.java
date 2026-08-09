@@ -12,6 +12,7 @@ import dev.vibris.protocol.v1.BenchmarkProvenance;
 import dev.vibris.protocol.v1.ErrorCode;
 import dev.vibris.protocol.v1.GetGpuMetrics;
 import dev.vibris.protocol.v1.JobStage;
+import dev.vibris.protocol.v1.JobTimeouts;
 import dev.vibris.protocol.v1.LoadShader;
 import dev.vibris.protocol.v1.NamedShaderConfig;
 import dev.vibris.protocol.v1.PreparedSourceRef;
@@ -30,6 +31,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.List;
 import java.util.Map;
@@ -298,6 +300,81 @@ class RuntimeJobExecutorTest {
         assertTrue(fixture.runtime.events.indexOf("frames") > fixture.runtime.events.indexOf("reload"));
         assertTrue(fixture.runtime.events.indexOf("action:GpuMetrics") > fixture.runtime.events.indexOf("frames"));
         assertEquals(baseline.uuid, fixture.registry.activeUuid());
+    }
+
+    @Test
+    void executionTimeoutWaitsForReloadAndRollbackSafePoints() throws Exception {
+        Fixture fixture = new Fixture();
+        Source baseline = fixture.source("baseline");
+        fixture.activate(baseline);
+        Source candidate = fixture.source("candidate");
+        TimedGetFailsFuture<ReloadResult> candidateReload = new TimedGetFailsFuture<>();
+        TimedGetFailsFuture<ReloadResult> baselineReload = new TimedGetFailsFuture<>();
+        fixture.runtime.reloadStages.add(candidateReload);
+        fixture.runtime.reloadStages.add(baselineReload);
+        CoreJob job = job(candidate.lease);
+        job = new CoreJob(job.submission.toBuilder()
+            .setTimeouts(JobTimeouts.newBuilder().setExecutionTimeoutMs(5_000))
+            .build(), job.messageId, null);
+        job.initialize(List.of(candidate.lease));
+        AtomicReference<RuntimeJobExecutor.Failure> failure = new AtomicReference<>();
+        CoreJob timedJob = job;
+        Thread execution = new Thread(() -> {
+            try {
+                fixture.executor.execute(timedJob, ignored -> {});
+            } catch (RuntimeJobExecutor.Failure expected) {
+                failure.set(expected);
+            }
+        });
+
+        execution.start();
+        assertTrue(candidateReload.safePointAwaitEntered.await(2, TimeUnit.SECONDS));
+        assertTrue(execution.isAlive());
+        candidateReload.complete(ReloadResult.success(List.of()));
+        assertTrue(baselineReload.safePointAwaitEntered.await(2, TimeUnit.SECONDS));
+        assertTrue(execution.isAlive());
+        baselineReload.complete(ReloadResult.success(List.of()));
+        execution.join(5_000);
+        fixture.activator.release(List.of(candidate.lease));
+
+        assertFalse(execution.isAlive());
+        assertEquals(ErrorCode.EXECUTION_TIMEOUT, failure.get().code);
+        assertEquals(baseline.uuid, fixture.registry.activeUuid());
+        assertTrue(fixture.activator.ready());
+    }
+
+    @Test
+    void benchmarkRestoreWaitsForLongShaderReload() throws Exception {
+        Fixture fixture = new Fixture();
+        Source baseline = fixture.source("baseline");
+        fixture.executor.execute(jobWithLoad(baseline, "32"), ignored -> {});
+        fixture.activator.release(List.of(baseline.lease));
+        Source candidate = fixture.source("candidate");
+        TimedGetFailsFuture<ReloadResult> baselineReload = new TimedGetFailsFuture<>();
+        fixture.runtime.reloadStages.add(CompletableFuture.completedFuture(ReloadResult.success(List.of())));
+        fixture.runtime.reloadStages.add(baselineReload);
+        fixture.runtime.actionResponses.add(shaderInspection(14));
+        fixture.runtime.actionResponses.add(gpuMetrics(512));
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread execution = new Thread(() -> {
+            try {
+                fixture.executor.execute(isolatedJob(candidate, "candidate--long-restore", "512"), ignored -> {});
+            } catch (Throwable throwable) {
+                failure.set(throwable);
+            }
+        });
+
+        execution.start();
+        assertTrue(baselineReload.safePointAwaitEntered.await(2, TimeUnit.SECONDS));
+        assertTrue(execution.isAlive());
+        baselineReload.complete(ReloadResult.success(List.of()));
+        execution.join(5_000);
+        fixture.activator.release(List.of(candidate.lease));
+
+        assertFalse(execution.isAlive());
+        assertEquals(null, failure.get());
+        assertEquals(baseline.uuid, fixture.registry.activeUuid());
+        assertTrue(fixture.activator.ready());
     }
 
     @Test
@@ -637,6 +714,22 @@ class RuntimeJobExecutorTest {
         public boolean retainsActiveSource() throws Failure {
             if (tampered) throw new Failure("active shader link changed", false);
             return true;
+        }
+    }
+
+    private static final class TimedGetFailsFuture<T> extends CompletableFuture<T> {
+        private final CountDownLatch safePointAwaitEntered = new CountDownLatch(1);
+
+        @Override
+        public T join() {
+            safePointAwaitEntered.countDown();
+            return super.join();
+        }
+
+        @Override
+        public T get(long timeout, TimeUnit unit)
+            throws InterruptedException, java.util.concurrent.ExecutionException, TimeoutException {
+            throw new TimeoutException("timed wait rejected by fixture");
         }
     }
 

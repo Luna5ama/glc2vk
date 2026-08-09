@@ -5,6 +5,7 @@ import dev.vibris.api.VibrisRuntimeAdapter
 import dev.vibris.protocol.v1.ArtifactFormat
 import dev.vibris.protocol.v1.Capability
 import dev.vibris.protocol.v1.JobActionKind
+import dev.vibris.protocol.v1.JobStage
 import dev.vibris.protocol.v1.ResourceCatalog
 import dev.vibris.protocol.v1.ResourceCatalogEntry
 import dev.vibris.protocol.v1.ResourceKind
@@ -23,6 +24,9 @@ internal class ServerDescriptor @JvmOverloads constructor(
     maxSourceBytes: Long = ServerConfiguration.DEFAULT_MAX_SOURCE_BYTES,
     maxSourceFiles: Int = ServerConfiguration.DEFAULT_MAX_SOURCE_FILES,
 ) {
+    @Volatile
+    private var lastReadyStatus: RuntimeStatus? = null
+
     private val baseStatus = ServerStatus.newBuilder()
         .setPendingShadersRoot(pending.toString())
         .setArtifactRoot(artifacts.root().toString())
@@ -75,29 +79,31 @@ internal class ServerDescriptor @JvmOverloads constructor(
         .build()
 
     fun status(engine: VibrisCoreEngine): ServerStatus {
-        val current = runtimeStatus()
+        var activeJob = engine.activeJob()
+        var current = if (activeJob == null) runtimeStatus() else cachedRuntimeStatus()
+        if (!current.ready && activeJob == null) {
+            activeJob = engine.activeJob()
+            if (activeJob != null) current = cachedRuntimeStatus()
+        }
         val ready = engine.ready() && current.ready
         val activeSource = engine.activeSourceUuid()
+        val queueLength = engine.queueLength()
         return baseStatus.toBuilder()
             .setState(
-                if (ready) {
-                    if (engine.queueLength() == 0) {
-                        ServerState.SERVER_STATE_READY
-                    } else {
-                        ServerState.SERVER_STATE_BUSY
-                    }
-                } else {
-                    ServerState.SERVER_STATE_FAILED
+                when {
+                    !engine.ready() -> ServerState.SERVER_STATE_FAILED
+                    activeJob != null || queueLength > 0 -> ServerState.SERVER_STATE_BUSY
+                    ready -> ServerState.SERVER_STATE_READY
+                    else -> ServerState.SERVER_STATE_FAILED
                 },
             )
+            .setActiveRequestId(activeJob?.requestId.orEmpty())
             .setRuntimeReady(ready)
-            .setRuntimeState(
-                if (ready) RuntimeState.RUNTIME_STATE_READY else RuntimeState.RUNTIME_STATE_FAILED,
-            )
+            .setRuntimeState(runtimeState(engine.ready(), activeJob, current.ready))
             .setCurrentSaveId(current.currentSaveId)
             .setCurrentDimensionId(current.currentDimensionId)
             .setActiveSourceUuid(if (activeSource.isBlank()) current.activeSourceUuid else activeSource)
-            .setQueueLength(engine.queueLength())
+            .setQueueLength(queueLength)
             .setResourceCatalog(resourceCatalog())
             .setArtifactQuotaUsedBytes(artifacts.usedBytes())
             .build()
@@ -111,8 +117,8 @@ internal class ServerDescriptor @JvmOverloads constructor(
             .build()
     }
 
-    private fun runtimeStatus(): RuntimeStatus =
-        try {
+    private fun runtimeStatus(): RuntimeStatus {
+        val current = try {
             runtime.getStatus().toCompletableFuture().get(5, TimeUnit.SECONDS)
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
@@ -120,6 +126,33 @@ internal class ServerDescriptor @JvmOverloads constructor(
         } catch (_: Exception) {
             unavailable()
         }
+        if (current.ready) {
+            lastReadyStatus = current
+        }
+        return current
+    }
+
+    private fun cachedRuntimeStatus(): RuntimeStatus = lastReadyStatus ?: unavailable()
+
+    private fun runtimeState(
+        engineReady: Boolean,
+        activeJob: VibrisCoreEngine.ActiveJob?,
+        runtimeReady: Boolean,
+    ): RuntimeState {
+        if (!engineReady) return RuntimeState.RUNTIME_STATE_FAILED
+        if (activeJob == null) {
+            return if (runtimeReady) RuntimeState.RUNTIME_STATE_READY else RuntimeState.RUNTIME_STATE_FAILED
+        }
+        return when (activeJob.stage) {
+            JobStage.JOB_STAGE_ACTIVATING_SOURCE,
+            JobStage.JOB_STAGE_RELOADING_SHADERS,
+            -> RuntimeState.RUNTIME_STATE_RELOADING_SHADERS
+            JobStage.JOB_STAGE_LOADING_WORLD,
+            JobStage.JOB_STAGE_APPLYING_CONTEXT,
+            -> RuntimeState.RUNTIME_STATE_LOADING_WORLD
+            else -> if (runtimeReady) RuntimeState.RUNTIME_STATE_READY else RuntimeState.RUNTIME_STATE_NOT_READY
+        }
+    }
 
     private fun resourceCatalog(): ResourceCatalog {
         val catalog = ResourceCatalog.newBuilder()

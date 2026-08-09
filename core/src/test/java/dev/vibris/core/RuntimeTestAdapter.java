@@ -33,6 +33,8 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     final ArrayDeque<RuntimeException> captureFailuresAfterWrite = new ArrayDeque<>();
     final ArrayDeque<Map<String, byte[]>> captureFileBatches = new ArrayDeque<>();
     RuntimeStatus status = new RuntimeStatus(true, "save", "minecraft:overworld", "");
+    CompletionStage<RuntimeStatus> statusStage;
+    int statusCalls;
     TemporalResetResult reset = new TemporalResetResult(true);
     ResourceCatalog catalog = ResourceCatalog.empty();
     CaptureResult captureResult = new CaptureResult(0, List.of());
@@ -51,7 +53,8 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
 
     @Override
     public CompletionStage<RuntimeStatus> getStatus() {
-        return CompletableFuture.completedFuture(status);
+        statusCalls++;
+        return statusStage == null ? CompletableFuture.completedFuture(status) : statusStage;
     }
 
     @Override

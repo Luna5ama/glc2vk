@@ -60,8 +60,9 @@ internal class RuntimeAwaiter(private val probe: CoreProbe) {
             probe.event(job.requestId, "SAFE_POINT_TIMEOUT")
             throw RuntimeJobExecutor.Failure(ErrorCode.EXECUTION_TIMEOUT, "Job execution timed out.")
         } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
             job.cancellation.cancel()
+            awaitCancellation(future)
+            Thread.currentThread().interrupt()
             throw RuntimeJobExecutor.Failure(ErrorCode.CANCELLED, "Job execution was interrupted.")
         } catch (_: CancellationException) {
             throw RuntimeJobExecutor.Failure(ErrorCode.CANCELLED, "Job execution was cancelled.")
@@ -90,20 +91,9 @@ internal class RuntimeAwaiter(private val probe: CoreProbe) {
     @Throws(RuntimeJobExecutor.Failure::class)
     private fun awaitCancellation(future: CompletableFuture<*>) {
         try {
-            future.get(5, TimeUnit.SECONDS)
+            future.join()
         } catch (_: CancellationException) {
-        } catch (_: ExecutionException) {
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
-            throw RuntimeJobExecutor.Failure(
-                ErrorCode.CANCELLED,
-                "Interrupted while waiting for a runtime safe point.",
-            )
-        } catch (_: TimeoutException) {
-            throw RuntimeJobExecutor.Failure(
-                ErrorCode.INTERNAL_ERROR,
-                "Runtime did not stop at a cancellation safe point.",
-            )
+        } catch (_: CompletionException) {
         }
     }
 }

@@ -165,7 +165,7 @@ internal class ActionJobExecutor(
             }
             if (prepared == null) {
                 executeSteps()
-                owner.restoreBenchmarkCase(job, isolation)
+                owner.restoreBenchmarkCase(job, isolation, progress)
                 isolation?.requireComplete()
                 val result = JobResult.newBuilder().setKind(JobResultKind.JOB_RESULT_KIND_ACTION_SEQUENCE)
                 CaptureProtocolArtifacts.addDiagnostics(result, diagnostics, "")
@@ -174,7 +174,7 @@ internal class ActionJobExecutor(
             }
             prepared.use {
                 executeSteps()
-                owner.restoreBenchmarkCase(job, isolation)
+                owner.restoreBenchmarkCase(job, isolation, progress)
                 isolation?.requireComplete()
                 progress.accept(JobStage.JOB_STAGE_WRITING_ARTIFACTS)
                 probe.event(job.requestId, "WRITING_ARTIFACTS")

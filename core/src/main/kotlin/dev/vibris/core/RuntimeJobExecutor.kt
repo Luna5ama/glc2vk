@@ -14,7 +14,6 @@ import dev.vibris.protocol.v1.JobCompleted
 import dev.vibris.protocol.v1.JobStage
 import java.io.IOException
 import java.util.concurrent.CompletionStage
-import java.util.concurrent.TimeUnit
 import java.util.function.Consumer
 
 internal class RuntimeJobExecutor @JvmOverloads constructor(
@@ -39,12 +38,12 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         val isolation = BenchmarkCaseIsolation.begin(job, activator, activeContext, activeShaderSettings)
         val result = try {
             actions.execute(job, progress, deadline, isolation).also {
-                restoreBenchmarkCase(job, isolation)
+                restoreBenchmarkCase(job, isolation, progress)
                 isolation?.requireComplete()
             }
         } catch (failure: Failure) {
             try {
-                restoreBenchmarkCase(job, isolation)
+                restoreBenchmarkCase(job, isolation, progress)
             } catch (restoreFailure: Failure) {
                 restoreFailure.addSuppressed(failure)
                 throw restoreFailure
@@ -52,7 +51,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             throw failure
         } catch (exception: Exception) {
             try {
-                restoreBenchmarkCase(job, isolation)
+                restoreBenchmarkCase(job, isolation, progress)
             } catch (restoreFailure: Failure) {
                 restoreFailure.addSuppressed(exception)
                 throw restoreFailure
@@ -320,7 +319,11 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         awaiter.capture(stage, job, deadline)
 
     @Throws(Failure::class)
-    fun restoreBenchmarkCase(job: CoreJob, isolation: BenchmarkCaseIsolation?) {
+    fun restoreBenchmarkCase(
+        job: CoreJob,
+        isolation: BenchmarkCaseIsolation?,
+        progress: Consumer<JobStage>? = null,
+    ) {
         if (isolation == null || isolation.restored()) return
         probe.event(job.requestId, "RESTORING_BENCHMARK_STATE")
         var activation: SourceActivator.Activation? = null
@@ -329,6 +332,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             if (!activator.isActive(isolation.baselineSource)) {
                 activation = activator.begin(isolation.baselineSource)
             }
+            progress?.accept(JobStage.JOB_STAGE_RELOADING_SHADERS)
             val reload = restoreAwait(
                 runtime.reloadVibrisShaderpack(isolation.baselineShaderSettings, CancellationToken.none()),
             )
@@ -339,12 +343,15 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
                 activator.commit(activation)
                 committed = true
             }
+            progress?.accept(JobStage.JOB_STAGE_LOADING_WORLD)
+            progress?.accept(JobStage.JOB_STAGE_APPLYING_CONTEXT)
             val context = restoreAwait(
                 runtime.ensureWorldAndContext(isolation.baselineContext, CancellationToken.none()),
             )
             if (!context.successful) {
                 throw IllegalStateException("The baseline scene context could not be restored.")
             }
+            progress?.accept(JobStage.JOB_STAGE_RESETTING_TEMPORAL_STATE)
             val reset = restoreAwait(runtime.resetTemporalState(CancellationToken.none()))
             if (!reset.successful) {
                 throw IllegalStateException("Temporal state could not be reset after benchmark restoration.")
@@ -368,17 +375,14 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
 
     @Throws(Exception::class)
     private fun <T> restoreAwait(stage: CompletionStage<T>): T =
-        stage.toCompletableFuture().get(RESTORE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        stage.toCompletableFuture().join()
 
     private fun reloadPreviousSource(): Boolean {
         try {
             val result = runtime.reloadVibrisShaderpack(null, CancellationToken.none())
                 .toCompletableFuture()
-                .get(5, TimeUnit.SECONDS)
+                .join()
             return result.successful
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
-            return false
         } catch (_: Exception) {
             return false
         }
@@ -406,7 +410,4 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             this(code, message, java.util.List.of(artifact), java.util.List.of())
     }
 
-    private companion object {
-        const val RESTORE_TIMEOUT_SECONDS = 10L
-    }
 }

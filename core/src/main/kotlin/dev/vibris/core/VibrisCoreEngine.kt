@@ -44,6 +44,8 @@ class VibrisCoreEngine internal constructor(
         Thread(runnable, "Vibris Disconnect Grace").apply { isDaemon = true }
     }
     private var closed = false
+    private var activeRequestId = ""
+    private var activeStage = JobStage.JOB_STAGE_UNSPECIFIED
 
     constructor(pendingRoot: Path, runtime: VibrisRuntimeAdapter) :
         this(pendingRoot, runtime, ShaderLink.transientLink(), ShaderLogSink.none())
@@ -62,6 +64,10 @@ class VibrisCoreEngine internal constructor(
 
     @Synchronized
     fun queueLength(): Int = scheduler.size()
+
+    @Synchronized
+    internal fun activeJob(): ActiveJob? =
+        activeRequestId.takeIf(String::isNotBlank)?.let { ActiveJob(it, activeStage) }
 
     internal fun submit(session: ControlSession, message: ClientMessage) {
         val submission = message.submitJob
@@ -212,6 +218,8 @@ class VibrisCoreEngine internal constructor(
                     return
                 }
                 requests.markRunning(job.requestId)
+                activeRequestId = job.requestId
+                activeStage = JobStage.JOB_STAGE_UNSPECIFIED
             }
             started = true
             probe.jobStarted(job.requestId)
@@ -257,6 +265,10 @@ class VibrisCoreEngine internal constructor(
             }
             activator.release(job.sources)
             requests.finish(job.requestId, state, terminal)
+            if (activeRequestId == job.requestId) {
+                activeRequestId = ""
+                activeStage = JobStage.JOB_STAGE_UNSPECIFIED
+            }
             updateMetrics()
             job.session!!
         }
@@ -306,11 +318,16 @@ class VibrisCoreEngine internal constructor(
         job.bind(session)
         session.send(ProtocolMessages.accepted(job, scheduler.size()))
         if (state == RequestState.RUNNING) {
-            session.send(ProtocolMessages.progress(job, JobStage.JOB_STAGE_WARMING_UP))
+            session.send(ProtocolMessages.progress(job, activeStage))
         }
     }
 
     private fun sendProgress(job: CoreJob, stage: JobStage) {
+        synchronized(this) {
+            if (activeRequestId == job.requestId) {
+                activeStage = stage
+            }
+        }
         job.session!!.send(ProtocolMessages.progress(job, stage))
     }
 
@@ -357,4 +374,6 @@ class VibrisCoreEngine internal constructor(
             session.send(ProtocolMessages.immediateFailure(message, session.workspaceId(), code, detail))
         }
     }
+
+    internal data class ActiveJob(val requestId: String, val stage: JobStage)
 }
