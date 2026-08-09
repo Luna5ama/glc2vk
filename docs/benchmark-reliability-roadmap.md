@@ -40,7 +40,7 @@ Do not restart Minecraft or its launcher unless the user explicitly asks.
 |---|---|---|---|---|---|
 | T00 | P0 | vibris | Persist roadmap and isolated worktree protocol | Done | docs: add benchmark reliability roadmap |
 | T01 | P0 | vibris | Fail closed on missing GPU samples and report completeness counters | Done | fix(mcp): fail incomplete gpu profile results |
-| T02 | P0 | vibris | Normalize compact profile result schema and explicit timing units | Pending | feat(mcp): normalize profile result contract |
+| T02 | P0 | vibris | Normalize compact profile result schema and explicit timing units | Done | feat(mcp): normalize profile result contract |
 | T03 | P1 | vibris | Add pass/statistic filters and publish full results as an artifact | Pending | feat(mcp): add filtered profile output |
 | T04 | P0 | vibris | Retry incomplete matrix cases without rerunning completed cases | Pending | feat(mcp): retry incomplete profile cases |
 | T05 | P0 | vibris | Checkpoint matrix cases and expose resumable progress | Pending | feat(mcp): checkpoint profile matrix progress |
@@ -334,3 +334,10 @@ and exact commit title. The Git history is the source of truth for the resulting
   vibris-action-schema-tests, then running CTest cases SynchronousRecipeResultMapping and
   ActionSchemaRejectsForbiddenAndDuplicateTools (2/2 passed), including an exact 38-case missing-result
   regression. Commit title: fix(mcp): fail incomplete gpu profile results.
+- 2026-08-09 - T02 - Normalized profile and profile_matrix into one cases-array contract with explicit case/source/config
+  identity, stable status/error/frame/metrics fields, gpu_timing_unit=ns, and summary/metrics/full result detail.
+  Summary omits timing payloads, metrics is the default, and full retains non-metric action/job detail without
+  duplicating gpuTimings. Unsupported detail values fail schema validation. Updated capture-control documentation.
+  Verified by building vibris-job-protocol-tests and vibris-action-schema-tests, then running CTest cases
+  SynchronousRecipeResultMapping and ActionSchemaRejectsForbiddenAndDuplicateTools (2/2 passed).
+  Commit title: feat(mcp): normalize profile result contract.

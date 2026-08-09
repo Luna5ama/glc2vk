@@ -87,20 +87,23 @@ Json source_variant_schema() {
 Json recipe_schema() {
     const auto frames = bounded_integer(0, std::numeric_limits<std::uint32_t>::max());
     const auto metric_frames = bounded_integer(1, 10'000);
+    const auto result_detail = enum_string({"summary", "metrics", "full"});
     const Json config{{"type", "object"}};
     return one_of({
         closed_object({{"recipe", enum_string({"profile"})},
                        {"source", source_schema()},
                        {"config", config},
                        {"warmup_frames", frames},
-                       {"frames", metric_frames}},
+                       {"frames", metric_frames},
+                       {"result_detail", result_detail}},
                       {"recipe", "frames"}),
         closed_object({{"recipe", enum_string({"profile_matrix"})},
                        {"sources", named_sources_schema()},
                        {"configs", named_configs_schema()},
                        {"matrix", matrix_axes_schema()},
                        {"warmup_frames", frames},
-                       {"frames", metric_frames}},
+                       {"frames", metric_frames},
+                       {"result_detail", result_detail}},
                       {"recipe", "sources", "configs", "matrix", "frames"}),
         closed_object({{"recipe", enum_string({"load_and_screenshot"})},
                        {"source", source_schema()},
@@ -203,7 +206,8 @@ Json build_definitions() {
                    true),
         definition("vibris_run_recipe",
                    "Run a standard shader workflow and return its terminal result. load_and_screenshot loads one "
-                   "shader source and config, waits for the requested warmup frames, and saves a screenshot.",
+                   "shader source and config, waits for the requested warmup frames, and saves a screenshot. Profile "
+                   "recipes return normalized cases with summary, metrics, or full result detail.",
                    recipe_schema(), false),
         definition("vibris_run_actions",
                    "Run one ordered shader action sequence with explicitly named sources and configs.",

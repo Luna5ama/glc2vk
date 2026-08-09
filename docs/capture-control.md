@@ -250,9 +250,25 @@ The `profile` recipe is the high-level performance workflow. It snapshots the se
 reloads that source with the optional shader config, resets temporal state, waits `warmup_frames` (or the configured
 default), and then measures exactly the next required `frames`. It returns the same `avg`, `p5`, `p50`, and `p95`
 aggregates as the `get_gpu_metrics` action. The `profile_matrix` recipe profiles a selected source/config Cartesian
-product under the same scene preset. The result also
-includes the requested `frames` and effective `warmup_frames`. This direct in-game path replaces project-local wrappers
-for routine profiling. Compute capture and external replay/Nsight analysis remain separate diagnostic workflows.
+product under the same scene preset. Both recipes return the same top-level contract and a `cases` array; a single
+`profile` is represented by one `source--config` case.
+
+Every case always contains `case_id`, `source_id`, `config_id`, `status`, `error`, `frames`,
+`warmup_frames`, and `metrics`. The top level declares `gpu_timing_unit: "ns"` and reports requested, completed,
+with-metrics, missing, failed, retried, passed, and incomplete counts. Empty GPU samples produce a retryable
+`NO_GPU_SAMPLES` case error instead of a passed result.
+
+Profile requests accept an optional `result_detail`:
+
+| Value | Returned detail |
+|-------|-----------------|
+| `summary` | stable case fields and counters; `metrics` is `null` |
+| `metrics` | default; stable case fields plus one per-case GPU metrics payload |
+| `full` | metrics plus non-metric per-case action results, artifacts, and terminal job metadata |
+
+The raw `get_gpu_metrics` action result is never repeated in `action_results`; GPU timings live only under the case
+`metrics` field. This direct in-game path replaces project-local wrappers for routine profiling. Compute capture and
+external replay/Nsight analysis remain separate diagnostic workflows.
 
 Example request:
 
@@ -262,7 +278,8 @@ Example request:
   "source": {"kind": "workspace"},
   "config": {"SETTING_GI_SPATIAL_REUSE_COUNT": 14},
   "warmup_frames": 32,
-  "frames": 120
+  "frames": 120,
+  "result_detail": "metrics"
 }
 ```
 
@@ -349,12 +366,14 @@ and execute action sequences only; no recipe enum or recipe decoder exists in th
   "source": {"kind": "workspace"},
   "config": {"SETTING_PARALLAX_MODE": 4},
   "warmup_frames": 32,
-  "frames": 120
+  "frames": 120,
+  "result_detail": "metrics"
 }
 ```
 
 `profile_matrix` accepts `sources`, `configs`, and `matrix` axes in the same form as `vibris_run_matrix`, then profiles
-every selected source/config combination. A failed combination is recorded and later combinations continue.
+every selected source/config combination. A failed or incomplete combination is recorded with explicit source/config
+identity and later combinations continue.
 
 ### Load and screenshot
 
@@ -484,6 +503,7 @@ and the artifact quota. A noisy repository can therefore consume shared admissio
 | `SOURCE_TOO_LARGE` / `SOURCE_TOO_MANY_FILES` | Reduce the shader tree below the limits advertised by Iris. |
 | `SOURCE_CONTAINS_REPARSE_POINT` | Replace links/junctions with ordinary files and directories. |
 | `QUEUE_FULL` | Wait for current work; pending calls, source registry, and job queue are bounded. |
+| `NO_GPU_SAMPLES` | The profile case returned no non-empty GPU timing set; retry it or inspect runtime readiness. |
 | `CAPTURE_RESOURCE_NOT_FOUND` | Choose a logical name from `vibris_get_status.resource_catalog`. |
 | `ARTIFACT_JOB_TOO_LARGE` / `ARTIFACT_QUOTA_EXCEEDED` | Reduce captures or allow reported jobs to become evictable. |
 

@@ -242,6 +242,44 @@ void profile_recipe_requires_bounded_future_frames() {
     require(dispatches == 1, "Invalid profile arguments reached dispatch.");
 }
 
+void profile_result_detail_schema() {
+    std::size_t dispatches = 0;
+    ToolRegistry registry([&](std::string_view name, const Json&) {
+        ++dispatches;
+        require(name == "vibris_run_recipe", "Profile detail dispatched the wrong tool.");
+        return Json{{"accepted", true}};
+    });
+    const Json profile{{"recipe", "profile"}, {"frames", 64}};
+    const Json matrix{
+        {"recipe", "profile_matrix"},
+        {"sources", Json::array({{{"id", "source"}, {"kind", "workspace"}}})},
+        {"configs", Json::array({{{"id", "config"}, {"values", Json::object()}}})},
+        {"matrix", {{"sources", Json::array({"source"})}, {"configs", Json::array({"config"})}}},
+        {"frames", 64},
+    };
+    for (const auto* detail : {"summary", "metrics", "full"}) {
+        auto profile_request = profile;
+        profile_request["result_detail"] = detail;
+        require(std::holds_alternative<Json>(registry.invoke("vibris_run_recipe", profile_request)),
+            "Profile rejected a supported result detail.");
+        auto matrix_request = matrix;
+        matrix_request["result_detail"] = detail;
+        require(std::holds_alternative<Json>(registry.invoke("vibris_run_recipe", matrix_request)),
+            "Profile matrix rejected a supported result detail.");
+    }
+    auto invalid_profile = profile;
+    invalid_profile["result_detail"] = "verbose";
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_run_recipe", invalid_profile)),
+        "Profile accepted an unsupported result detail.");
+    auto invalid_matrix = matrix;
+    invalid_matrix["result_detail"] = "verbose";
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_run_recipe", invalid_matrix)),
+        "Profile matrix accepted an unsupported result detail.");
+    require(dispatches == 6, "Invalid result detail reached dispatch.");
+}
+
 void matrix_schema_requires_named_sources_configs_and_axes() {
     std::size_t dispatches = 0;
     ToolRegistry registry([&](std::string_view name, const Json&) {
@@ -291,6 +329,7 @@ int main() {
         empty_tool_schemas_declare_object_properties();
         atomic_action_schemas_reject_invalid_arguments();
         profile_recipe_requires_bounded_future_frames();
+        profile_result_detail_schema();
         matrix_schema_requires_named_sources_configs_and_axes();
         registry_declares_accurate_tool_annotations();
         std::cout << "PASS ActionSchemaRejectsForbiddenAndDuplicateTools\n";

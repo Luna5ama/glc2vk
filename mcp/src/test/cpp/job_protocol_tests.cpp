@@ -391,6 +391,16 @@ ToolOutcome synchronous_metrics_job(
     return outcome;
 }
 
+std::size_t count_occurrences(const std::string& value, std::string_view needle) {
+    std::size_t count = 0;
+    std::size_t offset = 0;
+    while ((offset = value.find(needle, offset)) != std::string::npos) {
+        ++count;
+        offset += needle.size();
+    }
+    return count;
+}
+
 void profile_requires_nonempty_gpu_samples() {
     const Json arguments{
         {"recipe", "profile"},
@@ -401,18 +411,76 @@ void profile_requires_nonempty_gpu_samples() {
     };
 
     const auto missing = synchronous_metrics_job(arguments, {std::nullopt});
-    const auto& failure = std::get<ToolFailure>(missing);
-    require(failure.code == "NO_GPU_SAMPLES" && failure.retryable &&
-            failure.details.at("reason") == "missing_gpu_metrics_action" &&
-            failure.details.at("frames") == 32 && failure.details.at("warmup_frames") == 0,
+    const auto& missing_result = std::get<Json>(missing);
+    const auto& missing_case = missing_result.at("cases").at(0);
+    require(missing_result.at("success") == false && missing_result.at("status") == "incomplete" &&
+            missing_case.at("case_id") == "source--config" &&
+            missing_case.at("error").at("error_code") == "NO_GPU_SAMPLES" &&
+            missing_case.at("error").at("retryable") == true &&
+            missing_case.at("error").at("details").at("reason") == "missing_gpu_metrics_action" &&
+            missing_case.at("frames") == 32 && missing_case.at("warmup_frames") == 0,
         "Missing profile metrics did not return structured NO_GPU_SAMPLES.");
 
     const auto complete = synchronous_metrics_job(
         arguments, {R"({"gpuTimings":{"composite_total":{"avg":7000000}}})"});
-    const auto& metrics = std::get<Json>(complete);
-    require(metrics.at("gpuTimings").at("composite_total").at("avg") == 7'000'000 &&
-            metrics.at("frames") == 32 && metrics.at("warmup_frames") == 0,
+    const auto& result = std::get<Json>(complete);
+    const auto& complete_case = result.at("cases").at(0);
+    require(result.at("success") == true && result.at("kind") == "profile" &&
+            result.at("result_detail") == "metrics" && result.at("gpu_timing_unit") == "ns" &&
+            complete_case.at("source_id") == "source" && complete_case.at("config_id") == "config" &&
+            complete_case.at("metrics").at("gpuTimings").at("composite_total").at("avg") == 7'000'000 &&
+            complete_case.at("frames") == 32 && complete_case.at("warmup_frames") == 0,
         "Complete profile metrics were rejected or lost their frame metadata.");
+}
+
+void profile_result_detail_contract() {
+    const Json base_arguments{
+        {"recipe", "profile"},
+        {"source", {{"kind", "workspace"}}},
+        {"config", Json::object()},
+        {"warmup_frames", 0},
+        {"frames", 32},
+    };
+    const std::optional<std::string> payload =
+        R"({"gpuTimings":{"composite_total":{"avg":7000000}}})";
+
+    auto summary_arguments = base_arguments;
+    summary_arguments["result_detail"] = "summary";
+    const auto summary_outcome = synchronous_metrics_job(summary_arguments, {payload});
+    const auto& summary = std::get<Json>(summary_outcome);
+    const auto& summary_case = summary.at("cases").at(0);
+    require(summary.at("result_detail") == "summary" && summary.at("gpu_timing_unit") == "ns" &&
+            summary_case.at("case_id") == "source--config" &&
+            summary_case.at("source_id") == "source" && summary_case.at("config_id") == "config" &&
+            summary_case.at("status") == "passed" && summary_case.at("error").is_null() &&
+            summary_case.at("frames") == 32 && summary_case.at("warmup_frames") == 0 &&
+            summary_case.at("metrics").is_null() && !summary.contains("action_results") &&
+            !summary_case.contains("action_results") && count_occurrences(summary.dump(), "gpuTimings") == 0,
+        "Summary profile result did not match the compact case contract.");
+
+    auto metrics_arguments = base_arguments;
+    metrics_arguments["result_detail"] = "metrics";
+    const auto metrics_outcome = synchronous_metrics_job(metrics_arguments, {payload});
+    const auto& metrics = std::get<Json>(metrics_outcome);
+    const auto& metrics_case = metrics.at("cases").at(0);
+    require(metrics.at("result_detail") == "metrics" && !metrics.contains("action_results") &&
+            !metrics_case.contains("action_results") &&
+            metrics_case.at("metrics").at("gpuTimings").contains("composite_total") &&
+            count_occurrences(metrics.dump(), "gpuTimings") == 1,
+        "Metrics profile result duplicated or omitted GPU timings.");
+
+    auto full_arguments = base_arguments;
+    full_arguments["result_detail"] = "full";
+    const auto full_outcome = synchronous_metrics_job(full_arguments, {payload});
+    const auto& full = std::get<Json>(full_outcome);
+    const auto& full_case = full.at("cases").at(0);
+    require(full.at("result_detail") == "full" && full.contains("timings") &&
+            full.contains("manifest_path") && !full.contains("action_results") &&
+            full_case.at("action_results").size() == 1 &&
+            full_case.at("action_results").at(0).at("kind") == "load_shader" &&
+            full_case.at("metrics").at("gpuTimings").contains("composite_total") &&
+            count_occurrences(full.dump(), "gpuTimings") == 1,
+        "Full profile result duplicated GPU timings or lost non-metric action details.");
 }
 
 void profile_matrix_reports_incomplete_cases() {
@@ -447,7 +515,8 @@ void profile_matrix_reports_incomplete_cases() {
         "Profile matrix completeness counters did not fail closed.");
 
     const auto& cases = result.at("cases");
-    require(cases.size() == 5 && cases.at(0).at("id") == "source--success" &&
+    require(cases.size() == 5 && cases.at(0).at("case_id") == "source--success" &&
+            cases.at(0).at("source_id") == "source" && cases.at(0).at("config_id") == "success" &&
             cases.at(0).at("status") == "passed" &&
             cases.at(0).at("metrics").at("gpuTimings").contains("composite_total"),
         "Successful profile case was not attributed to its source/config.");
@@ -965,6 +1034,7 @@ int main() {
         progress_does_not_consume_terminal();
         synchronous_submit_waits_for_terminal();
         profile_requires_nonempty_gpu_samples();
+        profile_result_detail_contract();
         profile_matrix_reports_incomplete_cases();
         profile_matrix_38_cases_requires_all_metrics();
         title_screen_runtime_can_prepare_source_for_world_loading_job();

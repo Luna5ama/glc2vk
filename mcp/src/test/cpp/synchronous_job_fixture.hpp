@@ -203,7 +203,19 @@ private:
             result->set_kind(proto::JOB_RESULT_KIND_ACTION_SEQUENCE);
             std::size_t payload_index = 0;
             for (int action_index = 0; action_index < job.actions().actions_size(); ++action_index) {
-                if (!job.actions().actions(action_index).has_get_gpu_metrics()) continue;
+                const auto& action = job.actions().actions(action_index);
+                if (action.has_load_shader()) {
+                    const auto& load = action.load_shader();
+                    auto* action_result = result->add_action_results();
+                    action_result->set_action_index(action_index);
+                    action_result->set_kind(proto::JOB_ACTION_KIND_LOAD_SHADER);
+                    action_result->set_json(Json{{"success", true},
+                                                {"case_id", load.case_id()},
+                                                {"source", load.source_id()},
+                                                {"config", load.config_id()}}.dump());
+                    continue;
+                }
+                if (!action.has_get_gpu_metrics()) continue;
                 const auto& payload = metric_payloads_.at(payload_index++);
                 if (!payload.has_value()) continue;
                 auto* action_result = result->add_action_results();
