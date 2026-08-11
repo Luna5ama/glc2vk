@@ -14,7 +14,7 @@
 
 namespace vibris::mcp {
 
-namespace proto = ::vibris::control::v1;
+namespace proto = ::vibris::control::v2;
 
 class GrpcClient::Impl final {
 public:
@@ -23,9 +23,10 @@ public:
 
     void start();
     bool get_server_info(GetServerInfoCompletion completion);
-    bool list_presets(ListPresetsCompletion completion);
+    bool list_presets(proto::ListPresetsRequest request, ListPresetsCompletion completion);
+    bool list_resources(proto::ListResourcesRequest request, ListResourcesCompletion completion);
     bool validate_context(proto::ValidateContextRequest request, ValidateContextCompletion completion);
-    bool get_status(GetStatusCompletion completion);
+    bool get_status(proto::GetStatusRequest request, GetStatusCompletion completion);
     bool submit(proto::ClientMessage message, GrpcCompletion completion);
     bool resume(std::string request_id, GrpcCompletion completion);
     bool cancel(std::string_view request_id, std::string reason);

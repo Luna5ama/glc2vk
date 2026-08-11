@@ -9,13 +9,15 @@ namespace vibris::mcp {
 class ResultMapper final {
 public:
     [[nodiscard]] static nlohmann::json list_presets(
-        const ::vibris::control::v1::ListPresetsResponse& response);
+        const ::vibris::control::v2::ListPresetsResponse& response);
+    [[nodiscard]] static nlohmann::json list_resources(
+        const ::vibris::control::v2::ListResourcesResponse& response);
     [[nodiscard]] static nlohmann::json validation(
-        const ::vibris::control::v1::ValidateContextResponse& response);
+        const ::vibris::control::v2::ValidateContextResponse& response);
     [[nodiscard]] static nlohmann::json status(
-        const ::vibris::control::v1::GetStatusResponse& response);
+        const ::vibris::control::v2::GetStatusResponse& response);
     [[nodiscard]] static nlohmann::json server_message(
-        const ::vibris::control::v1::ServerMessage& response);
+        const ::vibris::control::v2::ServerMessage& response);
 };
 
 }

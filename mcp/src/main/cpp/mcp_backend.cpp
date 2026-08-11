@@ -29,7 +29,7 @@
 namespace vibris::mcp {
 namespace {
 
-namespace control = vibris::control::v1;
+namespace control = vibris::control::v2;
 namespace fs = std::filesystem;
 constexpr std::size_t pending_limit = 256;
 
@@ -86,20 +86,13 @@ JobContext config_from_preset(const control::ScenePreset& preset, std::string wo
     return config;
 }
 
-std::string lowercase(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) {
-        return static_cast<char>(std::tolower(character));
-    });
-    return value;
-}
-
 bool has_all_tags(const Json& preset, const Json& requested) {
     const auto tags = preset.find("tags");
     if (tags == preset.end() || !tags->is_array()) return requested.empty();
     return std::all_of(requested.begin(), requested.end(), [&](const Json& requested_tag) {
-        const auto expected = lowercase(requested_tag.get<std::string>());
+        const auto expected = requested_tag.get<std::string>();
         return std::any_of(tags->begin(), tags->end(), [&](const Json& tag) {
-            return tag.is_string() && lowercase(tag.get<std::string>()) == expected;
+            return tag.is_string() && tag.get<std::string>() == expected;
         });
     });
 }
@@ -133,10 +126,15 @@ private:
 
         ToolOutcome dispatch(std::string_view name, const Json& arguments) {
             if (name == "vibris_list_presets") return list_presets(arguments);
-            if (name == "vibris_get_status") return get_status();
+            if (name == "vibris_list_resources") return list_resources(arguments);
+            if (name == "vibris_get_status") return get_status(arguments);
+            if (name == "vibris_job") return job(arguments);
+            if (name == "vibris_artifacts") {
+                return ToolFailure{"SERVER_NOT_AVAILABLE",
+                    "Managed artifact v2 operations are not available from this runtime.", true};
+            }
             if (name == "vibris_run_recipe" &&
                 arguments.value("recipe", std::string{}) == "profile_matrix") {
-                if (arguments.contains("operation")) return profile_matrix_.control(arguments);
                 return start_profile_matrix(arguments);
             }
             if (name == "vibris_run_recipe" || name == "vibris_run_actions" || name == "vibris_run_matrix") {
@@ -191,23 +189,30 @@ private:
         }
 
         ToolOutcome list_presets(const Json& arguments) {
+            control::ListPresetsRequest request;
+            if (arguments.contains("preset_id")) request.set_preset_id(arguments.at("preset_id").get<std::string>());
+            for (const auto& tag : arguments.value("tags", Json::array())) {
+                request.add_tags(tag.get<std::string>());
+            }
             return unary<control::ListPresetsResponse>(
-                [this](auto completion) { return client().list_presets(std::move(completion)); },
+                [this, request = std::move(request)](auto completion) mutable {
+                    return client().list_presets(std::move(request), std::move(completion));
+                },
                 [&arguments](const auto& response) -> ToolOutcome {
                     auto result = ResultMapper::list_presets(response);
-                    if (arguments.contains("filter") && result.contains("presets") && result["presets"].is_array()) {
-                        const auto filter = lowercase(arguments["filter"].get<std::string>());
+                    if (arguments.contains("preset_id") && result.contains("presets") && result["presets"].is_array()) {
+                        const auto filter = arguments["preset_id"].get<std::string>();
                         auto& presets = result["presets"];
                         presets.erase(std::remove_if(presets.begin(), presets.end(), [&](const Json& preset) {
-                                          return lowercase(preset.dump()).find(filter) == std::string::npos;
+                                          return preset.value("preset_id", std::string{}) != filter;
                                       }),
                                       presets.end());
                     }
-                    if (arguments.contains("filter_tags") && result.contains("presets") &&
+                    if (arguments.contains("tags") && result.contains("presets") &&
                         result["presets"].is_array()) {
                         auto& presets = result["presets"];
                         presets.erase(std::remove_if(presets.begin(), presets.end(), [&](const Json& preset) {
-                                          return !has_all_tags(preset, arguments["filter_tags"]);
+                                          return !has_all_tags(preset, arguments["tags"]);
                                       }),
                                       presets.end());
                     }
@@ -216,8 +221,12 @@ private:
         }
 
         ToolOutcome with_scene(const Json& arguments, const SceneContinuation& continuation) {
+            control::ListPresetsRequest request;
+            request.set_preset_id(arguments.at("preset_id").get<std::string>());
             return unary<control::ListPresetsResponse>(
-                [this](auto completion) { return client().list_presets(std::move(completion)); },
+                [this, request = std::move(request)](auto completion) mutable {
+                    return client().list_presets(std::move(request), std::move(completion));
+                },
                 [this, &arguments, &continuation](const auto& presets) -> ToolOutcome {
                     const auto preset = SceneContextResolver::resolve_preset(
                         arguments.at("preset_id").get<std::string>(), presets);
@@ -240,17 +249,55 @@ private:
                 });
         }
 
-        ToolOutcome get_status() {
+        ToolOutcome list_resources(const Json& arguments) {
+            control::ListResourcesRequest request;
+            auto* filter = request.mutable_filter();
+            for (const auto& kind : arguments.value("kinds", Json::array())) {
+                const auto value = kind.get<std::string>();
+                if (value == "final_framebuffer") filter->add_kinds(control::RESOURCE_KIND_FINAL_FRAMEBUFFER);
+                else if (value == "texture") filter->add_kinds(control::RESOURCE_KIND_TEXTURE);
+                else if (value == "buffer") filter->add_kinds(control::RESOURCE_KIND_BUFFER);
+                else if (value == "patched_shaders") filter->add_kinds(control::RESOURCE_KIND_PATCHED_SHADERS);
+            }
+            if (arguments.contains("logical_name")) {
+                filter->set_logical_name(arguments.at("logical_name").get<std::string>());
+            }
+            if (arguments.contains("pass_id")) filter->set_pass_id(arguments.at("pass_id").get<std::string>());
+            return unary<control::ListResourcesResponse>(
+                [this, request = std::move(request)](auto completion) mutable {
+                    return client().list_resources(std::move(request), std::move(completion));
+                },
+                [](const auto& response) -> ToolOutcome { return ResultMapper::list_resources(response); });
+        }
+
+        ToolOutcome get_status(const Json& arguments) {
+            control::GetStatusRequest request;
+            const auto detail = arguments.value("detail", std::string("summary"));
+            request.set_detail(detail == "full" ? control::STATUS_DETAIL_FULL :
+                detail == "jobs" ? control::STATUS_DETAIL_JOBS : control::STATUS_DETAIL_SUMMARY);
+            if (arguments.contains("wait_until")) {
+                request.set_wait_until(arguments.at("wait_until") == "job_terminal"
+                    ? control::STATUS_WAIT_CONDITION_JOB_TERMINAL
+                    : control::STATUS_WAIT_CONDITION_CAN_START_JOB);
+            }
+            if (arguments.contains("job_id")) request.set_job_id(arguments.at("job_id").get<std::string>());
+            request.set_timeout_ms(arguments.value("timeout_ms", std::uint64_t{0}));
             return unary<control::GetStatusResponse>(
-                [this](auto completion) { return client().get_status(std::move(completion)); },
-                [this](const auto& response) -> ToolOutcome {
+                [this, request = std::move(request)](auto completion) mutable {
+                    return client().get_status(std::move(request), std::move(completion));
+                },
+                [](const auto& response) -> ToolOutcome {
                     auto mapped = ResultMapper::status(response);
-                    Json result = mapped.contains("status") && mapped["status"].is_object() ? mapped["status"] : mapped;
-                    result["ready"] = mapped.value("ready", false);
-                    if (mapped.contains("errors")) result["errors"] = mapped["errors"];
-                    result["profile_matrix_job"] = profile_matrix_.active_status();
-                    return result;
+                    return mapped.contains("status") && mapped["status"].is_object() ? mapped["status"] : mapped;
                 });
+        }
+
+        ToolOutcome job(const Json& arguments) {
+            auto control_arguments = arguments;
+            const auto operation = arguments.at("operation").get<std::string>();
+            control_arguments["operation"] = operation == "query" || operation == "result" ? "status" : operation;
+            if (operation == "resume") control_arguments["execution"] = "async";
+            return profile_matrix_.control(control_arguments);
         }
 
         ToolOutcome run_profile_case(ProfileMatrixCaseExecution execution) {
@@ -280,7 +327,6 @@ private:
         ToolOutcome start_profile_matrix(const Json& arguments) {
             return with_scene(arguments, [this, &arguments](const auto& config, const auto& preset) -> ToolOutcome {
                 auto enriched = arguments;
-                enriched.erase("preset_id");
                 enriched["__vibris_scene_context"] = scene_json(preset.context());
                 enriched["__vibris_preset"] = preset_json(preset);
                 return profile_matrix_.start(enriched, config);
@@ -292,7 +338,6 @@ private:
                 [this, name, &arguments](const auto& config, const auto& preset) -> ToolOutcome {
                     const auto context = preset.context();
                     auto enriched = arguments;
-                    enriched.erase("preset_id");
                     enriched["__vibris_preset"] = preset_json(preset);
                     return unary<control::GetServerInfoResponse>(
                         [this](auto completion) { return client().get_server_info(std::move(completion)); },

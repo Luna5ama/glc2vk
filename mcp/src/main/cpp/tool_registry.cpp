@@ -128,81 +128,40 @@ Json recipe_schema() {
     const auto max_retries = bounded_integer(0, 5);
     const auto execution = enum_string({"sync", "async"});
     const Json config{{"type", "object"}};
-    return one_of({
-        scoped(closed_object({{"recipe", enum_string({"profile"})},
-                       {"source", source_schema()},
-                       {"config", config},
-                       {"warmup_frames", frames},
-                       {"frames", metric_frames},
-                       {"result_detail", result_detail},
-                       {"metric_filter", metric_filter},
-                       {"statistics", statistics},
-                       {"converted_units", converted_units},
-                       {"max_retries", max_retries},
-                       {"result_csv", {{"type", "boolean"}}}},
-                       {"recipe", "frames"}), true),
-        scoped(closed_object({{"recipe", enum_string({"profile_matrix"})},
-                       {"sources", named_sources_schema()},
-                       {"configs", named_configs_schema()},
-                       {"matrix", matrix_axes_schema()},
-                       {"warmup_frames", frames},
-                       {"frames", metric_frames},
-                       {"result_detail", result_detail},
-                       {"metric_filter", metric_filter},
-                       {"statistics", statistics},
-                       {"converted_units", converted_units},
-                       {"max_retries", max_retries},
-                       {"execution", execution},
-                       {"result_csv", {{"type", "boolean"}}}},
-                       {"recipe", "sources", "configs", "matrix", "frames"}), true),
-        scoped(closed_object({{"recipe", enum_string({"profile_matrix"})},
-                       {"operation", enum_string({"status", "cancel"})},
-                       {"job_id", {{"type", "string"}, {"minLength", 1}}}},
-                       {"recipe", "operation", "job_id"}), false),
-        scoped(closed_object({{"recipe", enum_string({"profile_matrix"})},
-                       {"operation", enum_string({"resume"})},
-                       {"job_id", {{"type", "string"}, {"minLength", 1}}},
-                       {"execution", execution}},
-                       {"recipe", "operation", "job_id"}), false),
-        scoped(closed_object({{"recipe", enum_string({"benchmark_ab"})},
-                       {"baseline", source_schema()},
-                       {"candidate", source_schema()},
-                       {"config", config},
-                       {"warmup_frames", frames},
-                       {"frames", metric_frames},
-                       {"rounds", bounded_integer(2, 20)},
-                       {"control_rounds", bounded_integer(2, 20)},
-                       {"order", enum_string({"abba", "abab", "randomized"})},
-                       {"random_seed", bounded_integer(0, std::numeric_limits<std::uint32_t>::max())},
-                       {"statistic", enum_string({"avg", "p5", "p50", "p95"})},
-                       {"metric_filter", metric_filter},
-                       {"max_retries", max_retries},
-                       {"result_detail", result_detail},
-                       {"visual", benchmark_visual_schema()}},
-                       {"recipe", "baseline", "candidate", "frames"}), true),
-        scoped(closed_object({{"recipe", enum_string({"load_and_screenshot"})},
-                       {"source", source_schema()},
-                       {"config", config},
-                       {"warmup_frames", frames},
-                       {"screenshot_format", enum_string({"png"})}},
-                       {"recipe"}), true),
-        scoped(closed_object({{"recipe", enum_string({"capture_debug_bundle"})},
-                       {"source", source_schema()},
-                       {"config", config},
-                       {"warmup_frames", frames},
-                       {"screenshot", {{"type", "boolean"}}},
-                       {"textures", string_array(64)},
-                       {"buffers", string_array(64)}},
-                       {"recipe"}), true),
-        scoped(closed_object({{"recipe", enum_string({"ab_compare"})},
-                       {"a", source_variant_schema()},
-                       {"b", source_variant_schema()},
-                       {"config", config},
-                       {"warmup_frames", frames},
-                       {"captures", {{"type", "array"}, {"items", capture_schema()}, {"maxItems", 64}}},
-                       {"visual_thresholds", visual_thresholds_schema()}},
-                       {"recipe", "a", "b", "captures"}), true),
-    });
+    return scoped(closed_object({
+        {"recipe", enum_string({"profile", "profile_matrix", "benchmark_ab", "load_and_screenshot",
+                                 "capture_debug_bundle", "ab_compare"})},
+        {"source", source_schema()},
+        {"baseline", source_schema()},
+        {"candidate", source_schema()},
+        {"a", source_variant_schema()},
+        {"b", source_variant_schema()},
+        {"sources", named_sources_schema()},
+        {"configs", named_configs_schema()},
+        {"matrix", matrix_axes_schema()},
+        {"config", config},
+        {"warmup_frames", frames},
+        {"frames", metric_frames},
+        {"rounds", bounded_integer(2, 20)},
+        {"control_rounds", bounded_integer(2, 20)},
+        {"order", enum_string({"abba", "abab", "randomized"})},
+        {"random_seed", bounded_integer(0, std::numeric_limits<std::uint32_t>::max())},
+        {"statistic", enum_string({"avg", "p5", "p50", "p95"})},
+        {"result_detail", result_detail},
+        {"metric_filter", metric_filter},
+        {"statistics", statistics},
+        {"converted_units", converted_units},
+        {"max_retries", max_retries},
+        {"execution", execution},
+        {"result_csv", {{"type", "boolean"}}},
+        {"screenshot_format", enum_string({"png"})},
+        {"screenshot", {{"type", "boolean"}}},
+        {"textures", string_array(64)},
+        {"buffers", string_array(64)},
+        {"captures", {{"type", "array"}, {"items", capture_schema()}, {"minItems", 1}, {"maxItems", 64}}},
+        {"visual", benchmark_visual_schema()},
+        {"visual_thresholds", visual_thresholds_schema()},
+    }, {"recipe"}), true);
 }
 
 Json action_schema() {
@@ -213,9 +172,9 @@ Json action_schema() {
         return closed_object({{"type", enum_string({type})}}, {"type"});
     };
     auto load_shader = closed_object({{"type", enum_string({"load_shader"})},
-                                      {"source", {{"type", "string"}, {"minLength", 1}}},
-                                      {"config", {{"type", "string"}, {"minLength", 1}}}},
-                                     {"type", "source", "config"});
+                                      {"source_id", {{"type", "string"}, {"minLength", 1}}},
+                                      {"config_id", {{"type", "string"}, {"minLength", 1}}}},
+                                     {"type", "source_id", "config_id"});
     load_shader["description"] =
         "Closes any open screen, hides the HUD, loads the selected source and config, reloads the shader pipeline, "
         "applies the request-scoped scene, resets temporal counters, and returns the resulting shader state, errors, "
@@ -230,54 +189,88 @@ Json action_schema() {
                        {"after_frames", bounded_integer(0, std::numeric_limits<std::int32_t>::max())}},
                       {"type"}),
         closed_object({{"type", enum_string({"dump_texture"})},
-                       {"name", resource_name},
+                       {"resource", closed_object({{"logical_name", resource_name},
+                                                   {"view", enum_string({"current", "alternate", "main", "alt"})},
+                                                   {"mip_level", bounded_integer(0, 31)},
+                                                   {"layer", bounded_integer(0, 4095)}},
+                                                  {"logical_name"})},
                        {"format", enum_string({"bin", "png"})},
                        {"artifact_name", artifact_name}},
-                      {"type", "name", "format", "artifact_name"}),
+                      {"type", "resource", "format", "artifact_name"}),
         closed_object({{"type", enum_string({"dump_buffer"})},
-                       {"name", resource_name},
+                       {"logical_name", resource_name},
                        {"artifact_name", artifact_name}},
-                      {"type", "name", "artifact_name"}),
+                      {"type", "logical_name", "artifact_name"}),
         empty_action("get_capture_status"),
         load_shader,
         closed_object({{"type", enum_string({"capture_pass"})},
-                       {"pass", resource_name}, {"path", resource_name}}, {"type", "pass"}),
+                       {"pass_id", resource_name}, {"artifact_name", artifact_name}},
+                      {"type", "pass_id", "artifact_name"}),
         closed_object({{"type", enum_string({"capture_multi"})},
                        {"capture_type", enum_string({"prepare", "begin", "deferred", "composite"})},
-                       {"path", resource_name}}, {"type", "capture_type"}),
+                       {"artifact_name", artifact_name}}, {"type", "capture_type", "artifact_name"}),
         empty_action("inspect_shader"),
-        closed_object({{"type", enum_string({"get_gpu_metrics"})}, {"frames", frames}}, {"type", "frames"}),
-        empty_action("list_buffers"),
-        empty_action("list_textures"),
+        closed_object({{"type", enum_string({"get_gpu_metrics"})}, {"frames", frames},
+                       {"metric_ids", string_array(256)}}, {"type", "frames"}),
+        closed_object({{"type", enum_string({"list_resources"})},
+                       {"kinds", enum_array({"final_framebuffer", "texture", "buffer", "patched_shaders"}, 4)},
+                       {"logical_name", resource_name}, {"pass_id", resource_name}}, {"type"}),
         closed_object({{"type", enum_string({"get_patched_shaders"})},
                        {"artifact_name", artifact_name}}, {"type", "artifact_name"}),
     });
 }
 
+Json output_schema() {
+    return closed_object({
+        {"schema_version", {{"type", "integer"}, {"const", 2}}},
+        {"success", {{"type", "boolean"}}},
+        {"result", {{"type", "object"}}},
+        {"error", closed_object({
+            {"code", {{"type", "string"}, {"minLength", 1}}},
+            {"message", {{"type", "string"}}},
+            {"retryable", {{"type", "boolean"}}},
+            {"details", {{"type", "object"}}},
+        }, {"code", "message", "retryable", "details"})},
+    }, {"schema_version", "success"});
+}
+
 Json definition(const char* name, const char* description, Json input_schema, bool read_only) {
     return Json{{"name", name},
+                {"schema_version", 2},
                 {"description", description},
                 {"inputSchema", std::move(input_schema)},
+                {"outputSchema", output_schema()},
                 {"annotations", {{"readOnlyHint", read_only}, {"destructiveHint", false}, {"openWorldHint", false}}}};
 }
 
 Json build_definitions() {
-    const auto empty = closed_object(Json::object());
     Json definitions = Json::array({
-        definition("vibris_list_presets",
-                   "List Minecraft scene presets for the explicit Git worktree. Scene presets are distinct from "
-                   "shader quality configs; optional text and tag filters are combined.",
-                   scoped(closed_object({{"filter", {{"type", "string"}}},
-                                         {"filter_tags", string_array(32)}}), false), true),
         definition("vibris_get_status",
-                   "Read server/runtime status plus async workflow state for the explicit Git worktree.",
-                   scoped(empty, false), true),
+                   "Read the compact v2 server, runtime, queue, lease and job status for the explicit Git worktree. "
+                   "Resource catalogs are intentionally omitted.",
+                   scoped(closed_object({
+                       {"detail", enum_string({"summary", "jobs", "full"})},
+                       {"wait_until", enum_string({"can_start_job", "job_terminal"})},
+                       {"job_id", {{"type", "string"}, {"minLength", 1}}},
+                       {"timeout_ms", bounded_integer(0, 300'000)},
+                   }), false), true),
+        definition("vibris_list_presets",
+                   "List Minecraft scene presets for the explicit Git worktree using exact preset and tag filters.",
+                   scoped(closed_object({{"preset_id", {{"type", "string"}, {"minLength", 1}}},
+                                         {"tags", string_array(32)}}), false), true),
+        definition("vibris_list_resources",
+                   "List the typed logical resource and named-pass catalog for the explicit Git worktree.",
+                   scoped(closed_object({
+                       {"kinds", enum_array({"final_framebuffer", "texture", "buffer", "patched_shaders"}, 4)},
+                       {"logical_name", {{"type", "string"}, {"minLength", 1}}},
+                       {"pass_id", {{"type", "string"}, {"minLength", 1}}},
+                   }), false), true),
         definition("vibris_run_recipe",
                    "Run a standard shader workflow for the explicit Git worktree and scene preset. "
                    "load_and_screenshot loads one "
                    "shader source and config, waits for the requested warmup frames, and saves a screenshot. Profile "
                    "recipes return normalized cases with summary, metrics, or full result detail. Profile matrices "
-                   "support sync/async execution plus checkpoint status, resume, and cancellation operations. "
+                   "support sync/async execution; all query, result, resume and cancellation operations use vibris_job. "
                    "benchmark_ab runs repeated paired ABBA, ABAB, or seeded randomized profiles plus same-commit "
                    "controls and returns guarded confidence and measured-noise comparisons; optional visual "
                    "thresholds add a deterministic screenshot gate and a combined performance/visual verdict.",
@@ -297,6 +290,23 @@ Json build_definitions() {
                                          {"matrix", matrix_axes_schema()},
                                          {"actions", {{"type", "array"}, {"items", action_schema()}, {"maxItems", 64}}}},
                                         {"sources", "configs", "matrix", "actions"}), true), false),
+        definition("vibris_job",
+                   "Query, retrieve, cancel or resume one durable v2 job for the explicit Git worktree.",
+                   scoped(closed_object({
+                       {"operation", enum_string({"query", "result", "cancel", "resume"})},
+                       {"job_id", {{"type", "string"}, {"minLength", 1}}},
+                       {"event_cursor", bounded_integer(0, std::numeric_limits<std::uint64_t>::max())},
+                       {"reason", {{"type", "string"}, {"maxLength", 512}}},
+                   }, {"operation", "job_id"}), false), false),
+        definition("vibris_artifacts",
+                   "List, inspect, measure capacity for, or delete managed v2 artifact manifests in the explicit Git worktree.",
+                   scoped(closed_object({
+                       {"operation", enum_string({"list", "get", "capacity", "delete"})},
+                       {"manifest_id", {{"type", "string"}, {"minLength", 1}}},
+                       {"expected_manifest_sha256", {{"type", "string"}, {"minLength", 64}, {"maxLength", 64}}},
+                       {"job_id", {{"type", "string"}, {"minLength", 1}}},
+                       {"request_id", {{"type", "string"}, {"minLength", 1}}},
+                   }, {"operation"}), false), false),
     });
     return definitions;
 }
@@ -353,10 +363,21 @@ std::optional<std::string> validate(const Json& value, const Json& schema, const
                 return error;
             }
         }
+        if (schema.value("uniqueItems", false)) {
+            for (std::size_t left = 0; left < value.size(); ++left) {
+                for (std::size_t right = left + 1; right < value.size(); ++right) {
+                    if (value[left] == value[right]) return path + " must contain unique items";
+                }
+            }
+        }
     }
     if (value.is_string() && schema.contains("minLength") &&
         value.get_ref<const std::string&>().size() < schema["minLength"].get<std::size_t>()) {
         return path + " is too short";
+    }
+    if (value.is_string() && schema.contains("maxLength") &&
+        value.get_ref<const std::string&>().size() > schema["maxLength"].get<std::size_t>()) {
+        return path + " is too long";
     }
     if (value.is_number() && schema.contains("minimum") &&
         value.get<double>() < schema["minimum"].get<double>()) {
@@ -369,10 +390,90 @@ std::optional<std::string> validate(const Json& value, const Json& schema, const
     return std::nullopt;
 }
 
-Json mcp_result(Json payload, bool is_error) {
-    const auto text = payload.dump();
-    return Json{{"content", Json::array({{{"type", "text"}, {"text", text}}})},
-                {"structuredContent", std::move(payload)},
+bool physical_texture_alias(const std::string_view name) {
+    return name.ends_with(".main") || name.ends_with(".alt");
+}
+
+std::optional<std::string> reject_physical_aliases(const Json& value, const std::string& path) {
+    if (value.is_object()) {
+        if (const auto name = value.find("logical_name"); name != value.end() && name->is_string() &&
+            physical_texture_alias(name->get_ref<const std::string&>())) {
+            return path + ".logical_name must use an explicit view instead of a physical suffix alias";
+        }
+        if (value.value("type", std::string{}) == "texture") {
+            const auto name = value.find("name");
+            if (name != value.end() && name->is_string() &&
+                physical_texture_alias(name->get_ref<const std::string&>())) {
+                return path + ".name must use a logical texture name instead of a physical suffix alias";
+            }
+        }
+        for (const auto& [key, item] : value.items()) {
+            if (key == "textures" && item.is_array()) {
+                for (std::size_t index = 0; index < item.size(); ++index) {
+                    if (item[index].is_string() &&
+                        physical_texture_alias(item[index].get_ref<const std::string&>())) {
+                        return path + ".textures[" + std::to_string(index) +
+                            "] must use a logical texture name instead of a physical suffix alias";
+                    }
+                }
+            }
+            if (const auto error = reject_physical_aliases(item, path + "." + key)) return error;
+        }
+    } else if (value.is_array()) {
+        for (std::size_t index = 0; index < value.size(); ++index) {
+            if (const auto error = reject_physical_aliases(value[index], path + "[" + std::to_string(index) + "]")) {
+                return error;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> validate_operation_shape(const std::string_view name, const Json& arguments) {
+    const auto require = [&](std::initializer_list<const char*> fields) -> std::optional<std::string> {
+        for (const auto* field : fields) {
+            if (!arguments.contains(field)) return "arguments." + std::string(field) + " is required";
+        }
+        return std::nullopt;
+    };
+    if (name == "vibris_run_recipe") {
+        const auto recipe = arguments.at("recipe").get<std::string>();
+        if (recipe == "profile") return require({"frames"});
+        if (recipe == "profile_matrix") return require({"sources", "configs", "matrix", "frames"});
+        if (recipe == "benchmark_ab") return require({"baseline", "candidate", "frames"});
+        if (recipe == "ab_compare") return require({"a", "b", "captures"});
+    }
+    if (name == "vibris_artifacts") {
+        const auto operation = arguments.at("operation").get<std::string>();
+        if (operation == "get") return require({"manifest_id"});
+        if (operation == "delete") return require({"manifest_id", "expected_manifest_sha256"});
+    }
+    return std::nullopt;
+}
+
+std::string bounded_summary(std::string value) {
+    constexpr std::size_t maximum_bytes = 2048;
+    if (value.size() > maximum_bytes) {
+        std::size_t boundary = maximum_bytes;
+        while (boundary != 0 && (static_cast<unsigned char>(value[boundary]) & 0xc0U) == 0x80U) --boundary;
+        value.resize(boundary);
+    }
+    return value;
+}
+
+Json mcp_result(std::string_view tool_name, Json payload, bool is_error) {
+    Json structured{{"schema_version", 2}, {"success", !is_error}};
+    std::string summary;
+    if (is_error) {
+        summary = payload.value("code", std::string("ERROR")) + ": " +
+            payload.value("message", std::string("Tool execution failed."));
+        structured["error"] = std::move(payload);
+    } else {
+        summary = std::string(tool_name) + " completed successfully.";
+        structured["result"] = std::move(payload);
+    }
+    return Json{{"content", Json::array({{{"type", "text"}, {"text", bounded_summary(std::move(summary))}}})},
+                {"structuredContent", std::move(structured)},
                 {"isError", is_error}};
 }
 
@@ -391,19 +492,25 @@ InvocationResult ToolRegistry::invoke(std::string_view name, const Json& argumen
     if (const auto error = validate(arguments, (*definition_it)["inputSchema"], "arguments")) {
         return InvocationError{InvocationErrorCode::InvalidArguments, *error};
     }
+    if (const auto error = validate_operation_shape(name, arguments)) {
+        return InvocationError{InvocationErrorCode::InvalidArguments, *error};
+    }
+    if (const auto error = reject_physical_aliases(arguments, "arguments")) {
+        return InvocationError{InvocationErrorCode::InvalidArguments, *error};
+    }
 
     ToolOutcome outcome = dispatch_
                               ? dispatch_(name, arguments)
                               : ToolFailure{"SERVER_NOT_READY", "The MCP backend is not connected.", true,
                                             {{"tool", std::string(name)}}};
-    if (const auto* value = std::get_if<Json>(&outcome)) return mcp_result(*value, false);
+    if (const auto* value = std::get_if<Json>(&outcome)) return mcp_result(name, *value, false);
 
     const auto& failure = std::get<ToolFailure>(outcome);
     Json error{{"code", failure.code},
                {"message", failure.message},
                {"retryable", failure.retryable},
                {"details", failure.details}};
-    return mcp_result({{"success", false}, {"error", std::move(error)}}, true);
+    return mcp_result(name, std::move(error), true);
 }
 
 } // namespace vibris::mcp

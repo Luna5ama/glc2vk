@@ -9,15 +9,15 @@ namespace vibris::mcp {
 
 class SceneContextResolver final {
 public:
-    [[nodiscard]] static ::vibris::control::v1::ScenePreset resolve_preset(
+    [[nodiscard]] static ::vibris::control::v2::ScenePreset resolve_preset(
         const JobContext& config,
-        const ::vibris::control::v1::ListPresetsResponse& response);
-    [[nodiscard]] static ::vibris::control::v1::ScenePreset resolve_preset(
+        const ::vibris::control::v2::ListPresetsResponse& response);
+    [[nodiscard]] static ::vibris::control::v2::ScenePreset resolve_preset(
         std::string_view preset_id,
-        const ::vibris::control::v1::ListPresetsResponse& response);
-    [[nodiscard]] static ::vibris::control::v1::SceneContext resolve(
+        const ::vibris::control::v2::ListPresetsResponse& response);
+    [[nodiscard]] static ::vibris::control::v2::SceneContext resolve(
         const JobContext& config,
-        const ::vibris::control::v1::ListPresetsResponse& response);
+        const ::vibris::control::v2::ListPresetsResponse& response);
 };
 
 }

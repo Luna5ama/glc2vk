@@ -1,68 +1,403 @@
 #include "job_protocol.hpp"
 
+#include <google/protobuf/util/json_util.h>
+
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
-#include <filesystem>
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace vibris::mcp {
 namespace {
 
-namespace proto = ::vibris::control::v1;
+namespace proto = ::vibris::control::v2;
+
 constexpr std::uint64_t queue_timeout_ms = 60'000;
 constexpr std::uint64_t execution_timeout_ms = 120'000;
-constexpr std::uint64_t total_timeout_ms = 180'000;
 
-proto::ArtifactFormat format(std::string_view value) {
+std::string lower_enum_name(std::string value, std::string_view prefix) {
+    if (value.starts_with(prefix)) value.erase(0, prefix.size());
+    std::ranges::transform(value, value.begin(), [](const unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
+    return value;
+}
+
+proto::ArtifactFormat artifact_format(const std::string_view value) {
     if (value == "png") return proto::ARTIFACT_FORMAT_PNG;
+    if (value == "exr") return proto::ARTIFACT_FORMAT_EXR;
     if (value == "bin") return proto::ARTIFACT_FORMAT_BIN;
+    if (value == "text") return proto::ARTIFACT_FORMAT_TEXT;
+    if (value == "json") return proto::ARTIFACT_FORMAT_JSON;
+    if (value == "csv") return proto::ARTIFACT_FORMAT_CSV;
     throw std::invalid_argument("unsupported artifact format");
+}
+
+proto::TextureView texture_view(const std::string_view value) {
+    if (value == "current") return proto::TEXTURE_VIEW_CURRENT;
+    if (value == "alternate") return proto::TEXTURE_VIEW_ALTERNATE;
+    if (value == "main") return proto::TEXTURE_VIEW_MAIN;
+    if (value == "alt") return proto::TEXTURE_VIEW_ALT;
+    throw std::invalid_argument("unsupported texture view");
+}
+
+proto::ResourceKind resource_kind(const std::string_view value) {
+    if (value == "final_framebuffer") return proto::RESOURCE_KIND_FINAL_FRAMEBUFFER;
+    if (value == "texture") return proto::RESOURCE_KIND_TEXTURE;
+    if (value == "buffer") return proto::RESOURCE_KIND_BUFFER;
+    if (value == "patched_shaders") return proto::RESOURCE_KIND_PATCHED_SHADERS;
+    throw std::invalid_argument("unsupported resource kind");
 }
 
 std::string config_value(const Json& value) {
     return value.is_string() ? value.get<std::string>() : value.dump();
 }
 
-std::string short_name(std::string value, std::string_view prefix) {
-    if (value.starts_with(prefix)) value.erase(0, prefix.size());
-    std::ranges::transform(value, value.begin(), [](unsigned char character) {
-        return static_cast<char>(std::tolower(character));
-    });
-    return value;
+proto::ShaderConfig shader_config(const Json* values, const bool preserve) {
+    proto::ShaderConfig result;
+    result.set_preserve_current(preserve);
+    if (values != nullptr) {
+        for (const auto& [key, value] : values->items()) {
+            (*result.mutable_values())[key] = config_value(value);
+        }
+    }
+    return result;
 }
 
-void require_sources(std::span<const proto::PreparedSourceRef> sources, std::size_t expected) {
-    if (sources.size() != expected) throw std::invalid_argument("prepared source count does not match execution");
+using SourceMap = std::unordered_map<std::string, const proto::PreparedSourceRef*>;
+using ConfigMap = std::unordered_map<std::string, proto::ShaderConfig>;
+
+SourceMap source_map(const Json& arguments, const std::span<const proto::PreparedSourceRef> sources) {
+    SourceMap result;
+    if (const auto declared = arguments.find("sources"); declared != arguments.end()) {
+        if (!declared->is_array() || declared->size() != sources.size()) {
+            throw std::invalid_argument("prepared source count does not match named declarations");
+        }
+        for (std::size_t index = 0; index < sources.size(); ++index) {
+            result.emplace((*declared)[index].at("id").get<std::string>(), &sources[index]);
+        }
+        return result;
+    }
+    if (sources.size() == 1) result.emplace("source", &sources.front());
+    if (sources.size() == 2) {
+        result.emplace("a", &sources[0]);
+        result.emplace("b", &sources[1]);
+        result.emplace("baseline", &sources[0]);
+        result.emplace("candidate", &sources[1]);
+    }
+    return result;
 }
 
-void scene(const JobContext& config, const proto::SceneContext& scene_context, proto::SubmitJob& job) {
-    job.set_workspace_id(config.workspace_id);
-    job.mutable_context()->CopyFrom(scene_context);
-    job.mutable_context()->set_fov(config.fov);
-    auto* timeouts = job.mutable_timeouts();
-    timeouts->set_queue_timeout_ms(queue_timeout_ms);
-    timeouts->set_execution_timeout_ms(execution_timeout_ms);
-    timeouts->set_total_timeout_ms(total_timeout_ms);
+ConfigMap config_map(const Json& arguments) {
+    ConfigMap result;
+    if (const auto declared = arguments.find("configs"); declared != arguments.end()) {
+        for (const auto& item : *declared) {
+            const auto values = item.find("values");
+            result.emplace(item.at("id").get<std::string>(),
+                shader_config(values == item.end() ? nullptr : &*values, values == item.end()));
+        }
+    } else if (const auto values = arguments.find("config"); values != arguments.end()) {
+        result.emplace("config", shader_config(&*values, false));
+    } else {
+        result.emplace("config", shader_config(nullptr, true));
+    }
+    return result;
 }
 
-void scale_timeouts(proto::SubmitJob& job) {
-    std::uint64_t rendered_frames = 0;
-    for (const auto& action : job.actions().actions()) {
-        if (action.has_wait_frames()) rendered_frames += action.wait_frames().frame_count();
-        else if (action.has_get_gpu_metrics()) rendered_frames += action.get_gpu_metrics().frames();
-        else if (action.has_take_screenshot()) rendered_frames += action.take_screenshot().after_frames();
+const proto::PreparedSourceRef& require_source(const SourceMap& sources, const std::string& id) {
+    const auto source = sources.find(id);
+    if (source == sources.end()) throw std::invalid_argument("action references an unknown source");
+    return *source->second;
+}
+
+const proto::ShaderConfig& require_config(const ConfigMap& configs, const std::string& id) {
+    const auto config = configs.find(id);
+    if (config == configs.end()) throw std::invalid_argument("action references an unknown config");
+    return config->second;
+}
+
+void copy_filter(const Json& input, proto::ResourceFilter& filter) {
+    for (const auto& kind : input.value("kinds", Json::array())) {
+        filter.add_kinds(resource_kind(kind.get<std::string>()));
+    }
+    if (input.contains("logical_name")) filter.set_logical_name(input.at("logical_name").get<std::string>());
+    if (input.contains("pass_id")) filter.set_pass_id(input.at("pass_id").get<std::string>());
+}
+
+void copy_texture_selector(const Json& input, proto::TextureSelector& selector) {
+    selector.set_logical_name(input.at("logical_name").get<std::string>());
+    selector.set_view(texture_view(input.value("view", std::string("current"))));
+    selector.set_mip_level(input.value("mip_level", std::uint32_t{0}));
+    selector.set_layer(input.value("layer", std::uint32_t{0}));
+}
+
+void append_action(const Json& input, const SourceMap& sources, const ConfigMap& configs,
+    proto::ActionSequence& sequence, const std::string_view artifact_prefix = {}) {
+    auto* action = sequence.add_actions();
+    const auto type = input.at("type").get<std::string>();
+    if (type == "reset_temporal_state") {
+        action->mutable_reset_temporal_state();
+    } else if (type == "wait_frames") {
+        action->mutable_wait_frames()->set_frame_count(input.at("frames").get<std::uint32_t>());
+    } else if (type == "take_screenshot") {
+        auto* value = action->mutable_take_screenshot();
+        value->set_artifact_name(std::string(artifact_prefix) + input.value("artifact_name", "screenshot"));
+        value->set_format(artifact_format(input.value("format", "png")));
+        value->set_after_frames(input.value("after_frames", std::uint32_t{0}));
+    } else if (type == "dump_texture") {
+        auto* value = action->mutable_dump_texture();
+        copy_texture_selector(input.at("resource"), *value->mutable_resource());
+        value->set_format(artifact_format(input.at("format").get<std::string>()));
+        value->set_artifact_name(std::string(artifact_prefix) + input.at("artifact_name").get<std::string>());
+    } else if (type == "dump_buffer") {
+        auto* value = action->mutable_dump_buffer();
+        value->set_logical_name(input.at("logical_name").get<std::string>());
+        value->set_artifact_name(std::string(artifact_prefix) + input.at("artifact_name").get<std::string>());
+    } else if (type == "get_capture_status") {
+        action->mutable_get_capture_status();
+    } else if (type == "load_shader") {
+        const auto source_id = input.at("source_id").get<std::string>();
+        const auto config_id = input.at("config_id").get<std::string>();
+        auto* value = action->mutable_load_shader();
+        value->set_source_uuid(require_source(sources, source_id).source_uuid());
+        value->set_source_id(source_id);
+        value->set_config_id(config_id);
+        value->mutable_config()->CopyFrom(require_config(configs, config_id));
+    } else if (type == "capture_pass") {
+        auto* value = action->mutable_capture_pass();
+        value->set_pass_id(input.at("pass_id").get<std::string>());
+        value->set_artifact_name(std::string(artifact_prefix) + input.at("artifact_name").get<std::string>());
+    } else if (type == "capture_multi") {
+        auto* value = action->mutable_capture_multi();
+        value->set_capture_type(input.at("capture_type").get<std::string>());
+        value->set_artifact_name(std::string(artifact_prefix) + input.at("artifact_name").get<std::string>());
+    } else if (type == "inspect_shader") {
+        action->mutable_inspect_shader();
+    } else if (type == "get_gpu_metrics") {
+        auto* value = action->mutable_get_gpu_metrics();
+        value->set_frames(input.at("frames").get<std::uint32_t>());
+        for (const auto& metric : input.value("metric_ids", Json::array())) {
+            value->add_metric_ids(metric.get<std::string>());
+        }
+    } else if (type == "list_resources") {
+        copy_filter(input, *action->mutable_list_resources()->mutable_filter());
+    } else if (type == "get_patched_shaders") {
+        action->mutable_get_patched_shaders()->set_artifact_name(
+            std::string(artifact_prefix) + input.at("artifact_name").get<std::string>());
+    } else {
+        throw std::invalid_argument("unsupported v2 action type");
+    }
+}
+
+void append_actions(const Json& inputs, const SourceMap& sources, const ConfigMap& configs,
+    proto::ActionSequence& sequence, const std::string_view artifact_prefix = {}) {
+    for (const auto& input : inputs) append_action(input, sources, configs, sequence, artifact_prefix);
+}
+
+void append_load(proto::ActionSequence& sequence, const proto::PreparedSourceRef& source,
+    std::string source_id, std::string config_id, const proto::ShaderConfig& config) {
+    auto* value = sequence.add_actions()->mutable_load_shader();
+    value->set_source_uuid(source.source_uuid());
+    value->set_source_id(std::move(source_id));
+    value->set_config_id(std::move(config_id));
+    value->mutable_config()->CopyFrom(config);
+}
+
+void append_wait(proto::ActionSequence& sequence, const std::uint32_t frames) {
+    if (frames != 0) sequence.add_actions()->mutable_wait_frames()->set_frame_count(frames);
+}
+
+std::uint32_t append_capture(proto::ActionSequence& sequence, const Json& capture, std::string artifact_name) {
+    const auto action_index = static_cast<std::uint32_t>(sequence.actions_size());
+    auto* action = sequence.add_actions();
+    const auto type = capture.at("type").get<std::string>();
+    if (type == "screenshot") {
+        auto* value = action->mutable_take_screenshot();
+        value->set_artifact_name(std::move(artifact_name));
+        value->set_format(artifact_format(capture.value("format", "png")));
+    } else if (type == "texture") {
+        auto* value = action->mutable_dump_texture();
+        value->mutable_resource()->set_logical_name(capture.at("name").get<std::string>());
+        value->mutable_resource()->set_view(proto::TEXTURE_VIEW_CURRENT);
+        value->set_format(artifact_format(capture.value("format", "png")));
+        value->set_artifact_name(std::move(artifact_name));
+    } else if (type == "buffer") {
+        auto* value = action->mutable_dump_buffer();
+        value->set_logical_name(capture.at("name").get<std::string>());
+        value->set_artifact_name(std::move(artifact_name));
+    } else {
+        throw std::invalid_argument("unsupported capture type");
+    }
+    return action_index;
+}
+
+void copy_visual_thresholds(const Json& input, proto::VisualThresholds& output) {
+    output.set_pixel_error_threshold(input.value("pixel_error_threshold", 0.0));
+    if (input.contains("max_mean_absolute_error")) {
+        output.set_max_mean_absolute_error(input.at("max_mean_absolute_error").get<double>());
+    }
+    if (input.contains("max_root_mean_square_error")) {
+        output.set_max_root_mean_square_error(input.at("max_root_mean_square_error").get<double>());
+    }
+    if (input.contains("max_p95_absolute_error")) {
+        output.set_max_p95_absolute_error(input.at("max_p95_absolute_error").get<double>());
+    }
+    if (input.contains("max_absolute_error")) {
+        output.set_max_absolute_error(input.at("max_absolute_error").get<double>());
+    }
+    if (input.contains("max_threshold_pixel_ratio")) {
+        output.set_max_threshold_pixel_ratio(input.at("max_threshold_pixel_ratio").get<double>());
+    }
+    if (input.contains("min_ssim")) output.set_min_ssim(input.at("min_ssim").get<double>());
+}
+
+void configure_result_artifacts(const Json& arguments, proto::ResultArtifactOptions& options) {
+    options.set_write_json(true);
+    options.set_write_csv(arguments.value("result_csv", false));
+    for (const auto& unit : arguments.value("converted_units", Json::array())) {
+        options.add_converted_units(unit.get<std::string>());
+    }
+}
+
+void build_matrix(const Json& arguments, const SourceMap& sources, const ConfigMap& configs,
+    const Json& template_actions, proto::MatrixRequest& matrix) {
+    matrix.set_max_retries(arguments.value("max_retries", std::uint32_t{0}));
+    for (const auto& source_value : arguments.at("matrix").at("sources")) {
+        const auto source_id = source_value.get<std::string>();
+        static_cast<void>(require_source(sources, source_id));
+        for (const auto& config_value : arguments.at("matrix").at("configs")) {
+            const auto config_id = config_value.get<std::string>();
+            auto* value = matrix.add_cases();
+            value->set_case_id(source_id + "--" + config_id);
+            value->set_source_id(source_id);
+            value->set_config_id(config_id);
+            value->mutable_config()->CopyFrom(require_config(configs, config_id));
+            append_actions(template_actions, sources, configs, *value->mutable_actions(), value->case_id() + "--");
+        }
+    }
+}
+
+void build_recipe(const Json& arguments, const JobContext& config, const SourceMap& sources,
+    const ConfigMap& configs, proto::JobSpec& job) {
+    const auto recipe = arguments.at("recipe").get<std::string>();
+    if (recipe == "profile_matrix") {
+        Json actions = Json::array();
+        const auto warmup = arguments.value("warmup_frames", config.default_warmup_frames);
+        if (warmup != 0) actions.push_back({{"type", "wait_frames"}, {"frames", warmup}});
+        actions.push_back({{"type", "get_gpu_metrics"}, {"frames", arguments.at("frames")},
+            {"metric_ids", arguments.value("metric_filter", Json::array())}});
+        build_matrix(arguments, sources, configs, actions, *job.mutable_matrix());
+        return;
+    }
+    if (recipe == "benchmark_ab") {
+        auto* benchmark = job.mutable_benchmark();
+        benchmark->set_baseline_source_id("baseline");
+        benchmark->set_candidate_source_id("candidate");
+        benchmark->mutable_baseline_config()->CopyFrom(require_config(configs, "config"));
+        benchmark->mutable_candidate_config()->CopyFrom(require_config(configs, "config"));
+        benchmark->set_warmup_frames(arguments.value("warmup_frames", config.default_warmup_frames));
+        benchmark->set_sample_frames(arguments.at("frames").get<std::uint32_t>());
+        benchmark->set_repetitions(arguments.value("rounds", std::uint32_t{2}));
+        const auto order = arguments.value("order", std::string("abba"));
+        benchmark->set_order(order == "abab" ? proto::BENCHMARK_ORDER_ABAB :
+            order == "randomized" ? proto::BENCHMARK_ORDER_RANDOMIZED : proto::BENCHMARK_ORDER_ABBA);
+        benchmark->set_run_same_source_control(true);
+        return;
+    }
+
+    auto* sequence = job.mutable_action_sequence();
+    if (recipe == "profile" || recipe == "load_and_screenshot" || recipe == "capture_debug_bundle") {
+        const auto& source = require_source(sources, "source");
+        const auto& shader = require_config(configs, "config");
+        append_load(*sequence, source, "source", "config", shader);
+        append_wait(*sequence, arguments.value("warmup_frames", config.default_warmup_frames));
+        if (recipe == "profile") {
+            auto* metrics = sequence->add_actions()->mutable_get_gpu_metrics();
+            metrics->set_frames(arguments.at("frames").get<std::uint32_t>());
+            for (const auto& id : arguments.value("metric_filter", Json::array())) {
+                metrics->add_metric_ids(id.get<std::string>());
+            }
+        } else if (recipe == "load_and_screenshot" || arguments.value("screenshot", false)) {
+            auto* capture = sequence->add_actions()->mutable_take_screenshot();
+            capture->set_artifact_name("screenshot");
+            capture->set_format(proto::ARTIFACT_FORMAT_PNG);
+        }
+        if (recipe == "capture_debug_bundle") {
+            for (const auto& texture : arguments.value("textures", Json::array())) {
+                auto* dump = sequence->add_actions()->mutable_dump_texture();
+                dump->mutable_resource()->set_logical_name(texture.get<std::string>());
+                dump->mutable_resource()->set_view(proto::TEXTURE_VIEW_CURRENT);
+                dump->set_format(proto::ARTIFACT_FORMAT_BIN);
+                dump->set_artifact_name(texture.get<std::string>());
+            }
+            for (const auto& buffer : arguments.value("buffers", Json::array())) {
+                auto* dump = sequence->add_actions()->mutable_dump_buffer();
+                dump->set_logical_name(buffer.get<std::string>());
+                dump->set_artifact_name(buffer.get<std::string>());
+            }
+        }
+        return;
+    }
+    if (recipe == "ab_compare") {
+        const auto shader = require_config(configs, "config");
+        append_load(*sequence, require_source(sources, "a"), "a", "config", shader);
+        append_wait(*sequence, arguments.value("warmup_frames", config.default_warmup_frames));
+        std::vector<std::uint32_t> baseline_captures;
+        std::size_t capture_index = 0;
+        for (const auto& capture : arguments.at("captures")) {
+            baseline_captures.push_back(
+                append_capture(*sequence, capture, "a-" + std::to_string(capture_index++)));
+        }
+        append_load(*sequence, require_source(sources, "b"), "b", "config", shader);
+        append_wait(*sequence, arguments.value("warmup_frames", config.default_warmup_frames));
+        std::vector<std::uint32_t> candidate_captures;
+        capture_index = 0;
+        for (const auto& capture : arguments.at("captures")) {
+            candidate_captures.push_back(
+                append_capture(*sequence, capture, "b-" + std::to_string(capture_index++)));
+        }
+        for (std::size_t index = 0; index < baseline_captures.size(); ++index) {
+            auto* compare = sequence->add_actions()->mutable_compare_captures();
+            compare->set_baseline_action_index(baseline_captures[index]);
+            compare->set_candidate_action_index(candidate_captures[index]);
+            compare->set_baseline_label(arguments.at("a").at("label").get<std::string>());
+            compare->set_candidate_label(arguments.at("b").at("label").get<std::string>());
+            if (const auto thresholds = arguments.find("visual_thresholds"); thresholds != arguments.end()) {
+                copy_visual_thresholds(*thresholds, *compare->mutable_thresholds());
+            }
+        }
+        return;
+    }
+    throw std::invalid_argument("unsupported recipe");
+}
+
+std::uint64_t rendered_frames(const proto::ActionSequence& sequence) {
+    std::uint64_t result = 0;
+    for (const auto& action : sequence.actions()) {
+        if (action.has_wait_frames()) result += action.wait_frames().frame_count();
+        else if (action.has_get_gpu_metrics()) result += action.get_gpu_metrics().frames();
+        else if (action.has_take_screenshot()) result += action.take_screenshot().after_frames();
+    }
+    return result;
+}
+
+void scale_timeouts(proto::JobSpec& job) {
+    std::uint64_t frames = job.has_action_sequence() ? rendered_frames(job.action_sequence()) : 0;
+    if (job.has_matrix()) {
+        for (const auto& value : job.matrix().cases()) frames += rendered_frames(value.actions());
     }
     constexpr std::uint64_t setup_ms = 60'000;
     constexpr std::uint64_t ms_per_frame = 1'000;
-    const auto measured_ms = rendered_frames > (std::numeric_limits<std::uint64_t>::max() - setup_ms) / ms_per_frame
+    const auto measured = frames > (std::numeric_limits<std::uint64_t>::max() - setup_ms) / ms_per_frame
         ? std::numeric_limits<std::uint64_t>::max()
-        : setup_ms + rendered_frames * ms_per_frame;
-    const auto execution = std::max(execution_timeout_ms, measured_ms);
+        : setup_ms + frames * ms_per_frame;
+    const auto execution = std::max(execution_timeout_ms, measured);
+    job.mutable_timeouts()->set_queue_timeout_ms(queue_timeout_ms);
     job.mutable_timeouts()->set_execution_timeout_ms(execution);
     job.mutable_timeouts()->set_total_timeout_ms(
         execution > std::numeric_limits<std::uint64_t>::max() - queue_timeout_ms
@@ -70,505 +405,49 @@ void scale_timeouts(proto::SubmitJob& job) {
             : execution + queue_timeout_ms);
 }
 
-void config_values(const Json& values, proto::ShaderConfig& config) {
-    for (const auto& [key, value] : values.items()) {
-        (*config.mutable_values())[key] = config_value(value);
-    }
+Json protobuf_json(const google::protobuf::Message& value) {
+    std::string encoded;
+    google::protobuf::util::JsonPrintOptions options;
+    options.preserve_proto_field_names = true;
+    options.always_print_fields_with_no_presence = true;
+    const auto status = google::protobuf::util::MessageToJsonString(value, &encoded, options);
+    if (!status.ok()) throw std::runtime_error("protobuf JSON mapping failed: " + status.ToString());
+    return Json::parse(encoded);
 }
 
-void recipe_config(const Json& arguments, proto::SubmitJob& job) {
-    auto* named = job.add_shader_configs();
-    named->set_id(arguments.value("__vibris_config_id", std::string("config")));
-    if (arguments.contains("config")) config_values(arguments.at("config"), *named->mutable_config());
-    else named->set_preserve(true);
-}
+} // namespace
 
-void named_configs(const Json& arguments, proto::SubmitJob& job) {
-    if (!arguments.contains("configs")) return;
-    for (const auto& input : arguments.at("configs")) {
-        auto* named = job.add_shader_configs();
-        named->set_id(input.at("id").get<std::string>());
-        if (input.contains("values")) config_values(input.at("values"), *named->mutable_config());
-        else named->set_preserve(true);
-    }
-}
-
-proto::Action* add_action(proto::ActionSequence& sequence) {
-    return sequence.add_actions();
-}
-
-void load(proto::ActionSequence& sequence, const proto::PreparedSourceRef& source,
-    std::string source_id, std::string config_id, std::string case_id, bool continue_on_failure = false) {
-    auto* action = add_action(sequence)->mutable_load_shader();
-    action->set_source_uuid(source.uuid());
-    action->set_source_id(std::move(source_id));
-    action->set_config_id(std::move(config_id));
-    action->set_case_id(std::move(case_id));
-    action->set_continue_on_failure(continue_on_failure);
-}
-
-void wait(proto::ActionSequence& sequence, std::uint32_t frames) {
-    if (frames != 0) add_action(sequence)->mutable_wait_frames()->set_frame_count(frames);
-}
-
-void load_and_screenshot_recipe(const Json& arguments, const JobContext& config,
-    std::span<const proto::PreparedSourceRef> sources, proto::ActionSequence& sequence) {
-    require_sources(sources, 1);
-    load(sequence, sources.front(), "source", "config", "source--config");
-    auto* capture = add_action(sequence)->mutable_take_screenshot();
-    capture->set_artifact_name("screenshot");
-    capture->set_format(format(arguments.value("screenshot_format", std::string("png"))));
-    capture->set_after_frames(arguments.value("warmup_frames", config.default_warmup_frames));
-}
-
-void debug_recipe(const Json& arguments, const JobContext& config,
-    std::span<const proto::PreparedSourceRef> sources, proto::ActionSequence& sequence) {
-    require_sources(sources, 1);
-    load(sequence, sources.front(), "source", "config", "source--config");
-    wait(sequence, arguments.value("warmup_frames", config.default_warmup_frames));
-    if (arguments.value("screenshot", false)) {
-        auto* capture = add_action(sequence)->mutable_take_screenshot();
-        capture->set_artifact_name("screenshot");
-        capture->set_format(proto::ARTIFACT_FORMAT_PNG);
-    }
-    for (const auto& texture : arguments.value("textures", Json::array())) {
-        const auto name = texture.get<std::string>();
-        auto* capture = add_action(sequence)->mutable_dump_texture_v2();
-        capture->set_logical_name(name);
-        capture->set_artifact_name(name);
-        capture->set_format(proto::ARTIFACT_FORMAT_BIN);
-    }
-    for (const auto& buffer : arguments.value("buffers", Json::array())) {
-        const auto name = buffer.get<std::string>();
-        auto* capture = add_action(sequence)->mutable_dump_buffer();
-        capture->set_logical_name(name);
-        capture->set_artifact_name(name);
-    }
-}
-
-void add_ab_capture(proto::ActionSequence& sequence, const Json& capture, std::string artifact_name) {
-    const auto type = capture.at("type").get<std::string>();
-    if (type == "screenshot") {
-        auto* value = add_action(sequence)->mutable_take_screenshot();
-        value->set_artifact_name(std::move(artifact_name));
-        value->set_format(format(capture.value("format", std::string("png"))));
-        return;
-    }
-    const auto default_format = type == "buffer" ? std::string("bin") : std::string("png");
-    if (type == "texture") {
-        auto* value = add_action(sequence)->mutable_dump_texture_v2();
-        value->set_logical_name(capture.at("name").get<std::string>());
-        value->set_artifact_name(std::move(artifact_name));
-        value->set_format(format(capture.value("format", default_format)));
-        return;
-    }
-    auto* value = add_action(sequence)->mutable_dump_buffer();
-    value->set_logical_name(capture.at("name").get<std::string>());
-    value->set_artifact_name(std::move(artifact_name));
-}
-
-void ab_recipe(const Json& arguments, const JobContext& config,
-    std::span<const proto::PreparedSourceRef> sources, proto::ActionSequence& sequence) {
-    require_sources(sources, 2);
-    const auto warmup = arguments.value("warmup_frames", config.default_warmup_frames);
-    load(sequence, sources[0], "a", "config", "a--config");
-    wait(sequence, warmup);
-    std::size_t index = 0;
-    for (const auto& capture : arguments.at("captures")) {
-        add_ab_capture(sequence, capture, "a-" + std::to_string(index++));
-    }
-    load(sequence, sources[1], "b", "config", "b--config");
-    wait(sequence, warmup);
-    index = 0;
-    for (const auto& capture : arguments.at("captures")) {
-        add_ab_capture(sequence, capture, "b-" + std::to_string(index++));
-    }
-    auto* compare = add_action(sequence)->mutable_compare_captures();
-    compare->set_baseline_capture_index(0);
-    compare->set_candidate_capture_index(1);
-    compare->set_baseline_label(arguments.at("a").at("label").get<std::string>());
-    compare->set_candidate_label(arguments.at("b").at("label").get<std::string>());
-    if (const auto configured = arguments.find("visual_thresholds"); configured != arguments.end()) {
-        auto* thresholds = compare->mutable_thresholds();
-        thresholds->set_pixel_error_threshold(
-            configured->value("pixel_error_threshold", 0.0));
-        if (configured->contains("max_mean_absolute_error")) {
-            thresholds->set_max_mean_absolute_error(configured->at("max_mean_absolute_error").get<double>());
-        }
-        if (configured->contains("max_root_mean_square_error")) {
-            thresholds->set_max_root_mean_square_error(
-                configured->at("max_root_mean_square_error").get<double>());
-        }
-        if (configured->contains("max_p95_absolute_error")) {
-            thresholds->set_max_p95_absolute_error(configured->at("max_p95_absolute_error").get<double>());
-        }
-        if (configured->contains("max_absolute_error")) {
-            thresholds->set_max_absolute_error(configured->at("max_absolute_error").get<double>());
-        }
-        if (configured->contains("max_threshold_pixel_ratio")) {
-            thresholds->set_max_threshold_pixel_ratio(
-                configured->at("max_threshold_pixel_ratio").get<double>());
-        }
-        if (configured->contains("min_ssim")) {
-            thresholds->set_min_ssim(configured->at("min_ssim").get<double>());
-        }
-    }
-}
-
-void profile_recipe(const Json& arguments, const JobContext& config,
-    std::span<const proto::PreparedSourceRef> sources, proto::ActionSequence& sequence) {
-    require_sources(sources, 1);
-    load(
-        sequence,
-        sources.front(),
-        arguments.value("__vibris_source_id", std::string("source")),
-        arguments.value("__vibris_config_id", std::string("config")),
-        arguments.value("__vibris_case_id", std::string("source--config")));
-    wait(sequence, arguments.value("warmup_frames", config.default_warmup_frames));
-    add_action(sequence)->mutable_get_gpu_metrics()->set_frames(arguments.at("frames").get<std::uint32_t>());
-}
-
-void profile_artifacts(const Json& arguments, std::string kind, proto::SubmitJob& job) {
-    auto* options = job.mutable_result_artifacts();
-    options->set_json(true);
-    options->set_csv(arguments.value("result_csv", false));
-    options->set_kind(arguments.value("__vibris_result_kind", kind));
-    options->set_attempt(arguments.value("__vibris_attempt", std::uint32_t{1}));
-    for (const auto& unit : arguments.value("converted_units", Json::array())) {
-        options->add_converted_units(unit.get<std::string>());
-    }
-    for (const auto& diagnostic : arguments.value("__vibris_previous_attempts", Json::array())) {
-        auto* output = options->add_previous_attempts();
-        output->set_attempt(diagnostic.at("attempt").get<std::uint32_t>());
-        output->set_status(diagnostic.at("status").get<std::string>());
-        output->set_retryable(diagnostic.value("retryable", false));
-        const auto error = diagnostic.find("error");
-        if (error != diagnostic.end() && error->is_object()) {
-            output->set_error_code(error->value("error_code", std::string{}));
-            output->set_message(error->value("message", std::string{}));
-        }
-    }
-}
-
-void matrix(const Json& arguments, std::span<const proto::PreparedSourceRef> prepared,
-    const Json& template_actions, proto::SubmitJob& job);
-
-void recipe(const Json& arguments, const JobContext& config,
-    std::span<const proto::PreparedSourceRef> sources, proto::SubmitJob& job) {
-    const auto kind = arguments.at("recipe").get<std::string>();
-    if (kind != "profile_matrix") recipe_config(arguments, job);
-    if (kind == "profile") {
-        profile_artifacts(arguments, kind, job);
-        return profile_recipe(arguments, config, sources, *job.mutable_actions());
-    }
-    if (kind == "profile_matrix") {
-        profile_artifacts(arguments, kind, job);
-        Json template_actions = Json::array();
-        const auto warmup = arguments.value("warmup_frames", config.default_warmup_frames);
-        if (warmup != 0) template_actions.push_back({{"type", "wait_frames"}, {"frames", warmup}});
-        template_actions.push_back({{"type", "get_gpu_metrics"}, {"frames", arguments.at("frames")}});
-        return matrix(arguments, sources, template_actions, job);
-    }
-    if (kind == "load_and_screenshot") {
-        return load_and_screenshot_recipe(arguments, config, sources, *job.mutable_actions());
-    }
-    if (kind == "capture_debug_bundle") return debug_recipe(arguments, config, sources, *job.mutable_actions());
-    if (kind == "ab_compare") return ab_recipe(arguments, config, sources, *job.mutable_actions());
-    throw std::invalid_argument("unsupported recipe");
-}
-
-using SourceMap = std::unordered_map<std::string, const proto::PreparedSourceRef*>;
-
-SourceMap source_map(const Json& arguments, std::span<const proto::PreparedSourceRef> sources) {
-    if (!arguments.contains("sources")) {
-        if (!sources.empty()) throw std::invalid_argument("prepared sources have no named declarations");
-        return {};
-    }
-    if (arguments.at("sources").size() != sources.size()) {
-        throw std::invalid_argument("prepared source count does not match named declarations");
-    }
-    SourceMap result;
-    for (std::size_t index = 0; index < sources.size(); ++index) {
-        result.emplace(arguments.at("sources")[index].at("id").get<std::string>(), &sources[index]);
-    }
-    return result;
-}
-
-void append_actions(const Json& inputs, const SourceMap& sources, proto::ActionSequence& sequence,
-    std::string_view artifact_prefix = {}) {
-    for (const auto& input : inputs) {
-        auto* action = sequence.add_actions();
-        const auto type = input.at("type").get<std::string>();
-        if (type == "reset_temporal_state") {
-            action->mutable_reset_temporal_state();
-        } else if (type == "wait_frames") {
-            action->mutable_wait_frames()->set_frame_count(input.at("frames").get<std::uint32_t>());
-        } else if (type == "take_screenshot") {
-            auto* value = action->mutable_take_screenshot();
-            value->set_format(format(input.value("format", std::string("png"))));
-            value->set_artifact_name(std::string(artifact_prefix) +
-                input.value("artifact_name", std::string("screenshot")));
-            value->set_after_frames(input.value("after_frames", std::uint32_t{0}));
-        } else if (type == "dump_texture") {
-            auto* value = action->mutable_dump_texture_v2();
-            value->set_logical_name(input.at("name").get<std::string>());
-            value->set_format(format(input.at("format").get<std::string>()));
-            value->set_artifact_name(std::string(artifact_prefix) + input.at("artifact_name").get<std::string>());
-        } else if (type == "dump_buffer") {
-            auto* value = action->mutable_dump_buffer();
-            value->set_logical_name(input.at("name").get<std::string>());
-            value->set_artifact_name(std::string(artifact_prefix) + input.at("artifact_name").get<std::string>());
-        } else if (type == "get_capture_status") action->mutable_get_capture_status();
-        else if (type == "load_shader") {
-            const auto source_id = input.at("source").get<std::string>();
-            const auto source = sources.find(source_id);
-            if (source == sources.end()) throw std::invalid_argument("load action references an unknown source");
-            auto* load_action = action->mutable_load_shader();
-            load_action->set_source_uuid(source->second->uuid());
-            load_action->set_source_id(source_id);
-            load_action->set_config_id(input.at("config").get<std::string>());
-            load_action->set_case_id(source_id + "--" + load_action->config_id());
-            load_action->set_continue_on_failure(true);
-        } else if (type == "capture_pass") {
-            auto* value = action->mutable_capture_pass();
-            value->set_pass(input.at("pass").get<std::string>());
-            if (input.contains("path")) value->set_path(input.at("path").get<std::string>());
-        } else if (type == "capture_multi") {
-            auto* value = action->mutable_capture_multi();
-            value->set_type(input.at("capture_type").get<std::string>());
-            if (input.contains("path")) value->set_path(input.at("path").get<std::string>());
-        } else if (type == "inspect_shader") action->mutable_inspect_shader();
-        else if (type == "get_gpu_metrics") {
-            action->mutable_get_gpu_metrics()->set_frames(input.at("frames").get<std::uint32_t>());
-        } else if (type == "list_buffers") action->mutable_list_buffers();
-        else if (type == "list_textures") action->mutable_list_textures_v2();
-        else if (type == "get_patched_shaders") {
-            action->mutable_get_patched_shaders()->set_artifact_name(
-                std::string(artifact_prefix) + input.at("artifact_name").get<std::string>());
-        }
-        else throw std::invalid_argument("unsupported action type");
-    }
-}
-
-void actions(const Json& arguments, std::span<const proto::PreparedSourceRef> prepared, proto::SubmitJob& job) {
-    named_configs(arguments, job);
-    const auto sources = source_map(arguments, prepared);
-    append_actions(arguments.at("actions"), sources, *job.mutable_actions());
-}
-
-void matrix(const Json& arguments, std::span<const proto::PreparedSourceRef> prepared,
-    const Json& template_actions, proto::SubmitJob& job) {
-    named_configs(arguments, job);
-    const auto sources = source_map(arguments, prepared);
-    auto& sequence = *job.mutable_actions();
-    for (const auto& source_value : arguments.at("matrix").at("sources")) {
-        const auto source_id = source_value.get<std::string>();
-        const auto source = sources.find(source_id);
-        if (source == sources.end()) throw std::invalid_argument("matrix references an unknown source");
-        for (const auto& config_value : arguments.at("matrix").at("configs")) {
-            const auto config_id = config_value.get<std::string>();
-            const auto case_id = source_id + "--" + config_id;
-            load(sequence, *source->second, source_id, config_id, case_id, true);
-            append_actions(template_actions, sources, sequence, case_id + "--");
-        }
-    }
-}
-
-void matrix(const Json& arguments, std::span<const proto::PreparedSourceRef> prepared, proto::SubmitJob& job) {
-    matrix(arguments, prepared, arguments.at("actions"), job);
-}
-
-void require_absolute(std::string_view value, std::string_view field, bool optional = false) {
-    if ((!optional && value.empty()) || (!value.empty() && !std::filesystem::path(value).is_absolute())) {
-        throw std::runtime_error(std::string(field) + " is not absolute");
-    }
-}
-
-Json resource(const proto::ResourceDescriptor& value) {
-    return {{"logical_name", value.logical_name()},
-            {"kind", short_name(proto::ResourceKind_Name(value.kind()), "RESOURCE_KIND_")},
-            {"width", value.width()}, {"height", value.height()}, {"depth", value.depth()},
-            {"mip_level", value.mip_level()}, {"mip_levels", value.mip_levels()}, {"layer", value.layer()},
-            {"internal_format", value.internal_format()}, {"category", value.category()},
-            {"target", value.texture_target()}, {"channel_layout", value.channel_layout()},
-            {"numeric_class", value.numeric_class()}, {"component_bits", value.component_bits()},
-            {"readback_format", value.readback_format()}, {"readback_type", value.readback_type()}};
-}
-
-Json artifact(const proto::ArtifactMetadata& value) {
-    require_absolute(value.path(), "artifact path");
-    return {{"artifact_id", value.artifact_id()}, {"file_name", value.file_name()},
-            {"kind", short_name(proto::ArtifactKind_Name(value.kind()), "ARTIFACT_KIND_")},
-            {"format", short_name(proto::ArtifactFormat_Name(value.format()), "ARTIFACT_FORMAT_")},
-            {"media_type", value.media_type()}, {"byte_size", value.byte_size()},
-            {"resource", resource(value.resource())},
-            {"role", short_name(proto::ArtifactRole_Name(value.role()), "ARTIFACT_ROLE_")},
-            {"subresource_index", value.has_subresource_index() ? Json(value.subresource_index()) : Json(nullptr)},
-            {"path", value.path()}};
-}
-
-Json artifacts(const google::protobuf::RepeatedPtrField<proto::ArtifactMetadata>& values) {
-    Json result = Json::array();
-    for (const auto& value : values) result.push_back(artifact(value));
-    return result;
-}
-
-Json diagnostics(const google::protobuf::RepeatedPtrField<proto::ShaderDiagnostic>& values) {
-    Json result = Json::array();
-    for (const auto& value : values) {
-        require_absolute(value.log_path(), "diagnostic log path", true);
-        result.push_back({{"severity", short_name(proto::DiagnosticSeverity_Name(value.severity()),
-                                                   "DIAGNOSTIC_SEVERITY_")},
-                          {"file_name", value.file_name()}, {"line", value.line()}, {"column", value.column()},
-                          {"message", value.message()}, {"log_path", value.log_path()}});
-    }
-    return result;
-}
-
-Json comparison(const proto::JobResult& value) {
-    if (!value.has_comparison()) return nullptr;
-    const auto& comparison = value.comparison();
-    Json violations = Json::array();
-    for (const auto& violation : comparison.violations()) violations.push_back(violation);
-    Json thresholds = nullptr;
-    if (comparison.has_thresholds()) {
-        const auto& configured = comparison.thresholds();
-        thresholds = {{"pixel_error_threshold", configured.pixel_error_threshold()}};
-        if (configured.has_max_mean_absolute_error()) {
-            thresholds["max_mean_absolute_error"] = configured.max_mean_absolute_error();
-        }
-        if (configured.has_max_root_mean_square_error()) {
-            thresholds["max_root_mean_square_error"] = configured.max_root_mean_square_error();
-        }
-        if (configured.has_max_p95_absolute_error()) {
-            thresholds["max_p95_absolute_error"] = configured.max_p95_absolute_error();
-        }
-        if (configured.has_max_absolute_error()) {
-            thresholds["max_absolute_error"] = configured.max_absolute_error();
-        }
-        if (configured.has_max_threshold_pixel_ratio()) {
-            thresholds["max_threshold_pixel_ratio"] = configured.max_threshold_pixel_ratio();
-        }
-        if (configured.has_min_ssim()) thresholds["min_ssim"] = configured.min_ssim();
-    }
-    Json result{{"baseline_label", comparison.baseline_label()},
-                {"candidate_label", comparison.candidate_label()},
-                {"mean_absolute_error", comparison.mean_absolute_error()},
-                {"root_mean_square_error", comparison.root_mean_square_error()},
-                {"p95_absolute_error", comparison.p95_absolute_error()},
-                {"max_absolute_error", comparison.max_absolute_error()},
-                {"threshold_pixel_ratio", comparison.threshold_pixel_ratio()},
-                {"ssim", comparison.has_ssim() ? Json(comparison.ssim()) : Json(nullptr)},
-                {"sample_count", comparison.sample_count()},
-                {"pixel_count", comparison.pixel_count()},
-                {"pixel_error_threshold", comparison.pixel_error_threshold()},
-                {"passed", comparison.passed()},
-                {"verdict", comparison.verdict()},
-                {"violations", std::move(violations)},
-                {"thresholds", std::move(thresholds)}};
-    return result;
-}
-
-Json artifact_groups(const google::protobuf::RepeatedPtrField<proto::ArtifactGroup>& values) {
-    Json result = Json::array();
-    for (const auto& value : values) {
-        result.push_back({{"name", value.name()}, {"resource", resource(value.resource())},
-                          {"artifacts", artifacts(value.artifacts())}});
-    }
-    return result;
-}
-
-Json action_results(const proto::JobResult& value) {
-    Json results = Json::array();
-    for (const auto& action : value.action_results()) {
-        Json payload = Json::object();
-        if (!action.json().empty()) payload = Json::parse(action.json());
-        results.push_back({{"action_index", action.action_index()},
-                           {"case_id", action.case_id()},
-                           {"kind", short_name(proto::JobActionKind_Name(action.kind()), "JOB_ACTION_KIND_")},
-                           {"result", std::move(payload)}});
-    }
-    return results;
-}
-
-Json benchmark_barriers(const proto::JobResult& value) {
-    Json result = Json::array();
-    for (const auto& receipt : value.benchmark_barriers()) {
-        result.push_back({{"case_id", receipt.case_id()},
-                          {"stage", short_name(proto::BenchmarkBarrierStage_Name(receipt.stage()),
-                                               "BENCHMARK_BARRIER_STAGE_")},
-                          {"ordinal", receipt.ordinal()},
-                          {"source_uuid", receipt.source_uuid()},
-                          {"config_sha256", receipt.config_sha256()},
-                          {"shader_generation", receipt.shader_generation()},
-                          {"detail", receipt.detail()}});
-    }
-    return result;
-}
-
-ToolOutcome completed(const proto::JobCompleted& completed) {
-    const auto& value = completed.result();
-    if (value.manifest_path().empty()) {
-        if (!value.artifacts().empty()) throw std::runtime_error("completed job omitted its artifact manifest");
-    } else {
-        require_absolute(value.manifest_path(), "manifest path");
-    }
-    const auto& timing = value.timings();
-    return Json{{"success", true},
-                {"kind", short_name(proto::JobResultKind_Name(value.kind()), "JOB_RESULT_KIND_")},
-                {"diagnostics", diagnostics(value.shader_diagnostics())},
-                {"comparison", comparison(value)},
-                {"action_results", action_results(value)},
-                {"benchmark_barriers", benchmark_barriers(value)},
-                {"timings", {{"started_at_unix_ms", timing.started_at_unix_ms()},
-                             {"completed_at_unix_ms", timing.completed_at_unix_ms()},
-                             {"queue_ms", timing.queue_ms()}, {"execution_ms", timing.execution_ms()},
-                             {"total_ms", timing.total_ms()}}},
-                {"frame_ids", value.frame_ids()}, {"artifacts", artifacts(value.artifacts())},
-                {"artifact_groups", artifact_groups(value.artifact_groups())},
-                {"manifest_path", value.manifest_path()}};
-}
-
-ToolOutcome failed(const proto::JobFailed& failed) {
-    const auto& error = failed.error();
-    require_absolute(error.log_path(), "failure log path", true);
-    Json details = Json::object();
-    for (const auto& [key, value] : error.details()) details[key] = value;
-    details["field"] = error.field();
-    details["log_path"] = error.log_path();
-    details["artifacts"] = artifacts(failed.artifacts());
-    return ToolFailure{proto::ErrorCode_Name(error.code()), error.message(), error.retryable(), std::move(details)};
-}
-
-}
-
-proto::ClientMessage JobProtocol::request(std::string_view tool_name, const Json& arguments,
+proto::ClientMessage JobProtocol::request(const std::string_view tool_name, const Json& arguments,
     const JobContext& config, const proto::SceneContext& context,
-    std::span<const proto::PreparedSourceRef> sources, std::string request_id) {
+    const std::span<const proto::PreparedSourceRef> sources, std::string request_id) {
     if (request_id.empty() || config.workspace_id.empty()) throw std::invalid_argument("job identity is missing");
     proto::ClientMessage message;
+    message.mutable_protocol_version()->set_major(2);
     message.set_message_id("job-" + request_id);
     message.set_request_id(request_id);
     message.set_workspace_id(config.workspace_id);
-    auto* job = message.mutable_submit_job();
-    job->set_request_id(std::move(request_id));
-    scene(config, context, *job);
-    if (const auto preset = arguments.find("__vibris_preset"); preset != arguments.end()) {
-        auto* provenance = job->mutable_benchmark_provenance();
-        provenance->set_preset_id(preset->at("preset_id").get<std::string>());
-        provenance->set_preset_version(preset->at("version").get<std::string>());
-        provenance->set_preset_display_name(preset->at("display_name").get<std::string>());
-    }
-    if (const auto workflow = arguments.find("__vibris_workflow_id"); workflow != arguments.end()) {
-        auto* benchmark_case = job->mutable_benchmark_case();
-        benchmark_case->set_workflow_id(workflow->get<std::string>());
-        benchmark_case->set_case_id(arguments.at("__vibris_case_id").get<std::string>());
-    }
+
+    auto* job = message.mutable_submit_job()->mutable_job();
+    job->set_job_id(request_id);
+    job->set_preset_id(arguments.value("preset_id", std::string{}));
+    job->mutable_context()->CopyFrom(context);
+    job->mutable_context()->set_fov(config.fov);
+    job->mutable_restore_state()->set_on_success(true);
+    job->mutable_restore_state()->set_on_error(true);
+    configure_result_artifacts(arguments, *job->mutable_result_artifacts());
     for (const auto& source : sources) job->add_sources()->CopyFrom(source);
-    if (tool_name == "vibris_run_recipe") recipe(arguments, config, sources, *job);
-    else if (tool_name == "vibris_run_actions") actions(arguments, sources, *job);
-    else if (tool_name == "vibris_run_matrix") matrix(arguments, sources, *job);
-    else throw std::invalid_argument("unsupported job tool");
+
+    const auto sources_by_id = source_map(arguments, sources);
+    const auto configs_by_id = config_map(arguments);
+    if (tool_name == "vibris_run_actions") {
+        append_actions(arguments.at("actions"), sources_by_id, configs_by_id, *job->mutable_action_sequence());
+    } else if (tool_name == "vibris_run_matrix") {
+        build_matrix(arguments, sources_by_id, configs_by_id, arguments.at("actions"), *job->mutable_matrix());
+    } else if (tool_name == "vibris_run_recipe") {
+        build_recipe(arguments, config, sources_by_id, configs_by_id, *job);
+    } else {
+        throw std::invalid_argument("unsupported job tool");
+    }
     scale_timeouts(*job);
     return message;
 }
@@ -578,9 +457,21 @@ bool JobProtocol::is_terminal(const proto::ServerMessage& message) noexcept {
 }
 
 ToolOutcome JobProtocol::terminal(const proto::ServerMessage& message) {
-    if (message.has_job_completed()) return completed(message.job_completed());
-    if (message.has_job_failed()) return failed(message.job_failed());
+    if (message.has_job_completed()) {
+        return Json{{"success", true}, {"job_id", message.job_completed().job_id()},
+            {"request_id", message.job_completed().request_id()},
+            {"result", protobuf_json(message.job_completed().result())}};
+    }
+    if (message.has_job_failed()) {
+        const auto& failed = message.job_failed();
+        Json details{{"job_id", failed.job_id()}, {"request_id", failed.request_id()},
+            {"artifacts", protobuf_json(failed).value("artifacts", Json::array())}};
+        for (const auto& [key, value] : failed.error().details()) details[key] = value;
+        return ToolFailure{
+            lower_enum_name(proto::ErrorCode_Name(failed.error().code()), "ERROR_CODE_"),
+            failed.error().message(), failed.error().retryable(), std::move(details)};
+    }
     throw std::invalid_argument("server message is not terminal");
 }
 
-}
+} // namespace vibris::mcp

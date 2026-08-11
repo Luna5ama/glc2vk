@@ -18,7 +18,7 @@
 
 namespace vibris::mcp::test {
 
-namespace proto = ::vibris::control::v1;
+namespace proto = ::vibris::control::v2;
 
 enum class PresetCatalogKind {
     process_local,
@@ -48,9 +48,13 @@ public:
 
     grpc::Status GetServerInfo(
         grpc::ServerContext*, const proto::GetServerInfoRequest*, proto::GetServerInfoResponse* response) override {
+        response->mutable_protocol_version()->set_major(2);
         auto* server = response->mutable_server();
-        server->set_ready(true);
-        server->set_pending_shaders_root(pending_root_.string());
+        server->set_server_version("2.0.0-test");
+        server->set_pending_source_root(pending_root_.string());
+        server->mutable_status()->set_state(proto::SERVER_STATE_AVAILABLE);
+        server->mutable_status()->set_can_accept_job(true);
+        server->mutable_status()->set_can_start_job(true);
         server->mutable_limits()->set_max_source_bytes(1024 * 1024);
         server->mutable_limits()->set_max_source_files(128);
         return grpc::Status::OK;
@@ -58,6 +62,7 @@ public:
 
     grpc::Status ListPresets(
         grpc::ServerContext*, const proto::ListPresetsRequest*, proto::ListPresetsResponse* response) override {
+        response->mutable_protocol_version()->set_major(2);
         if (preset_catalog_ == PresetCatalogKind::benchmark_19) {
             add_benchmark_presets(*response);
         } else {
@@ -68,20 +73,34 @@ public:
         return grpc::Status::OK;
     }
 
+    grpc::Status ListResources(
+        grpc::ServerContext*, const proto::ListResourcesRequest*, proto::ListResourcesResponse* response) override {
+        response->mutable_protocol_version()->set_major(2);
+        return grpc::Status::OK;
+    }
+
     grpc::Status ValidateContext(grpc::ServerContext*, const proto::ValidateContextRequest* request,
         proto::ValidateContextResponse* response) override {
         const std::lock_guard lock(mutex_);
         validated_.push_back(request->context());
+        response->mutable_protocol_version()->set_major(2);
         response->set_valid(true);
         return grpc::Status::OK;
     }
 
     grpc::Status GetStatus(
         grpc::ServerContext*, const proto::GetStatusRequest*, proto::GetStatusResponse* response) override {
-        response->set_ready(true);
-        response->mutable_status()->set_state(proto::SERVER_STATE_READY);
-        response->mutable_status()->set_runtime_ready(true);
-        response->mutable_status()->set_runtime_state(proto::RUNTIME_STATE_READY);
+        response->mutable_protocol_version()->set_major(2);
+        response->mutable_status()->set_state(proto::SERVER_STATE_AVAILABLE);
+        response->mutable_status()->set_can_accept_job(true);
+        response->mutable_status()->set_can_start_job(true);
+        auto* readiness = response->mutable_status()->mutable_readiness();
+        readiness->set_core_online(true);
+        readiness->set_minecraft_connected(true);
+        readiness->set_world_loaded(true);
+        readiness->set_scene_applied(true);
+        readiness->set_shader_reload_complete(true);
+        readiness->set_phase(proto::RUNTIME_PHASE_AVAILABLE);
         return grpc::Status::OK;
     }
 
@@ -91,16 +110,17 @@ public:
         if (!stream->Read(&request) || !request.has_client_hello()) {
             return {grpc::StatusCode::INVALID_ARGUMENT, "CLIENT_HELLO_REQUIRED"};
         }
-        const auto process_id = request.client_hello().process_instance_uuid();
+        const auto process_id = request.client_hello().process_instance_id();
         {
             const std::lock_guard lock(mutex_);
-            hellos_.push_back({request.workspace_id(), request.client_hello().workspace_id(), process_id,
+            hellos_.push_back({request.workspace_id(), request.workspace_id(), process_id,
                 request.message_id()});
         }
         proto::ServerMessage hello;
-        hello.mutable_protocol_version()->set_major(1);
+        hello.mutable_protocol_version()->set_major(2);
         hello.set_workspace_id(request.workspace_id());
-        hello.mutable_server_hello()->set_ready(true);
+        hello.mutable_server_hello()->set_server_version("2.0.0-test");
+        hello.mutable_server_hello()->mutable_status()->set_state(proto::SERVER_STATE_AVAILABLE);
         if (!stream->Write(hello)) {
             return {grpc::StatusCode::UNAVAILABLE, "hello write failed"};
         }
@@ -111,22 +131,24 @@ public:
             }
             {
                 const std::lock_guard lock(mutex_);
-                jobs_.push_back({request.workspace_id(), request.submit_job().workspace_id(), process_id,
-                    request.submit_job().context()});
+                jobs_.push_back({request.workspace_id(), request.workspace_id(), process_id,
+                    request.submit_job().job().context()});
             }
             proto::ServerMessage completed;
-            completed.mutable_protocol_version()->set_major(1);
+            completed.mutable_protocol_version()->set_major(2);
             completed.set_request_id(request.request_id());
             completed.set_workspace_id(request.workspace_id());
             auto* terminal = completed.mutable_job_completed();
+            terminal->set_job_id(request.submit_job().job().job_id());
             terminal->set_request_id(request.request_id());
             auto* result = terminal->mutable_result();
-            result->set_kind(proto::JOB_RESULT_KIND_ACTION_SEQUENCE);
-            for (int index = 0; index < request.submit_job().actions().actions_size(); ++index) {
-                auto* action = result->add_action_results();
+            const auto& sequence = request.submit_job().job().action_sequence();
+            for (int index = 0; index < sequence.actions_size(); ++index) {
+                auto* action = result->add_action_receipts();
                 action->set_action_index(static_cast<std::uint32_t>(index));
-                action->set_kind(proto::JOB_ACTION_KIND_INSPECT_SHADER);
-                action->set_json("{}");
+                action->set_kind(proto::ACTION_KIND_INSPECT_SHADER);
+                action->set_status(proto::RECEIPT_STATUS_OK);
+                action->mutable_empty();
             }
             if (!stream->Write(completed)) {
                 return {grpc::StatusCode::UNAVAILABLE, "completion write failed"};

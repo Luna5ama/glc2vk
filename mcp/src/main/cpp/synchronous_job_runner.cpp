@@ -26,7 +26,7 @@
 namespace vibris::mcp {
 namespace {
 
-namespace proto = ::vibris::control::v1;
+namespace proto = ::vibris::control::v2;
 
 struct CompletionState final {
     std::mutex mutex;
@@ -60,7 +60,7 @@ std::string progress_stage(const proto::JobStage stage) {
         case proto::JOB_STAGE_ACTIVATING_SOURCE:
         case proto::JOB_STAGE_LOADING_WORLD:
         case proto::JOB_STAGE_APPLYING_CONTEXT:
-        case proto::JOB_STAGE_RELOADING_SHADERS:
+        case proto::JOB_STAGE_COMPILING:
             return "loading";
         case proto::JOB_STAGE_RESETTING_TEMPORAL_STATE:
         case proto::JOB_STAGE_WARMING_UP:
@@ -82,73 +82,6 @@ std::string progress_stage(const proto::JobStage stage) {
 void report_progress(const SynchronousJobProgressSink& sink, std::string request_id,
     std::string stage, const bool accepted) {
     if (sink) sink({std::move(request_id), std::move(stage), accepted});
-}
-
-std::optional<Json> recovered_profile_job(const proto::ServerHello& server, const JobContext& config,
-    std::string_view request_id) {
-    namespace fs = std::filesystem;
-    if (server.artifact_root().empty() || config.workspace_id.empty() || !detail::is_uuid(request_id)) {
-        return std::nullopt;
-    }
-    const auto path = fs::path(server.artifact_root()) / config.workspace_id /
-        std::string(request_id) / "profile-result.json";
-    std::error_code error;
-    const auto status = fs::symlink_status(path, error);
-    if (error || !fs::is_regular_file(status) || fs::is_symlink(status)) return std::nullopt;
-    const auto size = fs::file_size(path, error);
-    constexpr std::uintmax_t maximum_bytes = 64ULL * 1024ULL * 1024ULL;
-    if (error || size == 0 || size > maximum_bytes) return std::nullopt;
-
-    try {
-        std::ifstream input(path, std::ios::binary);
-        if (!input) return std::nullopt;
-        Json document;
-        input >> document;
-        if (!input || !document.is_object() || document.value("artifact_schema_version", 0) != 1 ||
-            !document.contains("raw_action_results") || !document.at("raw_action_results").is_array() ||
-            !document.contains("benchmark_barriers") || !document.at("benchmark_barriers").is_array() ||
-            !document.contains("previous_attempts") || !document.at("previous_attempts").is_array() ||
-            document.value("attempt", std::uint32_t{}) == 0) {
-            return std::nullopt;
-        }
-        Json previous = Json::array();
-        for (const auto& diagnostic : document.at("previous_attempts")) {
-            Json diagnostic_error = nullptr;
-            if (!diagnostic.value("error_code", std::string{}).empty()) {
-                diagnostic_error = {{"success", false},
-                                    {"error_code", diagnostic.value("error_code", std::string{})},
-                                    {"message", diagnostic.value("message", std::string{})},
-                                    {"retryable", diagnostic.value("retryable", false)}};
-            }
-            previous.push_back({{"attempt", diagnostic.at("attempt")},
-                                {"status", diagnostic.at("status")},
-                                {"retryable", diagnostic.value("retryable", false)},
-                                {"error", std::move(diagnostic_error)},
-                                {"artifact_ids", Json::array()}});
-        }
-        Json artifact{{"artifact_id", std::string(request_id) + "--profile-result-json"},
-                      {"file_name", "profile-result.json"},
-                      {"kind", "profile_result"},
-                      {"format", "json"},
-                      {"media_type", "application/json"},
-                      {"byte_size", size},
-                      {"path", fs::absolute(path).string()}};
-        return Json{{"success", true},
-                    {"kind", "action_sequence"},
-                    {"diagnostics", Json::array()},
-                    {"comparison", nullptr},
-                    {"action_results", document.at("raw_action_results")},
-                    {"benchmark_barriers", document.at("benchmark_barriers")},
-                    {"timings", Json::object()},
-                    {"frame_ids", Json::array()},
-                    {"artifacts", Json::array({std::move(artifact)})},
-                    {"artifact_groups", Json::array()},
-                    {"recovered_from_artifact", true},
-                    {"recovered_attempt", document.at("attempt")},
-                    {"recovered_previous_attempts", std::move(previous)}};
-    } catch (const Json::exception&) {
-        return std::nullopt;
-    }
 }
 
 bool failed_action(const Json& action) {
@@ -861,7 +794,7 @@ ToolOutcome SynchronousJobRunner::submit_once(std::string_view tool_name, const 
     const auto references = sources_.bind_latest(request_id);
     try {
         auto request = JobProtocol::request(tool_name, arguments, config_, context, references, request_id);
-        const auto server_timeout = std::chrono::milliseconds(request.submit_job().timeouts().total_timeout_ms());
+        const auto server_timeout = std::chrono::milliseconds(request.submit_job().job().timeouts().total_timeout_ms());
         const auto maximum_wait = maximum_wait_.count() == 0 ? server_timeout + std::chrono::seconds(5)
                                                               : maximum_wait_;
         const auto state = std::make_shared<CompletionState>();
@@ -928,10 +861,6 @@ ToolOutcome SynchronousJobRunner::submit_once(std::string_view tool_name, const 
         sources_.retire(request_id);
         if (!status.ok()) {
             if (status.error_code() == grpc::StatusCode::NOT_FOUND) {
-                if (auto recovered = recovered_profile_job(server, config_, request_id)) {
-                    report_progress(control.progress, request_id, "checkpointing", false);
-                    return std::move(*recovered);
-                }
                 report_progress(control.progress, request_id, "loading", false);
                 return transport_failure(status);
             }
@@ -948,7 +877,7 @@ ToolOutcome SynchronousJobRunner::submit_once(std::string_view tool_name, const 
 }
 
 ToolOutcome SynchronousJobRunner::resume_once(std::string_view request_id,
-    const proto::ServerHello& server, const SynchronousJobControl& control) {
+    const SynchronousJobControl& control) {
     report_progress(control.progress, std::string(request_id), "loading", true);
     const auto state = std::make_shared<CompletionState>();
     const bool accepted = client_.resume(std::string(request_id),
@@ -1004,10 +933,6 @@ ToolOutcome SynchronousJobRunner::resume_once(std::string_view request_id,
     lock.unlock();
     if (!status.ok()) {
         if (status.error_code() == grpc::StatusCode::NOT_FOUND) {
-            if (auto recovered = recovered_profile_job(server, config_, request_id)) {
-                report_progress(control.progress, std::string(request_id), "checkpointing", false);
-                return std::move(*recovered);
-            }
             report_progress(control.progress, std::string(request_id), "loading", false);
             return transport_failure(status);
         }
@@ -1029,7 +954,7 @@ ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& ar
                 [this, &server, &context, &control, &first_attempt](const Json& attempt, bool matrix) -> ToolOutcome {
                     ToolOutcome outcome;
                     if (first_attempt && control.resume_request_id) {
-                        outcome = resume_once(*control.resume_request_id, server, control);
+                        outcome = resume_once(*control.resume_request_id, control);
                         if (auto* failure = std::get_if<ToolFailure>(&outcome);
                             failure != nullptr && failure->code == "CANCELLED" &&
                             (!failure->details.is_object() ||

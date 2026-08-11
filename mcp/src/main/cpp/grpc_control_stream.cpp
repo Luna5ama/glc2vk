@@ -6,7 +6,7 @@
 namespace vibris::mcp {
 namespace {
 
-constexpr std::uint32_t protocol_major = 1;
+constexpr std::uint32_t protocol_major = 2;
 constexpr std::uint32_t protocol_minor = 0;
 
 bool is_request_event(const proto::ServerMessage& message) {
@@ -14,7 +14,7 @@ bool is_request_event(const proto::ServerMessage& message) {
     switch (message.payload_case()) {
         case PayloadCase::kJobCompleted:
         case PayloadCase::kJobFailed:
-        case PayloadCase::kResumeState:
+        case PayloadCase::kJobState:
         case PayloadCase::kPong:
         case PayloadCase::kJobAccepted:
         case PayloadCase::kJobProgress:
@@ -48,12 +48,10 @@ proto::ClientMessage GrpcClient::Impl::hello() const {
     message.set_message_id("hello-" + options_.process_instance_uuid);
     message.set_workspace_id(options_.workspace_id);
     auto* hello = message.mutable_client_hello();
-    hello->mutable_protocol_version()->CopyFrom(message.protocol_version());
-    hello->set_mcp_version(options_.mcp_version);
-    hello->set_workspace_id(options_.workspace_id);
-    hello->set_process_instance_uuid(options_.process_instance_uuid);
+    hello->set_client_version(options_.mcp_version);
+    hello->set_process_instance_id(options_.process_instance_uuid);
     hello->add_capabilities(proto::CAPABILITY_CONTROL_STREAM);
-    hello->add_capabilities(proto::CAPABILITY_RESUME);
+    hello->add_capabilities(proto::CAPABILITY_DURABLE_JOBS);
     return message;
 }
 

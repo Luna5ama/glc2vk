@@ -32,16 +32,19 @@ struct GrpcClientStats {
 
 using ListPresetsCompletion = std::function<void(
     const grpc::Status&,
-    const ::vibris::control::v1::ListPresetsResponse&)>;
+    const ::vibris::control::v2::ListPresetsResponse&)>;
 using GetServerInfoCompletion = std::function<void(
     const grpc::Status&,
-    const ::vibris::control::v1::GetServerInfoResponse&)>;
+    const ::vibris::control::v2::GetServerInfoResponse&)>;
 using ValidateContextCompletion = std::function<void(
     const grpc::Status&,
-    const ::vibris::control::v1::ValidateContextResponse&)>;
+    const ::vibris::control::v2::ValidateContextResponse&)>;
 using GetStatusCompletion = std::function<void(
     const grpc::Status&,
-    const ::vibris::control::v1::GetStatusResponse&)>;
+    const ::vibris::control::v2::GetStatusResponse&)>;
+using ListResourcesCompletion = std::function<void(
+    const grpc::Status&,
+    const ::vibris::control::v2::ListResourcesResponse&)>;
 
 class GrpcClient final {
 public:
@@ -55,12 +58,19 @@ public:
 
     void start();
     bool get_server_info(GetServerInfoCompletion completion);
-    bool list_presets(ListPresetsCompletion completion);
+    bool list_presets(
+        ::vibris::control::v2::ListPresetsRequest request,
+        ListPresetsCompletion completion);
+    bool list_resources(
+        ::vibris::control::v2::ListResourcesRequest request,
+        ListResourcesCompletion completion);
     bool validate_context(
-        ::vibris::control::v1::ValidateContextRequest request,
+        ::vibris::control::v2::ValidateContextRequest request,
         ValidateContextCompletion completion);
-    bool get_status(GetStatusCompletion completion);
-    bool submit(::vibris::control::v1::ClientMessage message, GrpcCompletion completion);
+    bool get_status(
+        ::vibris::control::v2::GetStatusRequest request,
+        GetStatusCompletion completion);
+    bool submit(::vibris::control::v2::ClientMessage message, GrpcCompletion completion);
     bool resume(std::string request_id, GrpcCompletion completion);
     bool cancel(std::string_view request_id, std::string reason);
     void shutdown();

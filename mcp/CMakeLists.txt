@@ -98,9 +98,6 @@ target_link_libraries(vibris-protocol-smoke PRIVATE vibris_control_protocol)
 add_executable(vibris-descriptor-dump src/main/cpp/descriptor_dump.cpp)
 target_link_libraries(vibris-descriptor-dump PRIVATE vibris_control_protocol)
 
-add_executable(vibris-control-client src/main/cpp/control_client.cpp)
-target_link_libraries(vibris-control-client PRIVATE vibris_control_protocol nlohmann_json::nlohmann_json)
-
 add_library(vibris_mcp_core STATIC
     src/main/cpp/config_document.cpp
     src/main/cpp/workspace_artifact_link.cpp
@@ -141,7 +138,6 @@ target_link_libraries(vibris-mcp PRIVATE vibris_mcp_core)
 if(MSVC)
     target_compile_options(vibris-protocol-smoke PRIVATE /W4 /permissive-)
     target_compile_options(vibris-descriptor-dump PRIVATE /W4 /permissive-)
-    target_compile_options(vibris-control-client PRIVATE /W4 /permissive-)
     target_compile_options(vibris_mcp_core PRIVATE /W4 /permissive-)
     target_compile_options(vibris-mcp PRIVATE /W4 /permissive-)
 endif()
@@ -170,6 +166,9 @@ if(BUILD_TESTING)
 
     add_executable(vibris-stdio-fixture-test src/test/cpp/stdio_fixture_test.cpp)
     target_link_libraries(vibris-stdio-fixture-test PRIVATE nlohmann_json::nlohmann_json)
+
+    add_executable(vibris-stdio-v2-server src/test/cpp/stdio_v2_server.cpp)
+    target_link_libraries(vibris-stdio-v2-server PRIVATE vibris_control_protocol)
 
     add_executable(vibris-grpc-tests src/test/cpp/grpc_reconnect_tests.cpp)
     target_include_directories(vibris-grpc-tests PRIVATE src/test/cpp)
@@ -207,6 +206,7 @@ if(BUILD_TESTING)
         target_compile_options(vibris-commit-source-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-git-repository-security-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-stdio-fixture-test PRIVATE /W4 /permissive-)
+        target_compile_options(vibris-stdio-v2-server PRIVATE /W4 /permissive-)
         target_compile_options(vibris-grpc-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-grpc-request-ownership-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-grpc-source-ownership-tests PRIVATE /W4 /permissive-)
@@ -221,7 +221,8 @@ if(BUILD_TESTING)
         DEPENDS vibris-protocol-smoke vibris-descriptor-dump vibris-protocol-version-tests
                 vibris-state-tests vibris-worktree-discovery-tests vibris-workspace-source-tests
                 vibris-commit-source-tests vibris-git-repository-security-tests
-                vibris-stdio-fixture-test vibris-grpc-tests vibris-grpc-request-ownership-tests
+                vibris-stdio-fixture-test vibris-stdio-v2-server
+                vibris-grpc-tests vibris-grpc-request-ownership-tests
                 vibris-grpc-source-ownership-tests vibris-grpc-accepted-resume-tests)
     add_dependencies(mcp-tests vibris-job-protocol-tests vibris-action-schema-tests)
     add_dependencies(mcp-tests vibris-profile-matrix-workflow-tests)
@@ -356,7 +357,7 @@ if(BUILD_TESTING)
 
     add_test(NAME SynchronousRecipeResultMapping COMMAND vibris-job-protocol-tests)
     set_tests_properties(SynchronousRecipeResultMapping PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
-    add_test(NAME ActionSchemaRejectsForbiddenAndDuplicateTools COMMAND vibris-action-schema-tests)
+    add_test(NAME ActionSchemaV2ToolContract COMMAND vibris-action-schema-tests)
     add_test(NAME ProfileMatrixCheckpointResume COMMAND vibris-profile-matrix-workflow-tests)
     set_tests_properties(ProfileMatrixCheckpointResume PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
     foreach(scenario
@@ -376,9 +377,8 @@ if(BUILD_TESTING)
                 "${CMAKE_CURRENT_SOURCE_DIR}/../integration-tests/scripts/stdio-mcp-probe.ps1"
                 -Exe "$<TARGET_FILE:vibris-mcp>"
                 -WorkspaceRoot
-                    "${CMAKE_CURRENT_SOURCE_DIR}/../.omo/tmp/ulw-v1-g002-c001/worktree"
-                -FakeServerJar
-                    "${CMAKE_CURRENT_SOURCE_DIR}/../test-runtime/build/libs/vibris-test-runtime.jar"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/../.omo/tmp/stdio-v2-tools/worktree"
+                -FakeServerExe "$<TARGET_FILE:vibris-stdio-v2-server>"
                 -Requests
                     "${CMAKE_CURRENT_SOURCE_DIR}/../integration-tests/fixtures/mcp/happy-core-tools.jsonl")
         set_tests_properties(${test_name} PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)

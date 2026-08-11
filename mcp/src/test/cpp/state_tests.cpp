@@ -808,15 +808,18 @@ void same_worktree_backends_coexist() {
     McpBackend first(temp.path(), server.target());
     McpBackend second(temp.path(), server.target());
 
+    const auto scope = vibris::mcp::Json{{"worktree_root", fs::canonical(temp.path()).string()}};
+
     const auto& first_status = require_json(
-        first.dispatch("vibris_get_status", {}), "First same-root status failed.");
+        first.dispatch("vibris_get_status", scope), "First same-root status failed.");
     const auto& second_status = require_json(
-        second.dispatch("vibris_get_status", {}), "Second same-root status failed.");
+        second.dispatch("vibris_get_status", scope), "Second same-root status failed.");
     require(first_status.at("workspace_id") == valid_config().workspace_id &&
             second_status.at("workspace_id") == valid_config().workspace_id,
         "Same-worktree backends observed different durable workspace IDs.");
 
     const vibris::mcp::Json actions{
+        {"worktree_root", fs::canonical(temp.path()).string()},
         {"preset_id", "scene-a"},
         {"actions", vibris::mcp::Json::array({{{"type", "inspect_shader"}}})},
     };
@@ -924,13 +927,15 @@ void typed_preset_discovery_and_request_scene() {
         pending_root, vibris::mcp::test::PresetCatalogKind::benchmark_19);
     McpBackend backend(temp.path(), server.target());
 
-    const auto all_outcome = backend.dispatch("vibris_list_presets", {});
+    const auto root = fs::canonical(temp.path()).string();
+
+    const auto all_outcome = backend.dispatch("vibris_list_presets", {{"worktree_root", root}});
     const auto& all = require_json(all_outcome, "Known preset catalog listing failed.");
     require(all.at("presets").size() == 19, "Known preset catalog did not contain exactly 19 scenes.");
     for (const auto& [tag, count] : std::array<std::pair<const char*, std::size_t>, 4>{
              {{"sky", 6}, {"aerial-perspective", 4}, {"raster", 1}, {"shadow", 1}}}) {
         const auto filtered_outcome = backend.dispatch(
-            "vibris_list_presets", {{"filter_tags", vibris::mcp::Json::array({tag})}});
+            "vibris_list_presets", {{"worktree_root", root}, {"tags", vibris::mcp::Json::array({tag})}});
         const auto& filtered = require_json(filtered_outcome, "Preset tag filtering failed.");
         require(filtered.at("presets").size() == count, "Preset tag filter returned the wrong scene count.");
         for (const auto& preset : filtered.at("presets")) {
@@ -940,7 +945,8 @@ void typed_preset_discovery_and_request_scene() {
         }
     }
     const auto combined_outcome = backend.dispatch("vibris_list_presets", {
-        {"filter", "SKY-NOON-1"}, {"filter_tags", vibris::mcp::Json::array({"SKY"})},
+        {"worktree_root", root}, {"preset_id", "sky-noon-1"},
+        {"tags", vibris::mcp::Json::array({"sky"})},
     });
     const auto& combined = require_json(combined_outcome, "Combined preset filters failed.");
     if (combined.at("presets").size() != 1 ||
@@ -950,6 +956,7 @@ void typed_preset_discovery_and_request_scene() {
     }
 
     const auto& executed = require_json(backend.dispatch("vibris_run_actions", {
+        {"worktree_root", root},
         {"preset_id", "sky-noon-1"},
         {"actions", vibris::mcp::Json::array({{{"type", "inspect_shader"}}})},
     }), "Request-scoped preset execution failed.");
@@ -962,6 +969,7 @@ void typed_preset_discovery_and_request_scene() {
         "Request-scoped preset validation did not submit the complete resolved context.");
 
     const auto missing = backend.dispatch("vibris_run_actions", {
+        {"worktree_root", root},
         {"preset_id", "not-in-catalog"},
         {"actions", vibris::mcp::Json::array({{{"type", "inspect_shader"}}})},
     });
@@ -973,27 +981,19 @@ void typed_preset_discovery_and_request_scene() {
 
 void tool_metadata_is_request_scoped() {
     const vibris::mcp::ToolRegistry tools;
-    require(tools.definitions().size() == 5, "Tool registry did not expose exactly five stateless tools.");
+    require(tools.definitions().size() == 8, "Tool registry did not expose exactly eight v2 tools.");
     for (const auto& definition : tools.definitions()) {
         const auto name = definition.at("name").get<std::string>();
         const auto description = definition.at("description").get<std::string>();
         require(description.find("worktree") != std::string::npos,
             "Tool metadata does not describe explicit worktree routing.");
-        const auto verify_variant = [&](const vibris::mcp::Json& schema) {
-            const auto& required = schema.at("required");
-            require(std::find(required.begin(), required.end(), "worktree_root") != required.end(),
-                "Tool schema omitted required worktree_root.");
-            if (schema.at("properties").contains("preset_id")) {
-                require(std::find(required.begin(), required.end(), "preset_id") != required.end(),
-                    "Job-start schema omitted required preset_id.");
-            }
-        };
         const auto& schema = definition.at("inputSchema");
-        if (schema.contains("oneOf")) {
-            for (const auto& variant : schema.at("oneOf")) verify_variant(variant);
-        } else {
-            verify_variant(schema);
-        }
+        require(!schema.contains("oneOf"), "Tool schema retained a top-level oneOf.");
+        const auto& required = schema.at("required");
+        require(std::find(required.begin(), required.end(), "worktree_root") != required.end(),
+            "Tool schema omitted required worktree_root.");
+        require(definition.at("schema_version") == 2 && definition.contains("outputSchema"),
+            "Tool metadata omitted the v2 output contract.");
         require(name != "vibris_configure" && name != "vibris_get_config",
             "Ambient configuration tool remained registered.");
     }

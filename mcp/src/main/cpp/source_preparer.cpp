@@ -95,26 +95,28 @@ void promote(Destination& destination) {
     destination.staging.adopt(destination.final_path);
 }
 
-control::v1::PreparedSourceRef workspace_reference(
+control::v2::PreparedSourceRef workspace_reference(
     std::string_view uuid, const fs::path& worktree, std::string_view resolved_revision,
     const WorkspaceMetadata& metadata) {
-    control::v1::PreparedSourceRef reference;
-    reference.set_uuid(uuid);
+    control::v2::PreparedSourceRef reference;
+    reference.set_source_uuid(uuid);
     reference.set_file_count(metadata.file_count);
     reference.set_total_bytes(metadata.total_bytes);
-    reference.mutable_origin()->mutable_workspace()->set_display_name(worktree.filename().string());
+    auto* origin = reference.mutable_origin()->mutable_workspace();
+    origin->set_worktree_root(worktree.string());
+    origin->set_display_name(worktree.filename().string());
     reference.set_requested_revision("workspace");
     reference.set_resolved_revision(resolved_revision);
     return reference;
 }
 
-control::v1::PreparedSourceRef commit_reference(
+control::v2::PreparedSourceRef commit_reference(
     std::string_view uuid,
     const fs::path& worktree,
     std::string_view resolved_revision,
     const WorkspaceMetadata& metadata) {
-    control::v1::PreparedSourceRef reference;
-    reference.set_uuid(uuid);
+    control::v2::PreparedSourceRef reference;
+    reference.set_source_uuid(uuid);
     reference.set_file_count(metadata.file_count);
     reference.set_total_bytes(metadata.total_bytes);
     auto* origin = reference.mutable_origin()->mutable_commit();
@@ -203,7 +205,7 @@ PreparedSource SourcePreparer::prepare_commit(std::string_view revision) const {
 }
 
 PreparedSource SourcePreparer::prepare_snapshot(
-    const fs::path& snapshot_root, const control::v1::PreparedSourceRef& provenance) const {
+    const fs::path& snapshot_root, const control::v2::PreparedSourceRef& provenance) const {
     SourcePathPolicy{}.require_no_reparse_ancestry(snapshot_root, snapshot_root);
     const auto before = enumerate_workspace_tree(snapshot_root, limits_);
     if (before.file_count != provenance.file_count() || before.total_bytes != provenance.total_bytes()) {
@@ -217,7 +219,7 @@ PreparedSource SourcePreparer::prepare_snapshot(
     }
     promote(destination);
     auto reference = provenance;
-    reference.set_uuid(destination.uuid);
+    reference.set_source_uuid(destination.uuid);
     PreparedSource prepared(
         std::move(reference), destination.staging.path(), {}, 1,
         provenance.requested_revision(), provenance.resolved_revision());

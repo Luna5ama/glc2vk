@@ -8,7 +8,7 @@
 namespace vibris::mcp {
 namespace {
 
-constexpr std::uint32_t protocol_major = 1;
+constexpr std::uint32_t protocol_major = 2;
 constexpr std::uint32_t protocol_minor = 0;
 
 bool is_loopback_target(const std::string& target) {
@@ -51,7 +51,7 @@ bool GrpcClient::Impl::resume(std::string request_id, GrpcCompletion completion)
     request.set_message_id("resume-" + request_id);
     request.set_request_id(request_id);
     request.set_workspace_id(options_.workspace_id);
-    request.mutable_resume_request()->add_request_ids(request_id);
+    request.mutable_resume_job()->set_job_id(request_id);
     if (!pending_.add_resume(request_id, options_.workspace_id, std::move(completion))) return false;
     peak_pending_ = std::max(peak_pending_, pending_.size() + unary_in_flight_);
     submitted_.push_back(std::move(request));
@@ -71,7 +71,7 @@ bool GrpcClient::Impl::cancel(const std::string_view request_id, std::string rea
     request.set_message_id("cancel-" + std::string(request_id));
     request.set_request_id(std::string(request_id));
     request.set_workspace_id(options_.workspace_id);
-    request.mutable_cancel_job()->set_request_id(std::string(request_id));
+    request.mutable_cancel_job()->set_job_id(std::string(request_id));
     request.mutable_cancel_job()->set_reason(std::move(reason));
     submitted_.push_back(std::move(request));
     schedule_alarm_locked(AlarmKind::wake, std::chrono::milliseconds::zero());
@@ -167,13 +167,26 @@ void GrpcClient::Impl::ensure_stub_locked() {
 GrpcClient::GrpcClient(GrpcClientOptions options) : impl_(std::make_unique<Impl>(std::move(options))) {}
 GrpcClient::~GrpcClient() = default;
 void GrpcClient::start() { impl_->start(); }
-bool GrpcClient::list_presets(ListPresetsCompletion completion) { return impl_->list_presets(std::move(completion)); }
-bool GrpcClient::validate_context(::vibris::control::v1::ValidateContextRequest request,
+bool GrpcClient::list_presets(
+    ::vibris::control::v2::ListPresetsRequest request,
+    ListPresetsCompletion completion) {
+    return impl_->list_presets(std::move(request), std::move(completion));
+}
+bool GrpcClient::list_resources(
+    ::vibris::control::v2::ListResourcesRequest request,
+    ListResourcesCompletion completion) {
+    return impl_->list_resources(std::move(request), std::move(completion));
+}
+bool GrpcClient::validate_context(::vibris::control::v2::ValidateContextRequest request,
     ValidateContextCompletion completion) {
     return impl_->validate_context(std::move(request), std::move(completion));
 }
-bool GrpcClient::get_status(GetStatusCompletion completion) { return impl_->get_status(std::move(completion)); }
-bool GrpcClient::submit(::vibris::control::v1::ClientMessage message, GrpcCompletion completion) {
+bool GrpcClient::get_status(
+    ::vibris::control::v2::GetStatusRequest request,
+    GetStatusCompletion completion) {
+    return impl_->get_status(std::move(request), std::move(completion));
+}
+bool GrpcClient::submit(::vibris::control::v2::ClientMessage message, GrpcCompletion completion) {
     return impl_->submit(std::move(message), std::move(completion));
 }
 bool GrpcClient::resume(std::string request_id, GrpcCompletion completion) {

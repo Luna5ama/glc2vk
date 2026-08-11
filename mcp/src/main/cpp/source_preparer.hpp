@@ -23,7 +23,7 @@ public:
     PreparedSource& operator=(PreparedSource&& other);
     ~PreparedSource();
 
-    [[nodiscard]] const control::v1::PreparedSourceRef& reference() const noexcept;
+    [[nodiscard]] const control::v2::PreparedSourceRef& reference() const noexcept;
     [[nodiscard]] const std::filesystem::path& directory() const noexcept;
     [[nodiscard]] const ArchiveExtractionStats& archive_stats() const noexcept;
     [[nodiscard]] std::size_t attempts() const noexcept;
@@ -35,7 +35,7 @@ private:
     friend class SourcePreparer;
 
     PreparedSource(
-        control::v1::PreparedSourceRef reference,
+        control::v2::PreparedSourceRef reference,
         std::filesystem::path directory,
         ArchiveExtractionStats archive_stats,
         std::size_t attempts,
@@ -44,7 +44,7 @@ private:
 
     void cleanup() noexcept;
 
-    control::v1::PreparedSourceRef reference_;
+    control::v2::PreparedSourceRef reference_;
     std::filesystem::path directory_;
     ArchiveExtractionStats archive_stats_{};
     std::size_t attempts_ = 0;
@@ -65,7 +65,7 @@ public:
     [[nodiscard]] PreparedSource prepare_commit(std::string_view revision) const;
     [[nodiscard]] PreparedSource prepare_snapshot(
         const std::filesystem::path& snapshot_root,
-        const control::v1::PreparedSourceRef& provenance) const;
+        const control::v2::PreparedSourceRef& provenance) const;
 
 private:
     std::filesystem::path workspace_root_;

@@ -49,17 +49,20 @@ void GrpcClient::Impl::finish_unary(Call& call, const bool ok) noexcept {
 }
 
 bool GrpcClient::Impl::get_server_info(GetServerInfoCompletion completion) {
+    proto::GetServerInfoRequest request;
+    request.mutable_protocol_version()->set_major(2);
     return start_unary<proto::GetServerInfoRequest, proto::GetServerInfoResponse>(
-        {}, std::move(completion),
+        std::move(request), std::move(completion),
         [](proto::VibrisControl::Stub& stub, grpc::ClientContext& context,
             const proto::GetServerInfoRequest& request, grpc::CompletionQueue& queue) {
             return stub.AsyncGetServerInfo(&context, request, &queue);
         });
 }
 
-bool GrpcClient::Impl::list_presets(ListPresetsCompletion completion) {
+bool GrpcClient::Impl::list_presets(proto::ListPresetsRequest request, ListPresetsCompletion completion) {
+    request.mutable_protocol_version()->set_major(2);
     return start_unary<proto::ListPresetsRequest, proto::ListPresetsResponse>(
-        {}, std::move(completion),
+        std::move(request), std::move(completion),
         [](proto::VibrisControl::Stub& stub, grpc::ClientContext& context,
             const proto::ListPresetsRequest& request, grpc::CompletionQueue& queue) {
             return stub.AsyncListPresets(&context, request, &queue);
@@ -68,6 +71,7 @@ bool GrpcClient::Impl::list_presets(ListPresetsCompletion completion) {
 
 bool GrpcClient::Impl::validate_context(proto::ValidateContextRequest request,
     ValidateContextCompletion completion) {
+    request.mutable_protocol_version()->set_major(2);
     return start_unary<proto::ValidateContextRequest, proto::ValidateContextResponse>(
         std::move(request), std::move(completion),
         [](proto::VibrisControl::Stub& stub, grpc::ClientContext& context,
@@ -76,12 +80,24 @@ bool GrpcClient::Impl::validate_context(proto::ValidateContextRequest request,
         });
 }
 
-bool GrpcClient::Impl::get_status(GetStatusCompletion completion) {
+bool GrpcClient::Impl::get_status(proto::GetStatusRequest request, GetStatusCompletion completion) {
+    request.mutable_protocol_version()->set_major(2);
     return start_unary<proto::GetStatusRequest, proto::GetStatusResponse>(
-        {}, std::move(completion),
+        std::move(request), std::move(completion),
         [](proto::VibrisControl::Stub& stub, grpc::ClientContext& context,
             const proto::GetStatusRequest& request, grpc::CompletionQueue& queue) {
             return stub.AsyncGetStatus(&context, request, &queue);
+        });
+}
+
+bool GrpcClient::Impl::list_resources(
+    proto::ListResourcesRequest request, ListResourcesCompletion completion) {
+    request.mutable_protocol_version()->set_major(2);
+    return start_unary<proto::ListResourcesRequest, proto::ListResourcesResponse>(
+        std::move(request), std::move(completion),
+        [](proto::VibrisControl::Stub& stub, grpc::ClientContext& context,
+            const proto::ListResourcesRequest& value, grpc::CompletionQueue& queue) {
+            return stub.AsyncListResources(&context, value, &queue);
         });
 }
 

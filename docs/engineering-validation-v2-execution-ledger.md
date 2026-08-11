@@ -79,8 +79,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 |---|---|---|---|---|---|
 | T00 | P0 | Vibris | Persist v2 execution ledger | DONE | `T00 persist engineering validation v2 ledger` |
 | T01 | P0 | Vibris | Replace protocol with strict v2 wire contract | DONE | `T01 replace control protocol with strict v2` |
-| T02 | P0 | Vibris | Publish compact typed MCP v2 tools | READY | `T02 publish compact typed MCP v2 tools` |
-| T03 | P0 | Vibris | Add truthful runtime lease and status waiting | PENDING | `T03 expose runtime lease and status transitions` |
+| T02 | P0 | Vibris | Publish compact typed MCP v2 tools | DONE | `T02 publish compact typed MCP v2 tools` |
+| T03 | P0 | Vibris | Add truthful runtime lease and status waiting | READY | `T03 expose runtime lease and status transitions` |
 | T04 | P0 | Vibris | Generalize durable resumable jobs | PENDING | `T04 add durable resumable workflow jobs` |
 | T05 | P0 | Vibris | Add transactional restoration and recovery | PENDING | `T05 make runtime mutations transactional` |
 | T06 | P0 | Vibris | Define effective shader settings contract | PENDING | `T06 expose resolved shader settings contract` |
@@ -215,7 +215,7 @@ Evidence:
 
 ### T02 — Publish compact typed MCP v2 tools
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T01
 
@@ -262,11 +262,20 @@ Blockers:
 
 Evidence:
 
-- Pending.
+- Published exactly eight tools: `vibris_get_status`, `vibris_list_presets`, `vibris_list_resources`, `vibris_run_actions`, `vibris_run_matrix`, `vibris_run_recipe`, `vibris_job`, and `vibris_artifacts`; every definition carries `schema_version: 2`, a concrete object `inputSchema` without a top-level `oneOf`, and an `outputSchema`.
+- Recipe inputs require the `recipe` discriminator, job query/result/cancel/resume operations exist only on `vibris_job`, exact preset/resource filters are first-class, and compact status results omit the resource catalog.
+- Result envelopes contain one text summary capped at 2,048 bytes and one full payload only under `structuredContent`; schema tests use a 16 KiB marker payload to prove it is not duplicated.
+- Schema validation rejects old recipe control fields, `list_textures`, `list_buffers`, `dump_texture_v2`, and physical `.main` / `.alt` texture aliases in resource selectors, debug-bundle lists, and A/B capture recipes.
+- Removed the obsolete v1 diagnostic control client and replaced the stdio integration dependency on the Java v1 fake server with a native strict-v2 gRPC fixture.
+- `cmake --build --preset release --target vibris-action-schema-tests vibris-state-tests vibris-stdio-fixture-test vibris-stdio-v2-server vibris-mcp` passed with the Visual Studio CMake executable; direct `vibris-action-schema-tests.exe` printed `PASS ActionSchemaV2ToolContract`.
+- `ctest --preset release -R 'ActionSchema|ToolMetadata|ResourceLists|Stdio' --output-on-failure` passed 5/5 tests: request-scoped metadata, empty resource lists, v2 action schema, stdio tool happy path, and stdio lifecycle.
+- Direct stdio probe printed `PASS tools=8 schema_version=2 workspace_id=6e8e5769-4b9c-4aaf-9396-4fabc4ffd6d7 grpc_status=test-save request_scoped=true` and `CLEANUP owned_processes=4 temp_removed=True listener_closed=true`.
+- `.\gradlew.bat :vibris-protocol-java:test --offline` passed with 23 actionable tasks and regenerated bindings only under build outputs.
+- Commit: this task's commit with subject `T02 publish compact typed MCP v2 tools`.
 
 ### T03 — Add truthful runtime lease and status waiting
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T02
 
@@ -1213,7 +1222,7 @@ Queue order is authoritative and serial even where technical dependencies could 
 
 ## Global acceptance checklist
 
-- [ ] MCP publishes exactly the eight typed v2 tools and never duplicates the structured payload.
+- [x] MCP publishes exactly the eight typed v2 tools and never duplicates the structured payload.
 - [ ] No affected v1 compatibility parser, alias, adapter, fallback, migration, dual-read, or dual-write remains.
 - [ ] Shared runtime ownership, queue, progress, error history, readiness, waits, cancellation, and recovery are truthful.
 - [ ] Long jobs are durable, queryable, resumable when safe, and never duplicate completed or uncertain side effects.
@@ -1239,3 +1248,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 
 - `2026-08-11 - T00 - initialized and validated 22-task strict-v2 serial ledger; verified both repository identities and protected concurrent dirty state - Commit title: T00 persist engineering validation v2 ledger`
 - `2026-08-11 - T01 - generated strict v2 Java/C++ protocol; Java 5/5 and native CTest 5/5 passed; v1 and missing versions reject as UNSUPPORTED_VERSION - Commit title: T01 replace control protocol with strict v2`
+- `2026-08-11 - T02 - published exactly eight typed MCP v2 tools; native CTest 5/5 and direct schema/stdio fixtures passed; removed old control client and v1 stdio fixture dependency - Commit title: T02 publish compact typed MCP v2 tools`

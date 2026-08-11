@@ -12,15 +12,15 @@ namespace vibris::mcp {
 
 class JobProtocol final {
 public:
-    [[nodiscard]] static ::vibris::control::v1::ClientMessage request(
+    [[nodiscard]] static ::vibris::control::v2::ClientMessage request(
         std::string_view tool_name,
         const Json& arguments,
         const JobContext& config,
-        const ::vibris::control::v1::SceneContext& context,
-        std::span<const ::vibris::control::v1::PreparedSourceRef> sources,
+        const ::vibris::control::v2::SceneContext& context,
+        std::span<const ::vibris::control::v2::PreparedSourceRef> sources,
         std::string request_id);
-    [[nodiscard]] static bool is_terminal(const ::vibris::control::v1::ServerMessage& message) noexcept;
-    [[nodiscard]] static ToolOutcome terminal(const ::vibris::control::v1::ServerMessage& message);
+    [[nodiscard]] static bool is_terminal(const ::vibris::control::v2::ServerMessage& message) noexcept;
+    [[nodiscard]] static ToolOutcome terminal(const ::vibris::control::v2::ServerMessage& message);
 };
 
 }

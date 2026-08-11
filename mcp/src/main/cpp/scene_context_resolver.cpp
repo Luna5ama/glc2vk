@@ -8,7 +8,7 @@
 namespace vibris::mcp {
 namespace {
 
-namespace proto = ::vibris::control::v1;
+namespace proto = ::vibris::control::v2;
 
 bool matches(const JobContext& config, const proto::SceneContext& context) {
     return context.save_id() == config.save_id && context.dimension_id() == config.dimension_id &&

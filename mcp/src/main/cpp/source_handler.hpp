@@ -20,9 +20,9 @@ public:
     void prepare(
         std::string_view tool_name,
         const Json& arguments,
-        const ::vibris::control::v1::ServerHello& server);
-    std::vector<::vibris::control::v1::PreparedSourceRef> bind_latest(std::string request_id);
-    void observe(const ::vibris::control::v1::ServerMessage& message) noexcept;
+        const ::vibris::control::v2::ServerHello& server);
+    std::vector<::vibris::control::v2::PreparedSourceRef> bind_latest(std::string request_id);
+    void observe(const ::vibris::control::v2::ServerMessage& message) noexcept;
     void retire(std::string_view request_id) noexcept;
     void clear() noexcept;
 

@@ -6,7 +6,7 @@
 namespace vibris::mcp {
 
 PreparedSource::PreparedSource(
-    control::v1::PreparedSourceRef reference,
+    control::v2::PreparedSourceRef reference,
     std::filesystem::path directory,
     ArchiveExtractionStats archive_stats,
     std::size_t attempts,
@@ -49,7 +49,7 @@ PreparedSource::~PreparedSource() {
     cleanup();
 }
 
-const control::v1::PreparedSourceRef& PreparedSource::reference() const noexcept {
+const control::v2::PreparedSourceRef& PreparedSource::reference() const noexcept {
     return reference_;
 }
 

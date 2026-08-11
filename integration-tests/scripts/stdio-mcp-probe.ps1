@@ -2,7 +2,7 @@
 param(
     [Parameter(Mandatory)] [string] $Exe,
     [Parameter(Mandatory)] [string] $WorkspaceRoot,
-    [Parameter(Mandatory)] [string] $FakeServerJar,
+    [Parameter(Mandatory)] [string] $FakeServerExe,
     [Parameter(Mandatory)] [string] $Requests,
     [ValidateRange(1, 60)] [int] $TimeoutSeconds = 15
 )
@@ -12,7 +12,7 @@ $ErrorActionPreference = "Stop"
 $ownedProcesses = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
 $tempBase = Join-Path $repoRoot ".omo\tmp"
-$tempRoot = Join-Path $tempBase "ulw-v1-g002-c001"
+$tempRoot = Join-Path $tempBase "stdio-v2-tools"
 $tempCreated = $false
 $port = 55061
 $workspace = [System.IO.Path]::GetFullPath($WorkspaceRoot)
@@ -172,7 +172,21 @@ function Get-ToolPayload
     {
         throw "Tool response $($Response.id) must contain exactly one text item."
     }
-    return $content[0].text | ConvertFrom-Json
+    if ([Text.Encoding]::UTF8.GetByteCount([string] $content[0].text) -gt 2048)
+    {
+        throw "Tool response $($Response.id) text summary exceeds 2 KiB."
+    }
+    $structured = $Response.result.structuredContent
+    if ($null -eq $structured -or $structured.schema_version -ne 2 -or $structured.success -ne $true)
+    {
+        throw "Tool response $($Response.id) omitted its successful v2 structured payload."
+    }
+    $serialized = $structured.result | ConvertTo-Json -Compress -Depth 30
+    if ([string] $content[0].text -ceq $serialized)
+    {
+        throw "Tool response $($Response.id) duplicated its full JSON payload in text content."
+    }
+    return $structured.result
 }
 
 function Get-NamedValue
@@ -203,7 +217,7 @@ function Get-NamedValue
 
 try
 {
-    foreach ($path in @($Exe, $FakeServerJar, $Requests))
+    foreach ($path in @($Exe, $FakeServerExe, $Requests))
     {
         if (-not (Test-Path -LiteralPath $path -PathType Leaf))
         {
@@ -262,8 +276,8 @@ try
         throw "WorkspaceRoot is not a Git worktree: $workspace"
     }
     $serverRoot = Join-Path $tempRoot "server"
-    $server = Start-Process -FilePath "java.exe" -ArgumentList @(
-        "-jar", $FakeServerJar, "--port", $port, "--work-root", $serverRoot
+    $server = Start-Process -FilePath $FakeServerExe -ArgumentList @(
+        "--port", $port, "--work-root", $serverRoot
     ) -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $tempRoot "server.stdout") `
         -RedirectStandardError (Join-Path $tempRoot "server.stderr")
     $ownedProcesses.Add($server)
@@ -278,15 +292,18 @@ try
     $toolsResponse = Get-Response -Responses $first.Responses -Id 2
     $listed = @($toolsResponse.result.tools | ForEach-Object { $_.name })
     $expectedTools = @(
-        "vibris_list_presets",
         "vibris_get_status",
+        "vibris_list_presets",
+        "vibris_list_resources",
         "vibris_run_recipe",
         "vibris_run_actions",
-        "vibris_run_matrix"
+        "vibris_run_matrix",
+        "vibris_job",
+        "vibris_artifacts"
     )
     if ([string]::Join("`n", $listed) -cne [string]::Join("`n", $expectedTools))
     {
-        throw "tools/list did not expose exactly the expected 5-tool surface."
+        throw "tools/list did not expose exactly the expected 8-tool v2 surface."
     }
 
     $status = Get-ToolPayload (Get-Response -Responses $first.Responses -Id 3)
@@ -301,9 +318,9 @@ try
     {
         throw "vibris_get_status workspace_id is not a UUID: $workspaceId"
     }
-    if (@(Get-NamedValue -Value $status -Name "current_save_id") -cnotcontains "test-save" -or
-        @(Get-NamedValue -Value $status -Name "current_dimension_id") -cnotcontains "minecraft:overworld" -or
-        @(Get-NamedValue -Value $status -Name "runtime_ready") -notcontains $true)
+    if (@(Get-NamedValue -Value $status -Name "detail") -cnotcontains "test-save minecraft:overworld" -or
+        @(Get-NamedValue -Value $status -Name "world_loaded") -notcontains $true -or
+        @(Get-NamedValue -Value $status -Name "can_start_job") -notcontains $true)
     {
         throw "vibris_get_status did not expose the fake gRPC runtime markers."
     }
@@ -326,7 +343,7 @@ try
     {
         throw "Native stdio MCP restart did not preserve the durable workspace identity."
     }
-    Write-Output "PASS tools=5 workspace_id=$workspaceId grpc_status=test-save request_scoped=true"
+    Write-Output "PASS tools=8 schema_version=2 workspace_id=$workspaceId grpc_status=test-save request_scoped=true"
 }
 finally
 {

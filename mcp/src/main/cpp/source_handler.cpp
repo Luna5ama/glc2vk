@@ -15,7 +15,7 @@
 namespace vibris::mcp {
 namespace {
 
-namespace control = ::vibris::control::v1;
+namespace control = ::vibris::control::v2;
 
 void prepare_one(SourcePreparer& preparer, const std::filesystem::path& workspace_root,
     const Json* source, std::list<PreparedSource>& prepared) {
@@ -52,7 +52,7 @@ void prepare_one(SourcePreparer& preparer, const std::filesystem::path& workspac
 }
 
 [[nodiscard]] SourceLimits server_limits(const control::ServerHello& server) {
-    if (server.pending_shaders_root().empty() || !std::filesystem::path(server.pending_shaders_root()).is_absolute() ||
+    if (server.pending_source_root().empty() || !std::filesystem::path(server.pending_source_root()).is_absolute() ||
         server.limits().max_source_bytes() == 0 || server.limits().max_source_files() == 0) {
         throw StateError("SERVER_NOT_READY", "The local Vibris server did not advertise a usable source root.", true);
     }
@@ -72,7 +72,7 @@ SourceHandler::~SourceHandler() {
 void SourceHandler::prepare(
     std::string_view tool_name, const Json& arguments, const control::ServerHello& server) {
     SourcePreparer preparer(
-        workspace_root_, std::filesystem::path(server.pending_shaders_root()), server_limits(server));
+        workspace_root_, std::filesystem::path(server.pending_source_root()), server_limits(server));
     std::list<PreparedSource> prepared;
     const auto recipe = arguments.value("recipe", std::string{});
     if (tool_name == "vibris_run_matrix" ||
@@ -133,28 +133,18 @@ void SourceHandler::observe(const control::ServerMessage& message) noexcept {
         if (batch != source_batches_.end()) transfer(*batch);
         return;
     }
-    if (!message.has_resume_state()) return;
+    if (!message.has_job_state()) return;
 
-    const auto update = [&](SourceBatch& batch) {
-        const auto job = std::find_if(
-            message.resume_state().jobs().begin(), message.resume_state().jobs().end(),
-            [&](const control::JobSummary& summary) { return summary.request_id() == batch.request_id; });
-        if (job == message.resume_state().jobs().end() || job->state() == control::JOB_STATE_UNSPECIFIED) {
-            batch.server_owned = false;
-        } else {
-            transfer(batch);
-        }
-    };
-    if (!message.request_id().empty()) {
-        const auto batch = std::find_if(source_batches_.begin(), source_batches_.end(), [&](const SourceBatch& item) {
-            return item.request_id == message.request_id();
-        });
-        if (batch != source_batches_.end()) update(*batch);
-        return;
-    }
-    for (auto& batch : source_batches_) {
-        if (!batch.request_id.empty()) update(batch);
-    }
+    const auto& job = message.job_state().summary();
+    const auto& id = !message.request_id().empty() ? message.request_id() :
+        !job.request_id().empty() ? job.request_id() : job.job_id();
+    if (id.empty()) return;
+    const auto batch = std::find_if(source_batches_.begin(), source_batches_.end(), [&](const SourceBatch& item) {
+        return item.request_id == id;
+    });
+    if (batch == source_batches_.end()) return;
+    if (job.state() == control::JOB_STATE_UNSPECIFIED) batch->server_owned = false;
+    else transfer(*batch);
 }
 
 void SourceHandler::retire(std::string_view request_id) noexcept {

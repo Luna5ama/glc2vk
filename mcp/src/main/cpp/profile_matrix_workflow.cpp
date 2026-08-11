@@ -138,7 +138,7 @@ Json freeze_sources(const fs::path& workspace_root, const fs::path& state_direct
         frozen.push_back({{"id", declared.at("id")},
                           {"kind", "snapshot"},
                           {"job_id", job_id},
-                          {"snapshot_uuid", reference.uuid()},
+                          {"snapshot_uuid", reference.source_uuid()},
                           {"origin_kind", commit ? "commit" : "workspace"},
                           {"origin_name", commit ? reference.origin().commit().repository_id()
                                                   : reference.origin().workspace().display_name()},

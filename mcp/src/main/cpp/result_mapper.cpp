@@ -8,7 +8,7 @@
 #include <string>
 
 namespace vibris::mcp {
-namespace proto = ::vibris::control::v1;
+namespace proto = ::vibris::control::v2;
 namespace {
 
 nlohmann::json map_message(const google::protobuf::Message& message) {
@@ -27,6 +27,10 @@ nlohmann::json map_message(const google::protobuf::Message& message) {
 }
 
 nlohmann::json ResultMapper::list_presets(const proto::ListPresetsResponse& response) {
+    return map_message(response);
+}
+
+nlohmann::json ResultMapper::list_resources(const proto::ListResourcesResponse& response) {
     return map_message(response);
 }
 

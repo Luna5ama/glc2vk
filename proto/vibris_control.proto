@@ -76,6 +76,7 @@ message ServerHello {
     repeated Capability capabilities = 2;
     ServerLimits limits = 3;
     ServerStatus status = 4;
+    string pending_source_root = 5;
 }
 
 message ServerLimits {
