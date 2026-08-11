@@ -18,6 +18,7 @@ import java.util.Objects
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.BiConsumer
 import java.util.function.Supplier
 
@@ -25,59 +26,67 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
     host: VibrisRuntimeHost?,
     frames: RenderedFrameClock?,
     private val frameWaitObserver: BiConsumer<Long, Long>? = null,
+    private val activityObserver: Runnable? = null,
 ) : VibrisRuntimeAdapter {
     private val host = Objects.requireNonNull(host, "host")!!
     private val frames = Objects.requireNonNull(frames, "frames")!!
     private val closed = AtomicBoolean()
+    private val pendingOperations = AtomicInteger()
 
     @Volatile
     private var catalog = ResourceCatalog.empty()
 
-    override fun getStatus(): CompletionStage<RuntimeStatus> = onClient(
-        Supplier {
-            val status = host.status()
-            catalog = try {
-                host.resourceCatalog(frames.currentFrame())
-            } catch (_: IllegalStateException) {
-                ResourceCatalog.empty()
-            }
-            status
-        },
-        CancellationToken.none(),
-    )
+    fun isIdle(): Boolean = pendingOperations.get() == 0
+
+    override fun getStatus(): CompletionStage<RuntimeStatus> = trackActivity {
+        onClient(
+            Supplier {
+                val status = host.status()
+                catalog = try {
+                    host.resourceCatalog(frames.currentFrame())
+                } catch (_: IllegalStateException) {
+                    ResourceCatalog.empty()
+                }
+                status
+            },
+            CancellationToken.none(),
+        )
+    }
 
     override fun executeAction(action: RuntimeAction): CompletionStage<String> =
-        onClientStage(Supplier { host.executeAction(action) }, CancellationToken.none())
+        trackActivity { onClientStage(Supplier { host.executeAction(action) }, CancellationToken.none()) }
 
     override fun listPresets(): CompletionStage<List<ScenePreset>> =
-        onClient(Supplier(host::presets), CancellationToken.none())
+        trackActivity { onClient(Supplier(host::presets), CancellationToken.none()) }
 
     override fun validateContext(context: SceneContext): CompletionStage<ContextValidationResult> =
-        onClient(Supplier { host.validateContext(context) }, CancellationToken.none())
+        trackActivity { onClient(Supplier { host.validateContext(context) }, CancellationToken.none()) }
 
     override fun ensureWorldAndContext(
         context: SceneContext,
         cancellation: CancellationToken,
     ): CompletionStage<ContextApplyResult> =
-        onClientStage(Supplier { host.applyContext(context, cancellation) }, cancellation)
+        trackActivity { onClientStage(Supplier { host.applyContext(context, cancellation) }, cancellation) }
 
     override fun reloadVibrisShaderpack(
         config: Map<String, String>?,
         cancellation: CancellationToken,
     ): CompletionStage<ReloadResult> =
-        onClient(
-            Supplier {
-                val result = host.reload(config, cancellation)
-                if (result.successful) {
-                    catalog = host.resourceCatalog(frames.currentFrame())
-                }
-                result
-            },
-            cancellation,
-        )
+        trackActivity {
+            onClient(
+                Supplier {
+                    val result = host.reload(config, cancellation)
+                    if (result.successful) {
+                        catalog = host.resourceCatalog(frames.currentFrame())
+                    }
+                    result
+                },
+                cancellation,
+            )
+        }
 
     override fun resetTemporalState(cancellation: CancellationToken): CompletionStage<TemporalResetResult> =
-        onClient(Supplier { host.resetTemporal(cancellation) }, cancellation)
+        trackActivity { onClient(Supplier { host.resetTemporal(cancellation) }, cancellation) }
 
     override fun waitRenderedFrames(
         frameCount: Int,
@@ -87,9 +96,11 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
             return CompletableFuture.failedFuture(IllegalStateException("Vibris runtime is closed"))
         }
         val start = frames.currentFrame()
-        return frames.waitRenderedFrames(frameCount, cancellation).thenApply { end ->
-            frameWaitObserver?.accept(start, end)
-            end
+        return trackActivity {
+            frames.waitRenderedFrames(frameCount, cancellation).thenApply { end ->
+                frameWaitObserver?.accept(start, end)
+                end
+            }
         }
     }
 
@@ -103,10 +114,12 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
         if (closed.get()) {
             return CompletableFuture.failedFuture(IllegalStateException("Vibris runtime is closed"))
         }
-        return frames.captureAtNextFrame(cancellation) { frameId ->
-            val result = host.capture(plan, sink, frameId, cancellation)
-            catalog = host.resourceCatalog(frameId)
-            result
+        return trackActivity {
+            frames.captureAtNextFrame(cancellation) { frameId ->
+                val result = host.capture(plan, sink, frameId, cancellation)
+                catalog = host.resourceCatalog(frameId)
+                result
+            }
         }
     }
 
@@ -118,10 +131,12 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
         if (closed.get()) {
             return CompletableFuture.failedFuture(IllegalStateException("Vibris runtime is closed"))
         }
-        return onClientStage(
-            Supplier { host.capturePatchedShaders(artifactName, sink, frames.currentFrame(), cancellation) },
-            cancellation,
-        )
+        return trackActivity {
+            onClientStage(
+                Supplier { host.capturePatchedShaders(artifactName, sink, frames.currentFrame(), cancellation) },
+                cancellation,
+            )
+        }
     }
 
     override fun close() {
@@ -170,4 +185,18 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
         action: Supplier<CompletionStage<T>>,
         cancellation: CancellationToken,
     ): CompletionStage<T> = onClient(action, cancellation).thenCompose { stage -> stage }
+
+    private fun <T> trackActivity(action: Supplier<CompletionStage<T>>): CompletionStage<T> {
+        val becameActive = pendingOperations.getAndIncrement() == 0
+        val stage = try {
+            if (becameActive) {
+                activityObserver?.run()
+            }
+            action.get()
+        } catch (throwable: Throwable) {
+            pendingOperations.decrementAndGet()
+            return CompletableFuture.failedFuture(throwable)
+        }
+        return stage.whenComplete { _, _ -> pendingOperations.decrementAndGet() }
+    }
 }
