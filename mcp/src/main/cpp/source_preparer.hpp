@@ -15,6 +15,21 @@ namespace vibris::mcp {
 
 using WorkspaceCopier = std::function<void(std::filesystem::path, std::filesystem::path)>;
 
+struct WorkspaceProvenance final {
+    std::string branch;
+    std::string head;
+    std::string shader_tree_id;
+    std::string source_snapshot_sha256;
+    std::string dirty_shader_delta_sha256;
+
+    [[nodiscard]] bool operator==(const WorkspaceProvenance&) const = default;
+};
+
+[[nodiscard]] WorkspaceProvenance capture_workspace_provenance(
+    const std::filesystem::path& workspace_root, SourceLimits limits);
+[[nodiscard]] std::string shader_content_delta_sha256(
+    std::string_view measured_snapshot_sha256, std::string_view completion_snapshot_sha256);
+
 class PreparedSource final {
 public:
     PreparedSource(const PreparedSource&) = delete;

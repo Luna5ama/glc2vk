@@ -486,6 +486,10 @@ proto::ClientMessage JobProtocol::request(const std::string_view tool_name, cons
     auto* job = message.mutable_submit_job()->mutable_job();
     job->set_job_id(request_id);
     job->set_preset_id(arguments.value("preset_id", std::string{}));
+    if (const auto preset = arguments.find("__vibris_preset");
+        preset != arguments.end() && preset->is_object()) {
+        job->set_preset_sha256(preset->value("preset_sha256", std::string{}));
+    }
     job->mutable_context()->CopyFrom(context);
     job->mutable_context()->set_fov(config.fov);
     const auto restore = arguments.find("restore_state");

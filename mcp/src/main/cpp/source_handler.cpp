@@ -35,13 +35,21 @@ void prepare_one(SourcePreparer& preparer, const std::filesystem::path& workspac
         provenance.set_total_bytes(source->at("total_bytes").get<std::uint64_t>());
         provenance.set_requested_revision(source->at("requested_revision").get<std::string>());
         provenance.set_resolved_revision(source->at("resolved_revision").get<std::string>());
+        provenance.set_snapshot_sha256(source->at("snapshot_sha256").get<std::string>());
+        provenance.set_branch(source->at("branch").get<std::string>());
+        provenance.set_start_head(source->at("start_head").get<std::string>());
+        provenance.set_shader_tree_id(source->at("shader_tree_id").get<std::string>());
+        provenance.set_dirty_shader_delta_sha256(
+            source->at("dirty_shader_delta_sha256").get<std::string>());
         if (source->at("origin_kind") == "commit") {
             auto* origin = provenance.mutable_origin()->mutable_commit();
             origin->set_repository_id(source->at("origin_name").get<std::string>());
             origin->set_revision(provenance.resolved_revision());
+            origin->set_worktree_root(source->at("worktree_root").get<std::string>());
         } else {
-            provenance.mutable_origin()->mutable_workspace()->set_display_name(
-                source->at("origin_name").get<std::string>());
+            auto* origin = provenance.mutable_origin()->mutable_workspace();
+            origin->set_display_name(source->at("origin_name").get<std::string>());
+            origin->set_worktree_root(source->at("worktree_root").get<std::string>());
         }
         const auto snapshot = workspace_root / ".vibris" / "jobs" /
             job_id / "sources" / snapshot_uuid;

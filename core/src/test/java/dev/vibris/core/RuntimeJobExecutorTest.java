@@ -92,6 +92,13 @@ class RuntimeJobExecutorTest {
             terminal.completed().getResult().getActionReceipts(1).getWaitFrames().getStartFrame());
         assertEquals(3,
             terminal.completed().getResult().getActionReceipts(1).getWaitFrames().getEndFrame());
+        var provenance = terminal.completed().getResult().getProvenance();
+        assertEquals(source.uuid, provenance.getActiveSourceUuid());
+        assertEquals(runtimeSettings.settingsSha256(), provenance.getConfigSha256());
+        assertFalse(provenance.getSceneSha256().isBlank());
+        assertEquals(fixture.runtime.compileCatalog.mappingSha256(), provenance.getPassMappingSha256());
+        assertTrue(provenance.getShaderLoadedAtUnixMs() > 0);
+        assertFalse(provenance.getEnvironment().getJavaVersion().isBlank());
     }
 
     @Test
@@ -259,6 +266,7 @@ class RuntimeJobExecutorTest {
         assertEquals(CompileCatalogProtocol.INSTANCE.toProtocol(catalog(List.of(unchanged, added), true)),
             compile.getCatalog());
         assertEquals(candidate.uuid, compile.getProvenance().getActiveSourceUuid());
+        assertEquals(candidate.uuid, result.getProvenance().getActiveSourceUuid());
         assertEquals(ReceiptStatus.RECEIPT_STATUS_OK, result.getRestoration().getStatus());
         assertEquals(baseline.uuid, fixture.registry.activeUuid());
         assertFalse(fixture.runtime.events.contains("frames"));

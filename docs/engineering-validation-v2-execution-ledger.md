@@ -92,8 +92,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T09 | P0 | Vibris | Define compile catalog runtime contract | DONE | `T09 define compile validation catalog contract` |
 | T10 | P0 | Iris | Emit complete Iris compile catalog | DONE | `T10 emit Iris program compile catalog` |
 | T11 | P0 | Vibris | Add compile_validate recipe | DONE | `T11 add compile validation recipe` |
-| T12 | P0 | Vibris | Expand immutable benchmark provenance | READY | `T12 expand benchmark provenance and stale checks` |
-| T13 | P0 | Vibris | Enforce statistical benchmark guardrails | PENDING | `T13 enforce benchmark semantic guardrails` |
+| T12 | P0 | Vibris | Expand immutable benchmark provenance | DONE | `T12 expand benchmark provenance and stale checks` |
+| T13 | P0 | Vibris | Enforce statistical benchmark guardrails | READY | `T13 enforce benchmark semantic guardrails` |
 | T14 | P0 | Vibris | Replace artifacts with managed v2 manifests | PENDING | `T14 add managed artifact v2 lifecycle` |
 | T15 | P0 | Vibris | Define named pass resource dump contract | PENDING | `T15 define named pass resource dump contract` |
 | T16 | P0 | Iris | Implement named Iris pass boundary hooks | PENDING | `T16 capture resources after named Iris passes` |
@@ -905,7 +905,7 @@ Evidence:
 
 ### T12 — Expand immutable benchmark provenance
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T11
 
@@ -950,11 +950,28 @@ Blockers:
 
 Evidence:
 
-- Pending.
+- Extended strict-v2 prepared-source and result provenance with worktree/branch/workspace identity, requested and
+  resolved revisions, start/completion HEAD, committed shader tree object, deterministic dirty shader delta,
+  immutable source snapshot and active UUID, effective config/settings, preset/scene hashes, shader load time,
+  runtime versions plus GPU/GL/driver strings, and the current program/pass mapping hash. Durable source checkpoints
+  retain the same immutable fields across materialization and restart.
+- MCP now recomputes the live workspace shader fingerprint at terminal mapping. Commit-message-only movement reports
+  `head_changed=true, stale=false`; tracked edits, untracked additions, and deletions report `stale=true` with the same
+  deterministic content-delta hash on repeated reads. Immutable commit-source results track completion HEAD without
+  treating mutable workspace content as their measured source.
+- Top-level action/performance/visual results and every compile-validation case carry the exact active source UUID;
+  Core captures Java/OS/Vibris metadata directly and refreshes Minecraft/Iris/GPU/OpenGL/driver identity on the
+  render thread when the real host is present.
+- `\.\gradlew.bat :vibris-core:test --offline --console=plain` passed: 103 tests, 0 failures.
+- Native release targets `vibris-workspace-source-tests`, `vibris-job-protocol-tests`, and the affected
+  `vibris-profile-matrix-workflow-tests` built successfully. Focused CTest passed 7/7 provenance/JobProtocol cases;
+  the broader workspace-source plus durable matrix/compile checkpoint regression passed 14/14.
+- Protected untracked `capture\a.spv` remained outside task staging. Commit: this task's commit with subject
+  `T12 expand benchmark provenance and stale checks`.
 
 ### T13 — Enforce statistical benchmark guardrails
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T12
 
@@ -1454,3 +1471,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T09 - defined canonical compile catalogs and stable diagnostic fingerprints, replaced string shader inspection with a typed runtime query/receipt, and passed API 7/7 plus Core 101/101 tests - Commit title: T09 define compile validation catalog contract`
 - `2026-08-11 - T10 - Iris emits complete canonical program/pass compile catalogs with terminal diagnostics and patched-source identities only after pipeline/reload completion; external commit 0ccdadd3a9b80891d147ace95a3c3919b7055b76; bridge tests 11/11 and offline Iris build passed - Owner receipt commit title: T10 record Iris compile catalog receipt`
 - `2026-08-11 - T11 - added durable sync/async compile_validate for single and matrix cases with optional baseline, canonical catalog and stable diagnostic diffs, per-case checkpoints/provenance, fail-closed compile gates, and forced runtime restoration; Core focused 10/10 and native filtered CTest 3/3 passed - Commit title: T11 add compile validation recipe`
+- `2026-08-11 - T12 - expanded immutable source/result provenance, separated HEAD movement from shader-content staleness with deterministic completion deltas, retained provenance through durable checkpoints, and proved active source UUIDs on compile/action receipts; Core 103/103, focused native 7/7, and source/checkpoint regression 14/14 passed - Commit title: T12 expand benchmark provenance and stale checks`

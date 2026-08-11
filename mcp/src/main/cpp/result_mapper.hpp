@@ -18,6 +18,7 @@ public:
         const ::vibris::control::v2::GetStatusResponse& response);
     [[nodiscard]] static nlohmann::json server_message(
         const ::vibris::control::v2::ServerMessage& response);
+    static void finalize_provenance(nlohmann::json& result);
 };
 
 }

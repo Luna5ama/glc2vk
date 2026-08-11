@@ -130,7 +130,8 @@ target_link_libraries(vibris_mcp_core PUBLIC
     vibris_control_protocol
     LibArchive::LibArchive
     nlohmann_json::nlohmann_json
-    Advapi32)
+    Advapi32
+    Bcrypt)
 
 add_executable(vibris-mcp src/main/cpp/main.cpp)
 target_link_libraries(vibris-mcp PRIVATE vibris_mcp_core)
@@ -299,6 +300,11 @@ if(BUILD_TESTING)
             MissingPendingRootRejected
             CheckedFileSwapDoesNotReadReparseTarget
             QueuedSnapshotMaterializesWithStableProvenance
+            ProvenanceClean
+            ProvenanceMetadataOnly
+            ProvenanceTrackedChange
+            ProvenanceUntrackedChange
+            ProvenanceDeletion
             SourceSoak)
         add_test(NAME ${scenario} COMMAND vibris-workspace-source-tests ${scenario})
     endforeach()

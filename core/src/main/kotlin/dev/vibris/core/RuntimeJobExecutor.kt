@@ -44,6 +44,12 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     @Volatile
     private var pendingRecovery: PendingRecovery? = null
 
+    @Volatile
+    private var activeShaderLoadedAtUnixMs: Long = 0
+
+    @Volatile
+    private var activePassMappingSha256: String = ""
+
     @Throws(Failure::class)
     fun execute(job: CoreJob, progress: Consumer<JobStage>): TerminalResult {
         val startedAtUnixMs = System.currentTimeMillis()
@@ -64,6 +70,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             } else {
                 actions.execute(job, progress, deadline)
             }
+            completed = attachProvenance(job, completed)
             val restoration = terminalize(job, isolation, true, progress)
             completed = completed.toBuilder().setRestoration(restoration).build()
             isolation.release(activator)
@@ -103,6 +110,22 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             .setResult(awaiter.withTimings(job, result, startedAtUnixMs, startedNanos))
             .build(),
     )
+
+    private fun attachProvenance(job: CoreJob, result: JobResult): JobResult {
+        val source = activator.activeSnapshot() ?: return result
+        return result.toBuilder()
+            .setProvenance(
+                BenchmarkProvenance.result(
+                    job,
+                    source,
+                    activeShaderSettings,
+                    activeContext,
+                    activeShaderLoadedAtUnixMs,
+                    activePassMappingSha256,
+                ),
+            )
+            .build()
+    }
 
     @Throws(Failure::class)
     fun applyContext(job: CoreJob, progress: Consumer<JobStage>, deadline: Long): ContextApplyResult {
@@ -146,6 +169,11 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     }
 
     fun runtime(): VibrisRuntimeAdapter = runtime
+
+    fun observeCatalog(catalog: CompileCatalog, loadedAtUnixMs: Long = System.currentTimeMillis()) {
+        activePassMappingSha256 = catalog.mappingSha256
+        activeShaderLoadedAtUnixMs = loadedAtUnixMs
+    }
 
     fun probe(): CoreProbe = probe
 
@@ -202,6 +230,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             val reload = reload(job, settings, progress, deadline)
             val catalog = await(runtime.getCompileCatalog(job.cancellation.token()), job, deadline)
             val loadedAtUnixMs = System.currentTimeMillis()
+            observeCatalog(catalog, loadedAtUnixMs)
             if (activation != null) {
                 try {
                     activator.commit(activation)
@@ -253,6 +282,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             original = failure
         }
         if (original == null) {
+            activeShaderLoadedAtUnixMs = System.currentTimeMillis()
             return successful!!
         }
         val restored = activator.rollback(activation)
@@ -280,6 +310,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             }
             throw ShaderReloadFailure.create(shaderLogs, job, reload)
         }
+        activeShaderLoadedAtUnixMs = System.currentTimeMillis()
         return reload
     }
 
@@ -293,7 +324,10 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         progress.accept(JobStage.JOB_STAGE_COMPILING)
         probe.event(job.requestId, "RELOADING_SHADERS")
         val result = await(runtime.reloadVibrisShaderpack(config, job.cancellation.token()), job, deadline)
-        if (result.successful) activeShaderSettings = result.effectiveSettings
+        if (result.successful) {
+            activeShaderSettings = result.effectiveSettings
+            activePassMappingSha256 = ""
+        }
         return result
     }
 

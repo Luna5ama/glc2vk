@@ -314,6 +314,10 @@ message PreparedSourceRef {
     string requested_revision = 5;
     string resolved_revision = 6;
     string snapshot_sha256 = 7;
+    string branch = 8;
+    string start_head = 9;
+    string shader_tree_id = 10;
+    string dirty_shader_delta_sha256 = 11;
 }
 
 message SourceOrigin {
@@ -331,6 +335,7 @@ message WorkspaceOrigin {
 message CommitOrigin {
     string repository_id = 1;
     string revision = 2;
+    string worktree_root = 3;
 }
 
 message SceneContext {
@@ -398,6 +403,7 @@ message JobSpec {
     JobTimeouts timeouts = 5;
     RestorePolicy restore_state = 6;
     ResultArtifactOptions result_artifacts = 7;
+    string preset_sha256 = 8;
     oneof workload {
         ActionSequence action_sequence = 20;
         MatrixRequest matrix = 21;

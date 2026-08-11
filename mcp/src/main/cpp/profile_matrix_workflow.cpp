@@ -180,8 +180,15 @@ Json freeze_source(SourcePreparer& preparer, std::vector<PreparedSource>& snapsh
 		{"origin_kind", commit ? "commit" : "workspace"},
 		{"origin_name", commit ? reference.origin().commit().repository_id()
 			: reference.origin().workspace().display_name()},
+		{"worktree_root", commit ? reference.origin().commit().worktree_root()
+			: reference.origin().workspace().worktree_root()},
 		{"requested_revision", reference.requested_revision()},
 		{"resolved_revision", reference.resolved_revision()},
+		{"snapshot_sha256", reference.snapshot_sha256()},
+		{"branch", reference.branch()},
+		{"start_head", reference.start_head()},
+		{"shader_tree_id", reference.shader_tree_id()},
+		{"dirty_shader_delta_sha256", reference.dirty_shader_delta_sha256()},
 		{"file_count", reference.file_count()},
 		{"total_bytes", reference.total_bytes()}};
 }

@@ -1,15 +1,19 @@
 #include "workspace_source_fixture.hpp"
+#include "result_mapper.hpp"
 
 #include <array>
 #include <exception>
 #include <iostream>
 #include <string_view>
 #include <utility>
+#include <nlohmann/json.hpp>
 
 namespace {
 
 namespace fs = std::filesystem;
 using vibris::mcp::SourcePreparer;
+using vibris::mcp::ResultMapper;
+using Json = nlohmann::json;
 using vibris::mcp::WorkspaceCopier;
 using vibris::mcp::copy_workspace_tree;
 using vibris::mcp::copy_workspace_tree_after_check;
@@ -21,6 +25,7 @@ using vibris::mcp::test::mutating_copier;
 using vibris::mcp::test::pending_has_no_sources;
 using vibris::mcp::test::read_file;
 using vibris::mcp::test::replace_with_file_symlink;
+using vibris::mcp::test::run_git;
 using vibris::mcp::test::require;
 
 void workspace_snapshot_tracked_untracked_ignored_and_retry() {
@@ -48,9 +53,13 @@ void workspace_snapshot_tracked_untracked_ignored_and_retry() {
         require(reference.origin().has_workspace(), "Prepared source did not record workspace origin.");
         require(reference.requested_revision() == "workspace" && reference.resolved_revision().size() == 40,
             "PreparedSourceRef omitted the requested workspace revision or resolved full commit.");
+        require(reference.snapshot_sha256().size() == 64 && !reference.branch().empty() &&
+                reference.start_head() == reference.resolved_revision() &&
+                !reference.shader_tree_id().empty() && reference.dirty_shader_delta_sha256().size() == 64,
+            "PreparedSourceRef omitted immutable workspace provenance.");
         require(prepared.resolved_revision().size() == 40,
             "Prepared workspace source did not retain its full HEAD revision.");
-        require(owned_directory == fixture.pending() / reference.uuid(), "Prepared source used the wrong final path.");
+        require(owned_directory == fixture.pending() / reference.source_uuid(), "Prepared source used the wrong final path.");
         require(read_file(owned_directory / "composite.fsh") == "tracked-composite", "Tracked file was omitted.");
         require(read_file(owned_directory / "untracked.glsl") == "untracked-source", "Untracked file was omitted.");
         require(
@@ -74,7 +83,7 @@ void staging_promotion() {
         // When: preparation completes and ownership is explicitly released.
         auto prepared = preparer.prepare_workspace();
         released_directory = prepared.directory();
-        const auto uuid = prepared.reference().uuid();
+        const auto uuid = prepared.reference().source_uuid();
         prepared.release();
 
         // Then: staging was atomically promoted to the direct UUID child, and release prevents RAII deletion.
@@ -169,7 +178,7 @@ void queued_snapshot_materializes_with_stable_provenance() {
 
     auto materialized = materializer.prepare_snapshot(frozen.directory(), frozen.reference());
 
-    require(materialized.reference().uuid() != frozen.reference().uuid(),
+    require(materialized.reference().source_uuid() != frozen.reference().source_uuid(),
         "Queued snapshot materialization reused the checkpoint source UUID.");
     require(materialized.reference().requested_revision() == frozen.reference().requested_revision() &&
             materialized.reference().resolved_revision() == frozen.reference().resolved_revision(),
@@ -178,8 +187,98 @@ void queued_snapshot_materializes_with_stable_provenance() {
         "Queued snapshot materialization reread the mutable workspace.");
 }
 
+void make_clean(WorkspaceFixture& fixture) {
+    run_git(fixture.worktree(), "add -f shaders");
+    run_git(fixture.worktree(), "commit --quiet -m provenance-clean");
+}
+
+Json receipt(const vibris::control::v2::PreparedSourceRef& source) {
+    return {{"result", {{"provenance", {
+        {"workspace_id", "fixture-workspace"},
+        {"worktree_root", source.origin().workspace().worktree_root()},
+        {"branch", source.branch()},
+        {"requested_revision", source.requested_revision()},
+        {"resolved_revision", source.resolved_revision()},
+        {"start_head", source.start_head()},
+        {"completion_head", source.start_head()},
+        {"head_changed", false},
+        {"stale", false},
+        {"shader_tree_id", source.shader_tree_id()},
+        {"dirty_shader_delta_sha256", source.dirty_shader_delta_sha256()},
+        {"source_snapshot_sha256", source.snapshot_sha256()},
+        {"active_source_uuid", source.source_uuid()},
+    }}}}};
+}
+
+const Json& finalized(Json& value) {
+    ResultMapper::finalize_provenance(value);
+    return value.at("result").at("provenance");
+}
+
+void provenance_clean() {
+    WorkspaceFixture fixture;
+    make_clean(fixture);
+    SourcePreparer preparer(fixture.worktree(), fixture.pending(), generous_limits());
+    auto prepared = preparer.prepare_workspace();
+    auto value = receipt(prepared.reference());
+    const auto& provenance = finalized(value);
+    require(!provenance.at("head_changed").get<bool>() && !provenance.at("stale").get<bool>(),
+        "An unchanged workspace was not finalized as clean.");
+    require(provenance.at("completion_head").get<std::string>() ==
+            provenance.at("start_head").get<std::string>(),
+        "Clean provenance changed its completion HEAD.");
+}
+
+void provenance_metadata_only() {
+    WorkspaceFixture fixture;
+    make_clean(fixture);
+    SourcePreparer preparer(fixture.worktree(), fixture.pending(), generous_limits());
+    auto prepared = preparer.prepare_workspace();
+    run_git(fixture.worktree(), "commit --quiet --allow-empty -m metadata-only");
+    auto value = receipt(prepared.reference());
+    const auto& provenance = finalized(value);
+    require(provenance.at("head_changed").get<bool>() && !provenance.at("stale").get<bool>(),
+        "A commit-message-only change did not separate HEAD change from shader staleness.");
+}
+
+template <typename Mutation>
+void require_stale_delta(std::string_view label, Mutation&& mutation) {
+    WorkspaceFixture fixture;
+    make_clean(fixture);
+    SourcePreparer preparer(fixture.worktree(), fixture.pending(), generous_limits());
+    auto prepared = preparer.prepare_workspace();
+    std::forward<Mutation>(mutation)(fixture);
+    auto first = receipt(prepared.reference());
+    auto second = receipt(prepared.reference());
+    const auto& first_provenance = finalized(first);
+    const auto& second_provenance = finalized(second);
+    require(first_provenance.at("stale").get<bool>(), std::string(label) + " did not mark provenance stale.");
+    const auto delta = first_provenance.at("dirty_shader_delta_sha256").get<std::string>();
+    require(delta.size() == 64 && delta ==
+            second_provenance.at("dirty_shader_delta_sha256").get<std::string>(),
+        std::string(label) + " did not produce a deterministic shader delta hash.");
+}
+
+void provenance_tracked_change() {
+    require_stale_delta("Tracked shader change", [](WorkspaceFixture& fixture) {
+        vibris::mcp::test::write_file(fixture.shaders() / "composite.fsh", "tracked-change");
+    });
+}
+
+void provenance_untracked_change() {
+    require_stale_delta("Untracked shader change", [](WorkspaceFixture& fixture) {
+        vibris::mcp::test::write_file(fixture.shaders() / "new-untracked.glsl", "untracked-change");
+    });
+}
+
+void provenance_deletion() {
+    require_stale_delta("Deleted shader", [](WorkspaceFixture& fixture) {
+        require(fs::remove(fixture.shaders() / "composite.fsh"), "Could not delete tracked shader fixture.");
+    });
+}
+
 using TestCase = std::pair<std::string_view, void (*)()>;
-constexpr std::array<TestCase, 7> test_cases {{
+constexpr std::array<TestCase, 12> test_cases {{
     {"WorkspaceSnapshotTrackedUntrackedIgnoredAndRetry", workspace_snapshot_tracked_untracked_ignored_and_retry},
     {"StagingPromotion", staging_promotion},
     {"MutationTwiceFails", mutation_twice_fails},
@@ -187,6 +286,11 @@ constexpr std::array<TestCase, 7> test_cases {{
     {"CheckedFileSwapDoesNotReadReparseTarget", checked_file_swap_does_not_read_reparse_target},
     {"SourceSoak", source_soak},
     {"QueuedSnapshotMaterializesWithStableProvenance", queued_snapshot_materializes_with_stable_provenance},
+    {"ProvenanceClean", provenance_clean},
+    {"ProvenanceMetadataOnly", provenance_metadata_only},
+    {"ProvenanceTrackedChange", provenance_tracked_change},
+    {"ProvenanceUntrackedChange", provenance_untracked_change},
+    {"ProvenanceDeletion", provenance_deletion},
 }};
 
 } // namespace

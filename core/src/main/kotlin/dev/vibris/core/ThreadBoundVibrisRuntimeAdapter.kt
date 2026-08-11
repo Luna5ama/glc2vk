@@ -43,6 +43,7 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
     override fun getStatus(): CompletionStage<RuntimeStatus> = trackActivity {
         onClient(
             Supplier {
+                BenchmarkProvenance.captureRuntimeEnvironment()
                 val status = host.status()
                 catalog = try {
                     host.resourceCatalog(frames.currentFrame())
@@ -77,6 +78,7 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
         trackActivity {
             onClient(
                 Supplier {
+                    BenchmarkProvenance.captureRuntimeEnvironment()
                     val result = host.reload(config, cancellation)
                     if (result.successful) {
                         catalog = host.resourceCatalog(frames.currentFrame())
@@ -88,7 +90,15 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
         }
 
     override fun getCompileCatalog(cancellation: CancellationToken): CompletionStage<CompileCatalog> =
-        trackActivity { onClient(Supplier { host.compileCatalog(cancellation) }, cancellation) }
+        trackActivity {
+            onClient(
+                Supplier {
+                    BenchmarkProvenance.captureRuntimeEnvironment()
+                    host.compileCatalog(cancellation)
+                },
+                cancellation,
+            )
+        }
 
     override fun resetTemporalState(cancellation: CancellationToken): CompletionStage<TemporalResetResult> =
         trackActivity { onClient(Supplier { host.resetTemporal(cancellation) }, cancellation) }

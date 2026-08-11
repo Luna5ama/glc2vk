@@ -7,7 +7,6 @@ import dev.vibris.protocol.v2.CompileValidationResult
 import dev.vibris.protocol.v2.ErrorCode
 import dev.vibris.protocol.v2.JobResult
 import dev.vibris.protocol.v2.JobStage
-import dev.vibris.protocol.v2.ResultProvenance
 import dev.vibris.protocol.v2.ShaderDiagnostic
 import java.util.TreeMap
 import java.util.function.Consumer
@@ -91,24 +90,14 @@ internal class CompileValidationJobExecutor(
         return result
     }
 
-    private fun provenance(job: CoreJob, execution: Execution): ResultProvenance {
-        val reference = execution.source.reference
-        val builder = ResultProvenance.newBuilder()
-            .setWorkspaceId(job.workspaceId)
-            .setRequestedRevision(reference.requestedRevision)
-            .setResolvedRevision(reference.resolvedRevision)
-            .setSourceSnapshotSha256(execution.source.snapshotSha256)
-            .setActiveSourceUuid(execution.source.uuid)
-            .setPresetId(job.submission.presetId)
-            .setShaderLoadedAtUnixMs(execution.result.loadedAtUnixMs)
-            .setPassMappingSha256(execution.result.catalog.mappingSha256)
-        if (reference.origin.hasWorkspace()) builder.worktreeRoot = reference.origin.workspace.worktreeRoot
-        if (execution.result.reload.successful) {
-            builder.configSha256 = execution.result.reload.effectiveSettings.settingsSha256
-            builder.effectiveSettings = BenchmarkProvenance.effectiveSettings(execution.result.reload.effectiveSettings)
-        }
-        return builder.build()
-    }
+    private fun provenance(job: CoreJob, execution: Execution) = BenchmarkProvenance.result(
+        job,
+        execution.source,
+        execution.result.reload.effectiveSettings.takeIf { execution.result.reload.successful },
+        RuntimeJobContext.toApi(job.submission.context),
+        execution.result.loadedAtUnixMs,
+        execution.result.catalog.mappingSha256,
+    )
 
     private data class Execution(
         val source: SourceRegistry.Lease,

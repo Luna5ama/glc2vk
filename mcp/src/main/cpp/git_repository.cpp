@@ -325,6 +325,45 @@ std::string GitRepository::resolve_commit(std::string_view revision) const {
     return output;
 }
 
+std::string GitRepository::query(const std::vector<std::wstring>& arguments,
+    const std::size_t max_stdout_bytes, const bool allow_nonzero) const {
+    auto process = launch_git(arguments, {}, max_stdout_bytes);
+    std::array<std::byte, 4096> buffer{};
+    std::string output;
+    for (std::size_t read = process.read(buffer); read != 0; read = process.read(buffer)) {
+        output.append(reinterpret_cast<const char*>(buffer.data()), read);
+    }
+    const auto exit_code = process.wait();
+    if (exit_code != 0 && !allow_nonzero) {
+        throw StateError("INTERNAL_ERROR", "Git provenance query failed.", true);
+    }
+    if (exit_code != 0) return {};
+    while (!output.empty() && (output.back() == '\r' || output.back() == '\n')) output.pop_back();
+    return output;
+}
+
+std::string GitRepository::current_branch() const {
+    return query({L"git", L"-C", repository_.wstring(), L"symbolic-ref", L"--short", L"-q", L"HEAD"},
+        8192, true);
+}
+
+std::string GitRepository::shader_tree_id(std::string_view revision) const {
+    if (!is_full_sha(revision)) {
+        throw StateError("COMMIT_NOT_FOUND", "Shader tree lookup requires a full commit SHA.");
+    }
+    const auto output = query({L"git", L"-C", repository_.wstring(), L"rev-parse", L"--verify",
+        L"--end-of-options", std::filesystem::path(std::string(revision) + ":shaders").wstring()}, 8192);
+    if (!is_full_sha(output)) {
+        throw StateError("COMMIT_HAS_NO_SHADERS", "The resolved commit has no shaders tree.");
+    }
+    return output;
+}
+
+bool GitRepository::shader_worktree_dirty() const {
+    return !query({L"git", L"-C", repository_.wstring(), L"status", L"--porcelain=v1", L"-z",
+        L"--untracked-files=all", L"--", L"shaders"}, 16 * 1024 * 1024).empty();
+}
+
 GitArchivePipe GitRepository::open_shader_archive(
     std::string_view full_sha, const std::size_t max_archive_bytes) const {
     if (!is_full_sha(full_sha)) {

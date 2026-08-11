@@ -1,5 +1,7 @@
 #include "synchronous_job_runner.hpp"
 
+#include "result_mapper.hpp"
+
 #include "config_document.hpp"
 #include "job_protocol.hpp"
 #include "paired_benchmark.hpp"
@@ -922,7 +924,9 @@ ToolOutcome SynchronousJobRunner::submit_once(std::string_view tool_name, const 
         }
         if (!terminal) throw std::logic_error("gRPC completed without a terminal job message");
         report_progress(control.progress, request_id, "checkpointing", false);
-        return JobProtocol::terminal(*terminal);
+        auto outcome = JobProtocol::terminal(*terminal);
+        if (auto* result = std::get_if<Json>(&outcome)) ResultMapper::finalize_provenance(*result);
+        return outcome;
     } catch (...) {
         sources_.retire(request_id);
         throw;
@@ -993,7 +997,9 @@ ToolOutcome SynchronousJobRunner::resume_once(std::string_view request_id,
     }
     if (!terminal) throw std::logic_error("gRPC resume completed without a terminal job message");
     report_progress(control.progress, std::string(request_id), "checkpointing", false);
-    return JobProtocol::terminal(*terminal);
+    auto outcome = JobProtocol::terminal(*terminal);
+    if (auto* result = std::get_if<Json>(&outcome)) ResultMapper::finalize_provenance(*result);
+    return outcome;
 }
 
 ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& arguments,

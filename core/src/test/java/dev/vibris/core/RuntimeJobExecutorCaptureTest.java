@@ -73,6 +73,8 @@ class RuntimeJobExecutorCaptureTest {
 
         var result = terminal.completed().getResult();
         assertEquals(List.of("link:A", "reload", "context", "capture"), fixture.runtime.events);
+        assertEquals(result.getActionReceipts(0).getRuntimeMutation().getSourceUuid(),
+            result.getProvenance().getActiveSourceUuid());
         assertEquals(7, result.getArtifactsCount());
         assertEquals(List.of(
                 ArtifactKind.ARTIFACT_KIND_SCREENSHOT,

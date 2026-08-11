@@ -50,7 +50,9 @@ internal class ActionJobExecutor(
                             val execution = load(job, load, progress, deadline)
                             diagnostics.addAll(execution.reload.diagnostics)
                             prepared?.addDiagnostics(execution.reload.diagnostics)
-                            owner.await(runtime.getCompileCatalog(job.cancellation.token()), job, deadline)
+                            owner.observeCatalog(
+                                owner.await(runtime.getCompileCatalog(job.cancellation.token()), job, deadline),
+                            )
                             receiptBook.put(
                                 step.actionIndex,
                                 receiptBook.success(step.actionIndex)
@@ -172,6 +174,7 @@ internal class ActionJobExecutor(
                                 job,
                                 deadline,
                             )
+                            owner.observeCatalog(catalog)
                             receiptBook.put(
                                 step.actionIndex,
                                 receiptBook.success(step.actionIndex)

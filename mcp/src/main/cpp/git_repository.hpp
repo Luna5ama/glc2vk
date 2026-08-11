@@ -52,10 +52,16 @@ public:
     explicit GitRepository(std::filesystem::path repository);
 
     [[nodiscard]] std::string resolve_commit(std::string_view revision) const;
+    [[nodiscard]] std::string current_branch() const;
+    [[nodiscard]] std::string shader_tree_id(std::string_view revision) const;
+    [[nodiscard]] bool shader_worktree_dirty() const;
     [[nodiscard]] GitArchivePipe open_shader_archive(
         std::string_view full_sha, std::size_t max_archive_bytes) const;
 
 private:
+    [[nodiscard]] std::string query(
+        const std::vector<std::wstring>& arguments, std::size_t max_stdout_bytes,
+        bool allow_nonzero = false) const;
     static GitArchivePipe launch_git(const std::vector<std::wstring>& arguments,
         const std::filesystem::path& executable = {}, std::size_t max_stdout_bytes = 0,
         std::string_view overflow_code = "INTERNAL_ERROR",
