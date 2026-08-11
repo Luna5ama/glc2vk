@@ -97,7 +97,7 @@ internal class AbArtifactComparator {
         for (index in baseline.indices) {
             val a = baseline[index]
             val b = candidate[index]
-            if (a.kind != b.kind || a.logicalName != b.logicalName || a.format != b.format) {
+            if (a.resource != b.resource || a.format != b.format) {
                 throw IOException(TOPOLOGY_ERROR)
             }
             val aPayloads = a.outputs.filter { it.role != CapturePlan.ArtifactRole.METADATA }

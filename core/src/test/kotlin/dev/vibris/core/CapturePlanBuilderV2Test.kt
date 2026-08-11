@@ -5,8 +5,11 @@ import dev.vibris.api.ResourceCatalog
 import dev.vibris.protocol.v2.Action
 import dev.vibris.protocol.v2.ArtifactFormat
 import dev.vibris.protocol.v2.DumpBuffer
+import dev.vibris.protocol.v2.DumpBufferAfterPass
 import dev.vibris.protocol.v2.DumpTexture
-import dev.vibris.protocol.v2.TextureSelector
+import dev.vibris.protocol.v2.DumpTextureAfterPass
+import dev.vibris.protocol.v2.ResourceSelector
+import dev.vibris.protocol.v2.TextureView
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
@@ -14,19 +17,19 @@ import org.junit.jupiter.api.Test
 class CapturePlanBuilderV2Test {
     @Test
     fun expandsThreeDimensionalPngAndBufferSidecarsDeterministically() {
-        val catalog = ResourceCatalog(listOf(
-            resource("iris_custom_image.volume", ResourceCatalog.ResourceKind.TEXTURE, depth = 12),
-            resource("iris_ssbo_6", ResourceCatalog.ResourceKind.BUFFER, depth = 0),
-        ))
+        val catalog = catalog()
         val targets = mutableListOf<CapturePlan.Target>()
         CapturePlanBuilder.addAction(targets, Action.newBuilder().setDumpTexture(
             DumpTexture.newBuilder().setResource(
-                TextureSelector.newBuilder().setLogicalName("iris_custom_image.volume"),
-            )
-                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setArtifactName("volume"),
+                ResourceSelector.newBuilder()
+                    .setLogicalName("iris_custom_image.volume")
+                    .setView(TextureView.TEXTURE_VIEW_CURRENT),
+            ).setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setArtifactName("volume"),
         ).build(), catalog)
         CapturePlanBuilder.addAction(targets, Action.newBuilder().setDumpBuffer(
-            DumpBuffer.newBuilder().setLogicalName("iris_ssbo_6").setArtifactName("ssbo-6"),
+            DumpBuffer.newBuilder().setResource(
+                ResourceSelector.newBuilder().setLogicalName("iris_ssbo_6"),
+            ).setArtifactName("ssbo-6"),
         ).build(), catalog)
 
         val plan = CapturePlanBuilder.plan(targets, catalog).capture
@@ -37,30 +40,145 @@ class CapturePlanBuilderV2Test {
     }
 
     @Test
-    fun rejectsRemovedOrAmbiguousFormatsAndDuplicateOutputs() {
-        val catalog = ResourceCatalog(listOf(resource("colortex0.main", ResourceCatalog.ResourceKind.TEXTURE, 1)))
+    fun resolvesExactAfterPassTextureAndBufferRequests() {
+        val catalog = catalog()
+        val texture = CapturePlanBuilder.afterPassRequest(
+            Action.newBuilder().setDumpTextureAfterPass(
+                DumpTextureAfterPass.newBuilder()
+                    .setPassId("composite/composite21")
+                    .setResource(
+                        ResourceSelector.newBuilder()
+                            .setLogicalName("iris_custom_image.volume")
+                            .setView(TextureView.TEXTURE_VIEW_ALTERNATE)
+                            .setMipLevel(1)
+                            .setLayer(0),
+                    )
+                    .setFormat(ArtifactFormat.ARTIFACT_FORMAT_BIN)
+                    .setArtifactName("volume-after"),
+            ).build(),
+            catalog,
+        )
+        val buffer = CapturePlanBuilder.afterPassRequest(
+            Action.newBuilder().setDumpBufferAfterPass(
+                DumpBufferAfterPass.newBuilder()
+                    .setPassId("composite/composite21")
+                    .setResource(ResourceSelector.newBuilder().setLogicalName("iris_ssbo_6"))
+                    .setArtifactName("buffer-after"),
+            ).build(),
+            catalog,
+        )
+
+        assertEquals(catalog.mappingSha256, texture.mappingSha256)
+        assertEquals(ResourceCatalog.TextureView.ALTERNATE, texture.target.resource.textureView)
+        assertEquals(CapturePlan.ArtifactFormat.BIN, buffer.target.format)
+        assertEquals(listOf("buffer-after.bin", "buffer-after.json"), buffer.target.outputs.map { it.fileName })
+    }
+
+    @Test
+    fun rejectsUnknownPassResourceViewAndPhysicalSuffixBeforeScheduling() {
+        val catalog = catalog()
+        fun texture(passId: String, name: String, view: TextureView) = Action.newBuilder().setDumpTextureAfterPass(
+            DumpTextureAfterPass.newBuilder()
+                .setPassId(passId)
+                .setResource(ResourceSelector.newBuilder().setLogicalName(name).setView(view))
+                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)
+                .setArtifactName("texture"),
+        ).build()
+
+        assertThrows(RuntimeJobExecutor.Failure::class.java) {
+            CapturePlanBuilder.afterPassRequest(
+                texture("composite/missing", "iris_custom_image.volume", TextureView.TEXTURE_VIEW_CURRENT),
+                catalog,
+            )
+        }
+        assertThrows(RuntimeJobExecutor.Failure::class.java) {
+            CapturePlanBuilder.afterPassRequest(
+                texture("composite/composite21", "missing", TextureView.TEXTURE_VIEW_CURRENT),
+                catalog,
+            )
+        }
+        assertThrows(RuntimeJobExecutor.Failure::class.java) {
+            CapturePlanBuilder.afterPassRequest(
+                texture("composite/composite21", "iris_custom_image.volume", TextureView.TEXTURE_VIEW_MAIN),
+                catalog,
+            )
+        }
+        assertThrows(RuntimeJobExecutor.Failure::class.java) {
+            CapturePlanBuilder.afterPassRequest(
+                texture("composite/composite21", "iris_custom_image.volume.main", TextureView.TEXTURE_VIEW_MAIN),
+                catalog,
+            )
+        }
+    }
+
+    @Test
+    fun rejectsUnspecifiedTextureViewAndDuplicateOutputs() {
+        val catalog = catalog()
         val unspecified = mutableListOf<CapturePlan.Target>()
         assertThrows(RuntimeJobExecutor.Failure::class.java) {
             CapturePlanBuilder.addAction(unspecified, Action.newBuilder().setDumpTexture(
                 DumpTexture.newBuilder().setResource(
-                    TextureSelector.newBuilder().setLogicalName("colortex0.main"),
-                ).setArtifactName("texture"),
+                    ResourceSelector.newBuilder().setLogicalName("iris_custom_image.volume"),
+                ).setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setArtifactName("texture"),
             ).build(), catalog)
         }
 
-        val target = CapturePlanBuilder.target(ResourceCatalog.ResourceKind.TEXTURE, "colortex0.main",
-            CapturePlan.ArtifactFormat.BIN, "same", 0, 0)
+        val target = CapturePlanBuilder.target(
+            CapturePlan.ResourceSelector(
+                ResourceCatalog.ResourceKind.TEXTURE,
+                "iris_custom_image.volume",
+                ResourceCatalog.TextureView.CURRENT,
+                0,
+                0,
+            ),
+            CapturePlan.ArtifactFormat.BIN,
+            "same",
+        )
         assertThrows(RuntimeJobExecutor.Failure::class.java) {
             CapturePlanBuilder.plan(listOf(target, target), catalog)
         }
     }
 
+    private fun catalog(): ResourceCatalog {
+        val resources = listOf(
+            resource("iris_custom_image.volume", ResourceCatalog.ResourceKind.TEXTURE, depth = 12),
+            resource("iris_ssbo_6", ResourceCatalog.ResourceKind.BUFFER, depth = 0),
+        )
+        val pass = ResourceCatalog.PassDescriptor.of(
+            ResourceCatalog.PassStage.COMPOSITE,
+            "composite21",
+            0,
+            resources.map(ResourceCatalog.ResourceDescriptor::logicalName),
+        )
+        return ResourceCatalog.of(resources, listOf(pass))
+    }
+
     private fun resource(name: String, kind: ResourceCatalog.ResourceKind, depth: Int) =
-        ResourceCatalog.ResourceDescriptor(
-            name, kind, if (kind == ResourceCatalog.ResourceKind.BUFFER) 0 else 2,
-            if (kind == ResourceCatalog.ResourceKind.BUFFER) 0 else 2, depth, 1, 1,
-            if (kind == ResourceCatalog.ResourceKind.BUFFER) "binary" else "RGBA8", 4,
-            ResourceCatalog.ScalarType.UINT8, if (kind == ResourceCatalog.ResourceKind.BUFFER) 64 else 16L * depth,
-            1, name,
+        ResourceCatalog.ResourceDescriptor.of(
+            name,
+            kind,
+            if (kind == ResourceCatalog.ResourceKind.TEXTURE) {
+                listOf(ResourceCatalog.TextureView.CURRENT, ResourceCatalog.TextureView.ALTERNATE)
+            } else {
+                emptyList()
+            },
+            if (kind == ResourceCatalog.ResourceKind.BUFFER) 0 else 2,
+            if (kind == ResourceCatalog.ResourceKind.BUFFER) 0 else 2,
+            depth,
+            if (kind == ResourceCatalog.ResourceKind.BUFFER) 0 else 2,
+            if (kind == ResourceCatalog.ResourceKind.BUFFER) 0 else 1,
+            if (kind == ResourceCatalog.ResourceKind.BUFFER) "binary" else "RGBA8",
+            if (kind == ResourceCatalog.ResourceKind.BUFFER) 0 else 4,
+            ResourceCatalog.ScalarType.UINT8,
+            if (kind == ResourceCatalog.ResourceKind.BUFFER) 64 else 16L * depth,
+            1,
+            name,
+            if (kind == ResourceCatalog.ResourceKind.BUFFER) "shader_storage" else "render_target",
+            if (kind == ResourceCatalog.ResourceKind.BUFFER) "" else "TEXTURE_3D",
+            if (kind == ResourceCatalog.ResourceKind.BUFFER) "" else "RGBA",
+            if (kind == ResourceCatalog.ResourceKind.BUFFER) "" else "unorm",
+            if (kind == ResourceCatalog.ResourceKind.BUFFER) 0 else 8,
+            if (kind == ResourceCatalog.ResourceKind.BUFFER) "" else "RGBA",
+            if (kind == ResourceCatalog.ResourceKind.BUFFER) "" else "UNSIGNED_BYTE",
         )
 }

@@ -62,12 +62,16 @@ internal object PatchedShaderCapture {
     ): CaptureResult {
         require(frameId >= 0) { "frameId must not be negative" }
         require(CapturePlan.Target(
-            ResourceCatalog.ResourceKind.PATCHED_SHADERS,
-            "patched_shaders",
+            CapturePlan.ResourceSelector(
+                ResourceCatalog.ResourceKind.PATCHED_SHADERS,
+                "patched_shaders",
+                null,
+                0,
+                0,
+            ),
             CapturePlan.ArtifactFormat.TEXT,
             artifactName,
-            0,
-            0,
+            emptyList(),
         ).artifactName == artifactName)
         if (!host.debugShadersEnabled()) {
             throw IllegalStateException("Iris shader debug output is disabled")
@@ -116,9 +120,10 @@ internal object PatchedShaderCapture {
             ))
         }
 
-        val resource = ResourceCatalog.ResourceDescriptor(
+        val resource = ResourceCatalog.ResourceDescriptor.of(
             "patched_shaders",
             ResourceCatalog.ResourceKind.PATCHED_SHADERS,
+            emptyList(),
             0,
             0,
             0,

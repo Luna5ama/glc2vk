@@ -81,10 +81,37 @@ void strict_v2_request_contains_typed_texture_and_buffer_actions() {
 				action.dump_texture().format() == proto::ARTIFACT_FORMAT_BIN;
 		}
 		if (action.has_dump_buffer()) {
-			buffer = action.dump_buffer().logical_name() == "scene_ssbo";
+			buffer = action.dump_buffer().resource().logical_name() == "scene_ssbo";
 		}
 	}
 	require(texture && buffer, "typed strict-v2 texture/buffer capture actions were not encoded");
+}
+
+void after_pass_actions_preserve_exact_pass_and_resource_selectors() {
+	const Json arguments{{"preset_id", "quality"}, {"actions", Json::array({
+		{{"type", "dump_texture_after_pass"}, {"pass_id", "composite/composite21"},
+		 {"resource", {{"logical_name", "colortex0"}, {"view", "alternate"},
+			 {"mip_level", 2}, {"layer", 3}}}, {"format", "png"}, {"artifact_name", "texture-after"}},
+		{{"type", "dump_buffer_after_pass"}, {"pass_id", "prepare/prepare3"},
+		 {"resource", {{"logical_name", "scene_ssbo"}}}, {"artifact_name", "buffer-after"}},
+	})}};
+	const auto request = JobProtocol::request(
+		"vibris_run_actions", arguments, config(), scene(), {}, std::string(request_id));
+	const auto& actions = request.submit_job().job().action_sequence().actions();
+	require(actions.size() == 2, "after-pass actions were not preserved one-for-one");
+	const auto& texture = actions[0].dump_texture_after_pass();
+	require(texture.pass_id() == "composite/composite21" &&
+		texture.resource().logical_name() == "colortex0" &&
+		texture.resource().view() == proto::TEXTURE_VIEW_ALTERNATE &&
+		texture.resource().mip_level() == 2 && texture.resource().layer() == 3 &&
+		texture.format() == proto::ARTIFACT_FORMAT_PNG,
+		"texture-after-pass selector was changed during protocol conversion");
+	const auto& buffer = actions[1].dump_buffer_after_pass();
+	require(buffer.pass_id() == "prepare/prepare3" &&
+		buffer.resource().logical_name() == "scene_ssbo" &&
+		buffer.resource().view() == proto::TEXTURE_VIEW_UNSPECIFIED &&
+		buffer.resource().mip_level() == 0 && buffer.resource().layer() == 0,
+		"buffer-after-pass request was not encoded as a full BIN resource selector");
 }
 
 void matrix_auto_load_is_a_prelude_receipt_action() {
@@ -257,6 +284,7 @@ void resume_registration_and_terminal_mapping_are_strict_v2() {
 int main() {
 	try {
 		strict_v2_request_contains_typed_texture_and_buffer_actions();
+		after_pass_actions_preserve_exact_pass_and_resource_selectors();
 		matrix_auto_load_is_a_prelude_receipt_action();
 		compile_validation_uses_typed_uuid_cases_without_render_actions();
 		recovery_request_has_no_scene_or_source_dependency();

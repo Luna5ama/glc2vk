@@ -17,7 +17,8 @@ import dev.vibris.protocol.v2.PreparedSourceRef;
 import dev.vibris.protocol.v2.ReceiptStatus;
 import dev.vibris.protocol.v2.SceneContext;
 import dev.vibris.protocol.v2.TakeScreenshot;
-import dev.vibris.protocol.v2.TextureSelector;
+import dev.vibris.protocol.v2.ResourceSelector;
+import dev.vibris.protocol.v2.TextureView;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -49,7 +50,7 @@ class RuntimeJobExecutorCaptureTest {
             "colortex0", ResourceCatalog.ResourceKind.TEXTURE, 77, 16);
         ResourceCatalog.ResourceDescriptor buffer = resource(
             "radiance_cache", ResourceCatalog.ResourceKind.BUFFER, 77, 8);
-        fixture.runtime.catalog = new ResourceCatalog(List.of(screenshot, texture, buffer));
+        fixture.runtime.catalog = ResourceCatalog.of(List.of(screenshot, texture, buffer), List.of());
         LinkedHashMap<String, ResourceCatalog.ResourceDescriptor> captured = new LinkedHashMap<>();
         captured.put("screenshot", screenshot);
         captured.put("colortex0", texture);
@@ -65,10 +66,12 @@ class RuntimeJobExecutorCaptureTest {
             .addActions(Action.newBuilder().setTakeScreenshot(TakeScreenshot.newBuilder()
                 .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setArtifactName("screenshot")))
             .addActions(Action.newBuilder().setDumpTexture(DumpTexture.newBuilder()
-                .setResource(TextureSelector.newBuilder().setLogicalName("colortex0"))
+                .setResource(ResourceSelector.newBuilder().setLogicalName("colortex0")
+                    .setView(TextureView.TEXTURE_VIEW_CURRENT))
                 .setFormat(ArtifactFormat.ARTIFACT_FORMAT_BIN).setArtifactName("colortex0")))
             .addActions(Action.newBuilder().setDumpBuffer(DumpBuffer.newBuilder()
-                .setLogicalName("radiance_cache").setArtifactName("radiance_cache")))
+                .setResource(ResourceSelector.newBuilder().setLogicalName("radiance_cache"))
+                .setArtifactName("radiance_cache")))
             .build()), ignored -> {});
 
         var result = terminal.completed().getResult();
@@ -112,7 +115,7 @@ class RuntimeJobExecutorCaptureTest {
         Fixture fixture = new Fixture();
         ResourceCatalog.ResourceDescriptor screenshot = resource(
             "final", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 2, 16);
-        fixture.runtime.catalog = new ResourceCatalog(List.of(screenshot));
+        fixture.runtime.catalog = ResourceCatalog.of(List.of(screenshot), List.of());
         fixture.runtime.captureResult = captureResult(2, Map.of("delayed", screenshot));
         fixture.runtime.captureFiles.put("delayed.png", new byte[]{1, 2, 3});
 
@@ -139,11 +142,12 @@ class RuntimeJobExecutorCaptureTest {
     @Test
     void unknownResourceFailsBeforeOpeningArtifactJob() throws Exception {
         Fixture fixture = new Fixture();
-        fixture.runtime.catalog = new ResourceCatalog(List.of(
-            resource("final", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 1, 16)));
+        fixture.runtime.catalog = ResourceCatalog.of(List.of(
+            resource("final", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 1, 16)), List.of());
         ActionSequence actions = ActionSequence.newBuilder()
             .addActions(Action.newBuilder().setDumpTexture(DumpTexture.newBuilder()
-                .setResource(TextureSelector.newBuilder().setLogicalName("missing"))
+                .setResource(ResourceSelector.newBuilder().setLogicalName("missing")
+                    .setView(TextureView.TEXTURE_VIEW_CURRENT))
                 .setFormat(ArtifactFormat.ARTIFACT_FORMAT_BIN).setArtifactName("missing")))
             .build();
 
@@ -162,7 +166,7 @@ class RuntimeJobExecutorCaptureTest {
         Fixture fixture = new Fixture(64);
         ResourceCatalog.ResourceDescriptor screenshot = resource(
             "final", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 1, 0);
-        fixture.runtime.catalog = new ResourceCatalog(List.of(screenshot));
+        fixture.runtime.catalog = ResourceCatalog.of(List.of(screenshot), List.of());
         fixture.runtime.captureResult = captureResult(1, Map.of("screenshot", screenshot));
         fixture.runtime.captureFiles.put("screenshot.png", new byte[128]);
 
@@ -178,7 +182,7 @@ class RuntimeJobExecutorCaptureTest {
         Fixture fixture = new Fixture();
         ResourceCatalog.ResourceDescriptor screenshot = resource(
             "final", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 1, 16);
-        fixture.runtime.catalog = new ResourceCatalog(List.of(screenshot));
+        fixture.runtime.catalog = ResourceCatalog.of(List.of(screenshot), List.of());
         fixture.runtime.captureResult = captureResult(1, Map.of("screenshot", screenshot));
 
         RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
@@ -261,8 +265,16 @@ class RuntimeJobExecutorCaptureTest {
 
     private static ResourceCatalog.ResourceDescriptor resource(
         String name, ResourceCatalog.ResourceKind kind, long frame, long bytes) {
-        return new ResourceCatalog.ResourceDescriptor(name, kind, 2, 2, 1, 1, 1, "RGBA8", 4,
-            ResourceCatalog.ScalarType.UINT8, bytes, frame, name);
+        return ResourceCatalog.ResourceDescriptor.of(
+            name,
+            kind,
+            kind == ResourceCatalog.ResourceKind.TEXTURE
+                ? List.of(ResourceCatalog.TextureView.CURRENT)
+                : List.of(),
+            2, 2, 1, 1, 1, "RGBA8", 4,
+            ResourceCatalog.ScalarType.UINT8, bytes, frame, name, "", "", "RGBA", "unorm", 8,
+            "RGBA", "UNSIGNED_BYTE"
+        );
     }
 
     private final class Fixture {

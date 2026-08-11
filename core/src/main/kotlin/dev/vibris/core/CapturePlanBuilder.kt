@@ -28,15 +28,11 @@ internal object CapturePlanBuilder {
             }
             action.hasDumpTexture() -> {
                 val dump = action.dumpTexture
-                val selector = dump.resource
                 targets.add(
                     target(
-                        ResourceCatalog.ResourceKind.TEXTURE,
-                        selector.logicalName,
+                        selector(dump.resource, ResourceCatalog.ResourceKind.TEXTURE),
                         textureFormat(dump.format),
                         dump.artifactName,
-                        selector.mipLevel,
-                        selector.layer,
                     ),
                 )
             }
@@ -44,12 +40,9 @@ internal object CapturePlanBuilder {
                 val dump = action.dumpBuffer
                 targets.add(
                     target(
-                        ResourceCatalog.ResourceKind.BUFFER,
-                        dump.logicalName,
+                        selector(dump.resource, ResourceCatalog.ResourceKind.BUFFER),
                         CapturePlan.ArtifactFormat.BIN,
                         dump.artifactName,
-                        0,
-                        0,
                     ),
                 )
             }
@@ -72,41 +65,83 @@ internal object CapturePlanBuilder {
             ?.logicalName
             ?: "final_framebuffer"
         return target(
-            ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER,
-            name,
+            CapturePlan.ResourceSelector(ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, name, null, 0, 0),
             format,
             artifactName,
-            0,
-            0,
         )
     }
 
     fun target(
-        kind: ResourceCatalog.ResourceKind,
-        name: String,
+        resource: CapturePlan.ResourceSelector,
         format: CapturePlan.ArtifactFormat,
         artifactName: String,
-        mip: Int,
-        layer: Int,
-    ): CapturePlan.Target = CapturePlan.Target(kind, name, format, artifactName, mip, layer)
+    ): CapturePlan.Target = CapturePlan.Target(resource, format, artifactName, emptyList())
 
     fun patchedShaders(artifactName: String): CapturePlan = CapturePlan(listOf(CapturePlan.Target(
-        ResourceCatalog.ResourceKind.PATCHED_SHADERS,
-        "patched_shaders",
+        CapturePlan.ResourceSelector(
+            ResourceCatalog.ResourceKind.PATCHED_SHADERS,
+            "patched_shaders",
+            null,
+            0,
+            0,
+        ),
         CapturePlan.ArtifactFormat.TEXT,
         artifactName,
-        0,
-        0,
+        emptyList(),
     )))
+
+    fun afterPassRequest(action: Action, catalog: ResourceCatalog): CapturePlan.AfterPassRequest {
+        val passId: String
+        val target: CapturePlan.Target
+        when {
+            action.hasDumpTextureAfterPass() -> {
+                val dump = action.dumpTextureAfterPass
+                passId = dump.passId
+                target = target(
+                    selector(dump.resource, ResourceCatalog.ResourceKind.TEXTURE),
+                    textureFormat(dump.format),
+                    dump.artifactName,
+                )
+            }
+            action.hasDumpBufferAfterPass() -> {
+                val dump = action.dumpBufferAfterPass
+                passId = dump.passId
+                target = target(
+                    selector(dump.resource, ResourceCatalog.ResourceKind.BUFFER),
+                    CapturePlan.ArtifactFormat.BIN,
+                    dump.artifactName,
+                )
+            }
+            else -> throw RuntimeJobExecutor.Failure(
+                ErrorCode.ERROR_CODE_CAPTURE_FAILED,
+                "Action is not an after-pass resource dump.",
+            )
+        }
+        val pass = catalog.passes.singleOrNull { it.passId == passId }
+            ?: throw missing("pass $passId")
+        val planned = plan(listOf(target), catalog).capture.targets.single()
+        return try {
+            CapturePlan.AfterPassRequest(catalog.mappingSha256, pass, planned)
+        } catch (failure: IllegalArgumentException) {
+            throw RuntimeJobExecutor.Failure(
+                ErrorCode.ERROR_CODE_RESOURCE_NOT_FOUND,
+                failure.message ?: "After-pass resource is unavailable.",
+            )
+        }
+    }
 
     fun realizePatchedShaders(plan: CapturePlan, result: dev.vibris.api.CaptureResult): CapturePlan {
         val target = plan.targets.single()
-        require(target.kind == ResourceCatalog.ResourceKind.PATCHED_SHADERS && target.outputs.isEmpty()) {
+        require(
+            target.resource.kind == ResourceCatalog.ResourceKind.PATCHED_SHADERS && target.outputs.isEmpty(),
+        ) {
             "Patched shader capture plan is invalid"
         }
         val group = result.groups.single()
         require(group.name == target.artifactName &&
-            group.resource.kind == target.kind && group.resource.logicalName == target.logicalName) {
+            group.resource.kind == target.resource.kind &&
+                group.resource.logicalName == target.resource.logicalName
+        ) {
             "Patched shader capture result did not match its plan"
         }
         val outputs = group.artifacts.map { artifact ->
@@ -143,14 +178,17 @@ internal object CapturePlanBuilder {
                         )
                     }
                 }
+                val selector = target.resource
                 val resource = catalog.resources
-                    .firstOrNull { it.kind == target.kind && it.logicalName == target.logicalName }
-                    ?: throw missing(target.logicalName)
+                    .singleOrNull { it.kind == selector.kind && it.logicalName == selector.logicalName }
+                    ?: throw missing(selector.logicalName)
                 if (
-                    target.mipLevel >= maxOf(1, resource.mipLevels) ||
-                    target.layer >= maxOf(1, resource.layers)
+                    selector.mipLevel >= maxOf(1, resource.mipLevels) ||
+                    selector.layer >= maxOf(1, resource.layers) ||
+                    (selector.kind == ResourceCatalog.ResourceKind.TEXTURE &&
+                        selector.textureView !in resource.availableViews)
                 ) {
-                    throw missing(target.logicalName)
+                    throw missing(selector.logicalName)
                 }
                 if (target.format == CapturePlan.ArtifactFormat.PNG) validatePng(resource)
                 for (output in target.outputs) {
@@ -218,7 +256,7 @@ internal object CapturePlanBuilder {
     }
 
     private fun supported(target: CapturePlan.Target): Boolean =
-        when (target.kind) {
+        when (target.resource.kind) {
             ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER ->
                 target.format == CapturePlan.ArtifactFormat.PNG
             ResourceCatalog.ResourceKind.TEXTURE ->
@@ -254,10 +292,12 @@ internal object CapturePlanBuilder {
 
     private fun expand(target: CapturePlan.Target, catalog: ResourceCatalog): CapturePlan.Target {
         val resource = catalog.resources
-            .firstOrNull { it.kind == target.kind && it.logicalName == target.logicalName }
-            ?: throw missing(target.logicalName)
+            .singleOrNull {
+                it.kind == target.resource.kind && it.logicalName == target.resource.logicalName
+            }
+            ?: throw missing(target.resource.logicalName)
         val outputs = ArrayList<CapturePlan.ArtifactOutputSpec>()
-        if (target.kind == ResourceCatalog.ResourceKind.TEXTURE &&
+        if (target.resource.kind == ResourceCatalog.ResourceKind.TEXTURE &&
             target.format == CapturePlan.ArtifactFormat.PNG && resource.depth > 1
         ) {
             val digits = maxOf(4, (resource.depth - 1).toString().length)
@@ -287,7 +327,7 @@ internal object CapturePlanBuilder {
                 ),
             )
         }
-        if (target.kind != ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER) {
+        if (target.resource.kind != ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER) {
             outputs.add(
                 CapturePlan.ArtifactOutputSpec(
                     target.metadataFileName(),
@@ -298,5 +338,26 @@ internal object CapturePlanBuilder {
             )
         }
         return target.copy(outputs = outputs)
+    }
+
+    private fun selector(
+        selector: dev.vibris.protocol.v2.ResourceSelector,
+        kind: ResourceCatalog.ResourceKind,
+    ): CapturePlan.ResourceSelector {
+        val view = when (selector.view) {
+            dev.vibris.protocol.v2.TextureView.TEXTURE_VIEW_CURRENT -> ResourceCatalog.TextureView.CURRENT
+            dev.vibris.protocol.v2.TextureView.TEXTURE_VIEW_ALTERNATE -> ResourceCatalog.TextureView.ALTERNATE
+            dev.vibris.protocol.v2.TextureView.TEXTURE_VIEW_MAIN -> ResourceCatalog.TextureView.MAIN
+            dev.vibris.protocol.v2.TextureView.TEXTURE_VIEW_ALT -> ResourceCatalog.TextureView.ALT
+            else -> null
+        }
+        return try {
+            CapturePlan.ResourceSelector(kind, selector.logicalName, view, selector.mipLevel, selector.layer)
+        } catch (failure: IllegalArgumentException) {
+            throw RuntimeJobExecutor.Failure(
+                ErrorCode.ERROR_CODE_CAPTURE_FAILED,
+                failure.message ?: "Resource selector is invalid.",
+            )
+        }
     }
 }

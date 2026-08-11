@@ -49,6 +49,12 @@ interface VibrisRuntimeHost : AutoCloseable {
         cancellation: CancellationToken,
     ): CaptureResult
 
+    fun captureAfterPass(
+        request: CapturePlan.AfterPassRequest,
+        sink: ArtifactSink,
+        cancellation: CancellationToken,
+    ): CompletionStage<CapturePlan.AfterPassReceipt>
+
     fun capturePatchedShaders(
         artifactName: String,
         sink: ArtifactSink,

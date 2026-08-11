@@ -162,7 +162,13 @@ void typed_actions_reject_aliases() {
         {{"type", "dump_texture"},
          {"resource", {{"logical_name", "colortex0"}, {"view", "alternate"}, {"mip_level", 1}, {"layer", 0}}},
          {"format", "bin"}, {"artifact_name", "color-bin"}},
-        {{"type", "dump_buffer"}, {"logical_name", "sceneData"}, {"artifact_name", "scene-data"}},
+        {{"type", "dump_buffer"}, {"resource", {{"logical_name", "sceneData"}}},
+         {"artifact_name", "scene-data"}},
+        {{"type", "dump_texture_after_pass"}, {"pass_id", "composite/composite21"},
+         {"resource", {{"logical_name", "colortex0"}, {"view", "current"}, {"mip_level", 0}, {"layer", 0}}},
+         {"format", "png"}, {"artifact_name", "shade-diffuse"}},
+        {{"type", "dump_buffer_after_pass"}, {"pass_id", "prepare/prepare3"},
+         {"resource", {{"logical_name", "sceneData"}}}, {"artifact_name", "scene-data-after"}},
         {{"type", "list_resources"}, {"kinds", Json::array({"texture"})}},
     });
     require(std::holds_alternative<Json>(registry.invoke("vibris_run_actions", request)),
@@ -184,6 +190,30 @@ void typed_actions_reject_aliases() {
     });
     require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_actions", request)),
         "physical texture suffix alias was accepted in an action");
+
+    request["actions"] = Json::array({
+        {{"type", "dump_texture_after_pass"}, {"pass_id", "composite/composite21"},
+         {"resource", {{"logical_name", "colortex0"}}},
+         {"format", "png"}, {"artifact_name", "missing-view"}},
+    });
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_actions", request)),
+        "texture selector without an explicit view was accepted");
+
+    request["actions"] = Json::array({
+        {{"type", "dump_buffer_after_pass"}, {"pass_id", "prepare/prepare3"},
+         {"resource", {{"logical_name", "sceneData"}, {"view", "current"}}},
+         {"artifact_name", "buffer-view"}},
+    });
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_actions", request)),
+        "buffer selector with a texture view was accepted");
+
+    request["actions"] = Json::array({
+        {{"type", "dump_texture_after_pass"}, {"pass_id", "composite21"},
+         {"resource", {{"logical_name", "colortex0"}, {"view", "current"}}},
+         {"format", "png"}, {"artifact_name", "fuzzy-pass"}},
+    });
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_actions", request)),
+        "non-canonical after-pass identifier was accepted");
 
     Json debug_bundle{{"worktree_root", "I:\\shader-worktree"}, {"preset_id", "scene"},
         {"recipe", "capture_debug_bundle"}, {"textures", Json::array({"colortex0.main"})}};

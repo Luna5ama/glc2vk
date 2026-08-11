@@ -3,6 +3,8 @@ package dev.vibris.core
 import dev.vibris.api.RuntimeStatus
 import dev.vibris.api.VibrisRuntimeAdapter
 import dev.vibris.protocol.v2.Capability
+import dev.vibris.protocol.v2.PassDescriptor
+import dev.vibris.protocol.v2.PassStage
 import dev.vibris.protocol.v2.ResourceCatalog
 import dev.vibris.protocol.v2.ResourceDescriptor
 import dev.vibris.protocol.v2.ResourceKind
@@ -95,12 +97,17 @@ internal class ServerDescriptor @JvmOverloads constructor(
         .build()
 
     fun resources(): ResourceCatalog {
+        val current = runtime.getResourceCatalog()
         val catalog = ResourceCatalog.newBuilder()
-        runtime.getResourceCatalog().resources.forEach { resource ->
+            .setMappingSha256(current.mappingSha256)
+        current.resources.forEach { resource ->
             catalog.addResources(
                 ResourceDescriptor.newBuilder()
                     .setLogicalName(resource.logicalName)
                     .setKind(resourceKind(resource.kind))
+                    .addAllAvailableViews(resource.availableViews.map { view ->
+                        dev.vibris.protocol.v2.TextureView.valueOf("TEXTURE_VIEW_" + view.name)
+                    })
                     .setWidth(resource.width)
                     .setHeight(resource.height)
                     .setDepth(resource.depth)
@@ -112,6 +119,16 @@ internal class ServerDescriptor @JvmOverloads constructor(
                     .setByteSize(resource.byteSize)
                     .setFrameId(resource.frameId)
                     .build(),
+            )
+        }
+        current.passes.forEach { pass ->
+            catalog.addPasses(
+                PassDescriptor.newBuilder()
+                    .setPassId(pass.passId)
+                    .setStage(PassStage.valueOf("PASS_STAGE_" + pass.stage.name))
+                    .setProgramId(pass.programId)
+                    .setOrder(pass.order)
+                    .addAllReadableResources(pass.readableResources),
             )
         }
         return catalog.build()

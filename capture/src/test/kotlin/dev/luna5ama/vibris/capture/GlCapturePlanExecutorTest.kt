@@ -22,7 +22,7 @@ class GlCapturePlanExecutorTest {
     fun writesArtifactGroupsAndSidecars() {
         val targets = listOf(
             target(ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, "beauty", CapturePlan.ArtifactFormat.PNG),
-            target(ResourceCatalog.ResourceKind.TEXTURE, "colortex0.main", CapturePlan.ArtifactFormat.BIN),
+            target(ResourceCatalog.ResourceKind.TEXTURE, "colortex0", CapturePlan.ArtifactFormat.BIN),
             target(ResourceCatalog.ResourceKind.BUFFER, "iris_ssbo_6", CapturePlan.ArtifactFormat.BIN),
         )
         val sink = MemorySink()
@@ -31,25 +31,25 @@ class GlCapturePlanExecutorTest {
 
         val result = GlCapturePlanExecutor.capture(
             CapturePlan(targets), sink, 42, CancellationToken.none(),
-            Function { target -> resolved.add(target.logicalName).let { resolved.size } },
+            Function { target -> resolved.add(target.resource.logicalName).let { resolved.size } },
         ) { target, _, glId, output ->
-            captured += target.logicalName
+            captured += target.resource.logicalName
             output.write(byteArrayOf(glId.toByte()))
             GlCaptureMetadata(2, 3, 1, "format\"$glId", 4, ResourceCatalog.ScalarType.FLOAT32, glId.toLong())
         }
 
-        assertEquals(targets.map(CapturePlan.Target::logicalName), resolved)
+        assertEquals(targets.map { it.resource.logicalName }, resolved)
         assertEquals(resolved, captured)
         assertEquals(targets.map(CapturePlan.Target::artifactName), result.groups.map { it.name })
         assertTrue("beauty.json" !in sink.artifacts)
         assertContentEquals(byteArrayOf(1), sink.artifacts.getValue("beauty.png"))
-        assertContentEquals(byteArrayOf(2), sink.artifacts.getValue("colortex0.main.bin"))
+        assertContentEquals(byteArrayOf(2), sink.artifacts.getValue("colortex0.bin"))
         assertContentEquals(byteArrayOf(3), sink.artifacts.getValue("iris_ssbo_6.bin"))
-        val sidecar = sink.artifacts.getValue("colortex0.main.json").decodeToString()
-        assertTrue(sidecar.contains("\"logical_name\":\"colortex0.main\""))
+        val sidecar = sink.artifacts.getValue("colortex0.json").decodeToString()
+        assertTrue(sidecar.contains("\"logical_name\":\"colortex0\""))
         assertTrue(sidecar.contains("\"endianness\":\"native\""))
         assertTrue(sidecar.contains("\"y_flipped\":false"))
-        val pngTarget = target(ResourceCatalog.ResourceKind.TEXTURE, "colortex1.main", CapturePlan.ArtifactFormat.PNG)
+        val pngTarget = target(ResourceCatalog.ResourceKind.TEXTURE, "colortex1", CapturePlan.ArtifactFormat.PNG)
         val pngSink = MemorySink()
         GlCapturePlanExecutor.capture(
             CapturePlan(listOf(pngTarget)), pngSink, 42, CancellationToken.none(), Function { 4 },
@@ -57,7 +57,7 @@ class GlCapturePlanExecutorTest {
             output.write(4)
             GlCaptureMetadata(2, 3, 1, "RGBA8", 4, ResourceCatalog.ScalarType.UINT8, 24)
         }
-        assertTrue(pngSink.artifacts.getValue("colortex1.main.json").decodeToString()
+        assertTrue(pngSink.artifacts.getValue("colortex1.json").decodeToString()
             .contains("\"y_flipped\":true"))
         assertEquals(42, result.frameId)
         assertEquals(42, result.groups.last().resource.frameId)
@@ -73,7 +73,7 @@ class GlCapturePlanExecutorTest {
         val failure = assertFailsWith<CaptureResourceNotFoundException> {
             GlCapturePlanExecutor.capture(
                 plan, sink, 1, CancellationToken.none(),
-                Function { target -> if (target.logicalName == "present") 7 else null },
+                Function { target -> if (target.resource.logicalName == "present") 7 else null },
             ) { _, _, _, _ -> error("Capture must not start before all targets resolve") }
         }
         assertEquals("Capture resource was not found: missing", failure.message)
@@ -83,7 +83,7 @@ class GlCapturePlanExecutorTest {
     @Test
     fun wrapsSinkFailuresAndHonorsCancellation() {
         val plan = CapturePlan(listOf(
-            target(ResourceCatalog.ResourceKind.TEXTURE, "colortex0.main", CapturePlan.ArtifactFormat.BIN),
+            target(ResourceCatalog.ResourceKind.TEXTURE, "colortex0", CapturePlan.ArtifactFormat.BIN),
         ))
         val ioFailure = assertFailsWith<UncheckedIOException> {
             GlCapturePlanExecutor.capture(
@@ -109,7 +109,18 @@ class GlCapturePlanExecutorTest {
             CapturePlan.ArtifactOutputSpec("$name.json", CapturePlan.ArtifactFormat.JSON,
                 CapturePlan.ArtifactRole.METADATA, null),
         )
-        return CapturePlan.Target(kind, name, format, name, 0, 0, outputs)
+        return CapturePlan.Target(
+            CapturePlan.ResourceSelector(
+                kind,
+                name,
+                if (kind == ResourceCatalog.ResourceKind.TEXTURE) ResourceCatalog.TextureView.CURRENT else null,
+                0,
+                0,
+            ),
+            format,
+            name,
+            outputs,
+        )
     }
 
     private class MemorySink : ArtifactSink {

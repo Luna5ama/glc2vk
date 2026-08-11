@@ -23,24 +23,24 @@ object GlCapturePlanExecutor {
     ): CaptureResult {
         val targets = plan.targets.map { target ->
             ResolvedTarget(target, resolveResource.apply(target)
-                ?: throw CaptureResourceNotFoundException(target.logicalName))
+                ?: throw CaptureResourceNotFoundException(target.resource.logicalName))
         }
         val groups = ArrayList<CaptureResult.ArtifactGroup>()
         for ((target, glId) in targets) {
             cancellation.throwIfCancellationRequested()
             val outputs = ArrayList<CaptureResult.CapturedArtifact>()
             val payloads = target.outputs.filter { it.role != CapturePlan.ArtifactRole.METADATA }
-            val metadata = when (target.kind) {
+            val metadata = when (target.resource.kind) {
                 ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER,
                 ResourceCatalog.ResourceKind.TEXTURE,
-                -> GlArtifactCapture.readTexture(glId, target.mipLevel).use { readback ->
+                -> GlArtifactCapture.readTexture(glId, target.resource.mipLevel).use { readback ->
                     for (spec in payloads) {
                         cancellation.throwIfCancellationRequested()
                         write(sink, spec.fileName) { output ->
                             when (spec.format) {
                                 CapturePlan.ArtifactFormat.BIN -> readback.writeBin(output)
                                 CapturePlan.ArtifactFormat.PNG ->
-                                    readback.writePng(spec.subresourceIndex ?: target.layer, output)
+                                    readback.writePng(spec.subresourceIndex ?: target.resource.layer, output)
                                 else -> throw IllegalArgumentException("Unsupported texture format: ${spec.format}")
                             }
                         }
@@ -80,7 +80,7 @@ object GlCapturePlanExecutor {
         val targets = plan.targets.map { target ->
             ResolvedTarget(
                 target,
-                resolveResource.apply(target) ?: throw CaptureResourceNotFoundException(target.logicalName),
+                resolveResource.apply(target) ?: throw CaptureResourceNotFoundException(target.resource.logicalName),
             )
         }
         val captured = ArrayList<CaptureResult.ArtifactGroup>()
@@ -116,9 +116,10 @@ object GlCapturePlanExecutor {
         target: CapturePlan.Target,
         metadata: GlCaptureMetadata,
         frameId: Long,
-    ) = ResourceCatalog.ResourceDescriptor(
-        target.logicalName,
-        target.kind,
+    ) = ResourceCatalog.ResourceDescriptor.of(
+        target.resource.logicalName,
+        target.resource.kind,
+        listOfNotNull(target.resource.textureView),
         metadata.width,
         metadata.height,
         metadata.depth,
@@ -129,8 +130,8 @@ object GlCapturePlanExecutor {
         metadata.scalarType,
         metadata.byteSize,
         frameId,
-        target.logicalName,
-        category(target.logicalName, target.kind),
+        target.resource.logicalName,
+        category(target.resource.logicalName, target.resource.kind),
         metadata.textureTarget,
         metadata.channelLayout,
         metadata.numericClass,

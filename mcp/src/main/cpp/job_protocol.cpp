@@ -142,9 +142,9 @@ void copy_filter(const Json& input, proto::ResourceFilter& filter) {
     if (input.contains("pass_id")) filter.set_pass_id(input.at("pass_id").get<std::string>());
 }
 
-void copy_texture_selector(const Json& input, proto::TextureSelector& selector) {
+void copy_texture_selector(const Json& input, proto::ResourceSelector& selector) {
     selector.set_logical_name(input.at("logical_name").get<std::string>());
-    selector.set_view(texture_view(input.value("view", std::string("current"))));
+    selector.set_view(texture_view(input.at("view").get<std::string>()));
     selector.set_mip_level(input.value("mip_level", std::uint32_t{0}));
     selector.set_layer(input.value("layer", std::uint32_t{0}));
 }
@@ -169,7 +169,19 @@ void append_action(const Json& input, const SourceMap& sources, const ConfigMap&
         value->set_artifact_name(std::string(artifact_prefix) + input.at("artifact_name").get<std::string>());
     } else if (type == "dump_buffer") {
         auto* value = action->mutable_dump_buffer();
-        value->set_logical_name(input.at("logical_name").get<std::string>());
+        value->mutable_resource()->set_logical_name(input.at("resource").at("logical_name").get<std::string>());
+        value->set_artifact_name(std::string(artifact_prefix) + input.at("artifact_name").get<std::string>());
+    } else if (type == "dump_texture_after_pass") {
+        auto* value = action->mutable_dump_texture_after_pass();
+        value->set_pass_id(input.at("pass_id").get<std::string>());
+        copy_texture_selector(input.at("resource"), *value->mutable_resource());
+        value->set_format(artifact_format(input.at("format").get<std::string>()));
+        value->set_artifact_name(std::string(artifact_prefix) + input.at("artifact_name").get<std::string>());
+    } else if (type == "dump_buffer_after_pass") {
+        auto* value = action->mutable_dump_buffer_after_pass();
+        value->set_pass_id(input.at("pass_id").get<std::string>());
+        value->mutable_resource()->set_logical_name(
+            input.at("resource").at("logical_name").get<std::string>());
         value->set_artifact_name(std::string(artifact_prefix) + input.at("artifact_name").get<std::string>());
     } else if (type == "get_capture_status") {
         action->mutable_get_capture_status();
@@ -243,7 +255,7 @@ std::uint32_t append_capture(proto::ActionSequence& sequence, const Json& captur
         value->set_artifact_name(std::move(artifact_name));
     } else if (type == "buffer") {
         auto* value = action->mutable_dump_buffer();
-        value->set_logical_name(capture.at("name").get<std::string>());
+        value->mutable_resource()->set_logical_name(capture.at("name").get<std::string>());
         value->set_artifact_name(std::move(artifact_name));
     } else {
         throw std::invalid_argument("unsupported capture type");
@@ -405,7 +417,7 @@ void build_recipe(const Json& arguments, const JobContext& config, const SourceM
             }
             for (const auto& buffer : arguments.value("buffers", Json::array())) {
                 auto* dump = sequence->add_actions()->mutable_dump_buffer();
-                dump->set_logical_name(buffer.get<std::string>());
+                dump->mutable_resource()->set_logical_name(buffer.get<std::string>());
                 dump->set_artifact_name(buffer.get<std::string>());
             }
         }

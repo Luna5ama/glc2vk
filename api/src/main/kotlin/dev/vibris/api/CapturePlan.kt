@@ -7,32 +7,51 @@ import java.util.regex.Pattern
 data class CapturePlan(@field:DefensiveSnapshot val targets: List<Target>) {
 
     @JvmRecord
-    data class Target(
+    data class ResourceSelector(
         val kind: ResourceCatalog.ResourceKind,
         val logicalName: String,
-        val format: ArtifactFormat,
-        val artifactName: String,
+        val textureView: ResourceCatalog.TextureView?,
         val mipLevel: Int,
         val layer: Int,
+    ) {
+        init {
+            require(ResourceCatalog.isLogicalName(logicalName)) {
+                "logicalName must be a canonical logical resource name"
+            }
+            require(mipLevel >= 0 && layer >= 0) { "Mip level and layer must be non-negative" }
+            when (kind) {
+                ResourceCatalog.ResourceKind.TEXTURE -> require(textureView != null) {
+                    "Texture selectors require an explicit logical view"
+                }
+                ResourceCatalog.ResourceKind.BUFFER -> require(
+                    textureView == null && mipLevel == 0 && layer == 0,
+                ) {
+                    "Buffer selectors cannot specify a view, mip level, or layer"
+                }
+                ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER,
+                ResourceCatalog.ResourceKind.PATCHED_SHADERS,
+                -> require(textureView == null && mipLevel == 0 && layer == 0) {
+                    "Non-texture selectors cannot specify a view, mip level, or layer"
+                }
+            }
+        }
+    }
+
+    @JvmRecord
+    data class Target(
+        val resource: ResourceSelector,
+        val format: ArtifactFormat,
+        val artifactName: String,
         @field:DefensiveSnapshot val outputs: List<ArtifactOutputSpec>,
     ) {
         init {
-            require(mipLevel >= 0 && layer >= 0) {
-                "Mip level and layer must be non-negative"
-            }
             require(SAFE_ARTIFACT_NAME.matcher(artifactName).matches()) {
                 "Artifact name must be a safe file name"
             }
+            require(resource.kind != ResourceCatalog.ResourceKind.BUFFER || format == ArtifactFormat.BIN) {
+                "Buffer captures must use the complete BIN format"
+            }
         }
-
-        constructor(
-            kind: ResourceCatalog.ResourceKind,
-            logicalName: String,
-            format: ArtifactFormat,
-            artifactName: String,
-            mipLevel: Int,
-            layer: Int,
-        ) : this(kind, logicalName, format, artifactName, mipLevel, layer, java.util.List.of())
 
         fun fileName(): String {
             outputs.firstOrNull { it.role != ArtifactRole.METADATA }?.let { return it.fileName }
@@ -48,6 +67,50 @@ data class CapturePlan(@field:DefensiveSnapshot val targets: List<Target>) {
 
         companion object {
             private val SAFE_ARTIFACT_NAME = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+        }
+    }
+
+    /** A one-shot request that remains pending until the exact named pass completes. */
+    @JvmRecord
+    data class AfterPassRequest(
+        val mappingSha256: String,
+        val pass: ResourceCatalog.PassDescriptor,
+        val target: Target,
+    ) {
+        init {
+            require(SHA256.matches(mappingSha256)) { "mappingSha256 must be a lowercase SHA-256" }
+            require(
+                target.resource.kind == ResourceCatalog.ResourceKind.TEXTURE ||
+                    target.resource.kind == ResourceCatalog.ResourceKind.BUFFER,
+            ) {
+                "After-pass capture supports only textures and buffers"
+            }
+            require(target.resource.logicalName in pass.readableResources) {
+                "Selected resource is not readable after the named pass"
+            }
+        }
+    }
+
+    /** Exact completion receipt for a previously pending after-pass request. */
+    @JvmRecord
+    data class AfterPassReceipt(
+        val request: AfterPassRequest,
+        val passOccurrence: Int,
+        val physicalName: String,
+        val capture: CaptureResult,
+    ) {
+        init {
+            require(passOccurrence > 0) { "passOccurrence must be positive" }
+            require(physicalName.isNotBlank()) { "physicalName must not be blank" }
+            require(capture.groups.size == 1) { "After-pass capture must return exactly one artifact group" }
+            val group = capture.groups.single()
+            require(group.name == request.target.artifactName) { "Capture group does not match the request" }
+            require(group.resource.logicalName == request.target.resource.logicalName) {
+                "Capture resource does not match the request"
+            }
+            require(group.resource.kind == request.target.resource.kind) {
+                "Capture resource kind does not match the request"
+            }
         }
     }
 
@@ -83,6 +146,8 @@ data class CapturePlan(@field:DefensiveSnapshot val targets: List<Target>) {
     }
 
     companion object {
+        private val SHA256 = Regex("[0-9a-f]{64}")
+
         @JvmStatic
         fun empty(): CapturePlan = CapturePlan(java.util.List.of())
     }

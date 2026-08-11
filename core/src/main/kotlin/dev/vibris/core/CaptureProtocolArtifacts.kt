@@ -116,7 +116,9 @@ internal class CaptureProtocolArtifacts {
         for (target in plan.targets) {
             val group = result.groups.firstOrNull { it.name == target.artifactName }
             val resource = group?.resource
-            if (resource == null || resource.kind != target.kind || resource.logicalName != target.logicalName ||
+            if (
+                resource == null || resource.kind != target.resource.kind ||
+                resource.logicalName != target.resource.logicalName ||
                 resource.frameId != result.frameId ||
                 group.artifacts.map { artifact ->
                     listOf(artifact.fileName, artifact.format, artifact.role, artifact.subresourceIndex)
@@ -173,7 +175,7 @@ internal class CaptureProtocolArtifacts {
         .setScalarType(dev.vibris.protocol.v2.ScalarType.valueOf("SCALAR_TYPE_" + resource.scalarType.name))
         .setByteSize(resource.byteSize)
         .setFrameId(resource.frameId)
-        .setPhysicalName(resource.semanticLabel.ifBlank { target.logicalName })
+        .setPhysicalName(resource.semanticLabel.ifBlank { target.resource.logicalName })
         .build()
 
     private fun specifications(
@@ -195,7 +197,7 @@ internal class CaptureProtocolArtifacts {
                 put(
                     output.fileName,
                     ArtifactManifest.FileSpec(
-                        kind(target.kind),
+                        kind(target.resource.kind),
                         protocolFormat(output.format),
                         protocolRole(output.role),
                         mediaType(output.format),

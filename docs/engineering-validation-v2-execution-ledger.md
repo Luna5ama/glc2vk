@@ -96,8 +96,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T12A | P0 | Vibris | Normalize strict-v2 execution receipts | DONE | `T12A normalize strict v2 execution receipts` |
 | T13 | P0 | Vibris | Enforce statistical benchmark guardrails | DONE | `T13 enforce benchmark semantic guardrails` |
 | T14 | P0 | Vibris | Replace artifacts with managed v2 manifests | DONE | `T14 add managed artifact v2 lifecycle` |
-| T15 | P0 | Vibris | Define named pass resource dump contract | READY | `T15 define named pass resource dump contract` |
-| T16 | P0 | Iris | Implement named Iris pass boundary hooks | PENDING | `T16 capture resources after named Iris passes` |
+| T15 | P0 | Vibris | Define named pass resource dump contract | DONE | `T15 define named pass resource dump contract` |
+| T16 | P0 | Iris | Implement named Iris pass boundary hooks | READY | `T16 capture resources after named Iris passes` |
 | T17 | P0 | Vibris | Integrate after-pass texture and buffer jobs | PENDING | `T17 integrate after-pass resource dump jobs` |
 | T18 | P0 | Vibris | Complete strict v2 cutover and documentation | PENDING | `T18 complete strict v2 cutover` |
 | T19 | P0 | Vibris | Run offline integrated acceptance | PENDING | `T19 verify offline v2 integration` |
@@ -1184,7 +1184,7 @@ Evidence:
 
 ### T15 — Define named pass resource dump contract
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T14
 
@@ -1228,11 +1228,28 @@ Blockers:
 
 Evidence:
 
-- Pending.
+- Added one canonical resource selector across immediate and after-pass texture/buffer dumps. Texture requests require an
+  explicit `current|alternate|main|alt` view plus bounded mip/layer and `png|bin`; buffer requests expose only a logical
+  resource and always capture complete BIN bytes. The strict v2 protobuf and MCP JSON schema contain no old selector,
+  buffer field, physical suffix, or implicit-view compatibility path.
+- `ResourceCatalog` now publishes uniquely ordered logical resources, available texture views, exact canonical
+  `stage/program` pass descriptors, readable resources, and a verified SHA-256 of the complete pass/resource mapping.
+  `CapturePlan` carries mapping-bound one-shot pending requests and exact after-pass receipts, while the runtime adapter
+  and host expose the asynchronous boundary seam required by T16/T17.
+- Core planning resolves exact pass/resource/view identities and expands artifact outputs before scheduling. Unknown
+  passes/resources, unavailable views, ambiguous catalog identities, fuzzy pass IDs, `.main/.alt` names, buffer views,
+  unspecified texture views, invalid subresources, and non-BIN buffer shapes fail closed.
+- `.\gradlew.bat :vibris-api:test :vibris-core:test --offline` passed 104/104 tests (API 8/8, Core 96/96).
+  The supporting clean-cutover check `.\gradlew.bat :vibris-capture:test --offline` passed 26/26 tests.
+- The release `vibris-action-schema-tests` target built successfully and
+  `ctest --preset release -R "ActionSchema|PassResource"` passed 1/1. The additional strict protocol conversion target
+  and `JobProtocol` CTest passed 1/1, including exact texture/buffer after-pass protobuf fields.
+- Protected `capture\a.spv` remained untracked and unstaged. No deployment, Minecraft/launcher restart, or generated
+  delivery refresh occurred.
 
 ### T16 — Implement named Iris pass boundary hooks
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T15
 

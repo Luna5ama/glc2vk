@@ -154,12 +154,15 @@ class AbArtifactComparatorTest {
     private fun plan(artifactName: String, fileName: String) = CapturePlan(
         listOf(
             CapturePlan.Target(
-                ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER,
-                "final",
+                CapturePlan.ResourceSelector(
+                    ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER,
+                    "final",
+                    null,
+                    0,
+                    0,
+                ),
                 CapturePlan.ArtifactFormat.PNG,
                 artifactName,
-                0,
-                0,
                 listOf(
                     CapturePlan.ArtifactOutputSpec(
                         fileName,

@@ -54,6 +54,12 @@ interface VibrisRuntimeAdapter : AutoCloseable {
         cancellation: CancellationToken,
     ): CompletionStage<CaptureResult>
 
+    fun captureAfterPass(
+        request: CapturePlan.AfterPassRequest,
+        sink: ArtifactSink,
+        cancellation: CancellationToken,
+    ): CompletionStage<CapturePlan.AfterPassReceipt>
+
     fun capturePatchedShaders(
         artifactName: String,
         sink: ArtifactSink,

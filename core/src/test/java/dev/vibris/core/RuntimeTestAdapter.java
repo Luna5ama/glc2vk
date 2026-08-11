@@ -155,6 +155,15 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     }
 
     @Override
+    public CompletionStage<CapturePlan.AfterPassReceipt> captureAfterPass(
+        CapturePlan.AfterPassRequest request,
+        ArtifactSink sink,
+        CancellationToken cancellation
+    ) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("not used by this fixture"));
+    }
+
+    @Override
     public CompletionStage<CaptureResult> capturePatchedShaders(
         String artifactName,
         ArtifactSink sink,

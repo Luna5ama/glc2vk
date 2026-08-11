@@ -1,6 +1,8 @@
 #include "tool_registry.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <cstdint>
 #include <initializer_list>
 #include <limits>
@@ -187,6 +189,12 @@ Json recipe_schema() {
 Json action_schema() {
     const Json artifact_name{{"type", "string"}, {"minLength", 1}};
     const Json resource_name{{"type", "string"}, {"minLength", 1}};
+    const auto texture_selector = closed_object({{"logical_name", resource_name},
+                                                  {"view", enum_string({"current", "alternate", "main", "alt"})},
+                                                  {"mip_level", bounded_integer(0, 31)},
+                                                  {"layer", bounded_integer(0, 4095)}},
+                                                 {"logical_name", "view"});
+    const auto buffer_selector = closed_object({{"logical_name", resource_name}}, {"logical_name"});
     const auto frames = bounded_integer(1, 10'000);
     const auto empty_action = [](const char* type) {
         return closed_object({{"type", enum_string({type})}}, {"type"});
@@ -209,18 +217,25 @@ Json action_schema() {
                        {"after_frames", bounded_integer(0, std::numeric_limits<std::int32_t>::max())}},
                       {"type"}),
         closed_object({{"type", enum_string({"dump_texture"})},
-                       {"resource", closed_object({{"logical_name", resource_name},
-                                                   {"view", enum_string({"current", "alternate", "main", "alt"})},
-                                                   {"mip_level", bounded_integer(0, 31)},
-                                                   {"layer", bounded_integer(0, 4095)}},
-                                                  {"logical_name"})},
+                       {"resource", texture_selector},
                        {"format", enum_string({"bin", "png"})},
                        {"artifact_name", artifact_name}},
                       {"type", "resource", "format", "artifact_name"}),
         closed_object({{"type", enum_string({"dump_buffer"})},
-                       {"logical_name", resource_name},
+                       {"resource", buffer_selector},
                        {"artifact_name", artifact_name}},
-                      {"type", "logical_name", "artifact_name"}),
+                      {"type", "resource", "artifact_name"}),
+        closed_object({{"type", enum_string({"dump_texture_after_pass"})},
+                       {"pass_id", resource_name},
+                       {"resource", texture_selector},
+                       {"format", enum_string({"bin", "png"})},
+                       {"artifact_name", artifact_name}},
+                      {"type", "pass_id", "resource", "format", "artifact_name"}),
+        closed_object({{"type", enum_string({"dump_buffer_after_pass"})},
+                       {"pass_id", resource_name},
+                       {"resource", buffer_selector},
+                       {"artifact_name", artifact_name}},
+                      {"type", "pass_id", "resource", "artifact_name"}),
         empty_action("get_capture_status"),
         load_shader,
         closed_object({{"type", enum_string({"capture_pass"})},
@@ -423,7 +438,22 @@ bool physical_texture_alias(const std::string_view name) {
     return name.ends_with(".main") || name.ends_with(".alt");
 }
 
-std::optional<std::string> reject_physical_aliases(const Json& value, const std::string& path) {
+bool canonical_pass_id(const std::string_view value) {
+    const auto separator = value.find('/');
+    if (separator == std::string_view::npos || separator == 0 || separator + 1 == value.size() ||
+        value.find('/', separator + 1) != std::string_view::npos) {
+        return false;
+    }
+    constexpr std::array stages{"begin", "prepare", "deferred", "composite", "final", "shadow_composite"};
+    if (std::ranges::find(stages, value.substr(0, separator)) == stages.end()) return false;
+    const auto program = value.substr(separator + 1);
+    if (program.size() > 128 || std::isalnum(static_cast<unsigned char>(program.front())) == 0) return false;
+    return std::ranges::all_of(program, [](const unsigned char character) {
+        return std::isalnum(character) != 0 || character == '.' || character == '_' || character == '-';
+    });
+}
+
+std::optional<std::string> validate_canonical_resource_references(const Json& value, const std::string& path) {
     if (value.is_object()) {
         if (const auto name = value.find("logical_name"); name != value.end() && name->is_string() &&
             physical_texture_alias(name->get_ref<const std::string&>())) {
@@ -436,6 +466,11 @@ std::optional<std::string> reject_physical_aliases(const Json& value, const std:
                 return path + ".name must use a logical texture name instead of a physical suffix alias";
             }
         }
+        const auto type = value.value("type", std::string{});
+        if ((type == "dump_texture_after_pass" || type == "dump_buffer_after_pass") &&
+            !canonical_pass_id(value.at("pass_id").get_ref<const std::string&>())) {
+            return path + ".pass_id must use canonical stage/program form";
+        }
         for (const auto& [key, item] : value.items()) {
             if (key == "textures" && item.is_array()) {
                 for (std::size_t index = 0; index < item.size(); ++index) {
@@ -446,11 +481,12 @@ std::optional<std::string> reject_physical_aliases(const Json& value, const std:
                     }
                 }
             }
-            if (const auto error = reject_physical_aliases(item, path + "." + key)) return error;
+            if (const auto error = validate_canonical_resource_references(item, path + "." + key)) return error;
         }
     } else if (value.is_array()) {
         for (std::size_t index = 0; index < value.size(); ++index) {
-            if (const auto error = reject_physical_aliases(value[index], path + "[" + std::to_string(index) + "]")) {
+            if (const auto error = validate_canonical_resource_references(
+                    value[index], path + "[" + std::to_string(index) + "]")) {
                 return error;
             }
         }
@@ -599,7 +635,7 @@ InvocationResult ToolRegistry::invoke(std::string_view name, const Json& argumen
     if (const auto error = validate_operation_shape(name, arguments)) {
         return InvocationError{InvocationErrorCode::InvalidArguments, *error};
     }
-    if (const auto error = reject_physical_aliases(arguments, "arguments")) {
+    if (const auto error = validate_canonical_resource_references(arguments, "arguments")) {
         return InvocationError{InvocationErrorCode::InvalidArguments, *error};
     }
 

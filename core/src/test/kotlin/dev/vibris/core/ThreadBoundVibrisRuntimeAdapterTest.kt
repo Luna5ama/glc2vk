@@ -90,6 +90,12 @@ class ThreadBoundVibrisRuntimeAdapterTest {
             cancellation: CancellationToken,
         ): CaptureResult = unsupported()
 
+        override fun captureAfterPass(
+            request: CapturePlan.AfterPassRequest,
+            sink: ArtifactSink,
+            cancellation: CancellationToken,
+        ): CompletionStage<CapturePlan.AfterPassReceipt> = unsupported()
+
         override fun close() = Unit
 
         private fun <T> unsupported(): T = throw UnsupportedOperationException()

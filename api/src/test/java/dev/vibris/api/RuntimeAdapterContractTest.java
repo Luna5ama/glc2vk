@@ -59,12 +59,16 @@ class RuntimeAdapterContractTest {
     @Test
     void canonicalConstructorsDefensivelySnapshotCollections() {
         var target = new CapturePlan.Target(
-            ResourceCatalog.ResourceKind.TEXTURE,
-            "colortex0",
+            new CapturePlan.ResourceSelector(
+                ResourceCatalog.ResourceKind.TEXTURE,
+                "colortex0",
+                ResourceCatalog.TextureView.CURRENT,
+                0,
+                0
+            ),
             CapturePlan.ArtifactFormat.PNG,
             "colortex0",
-            0,
-            0
+            List.of()
         );
         var targets = new ArrayList<>(List.of(target));
         CapturePlan plan = new CapturePlan(targets);
@@ -72,9 +76,7 @@ class RuntimeAdapterContractTest {
         assertEquals(List.of(target), plan.targets());
         assertThrows(UnsupportedOperationException.class, () -> plan.targets().clear());
 
-        var descriptor = new ResourceCatalog.ResourceDescriptor(
-            "colortex0", ResourceCatalog.ResourceKind.TEXTURE
-        );
+        var descriptor = textureDescriptor("colortex0", 1);
         var groups = new ArrayList<>(List.of(
             new CaptureResult.ArtifactGroup("colortex0", descriptor, List.of())
         ));
@@ -99,7 +101,7 @@ class RuntimeAdapterContractTest {
         assertThrows(UnsupportedOperationException.class, () -> reload.diagnostics().clear());
 
         var resources = new ArrayList<>(List.of(descriptor));
-        ResourceCatalog catalog = new ResourceCatalog(resources);
+        ResourceCatalog catalog = ResourceCatalog.of(resources, List.of());
         resources.clear();
         assertEquals(List.of(descriptor), catalog.resources());
         assertThrows(UnsupportedOperationException.class, () -> catalog.resources().clear());
@@ -144,6 +146,67 @@ class RuntimeAdapterContractTest {
             List.of(quality), "0".repeat(64)
         ));
         assertThrows(NullPointerException.class, () -> ReloadResult.success(null, List.of()));
+    }
+
+    @Test
+    void namedPassResourceContractIsCanonicalAndStrict() {
+        var texture = ResourceCatalog.ResourceDescriptor.of(
+            "colortex0",
+            ResourceCatalog.ResourceKind.TEXTURE,
+            List.of(ResourceCatalog.TextureView.ALT, ResourceCatalog.TextureView.CURRENT),
+            1920, 1080, 1, 4, 1, "RGBA16F", 4, ResourceCatalog.ScalarType.FLOAT16,
+            1920L * 1080 * 8, 7, "", "render_target", "TEXTURE_2D", "RGBA", "float", 16,
+            "RGBA", "HALF_FLOAT"
+        );
+        var buffer = ResourceCatalog.ResourceDescriptor.of(
+            "sceneData",
+            ResourceCatalog.ResourceKind.BUFFER,
+            List.of(),
+            0, 0, 0, 0, 0, "binary", 0, ResourceCatalog.ScalarType.UNSPECIFIED,
+            4096, 7, "", "shader_storage", "", "", "", 0, "", ""
+        );
+        var pass = ResourceCatalog.PassDescriptor.of(
+            ResourceCatalog.PassStage.COMPOSITE,
+            "composite21",
+            3,
+            List.of("sceneData", "colortex0")
+        );
+
+        ResourceCatalog catalog = ResourceCatalog.of(List.of(buffer, texture), List.of(pass));
+        assertEquals(List.of("colortex0", "sceneData"),
+            catalog.resources().stream().map(ResourceCatalog.ResourceDescriptor::logicalName).toList());
+        assertEquals(List.of(ResourceCatalog.TextureView.CURRENT, ResourceCatalog.TextureView.ALT),
+            catalog.resources().get(0).availableViews());
+        assertEquals("composite/composite21", catalog.passes().get(0).passId());
+        assertEquals(catalog.mappingSha256(),
+            ResourceCatalog.of(List.of(texture, buffer), List.of(pass)).mappingSha256());
+
+        var target = new CapturePlan.Target(
+            new CapturePlan.ResourceSelector(
+                ResourceCatalog.ResourceKind.TEXTURE,
+                "colortex0",
+                ResourceCatalog.TextureView.CURRENT,
+                1,
+                0
+            ),
+            CapturePlan.ArtifactFormat.PNG,
+            "shade-diffuse",
+            List.of()
+        );
+        var request = new CapturePlan.AfterPassRequest(catalog.mappingSha256(), pass, target);
+        assertEquals("composite/composite21", request.pass().passId());
+        assertThrows(IllegalArgumentException.class, () -> new CapturePlan.ResourceSelector(
+            ResourceCatalog.ResourceKind.TEXTURE, "colortex0.main", ResourceCatalog.TextureView.MAIN, 0, 0
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new CapturePlan.ResourceSelector(
+            ResourceCatalog.ResourceKind.BUFFER, "sceneData", ResourceCatalog.TextureView.CURRENT, 0, 0
+        ));
+        assertThrows(IllegalArgumentException.class, () -> ResourceCatalog.PassDescriptor.of(
+            ResourceCatalog.PassStage.COMPOSITE, "composite21", 3, List.of("colortex0.main")
+        ));
+        assertThrows(IllegalArgumentException.class, () -> ResourceCatalog.of(
+            List.of(texture, texture), List.of(pass)
+        ));
     }
 
     @Test
@@ -222,6 +285,10 @@ class RuntimeAdapterContractTest {
     @Test
     void kotlinDataCarriersPreserveJavaRecordAbi() {
         assertRecord(CapturePlan.class, "targets");
+        assertRecord(CapturePlan.ResourceSelector.class, "kind", "logicalName", "textureView", "mipLevel", "layer");
+        assertRecord(CapturePlan.Target.class, "resource", "format", "artifactName", "outputs");
+        assertRecord(CapturePlan.AfterPassRequest.class, "mappingSha256", "pass", "target");
+        assertRecord(CapturePlan.AfterPassReceipt.class, "request", "passOccurrence", "physicalName", "capture");
         assertRecord(CaptureResult.class, "frameId", "groups");
         assertRecord(CompileCatalog.class, "programs", "mappingSha256", "shaderGeneration");
         assertRecord(CompileCatalog.ProgramEntry.class, "programId", "passId", "stages", "compileState",
@@ -232,7 +299,13 @@ class RuntimeAdapterContractTest {
         assertRecord(EffectiveShaderSettings.class, "settings", "settingsSha256");
         assertRecord(EffectiveShaderSettings.Setting.class, "name", "value", "defaultValue", "origin");
         assertRecord(ReloadResult.class, "successful", "activeStatePreserved", "effectiveSettings", "diagnostics");
-        assertRecord(ResourceCatalog.class, "resources");
+        assertRecord(ResourceCatalog.class, "resources", "passes", "mappingSha256");
+        assertRecord(ResourceCatalog.PassDescriptor.class,
+            "passId", "stage", "programId", "order", "readableResources");
+        assertRecord(ResourceCatalog.ResourceDescriptor.class,
+            "logicalName", "kind", "availableViews", "width", "height", "depth", "mipLevels", "layers",
+            "internalFormat", "channelCount", "scalarType", "byteSize", "frameId", "semanticLabel", "category",
+            "textureTarget", "channelLayout", "numericClass", "componentBits", "readbackFormat", "readbackType");
     }
 
     private static void assertRecord(Class<?> type, String... components) {
@@ -294,7 +367,26 @@ class RuntimeAdapterContractTest {
         }
 
         @Override
+        public CompletionStage<CapturePlan.AfterPassReceipt> captureAfterPass(
+            CapturePlan.AfterPassRequest request,
+            ArtifactSink sink,
+            CancellationToken cancellation
+        ) {
+            return CompletableFuture.failedFuture(new UnsupportedOperationException("not used"));
+        }
+
+        @Override
         public void close() {
         }
+    }
+
+    private static ResourceCatalog.ResourceDescriptor textureDescriptor(String name, long frameId) {
+        return ResourceCatalog.ResourceDescriptor.of(
+            name,
+            ResourceCatalog.ResourceKind.TEXTURE,
+            List.of(ResourceCatalog.TextureView.CURRENT),
+            1, 1, 1, 1, 1, "RGBA8", 4, ResourceCatalog.ScalarType.UINT8,
+            4, frameId, name, "render_target", "TEXTURE_2D", "RGBA", "unorm", 8, "RGBA", "UNSIGNED_BYTE"
+        );
     }
 }
