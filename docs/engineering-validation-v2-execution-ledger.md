@@ -14,7 +14,10 @@ This Git-tracked file is the durable source of truth for the breaking Vibris eng
 - Iris baseline HEAD: `298099f4f12a48fc5968a8846790ae0d78639105`
 - Created: `2026-08-11`
 - Source handoff: `C:\Users\Luna5ama\.codex\attachments\45a3afb1-e7e8-4092-8fcb-e16af79e9805\pasted-text.txt`, the approved v2 implementation plan in the originating Codex task, and the completed `docs\benchmark-reliability-roadmap.md` T00-T12 baseline.
-- Protected pre-existing changes: Vibris untracked `capture\a.spv` plus concurrently introduced tracked modifications to `core\src\main\kotlin\dev\vibris\core\ThreadBoundVibrisRuntimeAdapter.kt` and `core\src\test\kotlin\dev\vibris\core\ThreadBoundVibrisRuntimeAdapterTest.kt`; Iris tracked `common\src\main\java\net\irisshaders\iris\vibris\IrisVibrisLifecycle.java` plus untracked `.codex\`, `.vibris\`, and `common\logs\`.
+- Protected pre-existing changes: Vibris untracked `capture\a.spv`; Iris untracked `.codex\`, `.vibris\`, and
+  `common\logs\`. The previously protected tracked Vibris adapter/test and Iris lifecycle changes were committed by
+  the user as `b7a0931d85042442c0360a38c50e30d811be9486` and
+  `6322cb2833edfddbfa64d0ac6001988c4d49efd1` respectively and are no longer dirty.
 
 Every Goal continuation must read this file completely before inspecting code, editing, validating, staging, or committing. Source handoffs are background evidence; this ledger owns task order, state, constraints, and completion criteria.
 
@@ -64,13 +67,12 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | Repository | Path or state | Owner | Required handling |
 |---|---|---|---|
 | `I:\code\vibris` | `capture\a.spv` untracked | User | Never read as a fixture, modify, delete, stage, or commit. |
-| `I:\code\vibris` | `core\src\main\kotlin\dev\vibris\core\ThreadBoundVibrisRuntimeAdapter.kt` modified during T00 initialization | User/concurrent work | Do not modify or stage; before any later overlapping task, reconcile whether the change has been committed or request direction. |
-| `I:\code\vibris` | `core\src\test\kotlin\dev\vibris\core\ThreadBoundVibrisRuntimeAdapterTest.kt` modified during T00 initialization | User/concurrent work | Do not modify or stage; before any later overlapping task, reconcile whether the change has been committed or request direction. |
+| `I:\code\vibris` | `core\src\main\kotlin\dev\vibris\core\ThreadBoundVibrisRuntimeAdapter.kt` and its test | User change committed as `b7a0931d85042442c0360a38c50e30d811be9486` | Resolved; the files are clean and may be modified by later task-owned work. |
 | `I:\code\vibris` | Detached review worktrees under `I:\code\vibris-review-*` | User/review tooling | Do not modify, remove, or use as implementation targets. |
 | `I:\code\Iris` | `.codex\` untracked | User/Codex runtime | Preserve and never stage. |
 | `I:\code\Iris` | `.vibris\` untracked | Runtime artifacts | Preserve and never stage. |
 | `I:\code\Iris` | `common\logs\` untracked | Runtime logs | Preserve and never stage. |
-| `I:\code\Iris` | `common\src\main\java\net\irisshaders\iris\vibris\IrisVibrisLifecycle.java` modified after the T00 commit | User/concurrent work | Do not modify or stage; reconcile ownership before any later overlapping Iris task. |
+| `I:\code\Iris` | `common\src\main\java\net\irisshaders\iris\vibris\IrisVibrisLifecycle.java` | User change committed as `6322cb2833edfddbfa64d0ac6001988c4d49efd1` | Resolved; the file is clean and may be modified by later task-owned work. |
 | Both | Any later unrelated dirty file | User until proven otherwise | Stop, classify ownership, and keep it outside task staging. |
 
 ## Status board
@@ -87,7 +89,7 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T06 | P0 | Vibris | Define effective shader settings contract | DONE | `T06 expose resolved shader settings contract` |
 | T07 | P0 | Iris | Implement effective settings in Iris host | DONE | `T07 report effective shader settings from Iris` |
 | T08 | P1 | Vibris | Return one ordered receipt per action | DONE | `T08 return complete ordered action receipts` |
-| T09 | P0 | Vibris | Define compile catalog runtime contract | BLOCKED | `T09 define compile validation catalog contract` |
+| T09 | P0 | Vibris | Define compile catalog runtime contract | READY | `T09 define compile validation catalog contract` |
 | T10 | P0 | Iris | Emit complete Iris compile catalog | PENDING | `T10 emit Iris program compile catalog` |
 | T11 | P0 | Vibris | Add compile_validate recipe | PENDING | `T11 add compile validation recipe` |
 | T12 | P0 | Vibris | Expand immutable benchmark provenance | PENDING | `T12 expand benchmark provenance and stale checks` |
@@ -699,7 +701,7 @@ Evidence:
 
 ### T09 — Define compile catalog runtime contract
 
-Status: `BLOCKED`
+Status: `READY`
 
 Dependencies: T08
 
@@ -737,13 +739,9 @@ Expected commit title: `T09 define compile validation catalog contract`
 
 Blockers:
 
-- The typed runtime query must be delegated through
-  `VibrisRuntimeAdapter -> ThreadBoundVibrisRuntimeAdapter -> VibrisRuntimeHost`, but
-  `core/src/main/kotlin/dev/vibris/core/ThreadBoundVibrisRuntimeAdapter.kt` still contains protected concurrent user
-  changes (`11/4` numstat). The protected-state contract forbids modifying or staging that file until the user change
-  is committed/merged or the user explicitly authorizes a narrowly separated overlap. A default empty/unavailable
-  catalog or reuse of the string-returning legacy inspection action would violate the truthful contract and the
-  strict no-compatibility requirement.
+- None known. The protected adapter/test changes were committed by the user as
+  `b7a0931d85042442c0360a38c50e30d811be9486`, resolving the prior runtime-query ownership conflict without a fallback
+  or compatibility path.
 
 Evidence:
 
@@ -755,6 +753,11 @@ Evidence:
   `VibrisRuntimeHost`; therefore an operational compile-catalog query cannot be added without overlapping the
   protected file.
 - No product source, protected file, deployment, or process state was changed. T10 remains `PENDING`.
+- `2026-08-11`: blocker-resolution audit verified Vibris `main` at
+  `b7a0931d85042442c0360a38c50e30d811be9486` with only protected untracked `capture/a.spv`, and Iris
+  `1.21.11-shaderdev` at `6322cb2833edfddbfa64d0ac6001988c4d49efd1` with only the recorded runtime directories.
+  All declared auxiliary worktrees remain clean at their recorded HEADs; T09 is safe to resume as the sole `READY`
+  task after this control-plane commit.
 
 ### T10 — Emit complete Iris compile catalog
 
@@ -1399,3 +1402,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T07 - Iris snapshots active settings before preserve reloads and returns complete post-install values/defaults/origins/hash; bridge tests 10/10 and Iris offline build passed; external commit 7096295b3875a13b6f00607b6f30d0649bd4f68f - Commit title: T07 report effective shader settings from Iris`
 - `2026-08-11 - T08 - returned one terminal receipt per input action, separated generated preludes, retained grouped-capture indices, nested screenshot waits, and preserved partial receipts on failure; protocol Java 5/5, Core 97/97, focused 13/13, and native CTest 2/2 passed - Commit title: T08 return complete ordered action receipts`
 - `2026-08-11 - T09 blocked - operational compile-catalog query requires the still-dirty protected ThreadBound runtime adapter; no fallback or compatibility path was added and T10 was not started - Control-plane commit title: roadmap block T09 on protected runtime adapter`
+- `2026-08-11 - T09 unblocked - user committed the protected Vibris adapter/test as b7a0931d85042442c0360a38c50e30d811be9486 and Iris lifecycle as 6322cb2833edfddbfa64d0ac6001988c4d49efd1; tracked dirt is resolved and T09 is READY - Control-plane commit title: roadmap unblock T09 after user merges`
