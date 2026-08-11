@@ -98,8 +98,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T14 | P0 | Vibris | Replace artifacts with managed v2 manifests | DONE | `T14 add managed artifact v2 lifecycle` |
 | T15 | P0 | Vibris | Define named pass resource dump contract | DONE | `T15 define named pass resource dump contract` |
 | T16 | P0 | Iris | Implement named Iris pass boundary hooks | DONE | `T16 capture resources after named Iris passes` |
-| T17 | P0 | Vibris | Integrate after-pass texture and buffer jobs | READY | `T17 integrate after-pass resource dump jobs` |
-| T18 | P0 | Vibris | Complete strict v2 cutover and documentation | PENDING | `T18 complete strict v2 cutover` |
+| T17 | P0 | Vibris | Integrate after-pass texture and buffer jobs | DONE | `T17 integrate after-pass resource dump jobs` |
+| T18 | P0 | Vibris | Complete strict v2 cutover and documentation | READY | `T18 complete strict v2 cutover` |
 | T19 | P0 | Vibris | Run offline integrated acceptance | PENDING | `T19 verify offline v2 integration` |
 | T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | PENDING | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
@@ -1319,7 +1319,7 @@ Evidence:
 
 ### T17 — Integrate after-pass texture and buffer jobs
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T16
 
@@ -1361,15 +1361,40 @@ Expected commit title: `T17 integrate after-pass resource dump jobs`
 
 Blockers:
 
-- Hardware runtime tests require an OpenGL 4.6-capable local environment; a genuine hardware blocker must be recorded rather than bypassed.
+- None.
 
 Evidence:
 
-- Pending.
+- Core now treats consecutive `dump_texture_after_pass` / `dump_buffer_after_pass` actions as one capture step:
+  every exact request is validated and registered before any future is awaited, so the Iris T16 host can service safe
+  grouped readbacks at the next exact named boundary. The action executor reserves all outputs in one artifact-v2
+  transaction, rolls the group back on failure, and cancels and drains sibling registrations on timeout, cancellation,
+  synchronous error, or asynchronous error.
+- Successful receipts retain the exact pass ID, frame and occurrence, logical resource and selected logical view,
+  physical `.main` / `.alt` or buffer name, complete GL metadata, per-file worktree-local artifact paths and SHA-256,
+  plus the result manifest ID and manifest hash. Artifact metadata receives the same physical resource/view identity;
+  no alternate-pass, pre-pass, alias, fallback, migration, dual-read, or compatibility path was added.
+- `GlArtifactCapture` now includes shader-storage visibility for buffer readback and shader-image, texture-fetch,
+  texture-update, and framebuffer visibility for texture readback. The existing PNG row inversion remains unchanged,
+  BIN writes still stream the native readback bytes unchanged, and the complete pixel-pack state remains restored.
+- `2026-08-11`: `.\gradlew.bat :vibris-capture:test :vibris-core:test --offline` passed with capture 26/26 and
+  Core 100/100 tests, zero failures, errors, or skips. The focused Core after-pass suite passed 10/10 and proves
+  all requests are registered before completion, current/alternate/buffer receipts and hashes are complete, and
+  timeout, explicit cancellation, and grouped-error paths release registrations and leave no temporary manifest.
+- `2026-08-11`: `.\gradlew.bat ':vibris-capture:test' '-Pvibris.runtimeTest=true'` passed. The OpenGL 4.6
+  `GlArtifactCaptureRuntimeTest` ran rather than returning early (`1/1`, zero skips/failures/errors, `0.491s`) and
+  proved graphics-framebuffer and compute-image texture completion, flip-correct current/alternate `2x2` PNGs,
+  unchanged raw bytes, a compute-written SSBO sentinel distinct from its pre-boundary bytes, and pixel-pack restore.
+- `2026-08-11`: the release CMake targets `vibris-job-protocol-tests` and `vibris-action-schema-tests` built
+  successfully; direct execution passed `JobProtocolStrictV2Resume` and `ActionSchemaV2ToolContract`. The terminal
+  mapping fixture preserves pass/frame/occurrence, logical/physical view, GL metadata, artifact path, manifest, and
+  hashes in the MCP structured result.
+- Iris protected `.codex\`, `.vibris\`, and `common\logs\` remained untracked and unstaged. Vibris protected
+  `capture\a.spv` remained untracked, unread, and unstaged. No deployment or Minecraft/launcher restart occurred.
 
 ### T18 — Complete strict v2 cutover and documentation
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T17
 
@@ -1593,7 +1618,7 @@ Queue order is authoritative and serial even where technical dependencies could 
 - [ ] Every result contains complete immutable provenance and correct shader-content stale semantics.
 - [x] Benchmark decisions enforce target/sibling/sentinel guardrails, measured noise, confidence, order, drift, compile, visual, provenance, and restoration gates.
 - [ ] Artifact v2 supports TTL, hash manifests, request/job grouping, capacity prediction, ownership-safe list/detail/delete, and worktree-local paths.
-- [ ] `dump_texture_after_pass` and `dump_buffer_after_pass` capture exact named pass boundaries with correct flip, visibility, bytes, artifacts, and GL-state restoration.
+- [x] `dump_texture_after_pass` and `dump_buffer_after_pass` capture exact named pass boundaries with correct flip, visibility, bytes, artifacts, and GL-state restoration.
 - [ ] Full Vibris native/Gradle and Iris build validation passes.
 - [ ] Live two-worktree 720p acceptance passes without autonomous deployment or process restart.
 - [ ] Every expected commit is present in the intended repository and branch.
@@ -1626,3 +1651,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T13 - enforced typed target/sibling/sentinel guardrails, paired p50/p95 confidence and measured-noise decisions, order/reversal/drift reporting, and mandatory compile/provenance/restoration/visual/statistical gates; release targets built and focused CTest passed 12/12 - Commit title: T13 enforce benchmark semantic guardrails`
 - `2026-08-11 - T14 - replaced artifacts with strict-v2 TTL/hash/grouped manifests, capacity reservations, ownership-safe list/detail/delete, worktree-local MCP paths, and durable expired metadata; Core 94/94 plus focused native 3/3 passed - Commit title: T14 add managed artifact v2 lifecycle`
 - `2026-08-11 - T16 - Iris registered ordered named pass boundaries, captured flip-correct texture/SSBO snapshots only after compute/graphics completion, moved encoding/writes off-thread, and removed cancelled/timed-out hooks; external commit 38a7d2eaf88939983e0e01f731ccd4c627fbf6a9; bridge tests 15/15 and offline Iris build passed - Owner receipt commit title: T16 record Iris named pass capture receipt`
+- `2026-08-11 - T17 - grouped exact next-frame after-pass texture/buffer registrations into one artifact-v2 transaction, returned complete physical-view/pass/hash receipts, strengthened GPU visibility barriers, preserved flipped PNG/native BIN semantics, and released timeout/cancel/error registrations; capture 26/26, Core 100/100, real OpenGL 4.6 runtime 1/1, and native protocol/schema 2/2 passed - Commit title: T17 integrate after-pass resource dump jobs`

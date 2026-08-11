@@ -114,6 +114,61 @@ void after_pass_actions_preserve_exact_pass_and_resource_selectors() {
 		"buffer-after-pass request was not encoded as a full BIN resource selector");
 }
 
+void after_pass_terminal_mapping_preserves_complete_artifact_receipt() {
+	proto::ServerMessage completed;
+	auto* terminal = completed.mutable_job_completed();
+	terminal->set_job_id(std::string(request_id));
+	terminal->set_request_id(std::string(request_id));
+	auto* result = terminal->mutable_result();
+	result->set_result_manifest_id("manifest-after-pass");
+	auto* receipt = result->add_action_receipts();
+	receipt->set_action_index(0);
+	receipt->set_kind(proto::ACTION_KIND_DUMP_TEXTURE_AFTER_PASS);
+	receipt->set_status(proto::RECEIPT_STATUS_OK);
+	auto* capture = receipt->mutable_capture();
+	capture->set_frame_id(91);
+	capture->set_pass_id("composite/composite21");
+	capture->set_pass_occurrence(2);
+	auto* resource = capture->mutable_resource();
+	resource->set_logical_name("colortex0");
+	resource->set_physical_name("colortex0.alt");
+	resource->set_kind(proto::RESOURCE_KIND_TEXTURE);
+	resource->add_available_views(proto::TEXTURE_VIEW_ALTERNATE);
+	resource->set_width(1920);
+	resource->set_height(1080);
+	resource->set_internal_format("RGBA16F");
+	resource->set_scalar_type(proto::SCALAR_TYPE_FLOAT16);
+	resource->set_byte_size(16'588'800);
+	resource->set_frame_id(91);
+	auto* artifact = capture->add_artifacts();
+	artifact->set_artifact_id("texture-after-pass");
+	artifact->set_relative_path("I:/artifacts/texture-after.png");
+	artifact->set_sha256(std::string(64, 'a'));
+	auto* manifest = result->add_artifacts();
+	manifest->set_artifact_id("manifest-after-pass");
+	manifest->set_kind(proto::ARTIFACT_KIND_MANIFEST);
+	manifest->set_relative_path("I:/artifacts/manifest.json");
+	manifest->set_sha256(std::string(64, 'b'));
+
+	const auto outcome = JobProtocol::terminal(completed);
+	const auto* mapped = std::get_if<Json>(&outcome);
+	require(mapped != nullptr, "after-pass completion did not map to a structured result");
+	const auto& mapped_result = mapped->at("result");
+	const auto& mapped_capture = mapped_result.at("action_receipts").at(0).at("capture");
+	require(mapped_result.at("result_manifest_id") == "manifest-after-pass" &&
+		mapped_capture.at("frame_id") == "91" &&
+		mapped_capture.at("pass_id") == "composite/composite21" &&
+		mapped_capture.at("pass_occurrence") == 2 &&
+		mapped_capture.at("resource").at("logical_name") == "colortex0" &&
+		mapped_capture.at("resource").at("physical_name") == "colortex0.alt" &&
+		mapped_capture.at("resource").at("available_views").at(0) == "TEXTURE_VIEW_ALTERNATE" &&
+		mapped_capture.at("resource").at("internal_format") == "RGBA16F" &&
+		mapped_capture.at("artifacts").at(0).at("relative_path") == "I:/artifacts/texture-after.png" &&
+		mapped_capture.at("artifacts").at(0).at("sha256") == std::string(64, 'a') &&
+		mapped_result.at("artifacts").at(0).at("sha256") == std::string(64, 'b'),
+		"after-pass terminal mapping dropped pass, view, GL metadata, artifact path, manifest, or hashes");
+}
+
 void matrix_auto_load_is_a_prelude_receipt_action() {
 	const Json arguments{
 		{"actions", Json::array({{{"type", "wait_frames"}, {"frames", 2}}})},
@@ -285,6 +340,7 @@ int main() {
 	try {
 		strict_v2_request_contains_typed_texture_and_buffer_actions();
 		after_pass_actions_preserve_exact_pass_and_resource_selectors();
+		after_pass_terminal_mapping_preserves_complete_artifact_receipt();
 		matrix_auto_load_is_a_prelude_receipt_action();
 		compile_validation_uses_typed_uuid_cases_without_render_actions();
 		recovery_request_has_no_scene_or_source_dependency();

@@ -46,6 +46,7 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     final Map<String, byte[]> captureFiles = new LinkedHashMap<>();
     CaptureResult patchedShaderResult = new CaptureResult(0, List.of());
     final Map<String, byte[]> patchedShaderFiles = new LinkedHashMap<>();
+    AfterPassOperation afterPassOperation;
     Map<String, String> lastShaderConfig;
     final List<Map<String, String>> shaderConfigs = new ArrayList<>();
     SceneContext lastContext;
@@ -160,7 +161,12 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
         ArtifactSink sink,
         CancellationToken cancellation
     ) {
-        return CompletableFuture.failedFuture(new UnsupportedOperationException("not used by this fixture"));
+        events.add("capture_after_pass:" + request.target().artifactName());
+        if (afterPassOperation == null) {
+            return CompletableFuture.failedFuture(
+                new UnsupportedOperationException("after-pass capture is not configured"));
+        }
+        return afterPassOperation.capture(request, sink, cancellation);
     }
 
     @Override
@@ -193,5 +199,14 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     private static <T> CompletionStage<T> completed(CancellationToken cancellation, T value) {
         cancellation.throwIfCancellationRequested();
         return CompletableFuture.completedFuture(value);
+    }
+
+    @FunctionalInterface
+    interface AfterPassOperation {
+        CompletionStage<CapturePlan.AfterPassReceipt> capture(
+            CapturePlan.AfterPassRequest request,
+            ArtifactSink sink,
+            CancellationToken cancellation
+        );
     }
 }

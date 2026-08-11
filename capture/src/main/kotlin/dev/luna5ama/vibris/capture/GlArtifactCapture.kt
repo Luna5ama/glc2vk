@@ -11,6 +11,7 @@ import org.lwjgl.opengl.GL30C
 import org.lwjgl.opengl.GL31C
 import org.lwjgl.opengl.GL33C
 import org.lwjgl.opengl.GL42C
+import org.lwjgl.opengl.GL43C
 import org.lwjgl.opengl.GL45C
 import org.lwjgl.system.MemoryUtil
 import java.awt.Transparency
@@ -47,7 +48,7 @@ data class GlCaptureMetadata(
 object GlArtifactCapture {
     @JvmStatic
     fun captureBuffer(bufferId: Int, output: OutputStream): GlCaptureMetadata {
-        GL42C.glMemoryBarrier(GL42C.GL_BUFFER_UPDATE_BARRIER_BIT)
+        GL42C.glMemoryBarrier(GL42C.GL_BUFFER_UPDATE_BARRIER_BIT or GL43C.GL_SHADER_STORAGE_BARRIER_BIT)
         val size = GL45C.glGetNamedBufferParameteri64(bufferId, GL15C.GL_BUFFER_SIZE)
         requireAllocation(size, "buffer")
         val data = MemoryUtil.memAlloc(size.toInt())
@@ -66,7 +67,7 @@ object GlArtifactCapture {
         requireAllocation(layout.metadata.byteSize, "texture")
         val data = MemoryUtil.memAlloc(layout.metadata.byteSize.toInt()).order(ByteOrder.nativeOrder())
         try {
-            GL42C.glMemoryBarrier(GL42C.GL_TEXTURE_UPDATE_BARRIER_BIT)
+            GL42C.glMemoryBarrier(TEXTURE_READBACK_BARRIER_BITS)
             GL45C.glGetTextureImage(textureId, mipLevel, layout.pixelFormat, layout.pixelType, data)
             TextureReadback(layout, data)
         } catch (exception: Throwable) {
@@ -524,6 +525,9 @@ object GlArtifactCapture {
     private const val GL31_TEXTURE_RECTANGLE = 0x84F5
     private const val GL_TEXTURE_IMMUTABLE_LEVELS = 0x82DF
     private const val MAX_CAPTURE_BYTES = 2_147_483_647L
+    private const val TEXTURE_READBACK_BARRIER_BITS = GL42C.GL_TEXTURE_UPDATE_BARRIER_BIT or
+        GL42C.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GL42C.GL_TEXTURE_FETCH_BARRIER_BIT or
+        GL42C.GL_FRAMEBUFFER_BARRIER_BIT
     private val supportedTargets = setOf(
         GL11C.GL_TEXTURE_1D,
         GL11C.GL_TEXTURE_2D,

@@ -10,6 +10,9 @@ internal object CapturePlanBuilder {
     @JvmRecord
     data class Plan(val capture: CapturePlan, val estimatedBytes: Long)
 
+    @JvmRecord
+    data class AfterPassPlan(val request: CapturePlan.AfterPassRequest, val estimatedBytes: Long)
+
     fun addAction(
         targets: MutableList<CapturePlan.Target>,
         action: Action,
@@ -90,7 +93,10 @@ internal object CapturePlanBuilder {
         emptyList(),
     )))
 
-    fun afterPassRequest(action: Action, catalog: ResourceCatalog): CapturePlan.AfterPassRequest {
+    fun afterPassRequest(action: Action, catalog: ResourceCatalog): CapturePlan.AfterPassRequest =
+        afterPassPlan(action, catalog).request
+
+    fun afterPassPlan(action: Action, catalog: ResourceCatalog): AfterPassPlan {
         val passId: String
         val target: CapturePlan.Target
         when {
@@ -119,9 +125,13 @@ internal object CapturePlanBuilder {
         }
         val pass = catalog.passes.singleOrNull { it.passId == passId }
             ?: throw missing("pass $passId")
-        val planned = plan(listOf(target), catalog).capture.targets.single()
+        val plan = plan(listOf(target), catalog)
+        val planned = plan.capture.targets.single()
         return try {
-            CapturePlan.AfterPassRequest(catalog.mappingSha256, pass, planned)
+            AfterPassPlan(
+                CapturePlan.AfterPassRequest(catalog.mappingSha256, pass, planned),
+                plan.estimatedBytes,
+            )
         } catch (failure: IllegalArgumentException) {
             throw RuntimeJobExecutor.Failure(
                 ErrorCode.ERROR_CODE_RESOURCE_NOT_FOUND,

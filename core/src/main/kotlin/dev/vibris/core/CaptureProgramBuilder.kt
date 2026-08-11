@@ -29,23 +29,37 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
             }
         }
         val steps = ArrayList<ActionStep>()
-        val group = ArrayList<PendingCapture>()
+        val captureGroup = ArrayList<PendingCapture>()
+        val afterPassGroup = ArrayList<PendingAfterPass>()
         val artifactNames = HashSet<String>()
         var estimatedBytes = 0L
         var comparisons = 0
-        fun flushGroup() {
+        fun flushCaptures() {
             estimatedBytes = flush(
-                group,
+                captureGroup,
                 steps,
                 catalog,
                 artifactNames,
                 estimatedBytes,
             )
         }
+        fun flushAfterPasses() {
+            estimatedBytes = flushAfterPassGroup(
+                afterPassGroup,
+                steps,
+                catalog,
+                artifactNames,
+                estimatedBytes,
+            )
+        }
+        fun flushAll() {
+            flushCaptures()
+            flushAfterPasses()
+        }
         for ((actionIndex, action) in job.submission.actionSequence.actionsList.withIndex()) {
             when {
                 action.hasLoadShader() -> {
-                    flushGroup()
+                    flushAll()
                     val load = action.loadShader
                     if (
                         load.sourceUuid.isBlank() || load.sourceId.isBlank() || load.configId.isBlank()
@@ -55,38 +69,43 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                     steps.add(ActionStep.load(actionIndex, load))
                 }
                 action.hasActivateSource() -> {
-                    flushGroup()
+                    flushAll()
                     val uuid = action.activateSource.sourceUuid
                     if (uuid.isBlank()) throw invalid("Source UUID is missing.")
                     steps.add(ActionStep.activate(actionIndex, uuid))
                 }
                 action.hasResetTemporalState() -> {
-                    flushGroup()
+                    flushAll()
                     steps.add(ActionStep.reset(actionIndex))
                 }
                 action.hasWaitFrames() -> {
-                    flushGroup()
+                    flushAll()
                     if (action.waitFrames.frameCount <= 0) throw invalid("Frame count must be positive.")
                     steps.add(ActionStep.waitFrames(actionIndex, action.waitFrames.frameCount))
                 }
                 action.hasTakeScreenshot() || action.hasDumpTexture() || action.hasDumpBuffer() -> {
+                    flushAfterPasses()
                     val afterFrames = if (action.hasTakeScreenshot()) action.takeScreenshot.afterFrames else 0
                     if (afterFrames < 0) throw invalid("Screenshot frame delay is too large.")
-                    if (afterFrames > 0) flushGroup()
+                    if (afterFrames > 0) flushCaptures()
                     val targets = ArrayList<CapturePlan.Target>(1)
                     CapturePlanBuilder.addAction(targets, action, catalog)
                     if (targets.size != 1) throw invalid("Capture action did not resolve to exactly one target.")
-                    group.add(PendingCapture(actionIndex, targets.single(), afterFrames))
-                    if (afterFrames > 0) flushGroup()
+                    captureGroup.add(PendingCapture(actionIndex, targets.single(), afterFrames))
+                    if (afterFrames > 0) flushCaptures()
+                }
+                action.hasDumpTextureAfterPass() || action.hasDumpBufferAfterPass() -> {
+                    flushCaptures()
+                    afterPassGroup.add(PendingAfterPass(actionIndex, action))
                 }
                 action.hasGetPatchedShaders() -> {
-                    flushGroup()
+                    flushAll()
                     val capture = CapturePlanBuilder.patchedShaders(action.getPatchedShaders.artifactName)
                     requireUnique(artifactNames, capture.targets.single().artifactName)
                     steps.add(ActionStep.patchedShaders(actionIndex, capture))
                 }
                 action.hasCompareCaptures() -> {
-                    flushGroup()
+                    flushAll()
                     val compare = action.compareCaptures
                     val captures = steps.asSequence()
                         .filter { it.type == ActionType.CAPTURE }
@@ -120,17 +139,17 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                     )
                 }
                 action.hasInspectShader() -> {
-                    flushGroup()
+                    flushAll()
                     steps.add(ActionStep.inspect(actionIndex))
                 }
                 RuntimeActionProtocol.isRuntime(action) -> {
-                    flushGroup()
+                    flushAll()
                     steps.add(ActionStep.runtime(actionIndex, action))
                 }
                 else -> throw invalid("Action is not supported.")
             }
         }
-        flushGroup()
+        flushAll()
         val firstActivation = steps.indexOfFirst { it.type == ActionType.ACTIVATE || it.type == ActionType.LOAD }
         if (firstActivation > 0) {
             throw invalid("Source activation must be the first action.")
@@ -144,6 +163,7 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
         RESET,
         WAIT,
         CAPTURE,
+        AFTER_PASS,
         PATCHED_SHADERS,
         COMPARE,
         INSPECT,
@@ -161,26 +181,47 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
         val runtimeAction: dev.vibris.protocol.v2.Action?,
         val loadShader: dev.vibris.protocol.v2.LoadShader?,
         val captureActions: List<CaptureAction>,
+        val afterPassActions: List<AfterPassAction>,
     ) {
         companion object {
             fun load(actionIndex: Int, load: dev.vibris.protocol.v2.LoadShader) =
-                ActionStep(ActionType.LOAD, null, 0, null, null, actionIndex, null, load, emptyList())
+                ActionStep(ActionType.LOAD, null, 0, null, null, actionIndex, null, load, emptyList(), emptyList())
             fun activate(actionIndex: Int, uuid: String) =
-                ActionStep(ActionType.ACTIVATE, uuid, 0, null, null, actionIndex, null, null, emptyList())
+                ActionStep(ActionType.ACTIVATE, uuid, 0, null, null, actionIndex, null, null, emptyList(), emptyList())
             fun reset(actionIndex: Int) =
-                ActionStep(ActionType.RESET, null, 0, null, null, actionIndex, null, null, emptyList())
+                ActionStep(ActionType.RESET, null, 0, null, null, actionIndex, null, null, emptyList(), emptyList())
             fun waitFrames(actionIndex: Int, frames: Int) =
-                ActionStep(ActionType.WAIT, null, frames, null, null, actionIndex, null, null, emptyList())
+                ActionStep(ActionType.WAIT, null, frames, null, null, actionIndex, null, null, emptyList(), emptyList())
             fun capture(capture: CapturePlan, actions: List<CaptureAction>) =
-                ActionStep(ActionType.CAPTURE, null, 0, capture, null, actions.first().actionIndex, null, null, actions)
+                ActionStep(
+                    ActionType.CAPTURE, null, 0, capture, null, actions.first().actionIndex,
+                    null, null, actions, emptyList(),
+                )
+            fun afterPass(actions: List<AfterPassAction>) =
+                ActionStep(
+                    ActionType.AFTER_PASS, null, 0, null, null, actions.first().actionIndex,
+                    null, null, emptyList(), actions,
+                )
             fun patchedShaders(actionIndex: Int, capture: CapturePlan) =
-                ActionStep(ActionType.PATCHED_SHADERS, null, 0, capture, null, actionIndex, null, null, emptyList())
+                ActionStep(
+                    ActionType.PATCHED_SHADERS, null, 0, capture, null, actionIndex,
+                    null, null, emptyList(), emptyList(),
+                )
             fun compare(actionIndex: Int, comparison: Comparison) =
-                ActionStep(ActionType.COMPARE, null, 0, null, comparison, actionIndex, null, null, emptyList())
+                ActionStep(
+                    ActionType.COMPARE, null, 0, null, comparison, actionIndex,
+                    null, null, emptyList(), emptyList(),
+                )
             fun inspect(actionIndex: Int) =
-                ActionStep(ActionType.INSPECT, null, 0, null, null, actionIndex, null, null, emptyList())
+                ActionStep(
+                    ActionType.INSPECT, null, 0, null, null, actionIndex,
+                    null, null, emptyList(), emptyList(),
+                )
             fun runtime(actionIndex: Int, action: dev.vibris.protocol.v2.Action) =
-                ActionStep(ActionType.RUNTIME, null, 0, null, null, actionIndex, action, null, emptyList())
+                ActionStep(
+                    ActionType.RUNTIME, null, 0, null, null, actionIndex,
+                    action, null, emptyList(), emptyList(),
+                )
         }
     }
 
@@ -189,6 +230,12 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
         val actionIndex: Int,
         val targetIndex: Int,
         val beforeFrames: Int,
+    )
+
+    @JvmRecord
+    data class AfterPassAction(
+        val actionIndex: Int,
+        val request: CapturePlan.AfterPassRequest,
     )
 
     @JvmRecord
@@ -207,6 +254,11 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
         val actionIndex: Int,
         val target: CapturePlan.Target,
         val beforeFrames: Int,
+    )
+
+    private data class PendingAfterPass(
+        val actionIndex: Int,
+        val action: dev.vibris.protocol.v2.Action,
     )
 
     companion object {
@@ -251,6 +303,39 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                     "Artifact estimate is too large.",
                 )
             }
+        }
+
+        @Throws(RuntimeJobExecutor.Failure::class)
+        private fun flushAfterPassGroup(
+            group: MutableList<PendingAfterPass>,
+            steps: MutableList<ActionStep>,
+            catalog: ResourceCatalog,
+            artifactNames: MutableSet<String>,
+            estimatedBytes: Long,
+        ): Long {
+            if (group.isEmpty()) return estimatedBytes
+            val pending = java.util.List.copyOf(group)
+            val plans = pending.map { capture ->
+                capture to CapturePlanBuilder.afterPassPlan(capture.action, catalog)
+            }
+            plans.forEach { (_, plan) ->
+                plan.request.target.outputs.forEach { requireUnique(artifactNames, it.fileName) }
+            }
+            val total = try {
+                plans.fold(estimatedBytes) { bytes, (_, plan) -> Math.addExact(bytes, plan.estimatedBytes) }
+            } catch (_: ArithmeticException) {
+                throw RuntimeJobExecutor.Failure(
+                    ErrorCode.ERROR_CODE_ARTIFACT_TOO_LARGE,
+                    "Artifact estimate is too large.",
+                )
+            }
+            group.clear()
+            steps.add(
+                ActionStep.afterPass(plans.map { (capture, plan) ->
+                    AfterPassAction(capture.actionIndex, plan.request)
+                }),
+            )
+            return total
         }
 
         private fun requireUnique(names: MutableSet<String>, name: String) {

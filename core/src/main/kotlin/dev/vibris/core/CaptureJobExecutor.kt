@@ -29,10 +29,17 @@ internal class CaptureJobExecutor(
         diagnostics: List<ReloadResult.Diagnostic>,
     ): ActionPrepared {
         val program = programs.actions(job, catalog)
-        val captures = program.steps
-            .filter { it.type == CaptureProgramBuilder.ActionType.CAPTURE ||
-                it.type == CaptureProgramBuilder.ActionType.PATCHED_SHADERS }
-            .map { it.capture!! }
+        val captures = program.steps.flatMap { step ->
+            when (step.type) {
+                CaptureProgramBuilder.ActionType.CAPTURE,
+                CaptureProgramBuilder.ActionType.PATCHED_SHADERS,
+                -> listOf(step.capture!!)
+                CaptureProgramBuilder.ActionType.AFTER_PASS -> step.afterPassActions.map { action ->
+                    CapturePlan(listOf(action.request.target))
+                }
+                else -> emptyList()
+            }
+        }
         val prepared = if (captures.isEmpty() && !ProfileResultArtifacts.requested(job.submission)) {
             null
         } else {
@@ -93,6 +100,7 @@ internal class CaptureJobExecutor(
         captured: List<CaptureResult>,
         comparison: CompareReceipt?,
         additionalArtifacts: List<GeneratedArtifact> = emptyList(),
+        physicalNames: Map<String, String> = emptyMap(),
     ): JobResult {
         try {
             prepared.writeShaderLog()
@@ -104,6 +112,7 @@ internal class CaptureJobExecutor(
                 prepared.diagnostics,
                 comparison,
                 additionalArtifacts,
+                physicalNames,
             )
         } catch (exception: Exception) {
             throw failure(exception)
@@ -148,6 +157,11 @@ internal class CaptureJobExecutor(
         captured: CaptureResult,
         committed: JobResult,
     ): PatchedShadersReceipt = protocol.patchedShadersReceipt(plan, captured, committed)
+
+    fun afterPassReceipt(
+        receipt: CapturePlan.AfterPassReceipt,
+        committed: JobResult,
+    ): CaptureReceipt = protocol.afterPassReceipt(receipt, committed)
 
     inner class Prepared internal constructor(
         internal val transaction: ArtifactManager.JobTransaction,

@@ -38,6 +38,7 @@ internal class ActionJobExecutor(
             val captured = ArrayList<CaptureResult>()
             val completedCapturePlans = ArrayList<CapturePlan>()
             val captureExecutions = ArrayList<CaptureExecution>()
+            val afterPassExecutions = ArrayList<AfterPassExecution>()
             val patchedExecutions = ArrayList<PatchedExecution>()
             var comparison: dev.vibris.protocol.v2.CompareReceipt? = null
 
@@ -136,6 +137,39 @@ internal class ActionJobExecutor(
                             }
                             captureExecutions.add(CaptureExecution(step.capture, result, step.captureActions, waits))
                         }
+                        CaptureProgramBuilder.ActionType.AFTER_PASS -> {
+                            if (prepared == null) throw captureUnavailable()
+                            val receipts = owner.captureAfterPass(
+                                job,
+                                progress,
+                                deadline,
+                                prepared,
+                                step.afterPassActions,
+                            )
+                            check(receipts.size == step.afterPassActions.size) {
+                                "Runtime after-pass receipt count did not match its requests."
+                            }
+                            receipts.zip(step.afterPassActions).forEach { (receipt, capture) ->
+                                val plan = CapturePlan(listOf(capture.request.target))
+                                captured.add(receipt.capture)
+                                completedCapturePlans.add(plan)
+                                receiptBook.put(
+                                    capture.actionIndex,
+                                    receiptBook.success(capture.actionIndex)
+                                        .setCapture(
+                                            captures.afterPassReceipt(
+                                                receipt,
+                                                JobResult.getDefaultInstance(),
+                                            ),
+                                        )
+                                        .build(),
+                                )
+                                pendingCaptureIndices.add(capture.actionIndex)
+                                afterPassExecutions.add(
+                                    AfterPassExecution(capture.actionIndex, receipt),
+                                )
+                            }
+                        }
                         CaptureProgramBuilder.ActionType.PATCHED_SHADERS -> {
                             if (prepared == null) throw captureUnavailable()
                             receiptBook.put(
@@ -226,6 +260,9 @@ internal class ActionJobExecutor(
                     captured,
                     comparison,
                     resultArtifacts,
+                    afterPassExecutions.associate { execution ->
+                        execution.receipt.request.target.artifactName to execution.receipt.physicalName
+                    },
                 )
                 captureExecutions.forEach { execution ->
                     execution.actions.forEach { capture ->
@@ -244,6 +281,14 @@ internal class ActionJobExecutor(
                                 .build(),
                         )
                     }
+                }
+                afterPassExecutions.forEach { execution ->
+                    receiptBook.replace(
+                        execution.actionIndex,
+                        receiptBook.success(execution.actionIndex)
+                            .setCapture(captures.afterPassReceipt(execution.receipt, committed))
+                            .build(),
+                    )
                 }
                 patchedExecutions.forEach { execution ->
                     receiptBook.replace(
@@ -322,10 +367,12 @@ internal class ActionJobExecutor(
     }
 
     private fun CaptureProgramBuilder.ActionStep.actionIndices(): List<Int> =
-        if (type == CaptureProgramBuilder.ActionType.CAPTURE) {
-            captureActions.map(CaptureProgramBuilder.CaptureAction::actionIndex)
-        } else {
-            listOf(actionIndex)
+        when (type) {
+            CaptureProgramBuilder.ActionType.CAPTURE ->
+                captureActions.map(CaptureProgramBuilder.CaptureAction::actionIndex)
+            CaptureProgramBuilder.ActionType.AFTER_PASS ->
+                afterPassActions.map(CaptureProgramBuilder.AfterPassAction::actionIndex)
+            else -> listOf(actionIndex)
         }
 
     private fun captureUnavailable() = RuntimeJobExecutor.Failure(
@@ -350,5 +397,10 @@ internal class ActionJobExecutor(
         val actionIndex: Int,
         val plan: CapturePlan,
         val result: CaptureResult,
+    )
+
+    private data class AfterPassExecution(
+        val actionIndex: Int,
+        val receipt: CapturePlan.AfterPassReceipt,
     )
 }

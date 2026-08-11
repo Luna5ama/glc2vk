@@ -1,5 +1,8 @@
 package dev.vibris.core;
 
+import dev.vibris.api.ArtifactSink;
+import dev.vibris.api.CancellationToken;
+import dev.vibris.api.CapturePlan;
 import dev.vibris.api.CaptureResult;
 import dev.vibris.api.ResourceCatalog;
 import dev.vibris.protocol.v2.Action;
@@ -9,7 +12,9 @@ import dev.vibris.protocol.v2.ActivateSource;
 import dev.vibris.protocol.v2.ArtifactFormat;
 import dev.vibris.protocol.v2.ArtifactKind;
 import dev.vibris.protocol.v2.DumpBuffer;
+import dev.vibris.protocol.v2.DumpBufferAfterPass;
 import dev.vibris.protocol.v2.DumpTexture;
+import dev.vibris.protocol.v2.DumpTextureAfterPass;
 import dev.vibris.protocol.v2.ErrorCode;
 import dev.vibris.protocol.v2.GetPatchedShaders;
 import dev.vibris.protocol.v2.JobSpec;
@@ -26,11 +31,19 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.LockSupport;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -108,6 +121,184 @@ class RuntimeJobExecutorCaptureTest {
             .map(artifact -> Path.of(artifact.getRelativePath()))
             .allMatch(Files::isRegularFile));
         assertFalse(result.getResultManifestId().isBlank());
+    }
+
+    @Test
+    void groupsExactAfterPassRequestsAndPublishesCompleteReceipts() throws Exception {
+        Fixture fixture = new Fixture();
+        ResourceCatalog.ResourceDescriptor texture = resource(
+            "colortex0", ResourceCatalog.ResourceKind.TEXTURE, 91, 16);
+        ResourceCatalog.ResourceDescriptor buffer = resource(
+            "scene_ssbo", ResourceCatalog.ResourceKind.BUFFER, 91, 4);
+        ResourceCatalog.PassDescriptor pass = ResourceCatalog.PassDescriptor.of(
+            ResourceCatalog.PassStage.COMPOSITE,
+            "composite21",
+            0,
+            List.of("colortex0", "scene_ssbo")
+        );
+        fixture.runtime.catalog = ResourceCatalog.of(List.of(texture, buffer), List.of(pass));
+        List<PendingAfterPass> pending = new ArrayList<>();
+        fixture.runtime.afterPassOperation = (request, sink, cancellation) -> {
+            CompletableFuture<CapturePlan.AfterPassReceipt> future = new CompletableFuture<>();
+            pending.add(new PendingAfterPass(request, sink, future));
+            if (pending.size() == 3) {
+                for (PendingAfterPass capture : pending) {
+                    try {
+                        ResourceCatalog.ResourceDescriptor capturedResource =
+                            capture.request().target().resource().kind() == ResourceCatalog.ResourceKind.BUFFER
+                                ? buffer : texture;
+                        writeAfterPassArtifacts(capture.sink(), capture.request().target());
+                        ResourceCatalog.TextureView view = capture.request().target().resource().textureView();
+                        String physicalName = view == null
+                            ? "scene_ssbo"
+                            : switch (view) {
+                                case CURRENT -> "colortex0.main";
+                                case ALTERNATE -> "colortex0.alt";
+                                default -> throw new AssertionError("unexpected texture view");
+                            };
+                        capture.future().complete(new CapturePlan.AfterPassReceipt(
+                            capture.request(),
+                            2,
+                            physicalName,
+                            captureResult(capture.request().target(), capturedResource, 91)
+                        ));
+                    } catch (Exception exception) {
+                        capture.future().completeExceptionally(exception);
+                    }
+                }
+            }
+            return future;
+        };
+
+        TerminalResult terminal = fixture.executor.execute(fixture.job(ActionSequence.newBuilder()
+            .addActions(Action.newBuilder().setDumpTextureAfterPass(DumpTextureAfterPass.newBuilder()
+                .setPassId(pass.passId())
+                .setResource(ResourceSelector.newBuilder().setLogicalName("colortex0")
+                    .setView(TextureView.TEXTURE_VIEW_CURRENT))
+                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setArtifactName("current-after")))
+            .addActions(Action.newBuilder().setDumpTextureAfterPass(DumpTextureAfterPass.newBuilder()
+                .setPassId(pass.passId())
+                .setResource(ResourceSelector.newBuilder().setLogicalName("colortex0")
+                    .setView(TextureView.TEXTURE_VIEW_ALTERNATE))
+                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setArtifactName("alternate-after")))
+            .addActions(Action.newBuilder().setDumpBufferAfterPass(DumpBufferAfterPass.newBuilder()
+                .setPassId(pass.passId())
+                .setResource(ResourceSelector.newBuilder().setLogicalName("scene_ssbo"))
+                .setArtifactName("buffer-after")))
+            .build()), ignored -> {});
+
+        var result = terminal.completed().getResult();
+        assertEquals(List.of(
+            "link:A", "reload", "context",
+            "capture_after_pass:current-after",
+            "capture_after_pass:alternate-after",
+            "capture_after_pass:buffer-after"
+        ), fixture.runtime.events);
+        assertEquals(3, pending.size());
+        assertEquals(4, result.getActionReceiptsCount());
+        var current = result.getActionReceipts(1).getCapture();
+        var alternate = result.getActionReceipts(2).getCapture();
+        var capturedBuffer = result.getActionReceipts(3).getCapture();
+        assertEquals(pass.passId(), current.getPassId());
+        assertEquals(2, current.getPassOccurrence());
+        assertEquals(91, current.getFrameId());
+        assertEquals("colortex0", current.getResource().getLogicalName());
+        assertEquals("colortex0.main", current.getResource().getPhysicalName());
+        assertEquals(List.of(TextureView.TEXTURE_VIEW_CURRENT), current.getResource().getAvailableViewsList());
+        assertTrue(current.getArtifactsList().stream().allMatch(artifact ->
+            artifact.getResource().getPhysicalName().equals("colortex0.main") &&
+                artifact.getResource().getAvailableViewsList().equals(List.of(TextureView.TEXTURE_VIEW_CURRENT))));
+        assertEquals("colortex0.alt", alternate.getResource().getPhysicalName());
+        assertEquals(List.of(TextureView.TEXTURE_VIEW_ALTERNATE), alternate.getResource().getAvailableViewsList());
+        assertEquals("scene_ssbo", capturedBuffer.getResource().getPhysicalName());
+        assertEquals(4, capturedBuffer.getResource().getByteSize());
+        assertTrue(result.getArtifactsList().stream().allMatch(artifact -> !artifact.getSha256().isBlank()));
+        assertTrue(result.getArtifactsList().stream()
+            .map(artifact -> Path.of(artifact.getRelativePath()))
+            .allMatch(Files::isRegularFile));
+        assertTrue(result.getArtifactsList().stream().anyMatch(artifact ->
+            artifact.getKind() == ArtifactKind.ARTIFACT_KIND_MANIFEST &&
+                artifact.getArtifactId().equals(result.getResultManifestId())));
+        var bin = result.getArtifactsList().stream()
+            .filter(artifact -> Path.of(artifact.getRelativePath()).getFileName().toString().equals("buffer-after.bin"))
+            .findFirst().orElseThrow();
+        assertArrayEquals(new byte[]{0x11, 0x22, 0x33, 0x44},
+            Files.readAllBytes(Path.of(bin.getRelativePath())));
+    }
+
+    @Test
+    void afterPassTimeoutCancelsAndReleasesThePendingRegistration() throws Exception {
+        Fixture fixture = new Fixture();
+        ResourceCatalog.PassDescriptor pass = afterPassCatalog(fixture);
+        AtomicInteger pending = new AtomicInteger();
+        fixture.runtime.afterPassOperation = (request, sink, cancellation) ->
+            cancellationFuture(cancellation, pending, null);
+        CoreJob job = fixture.job(singleAfterPassAction(pass), 5);
+
+        RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
+            () -> fixture.executor.execute(job, ignored -> {}));
+
+        assertEquals(ErrorCode.ERROR_CODE_EXECUTION_TIMEOUT, failure.code);
+        assertEquals(0, pending.get());
+        assertNoTemporaryOrManifest(fixture.artifactRoot);
+    }
+
+    @Test
+    void explicitCancellationReleasesThePendingAfterPassRegistration() throws Exception {
+        Fixture fixture = new Fixture();
+        ResourceCatalog.PassDescriptor pass = afterPassCatalog(fixture);
+        AtomicInteger pending = new AtomicInteger();
+        CountDownLatch registered = new CountDownLatch(1);
+        fixture.runtime.afterPassOperation = (request, sink, cancellation) ->
+            cancellationFuture(cancellation, pending, registered);
+        CoreJob job = fixture.job(singleAfterPassAction(pass));
+        CompletableFuture<RuntimeJobExecutor.Failure> execution = CompletableFuture.supplyAsync(() -> {
+            try {
+                fixture.executor.execute(job, ignored -> {});
+                throw new AssertionError("cancelled job completed successfully");
+            } catch (RuntimeJobExecutor.Failure failure) {
+                return failure;
+            }
+        });
+
+        assertTrue(registered.await(5, TimeUnit.SECONDS));
+        job.cancellation.cancel();
+        RuntimeJobExecutor.Failure failure = execution.get(5, TimeUnit.SECONDS);
+
+        assertEquals(ErrorCode.ERROR_CODE_CANCELLED, failure.code);
+        assertEquals(0, pending.get());
+        assertNoTemporaryOrManifest(fixture.artifactRoot);
+    }
+
+    @Test
+    void groupedAfterPassErrorCancelsItsSiblingAndRollsBackArtifacts() throws Exception {
+        Fixture fixture = new Fixture();
+        ResourceCatalog.PassDescriptor pass = afterPassCatalog(fixture);
+        AtomicInteger pending = new AtomicInteger();
+        List<CompletableFuture<CapturePlan.AfterPassReceipt>> stages = new ArrayList<>();
+        fixture.runtime.afterPassOperation = (request, sink, cancellation) -> {
+            CompletableFuture<CapturePlan.AfterPassReceipt> stage = stages.isEmpty()
+                ? new CompletableFuture<>()
+                : cancellationFuture(cancellation, pending, null);
+            if (stages.isEmpty()) pending.incrementAndGet();
+            stages.add(stage);
+            if (stages.size() == 2) {
+                pending.decrementAndGet();
+                stages.getFirst().completeExceptionally(new IllegalStateException("capture failed"));
+            }
+            return stage;
+        };
+        ActionSequence actions = ActionSequence.newBuilder()
+            .addAllActions(singleAfterPassAction(pass).getActionsList())
+            .addAllActions(singleAfterPassAction(pass, "second-after").getActionsList())
+            .build();
+
+        RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
+            () -> fixture.executor.execute(fixture.job(actions), ignored -> {}));
+
+        assertEquals(ErrorCode.ERROR_CODE_CAPTURE_FAILED, failure.code);
+        assertEquals(0, pending.get());
+        assertNoTemporaryOrManifest(fixture.artifactRoot);
     }
 
     @Test
@@ -235,6 +426,54 @@ class RuntimeJobExecutorCaptureTest {
                 .setArtifactName("screenshot"))).build();
     }
 
+    private static ResourceCatalog.PassDescriptor afterPassCatalog(Fixture fixture) {
+        ResourceCatalog.ResourceDescriptor texture = resource(
+            "colortex0", ResourceCatalog.ResourceKind.TEXTURE, 1, 16);
+        ResourceCatalog.PassDescriptor pass = ResourceCatalog.PassDescriptor.of(
+            ResourceCatalog.PassStage.COMPOSITE,
+            "composite21",
+            0,
+            List.of(texture.logicalName())
+        );
+        fixture.runtime.catalog = ResourceCatalog.of(List.of(texture), List.of(pass));
+        return pass;
+    }
+
+    private static ActionSequence singleAfterPassAction(ResourceCatalog.PassDescriptor pass) {
+        return singleAfterPassAction(pass, "texture-after");
+    }
+
+    private static ActionSequence singleAfterPassAction(
+        ResourceCatalog.PassDescriptor pass,
+        String artifactName
+    ) {
+        return ActionSequence.newBuilder().addActions(
+            Action.newBuilder().setDumpTextureAfterPass(DumpTextureAfterPass.newBuilder()
+                .setPassId(pass.passId())
+                .setResource(ResourceSelector.newBuilder().setLogicalName("colortex0")
+                    .setView(TextureView.TEXTURE_VIEW_CURRENT))
+                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)
+                .setArtifactName(artifactName))
+        ).build();
+    }
+
+    private static CompletableFuture<CapturePlan.AfterPassReceipt> cancellationFuture(
+        CancellationToken cancellation,
+        AtomicInteger pending,
+        CountDownLatch registered
+    ) {
+        pending.incrementAndGet();
+        if (registered != null) registered.countDown();
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                while (!cancellation.isCancellationRequested()) LockSupport.parkNanos(100_000);
+                throw new CancellationException("pending after-pass capture cancelled");
+            } finally {
+                pending.decrementAndGet();
+            }
+        });
+    }
+
     private static void assertNoTemporaryOrManifest(Path root) throws Exception {
         try (var files = Files.walk(root)) {
             assertFalse(files.anyMatch(path -> path.getFileName().toString().endsWith(".tmp") ||
@@ -263,13 +502,46 @@ class RuntimeJobExecutorCaptureTest {
         }).toList());
     }
 
+    private static CaptureResult captureResult(
+        CapturePlan.Target target,
+        ResourceCatalog.ResourceDescriptor resource,
+        long frameId
+    ) {
+        return new CaptureResult(frameId, List.of(new CaptureResult.ArtifactGroup(
+            target.artifactName(),
+            resource,
+            target.outputs().stream().map(output -> new CaptureResult.CapturedArtifact(
+                output.fileName(), output.format(), output.role(), output.subresourceIndex()
+            )).toList()
+        )));
+    }
+
+    private static void writeAfterPassArtifacts(ArtifactSink sink, CapturePlan.Target target) throws Exception {
+        for (CapturePlan.ArtifactOutputSpec output : target.outputs()) {
+            byte[] bytes = output.format() == CapturePlan.ArtifactFormat.JSON
+                ? "{\"after_pass\":true}".getBytes(StandardCharsets.UTF_8)
+                : target.resource().kind() == ResourceCatalog.ResourceKind.BUFFER
+                    ? new byte[]{0x11, 0x22, 0x33, 0x44}
+                    : new byte[]{(byte) 0x89, 0x50, 0x4e, 0x47};
+            try (var stream = sink.open(output.fileName())) {
+                stream.write(bytes);
+            }
+        }
+    }
+
+    private record PendingAfterPass(
+        CapturePlan.AfterPassRequest request,
+        ArtifactSink sink,
+        CompletableFuture<CapturePlan.AfterPassReceipt> future
+    ) {}
+
     private static ResourceCatalog.ResourceDescriptor resource(
         String name, ResourceCatalog.ResourceKind kind, long frame, long bytes) {
         return ResourceCatalog.ResourceDescriptor.of(
             name,
             kind,
             kind == ResourceCatalog.ResourceKind.TEXTURE
-                ? List.of(ResourceCatalog.TextureView.CURRENT)
+                ? List.of(ResourceCatalog.TextureView.CURRENT, ResourceCatalog.TextureView.ALTERNATE)
                 : List.of(),
             2, 2, 1, 1, 1, "RGBA8", 4,
             ResourceCatalog.ScalarType.UINT8, bytes, frame, name, "", "", "RGBA", "unorm", 8,
@@ -297,6 +569,10 @@ class RuntimeJobExecutorCaptureTest {
         }
 
         CoreJob job(ActionSequence actions) {
+            return job(actions, 0);
+        }
+
+        CoreJob job(ActionSequence actions, long timeoutMs) {
             ActionSequence sequence = ActionSequence.newBuilder()
                 .addActions(Action.newBuilder().setActivateSource(
                     ActivateSource.newBuilder().setSourceUuid(source.uuid())))
@@ -308,6 +584,9 @@ class RuntimeJobExecutorCaptureTest {
                     .setDimensionId("minecraft:overworld").setFov(70.0))
                 .addSources(source.reference())
                 .setActionSequence(sequence)
+                .build();
+            if (timeoutMs > 0) spec = spec.toBuilder()
+                .setTimeouts(spec.getTimeouts().toBuilder().setExecutionTimeoutMs(timeoutMs))
                 .build();
             CoreJob job = new CoreJob(spec, spec.getJobId(), WORKSPACE_ID, "message", null);
             job.initialize(List.of(source));

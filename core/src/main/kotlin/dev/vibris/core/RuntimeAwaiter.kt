@@ -1,6 +1,5 @@
 package dev.vibris.core
 
-import dev.vibris.api.CaptureResult
 import dev.vibris.protocol.v2.ErrorCode
 import dev.vibris.protocol.v2.JobResult
 import dev.vibris.protocol.v2.JobTimings
@@ -14,7 +13,7 @@ import java.util.concurrent.TimeoutException
 
 internal class RuntimeAwaiter(private val probe: CoreProbe) {
     @Throws(RuntimeJobExecutor.Failure::class)
-    fun capture(stage: CompletionStage<CaptureResult>, job: CoreJob, deadline: Long): CaptureResult =
+    fun <T> capture(stage: CompletionStage<T>, job: CoreJob, deadline: Long): T =
         await(stage, job, deadline, ErrorCode.ERROR_CODE_CAPTURE_FAILED)
 
     @Throws(RuntimeJobExecutor.Failure::class)

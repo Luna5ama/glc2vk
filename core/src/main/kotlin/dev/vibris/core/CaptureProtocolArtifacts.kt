@@ -27,6 +27,7 @@ internal class CaptureProtocolArtifacts {
         diagnostics: List<ReloadResult.Diagnostic>,
         comparison: CompareReceipt?,
         additionalArtifacts: List<GeneratedArtifact>,
+        physicalNames: Map<String, String>,
     ): JobResult {
         if (plans.size != captured.size) {
             throw RuntimeJobExecutor.Failure(
@@ -48,6 +49,7 @@ internal class CaptureProtocolArtifacts {
                             group.resource,
                             artifact,
                             requireArtifact(committed, artifact.fileName),
+                            physicalNames[target.artifactName],
                         ),
                     )
                 }
@@ -83,12 +85,13 @@ internal class CaptureProtocolArtifacts {
         targetIndex: Int,
         committed: JobResult,
         internalWait: WaitFramesReceipt?,
+        physicalName: String? = null,
     ): CaptureReceipt {
         val target = plan.targets[targetIndex]
         val group = captured.groups.first { it.name == target.artifactName }
         val receipt = CaptureReceipt.newBuilder()
             .setFrameId(captured.frameId)
-            .setResource(toProtocol(group.resource, target))
+            .setResource(toProtocol(group.resource, target, physicalName))
             .addAllArtifacts(receiptArtifacts(target, committed))
         internalWait?.let(receipt::setInternalWait)
         return receipt.build()
@@ -103,6 +106,24 @@ internal class CaptureProtocolArtifacts {
         return PatchedShadersReceipt.newBuilder()
             .setShaderGeneration(captured.frameId)
             .addAllArtifacts(receiptArtifacts(target, committed))
+            .build()
+    }
+
+    fun afterPassReceipt(
+        receipt: CapturePlan.AfterPassReceipt,
+        committed: JobResult,
+    ): CaptureReceipt {
+        val plan = CapturePlan(listOf(receipt.request.target))
+        return captureReceipt(
+            plan,
+            receipt.capture,
+            0,
+            committed,
+            null,
+            receipt.physicalName,
+        ).toBuilder()
+            .setPassId(receipt.request.pass.passId)
+            .setPassOccurrence(receipt.passOccurrence)
             .build()
     }
 
@@ -139,8 +160,9 @@ internal class CaptureProtocolArtifacts {
         resource: ResourceCatalog.ResourceDescriptor,
         artifact: CaptureResult.CapturedArtifact,
         file: ArtifactMetadata,
+        physicalName: String?,
     ): ArtifactMetadata = file.toBuilder()
-        .setResource(toProtocol(resource, target))
+        .setResource(toProtocol(resource, target, physicalName))
         .build()
 
     private fun receiptArtifacts(target: CapturePlan.Target, committed: JobResult): List<ArtifactMetadata> {
@@ -153,30 +175,38 @@ internal class CaptureProtocolArtifacts {
     private fun toProtocol(
         resource: ResourceCatalog.ResourceDescriptor,
         target: CapturePlan.Target,
-    ): dev.vibris.protocol.v2.ResourceDescriptor = dev.vibris.protocol.v2.ResourceDescriptor.newBuilder()
-        .setLogicalName(resource.logicalName)
-        .setKind(
-            when (resource.kind) {
-                ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER ->
-                    dev.vibris.protocol.v2.ResourceKind.RESOURCE_KIND_FINAL_FRAMEBUFFER
-                ResourceCatalog.ResourceKind.TEXTURE -> dev.vibris.protocol.v2.ResourceKind.RESOURCE_KIND_TEXTURE
-                ResourceCatalog.ResourceKind.BUFFER -> dev.vibris.protocol.v2.ResourceKind.RESOURCE_KIND_BUFFER
-                ResourceCatalog.ResourceKind.PATCHED_SHADERS ->
-                    dev.vibris.protocol.v2.ResourceKind.RESOURCE_KIND_PATCHED_SHADERS
-            },
-        )
-        .setWidth(resource.width)
-        .setHeight(resource.height)
-        .setDepth(resource.depth)
-        .setMipLevels(resource.mipLevels)
-        .setLayers(resource.layers)
-        .setInternalFormat(resource.internalFormat)
-        .setChannelCount(resource.channelCount)
-        .setScalarType(dev.vibris.protocol.v2.ScalarType.valueOf("SCALAR_TYPE_" + resource.scalarType.name))
-        .setByteSize(resource.byteSize)
-        .setFrameId(resource.frameId)
-        .setPhysicalName(resource.semanticLabel.ifBlank { target.resource.logicalName })
-        .build()
+        physicalName: String? = null,
+    ): dev.vibris.protocol.v2.ResourceDescriptor {
+        val result = dev.vibris.protocol.v2.ResourceDescriptor.newBuilder()
+            .setLogicalName(resource.logicalName)
+            .setKind(
+                when (resource.kind) {
+                    ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER ->
+                        dev.vibris.protocol.v2.ResourceKind.RESOURCE_KIND_FINAL_FRAMEBUFFER
+                    ResourceCatalog.ResourceKind.TEXTURE -> dev.vibris.protocol.v2.ResourceKind.RESOURCE_KIND_TEXTURE
+                    ResourceCatalog.ResourceKind.BUFFER -> dev.vibris.protocol.v2.ResourceKind.RESOURCE_KIND_BUFFER
+                    ResourceCatalog.ResourceKind.PATCHED_SHADERS ->
+                        dev.vibris.protocol.v2.ResourceKind.RESOURCE_KIND_PATCHED_SHADERS
+                },
+            )
+            .setWidth(resource.width)
+            .setHeight(resource.height)
+            .setDepth(resource.depth)
+            .setMipLevels(resource.mipLevels)
+            .setLayers(resource.layers)
+            .setInternalFormat(resource.internalFormat)
+            .setChannelCount(resource.channelCount)
+            .setScalarType(dev.vibris.protocol.v2.ScalarType.valueOf("SCALAR_TYPE_" + resource.scalarType.name))
+            .setByteSize(resource.byteSize)
+            .setFrameId(resource.frameId)
+            .setPhysicalName(physicalName ?: resource.semanticLabel.ifBlank { target.resource.logicalName })
+        target.resource.textureView?.let { view ->
+            result.addAvailableViews(
+                dev.vibris.protocol.v2.TextureView.valueOf("TEXTURE_VIEW_" + view.name),
+            )
+        }
+        return result.build()
+    }
 
     private fun specifications(
         plans: List<CapturePlan>,

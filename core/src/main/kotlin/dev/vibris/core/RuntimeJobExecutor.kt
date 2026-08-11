@@ -356,6 +356,41 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     }
 
     @Throws(Failure::class)
+    fun captureAfterPass(
+        job: CoreJob,
+        progress: Consumer<JobStage>,
+        deadline: Long,
+        prepared: CaptureJobExecutor.Prepared,
+        actions: List<CaptureProgramBuilder.AfterPassAction>,
+    ): List<CapturePlan.AfterPassReceipt> {
+        progress.accept(JobStage.JOB_STAGE_CAPTURING)
+        probe.event(job.requestId, "CAPTURING_AFTER_PASS")
+        val checkpoint = prepared.checkpoint()
+        val stages = ArrayList<CompletionStage<CapturePlan.AfterPassReceipt>>(actions.size)
+        try {
+            actions.forEach { action ->
+                stages.add(
+                    runtime.captureAfterPass(
+                        action.request,
+                        prepared.sink(),
+                        job.cancellation.token(),
+                    ),
+                )
+            }
+            return stages.map { stage -> awaitCapture(stage, job, deadline) }
+        } catch (failure: Failure) {
+            cancelAfterPassGroup(job, stages)
+            rollbackCapture(prepared, checkpoint, failure)
+            throw failure
+        } catch (exception: RuntimeException) {
+            cancelAfterPassGroup(job, stages)
+            val failure = CaptureJobExecutor.failure(exception)
+            rollbackCapture(prepared, checkpoint, failure)
+            throw failure
+        }
+    }
+
+    @Throws(Failure::class)
     fun capturePatchedShaders(
         job: CoreJob,
         progress: Consumer<JobStage>,
@@ -384,8 +419,32 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     }
 
     @Throws(Failure::class)
-    fun awaitCapture(stage: CompletionStage<CaptureResult>, job: CoreJob, deadline: Long): CaptureResult =
+    fun <T> awaitCapture(stage: CompletionStage<T>, job: CoreJob, deadline: Long): T =
         awaiter.capture(stage, job, deadline)
+
+    private fun cancelAfterPassGroup(
+        job: CoreJob,
+        stages: List<CompletionStage<CapturePlan.AfterPassReceipt>>,
+    ) {
+        job.cancellation.cancel()
+        stages.forEach { stage ->
+            runCatching { stage.toCompletableFuture().handle { _, _ -> null }.join() }
+        }
+    }
+
+    @Throws(Failure::class)
+    private fun rollbackCapture(
+        prepared: CaptureJobExecutor.Prepared,
+        checkpoint: ArtifactJobTransaction.Checkpoint,
+        failure: Failure,
+    ) {
+        try {
+            prepared.rollback(checkpoint)
+        } catch (rollbackFailure: IOException) {
+            rollbackFailure.addSuppressed(failure)
+            throw CaptureJobExecutor.failure(rollbackFailure)
+        }
+    }
 
     private fun reloadPreviousSource(): Boolean {
         try {

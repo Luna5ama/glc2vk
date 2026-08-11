@@ -23,16 +23,23 @@ import org.lwjgl.opengl.GL11C.GL_PACK_LSB_FIRST
 import org.lwjgl.opengl.GL11C.GL_PACK_SKIP_PIXELS
 import org.lwjgl.opengl.GL11C.GL_PACK_SKIP_ROWS
 import org.lwjgl.opengl.GL11C.GL_PACK_SWAP_BYTES
-import org.lwjgl.opengl.GL11C.GL_RGBA
+import org.lwjgl.opengl.GL11C.GL_COLOR_BUFFER_BIT
 import org.lwjgl.opengl.GL11C.GL_RGBA8
+import org.lwjgl.opengl.GL11C.GL_SCISSOR_TEST
 import org.lwjgl.opengl.GL11C.GL_TEXTURE_2D
-import org.lwjgl.opengl.GL11C.GL_UNSIGNED_BYTE
+import org.lwjgl.opengl.GL11C.glClear
+import org.lwjgl.opengl.GL11C.glClearColor
+import org.lwjgl.opengl.GL11C.glDisable
+import org.lwjgl.opengl.GL11C.glEnable
 import org.lwjgl.opengl.GL11C.glGetInteger
+import org.lwjgl.opengl.GL11C.glIsEnabled
 import org.lwjgl.opengl.GL11C.glPixelStorei
+import org.lwjgl.opengl.GL11C.glScissor
 import org.lwjgl.opengl.GL12C.GL_PACK_IMAGE_HEIGHT
 import org.lwjgl.opengl.GL12C.GL_PACK_ROW_LENGTH
 import org.lwjgl.opengl.GL12C.GL_PACK_SKIP_IMAGES
 import org.lwjgl.opengl.GL15C.GL_STATIC_DRAW
+import org.lwjgl.opengl.GL15C.GL_WRITE_ONLY
 import org.lwjgl.opengl.GL15C.glBindBuffer
 import org.lwjgl.opengl.GL21C.GL_PIXEL_PACK_BUFFER
 import org.lwjgl.opengl.GL21C.GL_PIXEL_PACK_BUFFER_BINDING
@@ -53,13 +60,22 @@ import org.lwjgl.opengl.GL43C.GL_COMPUTE_SHADER
 import org.lwjgl.opengl.GL43C.GL_SHADER_STORAGE_BUFFER
 import org.lwjgl.opengl.GL43C.glBindBufferBase
 import org.lwjgl.opengl.GL43C.glDispatchCompute
+import org.lwjgl.opengl.GL30C.GL_COLOR_ATTACHMENT0
+import org.lwjgl.opengl.GL30C.GL_DRAW_FRAMEBUFFER
+import org.lwjgl.opengl.GL30C.GL_DRAW_FRAMEBUFFER_BINDING
+import org.lwjgl.opengl.GL30C.GL_FRAMEBUFFER_COMPLETE
+import org.lwjgl.opengl.GL30C.glBindFramebuffer
+import org.lwjgl.opengl.GL42C.glBindImageTexture
 import org.lwjgl.opengl.GL45C.glCreateBuffers
+import org.lwjgl.opengl.GL45C.glCheckNamedFramebufferStatus
+import org.lwjgl.opengl.GL45C.glCreateFramebuffers
 import org.lwjgl.opengl.GL45C.glCreateTextures
 import org.lwjgl.opengl.GL45C.glDeleteBuffers
+import org.lwjgl.opengl.GL45C.glDeleteFramebuffers
 import org.lwjgl.opengl.GL45C.glDeleteTextures
 import org.lwjgl.opengl.GL45C.glNamedBufferData
+import org.lwjgl.opengl.GL45C.glNamedFramebufferTexture
 import org.lwjgl.opengl.GL45C.glTextureStorage2D
-import org.lwjgl.opengl.GL45C.glTextureSubImage2D
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
@@ -68,6 +84,7 @@ import javax.imageio.ImageIO
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 
 class GlArtifactCaptureRuntimeTest {
@@ -78,6 +95,8 @@ class GlArtifactCaptureRuntimeTest {
         withGlContext {
             val ssbo = glCreateBuffers()
             val texture = glCreateTextures(GL_TEXTURE_2D)
+            val alternateTexture = glCreateTextures(GL_TEXTURE_2D)
+            val framebuffer = glCreateFramebuffers()
             val packBuffer = glCreateBuffers()
             try {
                 val bufferBytes = byteArrayOf(0, 0x7f, 0x80.toByte(), 0xff.toByte())
@@ -94,15 +113,12 @@ class GlArtifactCaptureRuntimeTest {
                 val expectedGpuBytes = ByteBuffer.allocate(4).order(ByteOrder.nativeOrder())
                     .putInt(0x12345678).array()
                 assertContentEquals(expectedGpuBytes, gpuOutput.toByteArray())
+                assertFalse(bufferBytes.contentEquals(gpuOutput.toByteArray()))
 
                 glTextureStorage2D(texture, 1, GL_RGBA8, 2, 2)
-                val pixels = BufferUtils.createByteBuffer(16)
-                    .put(byteArrayOf(
-                        255.toByte(), 0, 0, 255.toByte(), 0, 255.toByte(), 0, 255.toByte(),
-                        0, 0, 255.toByte(), 255.toByte(), 255.toByte(), 255.toByte(), 255.toByte(), 255.toByte(),
-                    ))
-                    .flip()
-                glTextureSubImage2D(texture, 0, 0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, pixels)
+                glTextureStorage2D(alternateTexture, 1, GL_RGBA8, 2, 2)
+                writeTextureFromGraphics(framebuffer, texture)
+                writeTextureFromComputeShader(alternateTexture)
                 setPackState(packBuffer)
 
                 val rawOutput = ByteArrayOutputStream()
@@ -146,9 +162,26 @@ class GlArtifactCaptureRuntimeTest {
                 assertEquals(0xffff0000.toInt(), image.getRGB(0, 1))
                 assertEquals(0xff00ff00.toInt(), image.getRGB(1, 1))
                 assertPackState(packBuffer)
+
+                val alternatePng = ByteArrayOutputStream()
+                GlArtifactCapture.captureTexture(
+                    alternateTexture,
+                    0,
+                    0,
+                    CapturePlan.ArtifactFormat.PNG,
+                    alternatePng,
+                )
+                val alternateImage = assertNotNull(ImageIO.read(ByteArrayInputStream(alternatePng.toByteArray())))
+                assertEquals(0xffff00ff.toInt(), alternateImage.getRGB(0, 0))
+                assertEquals(0xff000000.toInt(), alternateImage.getRGB(1, 0))
+                assertEquals(0xffffff00.toInt(), alternateImage.getRGB(0, 1))
+                assertEquals(0xff00ffff.toInt(), alternateImage.getRGB(1, 1))
+                assertPackState(packBuffer)
             } finally {
                 resetPackState()
                 glDeleteBuffers(packBuffer)
+                glDeleteFramebuffers(framebuffer)
+                glDeleteTextures(alternateTexture)
                 glDeleteTextures(texture)
                 glDeleteBuffers(ssbo)
             }
@@ -190,6 +223,66 @@ class GlArtifactCaptureRuntimeTest {
         glPixelStorei(GL_PACK_SKIP_PIXELS, 0)
         glPixelStorei(GL_PACK_SKIP_ROWS, 0)
         glPixelStorei(GL_PACK_SKIP_IMAGES, 0)
+    }
+
+    private fun writeTextureFromGraphics(framebuffer: Int, texture: Int) {
+        glNamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, texture, 0)
+        check(glCheckNamedFramebufferStatus(framebuffer, GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+            "Graphics framebuffer is incomplete"
+        }
+        val previousFramebuffer = glGetInteger(GL_DRAW_FRAMEBUFFER_BINDING)
+        val previousScissor = glIsEnabled(GL_SCISSOR_TEST)
+        try {
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer)
+            glEnable(GL_SCISSOR_TEST)
+            clearPixel(0, 0, 1.0f, 0.0f, 0.0f)
+            clearPixel(1, 0, 0.0f, 1.0f, 0.0f)
+            clearPixel(0, 1, 0.0f, 0.0f, 1.0f)
+            clearPixel(1, 1, 1.0f, 1.0f, 1.0f)
+        } finally {
+            if (!previousScissor) glDisable(GL_SCISSOR_TEST)
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, previousFramebuffer)
+        }
+    }
+
+    private fun clearPixel(x: Int, y: Int, red: Float, green: Float, blue: Float) {
+        glScissor(x, y, 1, 1)
+        glClearColor(red, green, blue, 1.0f)
+        glClear(GL_COLOR_BUFFER_BIT)
+    }
+
+    private fun writeTextureFromComputeShader(texture: Int) {
+        val shader = glCreateShader(GL_COMPUTE_SHADER)
+        val program = glCreateProgram()
+        try {
+            glShaderSource(shader, """
+                #version 430 core
+                layout(local_size_x = 1, local_size_y = 1) in;
+                layout(rgba8, binding = 0) uniform writeonly image2D outputImage;
+                void main() {
+                    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+                    vec4 color;
+                    if (pixel == ivec2(0, 0)) color = vec4(1.0, 1.0, 0.0, 1.0);
+                    else if (pixel == ivec2(1, 0)) color = vec4(0.0, 1.0, 1.0, 1.0);
+                    else if (pixel == ivec2(0, 1)) color = vec4(1.0, 0.0, 1.0, 1.0);
+                    else color = vec4(0.0, 0.0, 0.0, 1.0);
+                    imageStore(outputImage, pixel, color);
+                }
+            """.trimIndent())
+            glCompileShader(shader)
+            check(glGetShaderi(shader, GL_COMPILE_STATUS) != 0) { "Compute texture shader compilation failed" }
+            glAttachShader(program, shader)
+            glLinkProgram(program)
+            check(glGetProgrami(program, GL_LINK_STATUS) != 0) { "Compute texture program link failed" }
+            glBindImageTexture(0, texture, 0, false, 0, GL_WRITE_ONLY, GL_RGBA8)
+            glUseProgram(program)
+            glDispatchCompute(2, 2, 1)
+            glUseProgram(0)
+            glBindImageTexture(0, 0, 0, false, 0, GL_WRITE_ONLY, GL_RGBA8)
+        } finally {
+            glDeleteProgram(program)
+            glDeleteShader(shader)
+        }
     }
 
     private fun writeBufferFromComputeShader(buffer: Int) {
