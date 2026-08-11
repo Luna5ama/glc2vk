@@ -1,10 +1,10 @@
 package dev.vibris.core
 
 import dev.vibris.core.request.RequestRegistry
-import dev.vibris.protocol.v1.ClientMessage
-import dev.vibris.protocol.v1.JobSummary
-import dev.vibris.protocol.v1.ResumeState
-import dev.vibris.protocol.v1.ServerMessage
+import dev.vibris.protocol.v2.ClientMessage
+import dev.vibris.protocol.v2.JobStateSnapshot
+import dev.vibris.protocol.v2.JobSummary
+import dev.vibris.protocol.v2.ServerMessage
 
 internal object ResumeResponses {
     @JvmStatic
@@ -14,33 +14,26 @@ internal object ResumeResponses {
         requests: RequestRegistry<TerminalResult>,
         liveJobs: Map<String, CoreJob>,
     ): List<ServerMessage> {
-        val result = ResumeState.newBuilder()
-        val terminalReplay = ArrayList<ServerMessage>()
-        for (requestId in message.resumeRequest.requestIdsList) {
-            requests.resume(requestId, session.workspaceId()).ifPresent { snapshot ->
-                val job = liveJobs[requestId]
-                if (job != null && job.workspaceId == session.workspaceId()) {
-                    job.bind(session)
-                }
-                result.addJobs(
-                    JobSummary.newBuilder()
-                        .setRequestId(requestId)
-                        .setState(ProtocolMessages.jobState(snapshot.state)),
-                )
-                if (snapshot.state.terminal()) {
-                    terminalReplay.add(
-                        snapshot.result!!.message(message.messageId, requestId, session.workspaceId()),
-                    )
-                }
-            }
+        val requestId = message.resumeJob.jobId
+        val snapshot = requests.resume(requestId, session.workspaceId()).orElse(null) ?: return emptyList()
+        val job = liveJobs[requestId]
+        if (job != null && job.workspaceId == session.workspaceId()) {
+            job.bind(session)
         }
-        val responses = ArrayList<ServerMessage>(terminalReplay.size + 1)
-        responses.add(
+        val summary = JobSummary.newBuilder()
+            .setJobId(job?.submission?.jobId ?: requestId)
+            .setRequestId(requestId)
+            .setWorkspaceId(session.workspaceId())
+            .setOperation(job?.submission?.workloadCase?.name?.lowercase().orEmpty())
+            .setState(ProtocolMessages.jobState(snapshot.state))
+            .build()
+        val state = JobStateSnapshot.newBuilder().setSummary(summary)
+        snapshot.result?.completed?.result?.let(state::setResult)
+        snapshot.result?.failed?.error?.let(state::setError)
+        return listOf(
             ProtocolMessages.envelope(message.messageId, message.requestId, session.workspaceId())
-                .setResumeState(result)
+                .setJobState(state)
                 .build(),
         )
-        responses.addAll(terminalReplay)
-        return responses
     }
 }

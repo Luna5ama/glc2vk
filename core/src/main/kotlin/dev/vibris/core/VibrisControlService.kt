@@ -1,20 +1,22 @@
 package dev.vibris.core
 
 import dev.vibris.api.VibrisRuntimeAdapter
-import dev.vibris.protocol.v1.ClientMessage
-import dev.vibris.protocol.v1.ErrorCode
-import dev.vibris.protocol.v1.GetServerInfoRequest
-import dev.vibris.protocol.v1.GetServerInfoResponse
-import dev.vibris.protocol.v1.GetStatusRequest
-import dev.vibris.protocol.v1.GetStatusResponse
-import dev.vibris.protocol.v1.ListPresetsRequest
-import dev.vibris.protocol.v1.ListPresetsResponse
-import dev.vibris.protocol.v1.Pong
-import dev.vibris.protocol.v1.ScenePreset
-import dev.vibris.protocol.v1.ServerMessage
-import dev.vibris.protocol.v1.ValidateContextRequest
-import dev.vibris.protocol.v1.ValidateContextResponse
-import dev.vibris.protocol.v1.VibrisControlGrpc
+import dev.vibris.protocol.v2.ClientMessage
+import dev.vibris.protocol.v2.ErrorCode
+import dev.vibris.protocol.v2.GetServerInfoRequest
+import dev.vibris.protocol.v2.GetServerInfoResponse
+import dev.vibris.protocol.v2.GetStatusRequest
+import dev.vibris.protocol.v2.GetStatusResponse
+import dev.vibris.protocol.v2.ListPresetsRequest
+import dev.vibris.protocol.v2.ListPresetsResponse
+import dev.vibris.protocol.v2.ListResourcesRequest
+import dev.vibris.protocol.v2.ListResourcesResponse
+import dev.vibris.protocol.v2.Pong
+import dev.vibris.protocol.v2.ScenePreset
+import dev.vibris.protocol.v2.ServerMessage
+import dev.vibris.protocol.v2.ValidateContextRequest
+import dev.vibris.protocol.v2.ValidateContextResponse
+import dev.vibris.protocol.v2.VibrisControlGrpc
 import io.grpc.Status
 import io.grpc.stub.StreamObserver
 import java.nio.file.Path
@@ -63,7 +65,12 @@ class VibrisControlService internal constructor(
         request: GetServerInfoRequest,
         observer: StreamObserver<GetServerInfoResponse>,
     ) {
-        observer.onNext(GetServerInfoResponse.newBuilder().setServer(descriptor.hello(engine)).build())
+        observer.onNext(
+            GetServerInfoResponse.newBuilder()
+                .setProtocolVersion(ProtocolMessages.V2)
+                .setServer(descriptor.hello(engine))
+                .build(),
+        )
         observer.onCompleted()
     }
 
@@ -76,7 +83,7 @@ class VibrisControlService internal constructor(
                 observer.onError(Status.INTERNAL.withDescription("PRESET_LIST_FAILED").asRuntimeException())
                 return@whenComplete
             }
-            val response = ListPresetsResponse.newBuilder()
+            val response = ListPresetsResponse.newBuilder().setProtocolVersion(ProtocolMessages.V2)
             presets.forEach { preset ->
                 val tags = preset.tags.sorted()
                 response.addPresets(
@@ -99,12 +106,43 @@ class VibrisControlService internal constructor(
         }
     }
 
+    override fun listResources(
+        request: ListResourcesRequest,
+        observer: StreamObserver<ListResourcesResponse>,
+    ) {
+        val resources = descriptor.resources()
+        val filtered = if (!request.hasFilter()) {
+            resources
+        } else {
+            val filter = request.filter
+            resources.toBuilder()
+                .clearResources()
+                .addAllResources(resources.resourcesList.filter { resource ->
+                    (filter.kindsCount == 0 || filter.kindsList.contains(resource.kind)) &&
+                        (!filter.hasLogicalName() || resource.logicalName == filter.logicalName)
+                })
+                .build()
+        }
+        observer.onNext(
+            ListResourcesResponse.newBuilder()
+                .setProtocolVersion(ProtocolMessages.V2)
+                .setCatalog(filtered)
+                .build(),
+        )
+        observer.onCompleted()
+    }
+
     override fun validateContext(
         request: ValidateContextRequest,
         observer: StreamObserver<ValidateContextResponse>,
     ) {
         if (!request.hasContext()) {
-            observer.onNext(ValidateContextResponse.newBuilder().setValid(false).build())
+            observer.onNext(
+                ValidateContextResponse.newBuilder()
+                    .setProtocolVersion(ProtocolMessages.V2)
+                    .setValid(false)
+                    .build(),
+            )
             observer.onCompleted()
             return
         }
@@ -114,11 +152,13 @@ class VibrisControlService internal constructor(
                 observer.onError(Status.INTERNAL.withDescription("PRESET_VALIDATION_FAILED").asRuntimeException())
                 return@whenComplete
             }
-            val response = ValidateContextResponse.newBuilder().setValid(validation.valid)
+            val response = ValidateContextResponse.newBuilder()
+                .setProtocolVersion(ProtocolMessages.V2)
+                .setValid(validation.valid)
             validation.errors.forEach { error ->
                 response.addErrors(
-                    dev.vibris.protocol.v1.ProtocolError.newBuilder()
-                        .setCode(ErrorCode.INVALID_PRESET)
+                    dev.vibris.protocol.v2.ProtocolError.newBuilder()
+                        .setCode(ErrorCode.ERROR_CODE_INVALID_PRESET)
                         .setMessage(error)
                         .setRetryable(false),
                 )
@@ -133,7 +173,12 @@ class VibrisControlService internal constructor(
         observer: StreamObserver<GetStatusResponse>,
     ) {
         val status = descriptor.status(engine)
-        observer.onNext(GetStatusResponse.newBuilder().setReady(status.runtimeReady).setStatus(status).build())
+        observer.onNext(
+            GetStatusResponse.newBuilder()
+                .setProtocolVersion(ProtocolMessages.V2)
+                .setStatus(status)
+                .build(),
+        )
         observer.onCompleted()
     }
 
@@ -151,16 +196,12 @@ class VibrisControlService internal constructor(
                     greet(message)
                     return
                 }
-                if (message.protocolVersion.major != 1) {
-                    fail(Status.FAILED_PRECONDITION.withDescription("PROTOCOL_MISMATCH"))
+                if (!message.hasProtocolVersion() || message.protocolVersion.major != 2) {
+                    fail(Status.FAILED_PRECONDITION.withDescription("UNSUPPORTED_VERSION"))
                     return
                 }
                 if (message.workspaceId != session.workspaceId()) {
                     fail(Status.PERMISSION_DENIED.withDescription("WORKSPACE_MISMATCH"))
-                    return
-                }
-                if (message.hasCancelJob() && message.requestId != message.cancelJob.requestId) {
-                    fail(Status.INVALID_ARGUMENT.withDescription("REQUEST_ID_MISMATCH"))
                     return
                 }
                 if (message.hasPing()) {
@@ -179,8 +220,8 @@ class VibrisControlService internal constructor(
                 } else if (message.hasSubmitJob()) {
                     engine.submit(session, message)
                 } else if (message.hasCancelJob()) {
-                    engine.cancel(session, message.cancelJob.requestId)
-                } else if (message.hasResumeRequest()) {
+                    engine.cancel(session, message.cancelJob.jobId)
+                } else if (message.hasResumeJob()) {
                     engine.resume(session, message)
                 }
             }
@@ -190,17 +231,17 @@ class VibrisControlService internal constructor(
                     fail(Status.INVALID_ARGUMENT.withDescription("CLIENT_HELLO_REQUIRED"))
                     return
                 }
-                if (message.clientHello.protocolVersion.major != 1) {
-                    fail(Status.FAILED_PRECONDITION.withDescription("PROTOCOL_MISMATCH"))
+                if (!message.hasProtocolVersion() || message.protocolVersion.major != 2) {
+                    fail(Status.FAILED_PRECONDITION.withDescription("UNSUPPORTED_VERSION"))
                     return
                 }
-                val workspace = message.clientHello.workspaceId
+                val workspace = message.workspaceId
                 if (workspace.isBlank()) {
                     fail(Status.INVALID_ARGUMENT.withDescription("WORKSPACE_ID_REQUIRED"))
                     return
                 }
                 greeted = true
-                session.identify(workspace, message.clientHello.processInstanceUuid)
+                session.identify(workspace, message.clientHello.processInstanceId)
                 session.send(
                     ProtocolMessages.envelope(message.messageId, message.requestId, workspace)
                         .setServerHello(descriptor.hello(engine))

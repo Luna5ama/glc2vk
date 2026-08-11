@@ -1,6 +1,6 @@
 package dev.vibris.core
 
-import dev.vibris.protocol.v1.ServerMessage
+import dev.vibris.protocol.v2.ServerMessage
 
 internal class TerminalDelivery(shaderLogs: ShaderLogSink) {
     private val artifacts = shaderLogs as? ArtifactManager

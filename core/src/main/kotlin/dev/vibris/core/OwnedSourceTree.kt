@@ -1,6 +1,6 @@
 package dev.vibris.core
 
-import dev.vibris.protocol.v1.ErrorCode
+import dev.vibris.protocol.v2.ErrorCode
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.file.FileVisitResult
@@ -29,7 +29,7 @@ internal class OwnedSourceTree(
         requireSafePendingRoot()
         val directory = pendingRoot.resolve(uuid).normalize()
         if (pendingRoot != directory.parent) {
-            throw SourceRegistry.Failure(ErrorCode.INVALID_SOURCE_UUID, "Source UUID escapes the pending root.")
+            throw SourceRegistry.Failure(ErrorCode.ERROR_CODE_INVALID_SOURCE, "Source UUID escapes the pending root.")
         }
         val stats = scan(directory)
         return Inspection(directory, stats.files.toLong(), stats.bytes)
@@ -42,7 +42,7 @@ internal class OwnedSourceTree(
         val stats = scan(directory)
         if (stats.files.toLong() != fileCount || stats.bytes != totalBytes) {
             throw SourceRegistry.Failure(
-                ErrorCode.SOURCE_DIRECTORY_MISSING,
+                ErrorCode.ERROR_CODE_INVALID_SOURCE,
                 "Source changed before ownership transfer.",
             )
         }
@@ -56,7 +56,7 @@ internal class OwnedSourceTree(
             )
         } catch (_: IOException) {
             throw SourceRegistry.Failure(
-                ErrorCode.SOURCE_CONTAINS_REPARSE_POINT,
+                ErrorCode.ERROR_CODE_SOURCE_CONTAINS_REPARSE_POINT,
                 "Source changed before ownership transfer.",
             )
         }
@@ -77,7 +77,7 @@ internal class OwnedSourceTree(
     private fun scan(directory: Path): FileStats {
         if (!Files.isDirectory(directory, NOFOLLOW_LINKS) || Files.isSymbolicLink(directory)) {
             throw SourceRegistry.Failure(
-                ErrorCode.SOURCE_DIRECTORY_MISSING,
+                ErrorCode.ERROR_CODE_INVALID_SOURCE,
                 "Prepared source directory is missing.",
             )
         }
@@ -106,12 +106,12 @@ internal class OwnedSourceTree(
             )
         } catch (_: IOException) {
             throw SourceRegistry.Failure(
-                ErrorCode.SOURCE_CONTAINS_REPARSE_POINT,
+                ErrorCode.ERROR_CODE_SOURCE_CONTAINS_REPARSE_POINT,
                 "Prepared source is not an ordinary tree.",
             )
         }
         if (stats.files == 0) {
-            throw SourceRegistry.Failure(ErrorCode.SOURCE_DIRECTORY_MISSING, "Prepared source is empty.")
+            throw SourceRegistry.Failure(ErrorCode.ERROR_CODE_INVALID_SOURCE, "Prepared source is empty.")
         }
         return stats
     }
@@ -121,7 +121,7 @@ internal class OwnedSourceTree(
         stats.sha256(directory)
     } catch (_: IOException) {
         throw SourceRegistry.Failure(
-            ErrorCode.SOURCE_CONTAINS_REPARSE_POINT,
+            ErrorCode.ERROR_CODE_SOURCE_CONTAINS_REPARSE_POINT,
             "Prepared source changed while its snapshot hash was computed.",
         )
     }
@@ -137,7 +137,7 @@ internal class OwnedSourceTree(
             }
             if (!checkNotNull(pendingRootIdentity).matchesDirectory(pendingRoot)) {
                 throw SourceRegistry.Failure(
-                    ErrorCode.SOURCE_CONTAINS_REPARSE_POINT,
+                    ErrorCode.ERROR_CODE_SOURCE_CONTAINS_REPARSE_POINT,
                     "Pending source root identity changed.",
                 )
             }
@@ -147,9 +147,9 @@ internal class OwnedSourceTree(
             }
         } catch (_: IOException) {
             val code = if (Files.exists(pendingRoot, NOFOLLOW_LINKS)) {
-                ErrorCode.SOURCE_CONTAINS_REPARSE_POINT
+                ErrorCode.ERROR_CODE_SOURCE_CONTAINS_REPARSE_POINT
             } else {
-                ErrorCode.SOURCE_DIRECTORY_MISSING
+                ErrorCode.ERROR_CODE_INVALID_SOURCE
             }
             throw SourceRegistry.Failure(code, "Pending source root is missing or unsafe.")
         }

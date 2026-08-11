@@ -1,7 +1,7 @@
 package dev.vibris.core;
 
-import dev.vibris.protocol.v1.ErrorCode;
-import dev.vibris.protocol.v1.PreparedSourceRef;
+import dev.vibris.protocol.v2.ErrorCode;
+import dev.vibris.protocol.v2.PreparedSourceRef;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -38,7 +38,7 @@ class SourceRegistrySecurityTest {
         SourceRegistry.Failure failure = assertThrows(
             SourceRegistry.Failure.class, () -> registry.validate(List.of(first, second)));
 
-        assertEquals(ErrorCode.SOURCE_ACTIVATION_FAILED, failure.code);
+        assertEquals(ErrorCode.ERROR_CODE_SOURCE_ACTIVATION_FAILED, failure.code);
     }
 
     @Test
@@ -51,14 +51,14 @@ class SourceRegistrySecurityTest {
         Path pending = Files.createSymbolicLink(temp.resolve("pending"), outside);
         SourceRegistry registry = new SourceRegistry(pending, new CoreProbe());
         PreparedSourceRef reference = PreparedSourceRef.newBuilder()
-            .setUuid(uuid)
+            .setSourceUuid(uuid)
             .setFileCount(1)
             .setTotalBytes(content.length)
             .build();
 
         SourceRegistry.Failure failure = assertThrows(
             SourceRegistry.Failure.class, () -> registry.validate(List.of(reference)));
-        assertEquals(ErrorCode.SOURCE_CONTAINS_REPARSE_POINT, failure.code);
+        assertEquals(ErrorCode.ERROR_CODE_SOURCE_CONTAINS_REPARSE_POINT, failure.code);
     }
 
     @Test
@@ -69,7 +69,7 @@ class SourceRegistrySecurityTest {
         byte[] content = "ordinary".getBytes(StandardCharsets.UTF_8);
         Files.write(source.resolve("main.glsl"), content);
         PreparedSourceRef reference = PreparedSourceRef.newBuilder()
-            .setUuid(uuid)
+            .setSourceUuid(uuid)
             .setFileCount(1)
             .setTotalBytes(content.length)
             .build();
@@ -80,7 +80,7 @@ class SourceRegistrySecurityTest {
 
         SourceRegistry.Failure failure = assertThrows(
             SourceRegistry.Failure.class, () -> registry.reserve(second));
-        assertEquals(ErrorCode.INVALID_SOURCE_UUID, failure.code);
+        assertEquals(ErrorCode.ERROR_CODE_INVALID_SOURCE, failure.code);
         registry.reject(reservation);
     }
 
@@ -90,7 +90,7 @@ class SourceRegistrySecurityTest {
         PreparedSourceRef reference = source(pending);
         SourceRegistry registry = new SourceRegistry(pending, new CoreProbe());
         List<SourceRegistry.Candidate> candidates = registry.validate(List.of(reference));
-        Files.writeString(pending.resolve(reference.getUuid()).resolve("main.glsl"), "x".repeat(36));
+        Files.writeString(pending.resolve(reference.getSourceUuid()).resolve("main.glsl"), "x".repeat(36));
 
         SourceRegistry.Lease lease = registry.reserve(candidates).getFirst();
 
@@ -105,7 +105,7 @@ class SourceRegistrySecurityTest {
         byte[] content = "reserved".getBytes(StandardCharsets.UTF_8);
         Files.write(source.resolve("main.glsl"), content);
         PreparedSourceRef reference = PreparedSourceRef.newBuilder()
-            .setUuid(uuid)
+            .setSourceUuid(uuid)
             .setFileCount(1)
             .setTotalBytes(content.length)
             .build();
@@ -160,7 +160,7 @@ class SourceRegistrySecurityTest {
 
         SourceRegistry.Failure failure = assertThrows(SourceRegistry.Failure.class, registry::requireActiveOwned);
 
-        assertEquals(ErrorCode.SOURCE_ACTIVATION_FAILED, failure.code);
+        assertEquals(ErrorCode.ERROR_CODE_SOURCE_ACTIVATION_FAILED, failure.code);
     }
 
     private static PreparedSourceRef source(Path pending) throws Exception {
@@ -168,7 +168,7 @@ class SourceRegistrySecurityTest {
         Path source = Files.createDirectory(pending.resolve(uuid));
         Path file = Files.writeString(source.resolve("main.glsl"), uuid);
         return PreparedSourceRef.newBuilder()
-            .setUuid(uuid)
+            .setSourceUuid(uuid)
             .setFileCount(1)
             .setTotalBytes(Files.size(file))
             .build();

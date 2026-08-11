@@ -2,7 +2,7 @@ package dev.vibris.core
 
 import dev.vibris.api.SceneContext
 import java.time.Duration
-import dev.vibris.protocol.v1.SceneContext as ProtocolSceneContext
+import dev.vibris.protocol.v2.SceneContext as ProtocolSceneContext
 
 internal object RuntimeJobContext {
     @JvmStatic
@@ -45,7 +45,7 @@ internal object RuntimeJobContext {
             .setFov(source.fov)
             .setSettingsPresetId(source.settingsPresetId)
             .setResolution(
-                dev.vibris.protocol.v1.Resolution.newBuilder()
+                dev.vibris.protocol.v2.Resolution.newBuilder()
                     .setWidth(source.resolution.width)
                     .setHeight(source.resolution.height),
             )

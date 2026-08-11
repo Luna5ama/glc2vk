@@ -144,9 +144,9 @@ class ArtifactManagerTest {
         var artifact = manager.writeShaderLog(WORKSPACE_ID, "request", List.of(
             new ReloadResult.Diagnostic(ReloadResult.Severity.ERROR, "composite.fsh", 17, "compile failed")));
 
-        assertEquals("shader.log", artifact.getFileName());
-        assertTrue(Files.readString(Path.of(artifact.getPath())).contains("compile failed"));
-        assertTrue(Files.isRegularFile(Path.of(artifact.getPath()).resolveSibling("manifest.json")));
+        assertTrue(artifact.getRelativePath().endsWith("shader.log"));
+        assertTrue(Files.readString(Path.of(artifact.getRelativePath())).contains("compile failed"));
+        assertTrue(Files.isRegularFile(Path.of(artifact.getRelativePath()).resolveSibling("manifest.json")));
     }
 
     private static boolean hasTemporaryDirectory(Path root) throws Exception {

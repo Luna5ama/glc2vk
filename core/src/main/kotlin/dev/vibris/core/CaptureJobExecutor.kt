@@ -5,9 +5,9 @@ import dev.vibris.api.CaptureResourceNotFoundException
 import dev.vibris.api.CaptureResult
 import dev.vibris.api.ReloadResult
 import dev.vibris.api.ResourceCatalog
-import dev.vibris.protocol.v1.AbComparisonResult
-import dev.vibris.protocol.v1.ErrorCode
-import dev.vibris.protocol.v1.JobResult
+import dev.vibris.protocol.v2.CompareReceipt
+import dev.vibris.protocol.v2.ErrorCode
+import dev.vibris.protocol.v2.JobResult
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 
@@ -50,7 +50,7 @@ internal class CaptureJobExecutor(
         diagnostics: List<ReloadResult.Diagnostic>,
     ): Prepared {
         val manager = artifacts
-            ?: throw RuntimeJobExecutor.Failure(ErrorCode.CAPTURE_FAILED, "Artifact storage is unavailable.")
+            ?: throw RuntimeJobExecutor.Failure(ErrorCode.ERROR_CODE_CAPTURE_FAILED, "Artifact storage is unavailable.")
         val shaderLog = shaderLog(diagnostics)
         var transaction: ArtifactManager.JobTransaction? = null
         try {
@@ -75,7 +75,7 @@ internal class CaptureJobExecutor(
         job: CoreJob,
         prepared: Prepared,
         captured: List<CaptureResult>,
-        comparison: AbComparisonResult?,
+        comparison: CompareReceipt?,
     ): JobResult = commit(job, prepared, prepared.plans, captured, comparison)
 
     @Throws(RuntimeJobExecutor.Failure::class)
@@ -84,7 +84,7 @@ internal class CaptureJobExecutor(
         prepared: Prepared,
         plans: List<CapturePlan>,
         captured: List<CaptureResult>,
-        comparison: AbComparisonResult?,
+        comparison: CompareReceipt?,
         additionalArtifacts: List<GeneratedArtifact> = emptyList(),
     ): JobResult {
         try {
@@ -107,7 +107,7 @@ internal class CaptureJobExecutor(
     fun compare(
         prepared: Prepared,
         comparison: CaptureProgramBuilder.Comparison,
-    ): AbComparisonResult {
+    ): CompareReceipt {
         try {
             return comparisons.compare(
                 prepared.transaction,
@@ -179,17 +179,17 @@ internal class CaptureJobExecutor(
                     is ArtifactManager.JobTooLargeException,
                     is ArithmeticException,
                     -> return RuntimeJobExecutor.Failure(
-                        ErrorCode.ARTIFACT_JOB_TOO_LARGE,
+                        ErrorCode.ERROR_CODE_ARTIFACT_TOO_LARGE,
                         "Artifact job is too large.",
                     )
 
                     is ArtifactManager.QuotaExceededException -> return RuntimeJobExecutor.Failure(
-                        ErrorCode.ARTIFACT_QUOTA_EXCEEDED,
+                        ErrorCode.ERROR_CODE_ARTIFACT_QUOTA_EXCEEDED,
                         cause.message,
                     )
 
                     is CaptureResourceNotFoundException -> return RuntimeJobExecutor.Failure(
-                        ErrorCode.CAPTURE_RESOURCE_NOT_FOUND,
+                        ErrorCode.ERROR_CODE_RESOURCE_NOT_FOUND,
                         cause.message,
                     )
 
@@ -197,7 +197,7 @@ internal class CaptureJobExecutor(
                 }
                 cause = cause.cause
             }
-            return RuntimeJobExecutor.Failure(ErrorCode.CAPTURE_FAILED, "Capture artifact creation failed.")
+            return RuntimeJobExecutor.Failure(ErrorCode.ERROR_CODE_CAPTURE_FAILED, "Capture artifact creation failed.")
         }
 
         private fun closeAfterFailure(transaction: ArtifactManager.JobTransaction?, original: Exception) {

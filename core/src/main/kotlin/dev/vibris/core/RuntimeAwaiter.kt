@@ -1,9 +1,9 @@
 package dev.vibris.core
 
 import dev.vibris.api.CaptureResult
-import dev.vibris.protocol.v1.ErrorCode
-import dev.vibris.protocol.v1.JobResult
-import dev.vibris.protocol.v1.JobTimings
+import dev.vibris.protocol.v2.ErrorCode
+import dev.vibris.protocol.v2.JobResult
+import dev.vibris.protocol.v2.JobTimings
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
@@ -15,11 +15,11 @@ import java.util.concurrent.TimeoutException
 internal class RuntimeAwaiter(private val probe: CoreProbe) {
     @Throws(RuntimeJobExecutor.Failure::class)
     fun capture(stage: CompletionStage<CaptureResult>, job: CoreJob, deadline: Long): CaptureResult =
-        await(stage, job, deadline, ErrorCode.CAPTURE_FAILED)
+        await(stage, job, deadline, ErrorCode.ERROR_CODE_CAPTURE_FAILED)
 
     @Throws(RuntimeJobExecutor.Failure::class)
     fun <T> await(stage: CompletionStage<T>, job: CoreJob, deadline: Long): T =
-        await(stage, job, deadline, ErrorCode.INTERNAL_ERROR)
+        await(stage, job, deadline, ErrorCode.ERROR_CODE_INTERNAL)
 
     fun withTimings(job: CoreJob, result: JobResult, startedAtUnixMs: Long, startedNanos: Long): JobResult {
         val completedAtUnixMs = System.currentTimeMillis()
@@ -28,6 +28,7 @@ internal class RuntimeAwaiter(private val probe: CoreProbe) {
         return result.toBuilder()
             .setTimings(
                 JobTimings.newBuilder()
+                    .setAcceptedAtUnixMs(job.acceptedAtUnixMs)
                     .setStartedAtUnixMs(startedAtUnixMs)
                     .setCompletedAtUnixMs(completedAtUnixMs)
                     .setQueueMs(queueMs)
@@ -58,14 +59,14 @@ internal class RuntimeAwaiter(private val probe: CoreProbe) {
             job.cancellation.cancel()
             awaitCancellation(future)
             probe.event(job.requestId, "SAFE_POINT_TIMEOUT")
-            throw RuntimeJobExecutor.Failure(ErrorCode.EXECUTION_TIMEOUT, "Job execution timed out.")
+            throw RuntimeJobExecutor.Failure(ErrorCode.ERROR_CODE_EXECUTION_TIMEOUT, "Job execution timed out.")
         } catch (_: InterruptedException) {
             job.cancellation.cancel()
             awaitCancellation(future)
             Thread.currentThread().interrupt()
-            throw RuntimeJobExecutor.Failure(ErrorCode.CANCELLED, "Job execution was interrupted.")
+            throw RuntimeJobExecutor.Failure(ErrorCode.ERROR_CODE_CANCELLED, "Job execution was interrupted.")
         } catch (_: CancellationException) {
-            throw RuntimeJobExecutor.Failure(ErrorCode.CANCELLED, "Job execution was cancelled.")
+            throw RuntimeJobExecutor.Failure(ErrorCode.ERROR_CODE_CANCELLED, "Job execution was cancelled.")
         } catch (exception: ExecutionException) {
             throw operationFailure(exception.cause, job, operationFailureCode)
         } catch (exception: CompletionException) {
@@ -79,9 +80,9 @@ internal class RuntimeAwaiter(private val probe: CoreProbe) {
         code: ErrorCode,
     ): RuntimeJobExecutor.Failure {
         if (cause is CancellationException || job.cancellation.token().isCancellationRequested()) {
-            return RuntimeJobExecutor.Failure(ErrorCode.CANCELLED, "Job execution was cancelled.")
+            return RuntimeJobExecutor.Failure(ErrorCode.ERROR_CODE_CANCELLED, "Job execution was cancelled.")
         }
-        return if (code == ErrorCode.CAPTURE_FAILED) {
+        return if (code == ErrorCode.ERROR_CODE_CAPTURE_FAILED) {
             CaptureJobExecutor.failure(cause)
         } else {
             RuntimeJobExecutor.Failure(code, "Runtime adapter operation failed.")

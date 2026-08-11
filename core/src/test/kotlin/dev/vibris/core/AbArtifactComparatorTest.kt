@@ -2,7 +2,7 @@ package dev.vibris.core
 
 import dev.vibris.api.CapturePlan
 import dev.vibris.api.ResourceCatalog
-import dev.vibris.protocol.v1.VisualThresholds
+import dev.vibris.protocol.v2.VisualThresholds
 import java.awt.Color
 import java.awt.image.BufferedImage
 import java.nio.file.Files
@@ -35,16 +35,16 @@ class AbArtifactComparatorTest {
 
         val result = compare("failed-gate", baseline, candidate, thresholds)
 
-        assertEquals(6, result.sampleCount)
-        assertEquals(2, result.pixelCount)
-        assertEquals(1.0 / 6.0, result.meanAbsoluteError, 1e-9)
-        assertEquals(kotlin.math.sqrt(1.0 / 6.0), result.rootMeanSquareError, 1e-9)
-        assertEquals(1.0, result.p95AbsoluteError, 1e-9)
-        assertEquals(1.0, result.maxAbsoluteError, 1e-9)
-        assertEquals(0.5, result.thresholdPixelRatio, 1e-9)
-        assertTrue(result.hasSsim())
-        assertTrue(result.ssim < 0.99)
-        assertEquals("failed", result.verdict)
+        assertEquals(6, result.metrics.sampleCount)
+        assertEquals(2, result.metrics.pixelCount)
+        assertEquals(1.0 / 6.0, result.metrics.meanAbsoluteError, 1e-9)
+        assertEquals(kotlin.math.sqrt(1.0 / 6.0), result.metrics.rootMeanSquareError, 1e-9)
+        assertEquals(1.0, result.metrics.p95AbsoluteError, 1e-9)
+        assertEquals(1.0, result.metrics.maxAbsoluteError, 1e-9)
+        assertEquals(0.5, result.metrics.thresholdPixelRatio, 1e-9)
+        assertTrue(result.metrics.hasSsim())
+        assertTrue(result.metrics.ssim < 0.99)
+        assertTrue(!result.passed)
         assertEquals(
             listOf(
                 "MAE_EXCEEDED",
@@ -80,10 +80,9 @@ class AbArtifactComparatorTest {
         val result = compare("passed-gate", image, image, thresholds)
 
         assertTrue(result.passed)
-        assertEquals("passed", result.verdict)
-        assertEquals(0.0, result.p95AbsoluteError)
-        assertEquals(0.0, result.thresholdPixelRatio)
-        assertEquals(1.0, result.ssim, 1e-9)
+        assertEquals(0.0, result.metrics.p95AbsoluteError)
+        assertEquals(0.0, result.metrics.thresholdPixelRatio)
+        assertEquals(1.0, result.metrics.ssim, 1e-9)
         assertTrue(result.violationsList.isEmpty())
     }
 
@@ -97,9 +96,8 @@ class AbArtifactComparatorTest {
         val result = compare("report-only", baseline, candidate, null)
 
         assertTrue(result.passed)
-        assertEquals("not_evaluated", result.verdict)
-        assertEquals(1.0, result.maxAbsoluteError)
-        assertTrue(!result.hasThresholds())
+        assertEquals(1.0, result.metrics.maxAbsoluteError)
+        assertTrue(result.violationsList.isEmpty())
     }
 
     private fun compare(

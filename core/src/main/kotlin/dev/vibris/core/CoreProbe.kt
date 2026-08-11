@@ -1,6 +1,6 @@
 package dev.vibris.core
 
-import dev.vibris.protocol.v1.SceneContext
+import dev.vibris.protocol.v2.SceneContext
 import java.util.ArrayList
 import java.util.LinkedHashMap
 

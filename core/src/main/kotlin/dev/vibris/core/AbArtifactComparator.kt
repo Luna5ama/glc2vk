@@ -1,8 +1,9 @@
 package dev.vibris.core
 
 import dev.vibris.api.CapturePlan
-import dev.vibris.protocol.v1.AbComparisonResult
-import dev.vibris.protocol.v1.VisualThresholds
+import dev.vibris.protocol.v2.CompareReceipt
+import dev.vibris.protocol.v2.VisualMetrics
+import dev.vibris.protocol.v2.VisualThresholds
 import java.awt.image.BufferedImage
 import java.io.IOException
 import java.nio.charset.StandardCharsets
@@ -21,7 +22,7 @@ internal class AbArtifactComparator {
         baselineLabel: String,
         candidateLabel: String,
         thresholds: VisualThresholds?,
-    ): AbComparisonResult {
+    ): CompareReceipt {
         val pairs = comparisonPairs(baseline.targets, candidate.targets)
         val heatmaps = heatmapFiles(baseline)
         val samples = ArrayList<Sample>()
@@ -71,9 +72,7 @@ internal class AbArtifactComparator {
             )
             output.write(json.toByteArray(StandardCharsets.UTF_8))
         }
-        return AbComparisonResult.newBuilder()
-            .setBaselineLabel(baselineLabel)
-            .setCandidateLabel(candidateLabel)
+        val metrics = VisualMetrics.newBuilder()
             .setMeanAbsoluteError(mean)
             .setRootMeanSquareError(rms)
             .setMaxAbsoluteError(maximum)
@@ -81,14 +80,11 @@ internal class AbArtifactComparator {
             .setThresholdPixelRatio(thresholdPixelRatio)
             .setSampleCount(count)
             .setPixelCount(pixelCount)
-            .setPixelErrorThreshold(pixelThreshold)
+            .apply { ssim?.let { setSsim(it) } }
+        return CompareReceipt.newBuilder()
+            .setMetrics(metrics)
             .setPassed(passed)
-            .setVerdict(verdict)
             .addAllViolations(violations)
-            .apply {
-                ssim?.let { setSsim(it) }
-                thresholds?.let { setThresholds(it) }
-            }
             .build()
     }
 

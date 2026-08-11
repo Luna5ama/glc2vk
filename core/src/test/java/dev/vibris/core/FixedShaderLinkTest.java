@@ -161,8 +161,8 @@ class FixedShaderLinkTest {
         byte[] content = marker.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         Path directory = Files.createDirectory(pending.resolve(uuid));
         Files.write(directory.resolve("main.glsl"), content);
-        var reference = dev.vibris.protocol.v1.PreparedSourceRef.newBuilder()
-            .setUuid(uuid)
+        var reference = dev.vibris.protocol.v2.PreparedSourceRef.newBuilder()
+            .setSourceUuid(uuid)
             .setFileCount(1)
             .setTotalBytes(content.length)
             .build();

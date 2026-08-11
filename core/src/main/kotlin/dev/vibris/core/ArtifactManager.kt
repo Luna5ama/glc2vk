@@ -1,9 +1,10 @@
 package dev.vibris.core
 
 import dev.vibris.api.ReloadResult
-import dev.vibris.protocol.v1.ArtifactFormat
-import dev.vibris.protocol.v1.ArtifactKind
-import dev.vibris.protocol.v1.ArtifactMetadata
+import dev.vibris.protocol.v2.ArtifactFormat
+import dev.vibris.protocol.v2.ArtifactKind
+import dev.vibris.protocol.v2.ArtifactMetadata
+import dev.vibris.protocol.v2.ArtifactRole
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -128,12 +129,15 @@ internal class ArtifactManager internal constructor(
         val log = committed.artifacts()["shader.log"]!!
         return ArtifactMetadata.newBuilder()
             .setArtifactId(segment("artifact", workspaceId + '\u0000' + requestId + "\u0000shader.log"))
-            .setFileName("shader.log")
+            .setJobId(requestId)
+            .setRequestId(requestId)
+            .setRelativePath(log.toString())
             .setKind(ArtifactKind.ARTIFACT_KIND_SHADER_COMPILE_LOG)
             .setFormat(ArtifactFormat.ARTIFACT_FORMAT_TEXT)
+            .setRole(ArtifactRole.ARTIFACT_ROLE_DIAGNOSTIC)
             .setMediaType("text/plain; charset=utf-8")
             .setByteSize(bytes.size.toLong())
-            .setPath(log.toString())
+            .setCreatedAtUnixMs(clock.millis())
             .build()
     }
 

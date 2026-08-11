@@ -2,14 +2,14 @@ package dev.vibris.core;
 
 import dev.vibris.api.SceneContext;
 import dev.vibris.api.ScenePreset;
-import dev.vibris.protocol.v1.ErrorCode;
-import dev.vibris.protocol.v1.GetStatusRequest;
-import dev.vibris.protocol.v1.GetStatusResponse;
-import dev.vibris.protocol.v1.ListPresetsRequest;
-import dev.vibris.protocol.v1.ListPresetsResponse;
-import dev.vibris.protocol.v1.ValidateContextRequest;
-import dev.vibris.protocol.v1.ValidateContextResponse;
-import dev.vibris.protocol.v1.VibrisControlGrpc;
+import dev.vibris.protocol.v2.ErrorCode;
+import dev.vibris.protocol.v2.GetStatusRequest;
+import dev.vibris.protocol.v2.GetStatusResponse;
+import dev.vibris.protocol.v2.ListPresetsRequest;
+import dev.vibris.protocol.v2.ListPresetsResponse;
+import dev.vibris.protocol.v2.ValidateContextRequest;
+import dev.vibris.protocol.v2.ValidateContextResponse;
+import dev.vibris.protocol.v2.VibrisControlGrpc;
 import io.grpc.BindableService;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
@@ -84,9 +84,10 @@ class VibrisBootstrapTest {
 
         assertFalse(bootstrap.ready());
         GetStatusResponse status = status(captured.get());
-        assertFalse(status.getReady());
-        assertEquals(ErrorCode.SERVER_NOT_READY, status.getErrors(0).getCode());
-        assertTrue(status.getErrors(0).getMessage().contains("server.json"));
+        assertFalse(status.getStatus().getCanStartJob());
+        assertEquals(ErrorCode.ERROR_CODE_SERVER_NOT_AVAILABLE,
+            status.getStatus().getLastError().getCode());
+        assertTrue(status.getStatus().getLastError().getMessage().contains("server.json"));
         bootstrap.close();
         assertEquals(1, runtime.closeCount);
     }
@@ -146,9 +147,10 @@ class VibrisBootstrapTest {
             GetStatusResponse response = VibrisControlGrpc.newBlockingStub(channel)
                 .withDeadlineAfter(5, TimeUnit.SECONDS)
                 .getStatus(GetStatusRequest.getDefaultInstance());
-            assertFalse(response.getReady());
-            assertEquals(ErrorCode.SERVER_NOT_READY, response.getErrors(0).getCode());
-            assertTrue(response.getErrors(0).getMessage().contains("pending_shaders_root"));
+            assertFalse(response.getStatus().getCanStartJob());
+            assertEquals(ErrorCode.ERROR_CODE_SERVER_NOT_AVAILABLE,
+                response.getStatus().getLastError().getCode());
+            assertTrue(response.getStatus().getLastError().getMessage().contains("pending_shaders_root"));
         } finally {
             channel.shutdownNow().awaitTermination(5, TimeUnit.SECONDS);
             bootstrap.close();
@@ -229,7 +231,7 @@ class VibrisBootstrapTest {
             captured.set(service);
             return new TestListener();
         });
-        dev.vibris.protocol.v1.SceneContext context = dev.vibris.protocol.v1.SceneContext.newBuilder()
+        dev.vibris.protocol.v2.SceneContext context = dev.vibris.protocol.v2.SceneContext.newBuilder()
             .setSaveId("shader-test-world")
             .setDimensionId("minecraft:overworld")
             .setTimePresetId("rooftop")
@@ -363,7 +365,7 @@ class VibrisBootstrapTest {
 
         VibrisBootstrap.Failure failure = assertThrows(VibrisBootstrap.Failure.class, bootstrap::close);
 
-        assertEquals(ErrorCode.INTERNAL_ERROR, failure.code());
+        assertEquals(ErrorCode.ERROR_CODE_INTERNAL, failure.code());
         assertEquals(1, listener.awaitCount);
         assertDirectoryEmpty(pending);
     }
@@ -426,7 +428,7 @@ class VibrisBootstrapTest {
 
     private static ValidateContextResponse validate(
         BindableService service,
-        dev.vibris.protocol.v1.SceneContext context
+        dev.vibris.protocol.v2.SceneContext context
     ) {
         AtomicReference<ValidateContextResponse> response = new AtomicReference<>();
         AtomicReference<Throwable> failure = new AtomicReference<>();

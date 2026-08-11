@@ -1,7 +1,7 @@
 package dev.vibris.core
 
 import dev.vibris.api.ReloadResult
-import dev.vibris.protocol.v1.ErrorCode
+import dev.vibris.protocol.v2.ErrorCode
 import java.io.IOException
 
 internal object ShaderReloadFailure {
@@ -18,14 +18,14 @@ internal object ShaderReloadFailure {
         return try {
             val artifact = logs.writeShaderLog(job.workspaceId, job.requestId, reload.diagnostics)
             RuntimeJobExecutor.Failure(
-                ErrorCode.SHADER_COMPILE_FAILED,
+                ErrorCode.ERROR_CODE_SHADER_COMPILE_FAILED,
                 message,
                 java.util.List.of(artifact),
                 reload.diagnostics,
             )
         } catch (_: IOException) {
             RuntimeJobExecutor.Failure(
-                ErrorCode.SHADER_COMPILE_FAILED,
+                ErrorCode.ERROR_CODE_SHADER_COMPILE_FAILED,
                 message,
                 java.util.List.of(),
                 reload.diagnostics,

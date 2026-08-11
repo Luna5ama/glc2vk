@@ -2,8 +2,8 @@ package dev.vibris.core
 
 import dev.vibris.api.CapturePlan
 import dev.vibris.api.ResourceCatalog
-import dev.vibris.protocol.v1.Action
-import dev.vibris.protocol.v1.ErrorCode
+import dev.vibris.protocol.v2.Action
+import dev.vibris.protocol.v2.ErrorCode
 import java.util.Locale
 
 internal object CapturePlanBuilder {
@@ -26,16 +26,17 @@ internal object CapturePlanBuilder {
                     ),
                 )
             }
-            action.hasDumpTextureV2() -> {
-                val dump = action.dumpTextureV2
+            action.hasDumpTexture() -> {
+                val dump = action.dumpTexture
+                val selector = dump.resource
                 targets.add(
                     target(
                         ResourceCatalog.ResourceKind.TEXTURE,
-                        dump.logicalName,
+                        selector.logicalName,
                         textureFormat(dump.format),
                         dump.artifactName,
-                        0,
-                        0,
+                        selector.mipLevel,
+                        selector.layer,
                     ),
                 )
             }
@@ -130,14 +131,14 @@ internal object CapturePlanBuilder {
             for (target in plan.targets) {
                 if (!supported(target)) {
                     throw RuntimeJobExecutor.Failure(
-                        ErrorCode.CAPTURE_FAILED,
+                        ErrorCode.ERROR_CODE_CAPTURE_FAILED,
                         "Capture resource kind and format are incompatible.",
                     )
                 }
                 for (output in target.outputs) {
                     if (!names.add(canonical(output.fileName))) {
                         throw RuntimeJobExecutor.Failure(
-                            ErrorCode.CAPTURE_FAILED,
+                            ErrorCode.ERROR_CODE_CAPTURE_FAILED,
                             "Capture artifact names are repeated.",
                         )
                     }
@@ -159,7 +160,7 @@ internal object CapturePlanBuilder {
             return bytes
         } catch (_: ArithmeticException) {
             throw RuntimeJobExecutor.Failure(
-                ErrorCode.ARTIFACT_JOB_TOO_LARGE,
+                ErrorCode.ERROR_CODE_ARTIFACT_TOO_LARGE,
                 "Artifact estimate is too large.",
             )
         }
@@ -167,7 +168,7 @@ internal object CapturePlanBuilder {
 
     private fun missing(name: String): RuntimeJobExecutor.Failure =
         RuntimeJobExecutor.Failure(
-            ErrorCode.CAPTURE_RESOURCE_NOT_FOUND,
+            ErrorCode.ERROR_CODE_RESOURCE_NOT_FOUND,
             "Capture resource was not found: $name",
         )
 
@@ -187,7 +188,7 @@ internal object CapturePlanBuilder {
             else -> null
         }
         if (reason != null) throw RuntimeJobExecutor.Failure(
-            ErrorCode.CAPTURE_FAILED,
+            ErrorCode.ERROR_CODE_CAPTURE_FAILED,
             "PNG export does not support ${resource.internalFormat} ($reason); use format=bin.",
         )
     }
@@ -230,23 +231,23 @@ internal object CapturePlanBuilder {
         }
 
     fun format(
-        format: dev.vibris.protocol.v1.ArtifactFormat,
+        format: dev.vibris.protocol.v2.ArtifactFormat,
         fallback: CapturePlan.ArtifactFormat,
     ): CapturePlan.ArtifactFormat =
         when (format) {
-            dev.vibris.protocol.v1.ArtifactFormat.ARTIFACT_FORMAT_PNG -> CapturePlan.ArtifactFormat.PNG
-            dev.vibris.protocol.v1.ArtifactFormat.ARTIFACT_FORMAT_EXR -> CapturePlan.ArtifactFormat.EXR
-            dev.vibris.protocol.v1.ArtifactFormat.ARTIFACT_FORMAT_BIN -> CapturePlan.ArtifactFormat.BIN
-            dev.vibris.protocol.v1.ArtifactFormat.ARTIFACT_FORMAT_TEXT -> CapturePlan.ArtifactFormat.TEXT
+            dev.vibris.protocol.v2.ArtifactFormat.ARTIFACT_FORMAT_PNG -> CapturePlan.ArtifactFormat.PNG
+            dev.vibris.protocol.v2.ArtifactFormat.ARTIFACT_FORMAT_EXR -> CapturePlan.ArtifactFormat.EXR
+            dev.vibris.protocol.v2.ArtifactFormat.ARTIFACT_FORMAT_BIN -> CapturePlan.ArtifactFormat.BIN
+            dev.vibris.protocol.v2.ArtifactFormat.ARTIFACT_FORMAT_TEXT -> CapturePlan.ArtifactFormat.TEXT
             else -> fallback
         }
 
-    private fun textureFormat(format: dev.vibris.protocol.v1.ArtifactFormat): CapturePlan.ArtifactFormat =
+    private fun textureFormat(format: dev.vibris.protocol.v2.ArtifactFormat): CapturePlan.ArtifactFormat =
         when (format) {
-            dev.vibris.protocol.v1.ArtifactFormat.ARTIFACT_FORMAT_PNG -> CapturePlan.ArtifactFormat.PNG
-            dev.vibris.protocol.v1.ArtifactFormat.ARTIFACT_FORMAT_BIN -> CapturePlan.ArtifactFormat.BIN
+            dev.vibris.protocol.v2.ArtifactFormat.ARTIFACT_FORMAT_PNG -> CapturePlan.ArtifactFormat.PNG
+            dev.vibris.protocol.v2.ArtifactFormat.ARTIFACT_FORMAT_BIN -> CapturePlan.ArtifactFormat.BIN
             else -> throw RuntimeJobExecutor.Failure(
-                ErrorCode.CAPTURE_FAILED,
+                ErrorCode.ERROR_CODE_CAPTURE_FAILED,
                 "dump_texture format must be png or bin.",
             )
         }

@@ -2,8 +2,8 @@ package dev.vibris.core
 
 import dev.vibris.core.source.SourceRecord
 import dev.vibris.core.source.SourceState
-import dev.vibris.protocol.v1.ErrorCode
-import dev.vibris.protocol.v1.PreparedSourceRef
+import dev.vibris.protocol.v2.ErrorCode
+import dev.vibris.protocol.v2.PreparedSourceRef
 import java.nio.file.Path
 import java.util.ArrayList
 import java.util.HashMap
@@ -27,22 +27,22 @@ internal class SourceRegistry @JvmOverloads constructor(
     fun validate(references: List<PreparedSourceRef>, expectedCount: Int): List<Candidate> {
         if (references.isEmpty()) {
             if (expectedCount == 0) return emptyList()
-            throw Failure(ErrorCode.SOURCE_DIRECTORY_MISSING, "A source is required.")
+            throw Failure(ErrorCode.ERROR_CODE_INVALID_SOURCE, "A source is required.")
         }
         if (references.size != expectedCount) {
-            throw Failure(ErrorCode.SOURCE_ACTIVATION_FAILED, "Prepared source count does not match the job.")
+            throw Failure(ErrorCode.ERROR_CODE_SOURCE_ACTIVATION_FAILED, "Prepared source count does not match the job.")
         }
         val unique = HashSet<String>()
         val candidates = ArrayList<Candidate>(references.size)
         for (reference in references) {
-            val uuid = requireUuid(reference.uuid)
+            val uuid = requireUuid(reference.sourceUuid)
             if (!unique.add(uuid)) {
-                throw Failure(ErrorCode.INVALID_SOURCE_UUID, "Source UUID is repeated.")
+                throw Failure(ErrorCode.ERROR_CODE_INVALID_SOURCE, "Source UUID is repeated.")
             }
             val inspection = trees.inspect(uuid)
             if (inspection.fileCount != reference.fileCount || inspection.totalBytes != reference.totalBytes) {
                 throw Failure(
-                    ErrorCode.SOURCE_DIRECTORY_MISSING,
+                    ErrorCode.ERROR_CODE_INVALID_SOURCE,
                     "Source metadata does not match its directory.",
                 )
             }
@@ -61,12 +61,12 @@ internal class SourceRegistry @JvmOverloads constructor(
     @Throws(Failure::class)
     fun reserve(candidates: List<Candidate>): List<Lease> {
         if (sources.size + candidates.size > CAPACITY) {
-            throw Failure(ErrorCode.QUEUE_FULL, "The source registry is full.")
+            throw Failure(ErrorCode.ERROR_CODE_QUEUE_FULL, "The source registry is full.")
         }
         val reservations = ArrayList<OwnedSourceTree.Reservation>(candidates.size)
         for (candidate in candidates) {
             if (sources.containsKey(candidate.uuid)) {
-                throw Failure(ErrorCode.INVALID_SOURCE_UUID, "Source UUID is already owned.")
+                throw Failure(ErrorCode.ERROR_CODE_INVALID_SOURCE, "Source UUID is already owned.")
             }
             reservations.add(trees.reserve(
                 candidate.directory,
@@ -164,7 +164,7 @@ internal class SourceRegistry @JvmOverloads constructor(
     @Throws(Failure::class)
     fun requireOwned(lease: Lease) {
         if (!sources.containsKey(lease.uuid) || !trees.stillOwned(lease.directory, lease.ownership)) {
-            throw Failure(ErrorCode.SOURCE_ACTIVATION_FAILED, "Prepared source identity changed.")
+            throw Failure(ErrorCode.ERROR_CODE_SOURCE_ACTIVATION_FAILED, "Prepared source identity changed.")
         }
     }
 
@@ -174,7 +174,7 @@ internal class SourceRegistry @JvmOverloads constructor(
         activeSource?.let { source ->
             requireOwned(source)
             if (!trees.matchesSnapshot(source.directory, source.snapshotSha256)) {
-                throw Failure(ErrorCode.SOURCE_ACTIVATION_FAILED, "Prepared source content changed.")
+                throw Failure(ErrorCode.ERROR_CODE_SOURCE_ACTIVATION_FAILED, "Prepared source content changed.")
             }
         }
     }
@@ -365,7 +365,7 @@ internal class SourceRegistry @JvmOverloads constructor(
                 }
                 return uuid.toString()
             } catch (_: IllegalArgumentException) {
-                throw Failure(ErrorCode.INVALID_SOURCE_UUID, "Source UUID is invalid.")
+                throw Failure(ErrorCode.ERROR_CODE_INVALID_SOURCE, "Source UUID is invalid.")
             }
         }
     }

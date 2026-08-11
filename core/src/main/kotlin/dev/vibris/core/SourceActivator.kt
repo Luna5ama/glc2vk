@@ -1,6 +1,6 @@
 package dev.vibris.core
 
-import dev.vibris.protocol.v1.ErrorCode
+import dev.vibris.protocol.v2.ErrorCode
 
 internal class SourceActivator(
     private val sources: SourceRegistry,
@@ -19,9 +19,9 @@ internal class SourceActivator(
             link.switchTo(next) { requireOwned(next) }
         } catch (failure: SourceRegistry.Failure) {
             sources.failActivation(next)
-            throw Failure(ErrorCode.SOURCE_ACTIVATION_FAILED, failure.message, failure)
+            throw Failure(ErrorCode.ERROR_CODE_SOURCE_ACTIVATION_FAILED, failure.message, failure)
         } catch (failure: ShaderLink.Failure) {
-            throw fail(next, ErrorCode.SYMLINK_SWITCH_FAILED, failure.message, failure.stable(), failure)
+            throw fail(next, ErrorCode.ERROR_CODE_SOURCE_ACTIVATION_FAILED, failure.message, failure.stable(), failure)
         }
         return Activation(activation)
     }
@@ -33,7 +33,7 @@ internal class SourceActivator(
             sources.requireOwned(activation.state.next)
             sources.commitActivation(activation.state)
         } catch (failure: SourceRegistry.Failure) {
-            throw Failure(ErrorCode.SOURCE_ACTIVATION_FAILED, failure.message, failure)
+            throw Failure(ErrorCode.ERROR_CODE_SOURCE_ACTIVATION_FAILED, failure.message, failure)
         }
     }
 
@@ -78,10 +78,10 @@ internal class SourceActivator(
             sources.requireActiveOwned()
         } catch (failure: SourceRegistry.Failure) {
             ready = false
-            throw Failure(ErrorCode.SOURCE_ACTIVATION_FAILED, failure.message, failure)
+            throw Failure(ErrorCode.ERROR_CODE_SOURCE_ACTIVATION_FAILED, failure.message, failure)
         } catch (failure: ShaderLink.Failure) {
             ready = false
-            throw Failure(ErrorCode.SYMLINK_SWITCH_FAILED, failure.message, failure)
+            throw Failure(ErrorCode.ERROR_CODE_SOURCE_ACTIVATION_FAILED, failure.message, failure)
         }
     }
 
@@ -154,7 +154,7 @@ internal class SourceActivator(
     @Throws(Failure::class)
     private fun requireReady() {
         if (!ready || closed) {
-            throw Failure(ErrorCode.SERVER_NOT_READY, "Source activation is not ready.")
+            throw Failure(ErrorCode.ERROR_CODE_SERVER_NOT_AVAILABLE, "Source activation is not ready.")
         }
     }
 

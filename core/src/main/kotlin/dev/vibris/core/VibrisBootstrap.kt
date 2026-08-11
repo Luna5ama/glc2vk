@@ -1,7 +1,7 @@
 package dev.vibris.core
 
 import dev.vibris.api.VibrisRuntimeAdapter
-import dev.vibris.protocol.v1.ErrorCode
+import dev.vibris.protocol.v2.ErrorCode
 import io.grpc.BindableService
 import io.grpc.Server
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder
@@ -41,7 +41,7 @@ class VibrisBootstrap private constructor(
         try {
             listener.stopAdmission()
         } catch (exception: Exception) {
-            failure = Failure(ErrorCode.INTERNAL_ERROR, "Failed to stop Vibris admission.", exception)
+            failure = Failure(ErrorCode.ERROR_CODE_INTERNAL, "Failed to stop Vibris admission.", exception)
         }
         try {
             service.close()
@@ -247,7 +247,7 @@ class VibrisBootstrap private constructor(
                 val listener = listenerFactory.start(address, service)
                 return VibrisBootstrap(service, null, listener, false, null)
             } catch (exception: Exception) {
-                val failure = Failure(ErrorCode.SERVER_NOT_READY, "Vibris listener could not start.", exception)
+                val failure = Failure(ErrorCode.ERROR_CODE_SERVER_NOT_AVAILABLE, "Vibris listener could not start.", exception)
                 closeFailedStart(service, runtime, failure)
                 throw failure
             }
@@ -256,8 +256,8 @@ class VibrisBootstrap private constructor(
         private fun startupFailure(exception: Exception): Failure =
             when (exception) {
                 is ShaderLink.Failure ->
-                    Failure(ErrorCode.SYMLINK_SWITCH_FAILED, exception.message, exception)
-                else -> Failure(ErrorCode.SERVER_NOT_READY, startupReason(exception), exception)
+                    Failure(ErrorCode.ERROR_CODE_SOURCE_ACTIVATION_FAILED, exception.message, exception)
+                else -> Failure(ErrorCode.ERROR_CODE_SERVER_NOT_AVAILABLE, startupReason(exception), exception)
             }
 
         private fun startupReason(exception: Exception): String {
@@ -283,7 +283,7 @@ class VibrisBootstrap private constructor(
 
         private fun append(current: Failure?, message: String, exception: Exception): Failure {
             if (current == null) {
-                return Failure(ErrorCode.INTERNAL_ERROR, message, exception)
+                return Failure(ErrorCode.ERROR_CODE_INTERNAL, message, exception)
             }
             current.addSuppressed(exception)
             return current

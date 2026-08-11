@@ -2,10 +2,11 @@ package dev.vibris.core
 
 import dev.vibris.api.CapturePlan
 import dev.vibris.api.ResourceCatalog
-import dev.vibris.protocol.v1.Action
-import dev.vibris.protocol.v1.ArtifactFormat
-import dev.vibris.protocol.v1.DumpBuffer
-import dev.vibris.protocol.v1.DumpTextureV2
+import dev.vibris.protocol.v2.Action
+import dev.vibris.protocol.v2.ArtifactFormat
+import dev.vibris.protocol.v2.DumpBuffer
+import dev.vibris.protocol.v2.DumpTexture
+import dev.vibris.protocol.v2.TextureSelector
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
@@ -18,8 +19,10 @@ class CapturePlanBuilderV2Test {
             resource("iris_ssbo_6", ResourceCatalog.ResourceKind.BUFFER, depth = 0),
         ))
         val targets = mutableListOf<CapturePlan.Target>()
-        CapturePlanBuilder.addAction(targets, Action.newBuilder().setDumpTextureV2(
-            DumpTextureV2.newBuilder().setLogicalName("iris_custom_image.volume")
+        CapturePlanBuilder.addAction(targets, Action.newBuilder().setDumpTexture(
+            DumpTexture.newBuilder().setResource(
+                TextureSelector.newBuilder().setLogicalName("iris_custom_image.volume"),
+            )
                 .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setArtifactName("volume"),
         ).build(), catalog)
         CapturePlanBuilder.addAction(targets, Action.newBuilder().setDumpBuffer(
@@ -38,8 +41,10 @@ class CapturePlanBuilderV2Test {
         val catalog = ResourceCatalog(listOf(resource("colortex0.main", ResourceCatalog.ResourceKind.TEXTURE, 1)))
         val unspecified = mutableListOf<CapturePlan.Target>()
         assertThrows(RuntimeJobExecutor.Failure::class.java) {
-            CapturePlanBuilder.addAction(unspecified, Action.newBuilder().setDumpTextureV2(
-                DumpTextureV2.newBuilder().setLogicalName("colortex0.main").setArtifactName("texture"),
+            CapturePlanBuilder.addAction(unspecified, Action.newBuilder().setDumpTexture(
+                DumpTexture.newBuilder().setResource(
+                    TextureSelector.newBuilder().setLogicalName("colortex0.main"),
+                ).setArtifactName("texture"),
             ).build(), catalog)
         }
 

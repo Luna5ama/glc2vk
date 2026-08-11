@@ -1,29 +1,31 @@
 package dev.vibris.core
 
 import dev.vibris.core.request.RequestState
-import dev.vibris.protocol.v1.ArtifactMetadata
-import dev.vibris.protocol.v1.ClientMessage
-import dev.vibris.protocol.v1.ErrorCode
-import dev.vibris.protocol.v1.JobAccepted
-import dev.vibris.protocol.v1.JobFailed
-import dev.vibris.protocol.v1.JobProgress
-import dev.vibris.protocol.v1.JobStage
-import dev.vibris.protocol.v1.JobState
-import dev.vibris.protocol.v1.ProtocolError
-import dev.vibris.protocol.v1.ProtocolVersion
-import dev.vibris.protocol.v1.ServerMessage
+import dev.vibris.protocol.v2.ArtifactMetadata
+import dev.vibris.protocol.v2.ClientMessage
+import dev.vibris.protocol.v2.ErrorCode
+import dev.vibris.protocol.v2.JobAccepted
+import dev.vibris.protocol.v2.JobFailed
+import dev.vibris.protocol.v2.JobProgress
+import dev.vibris.protocol.v2.JobStage
+import dev.vibris.protocol.v2.JobState
+import dev.vibris.protocol.v2.ProtocolError
+import dev.vibris.protocol.v2.ProtocolVersion
+import dev.vibris.protocol.v2.ServerMessage
 
 internal object ProtocolMessages {
     @JvmField
-    val V1: ProtocolVersion = ProtocolVersion.newBuilder().setMajor(1).setMinor(0).build()
+    val V2: ProtocolVersion = ProtocolVersion.newBuilder().setMajor(2).setMinor(0).build()
 
     @JvmStatic
     fun accepted(job: CoreJob, queuePosition: Int): ServerMessage =
         envelope(job.messageId, job.requestId, job.workspaceId)
             .setJobAccepted(
                 JobAccepted.newBuilder()
+                    .setJobId(job.submission.jobId)
                     .setRequestId(job.requestId)
-                    .setQueuePosition(queuePosition),
+                    .setQueuePosition(queuePosition)
+                    .setAcceptedAtUnixMs(job.acceptedAtUnixMs),
             )
             .build()
 
@@ -32,6 +34,7 @@ internal object ProtocolMessages {
         envelope(job.messageId, job.requestId, job.workspaceId)
             .setJobProgress(
                 JobProgress.newBuilder()
+                    .setJobId(job.submission.jobId)
                     .setRequestId(job.requestId)
                     .setStage(stage),
             )
@@ -52,15 +55,16 @@ internal object ProtocolMessages {
             .setCode(code)
             .setMessage(message)
             .setRetryable(
-                code == ErrorCode.QUEUE_FULL ||
-                    code == ErrorCode.QUEUE_TIMEOUT ||
-                    code == ErrorCode.EXECUTION_TIMEOUT,
+                code == ErrorCode.ERROR_CODE_QUEUE_FULL ||
+                    code == ErrorCode.ERROR_CODE_QUEUE_TIMEOUT ||
+                    code == ErrorCode.ERROR_CODE_EXECUTION_TIMEOUT,
             )
         if (artifacts.isNotEmpty()) {
-            error.setLogPath(artifacts.first().path)
+            error.setLogPath(artifacts.first().relativePath)
         }
         return TerminalResult.failed(
             JobFailed.newBuilder()
+                .setJobId(requestId)
                 .setRequestId(requestId)
                 .setError(error)
                 .addAllArtifacts(artifacts)
@@ -91,7 +95,7 @@ internal object ProtocolMessages {
     @JvmStatic
     fun envelope(messageId: String, requestId: String, workspaceId: String): ServerMessage.Builder =
         ServerMessage.newBuilder()
-            .setProtocolVersion(V1)
+            .setProtocolVersion(V2)
             .setMessageId(messageId)
             .setRequestId(requestId)
             .setWorkspaceId(workspaceId)

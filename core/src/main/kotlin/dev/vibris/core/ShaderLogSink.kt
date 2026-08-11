@@ -1,7 +1,7 @@
 package dev.vibris.core
 
 import dev.vibris.api.ReloadResult
-import dev.vibris.protocol.v1.ArtifactMetadata
+import dev.vibris.protocol.v2.ArtifactMetadata
 import java.io.IOException
 
 internal fun interface ShaderLogSink {

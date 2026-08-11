@@ -1,12 +1,12 @@
 package dev.vibris.core
 
 import dev.vibris.api.RuntimeAction
-import dev.vibris.protocol.v1.Action
-import dev.vibris.protocol.v1.CaptureMulti
-import dev.vibris.protocol.v1.CapturePass
-import dev.vibris.protocol.v1.DumpTextureV2
-import dev.vibris.protocol.v1.GetGpuMetrics
-import dev.vibris.protocol.v1.EmptyAction
+import dev.vibris.protocol.v2.Action
+import dev.vibris.protocol.v2.CaptureMulti
+import dev.vibris.protocol.v2.CapturePass
+import dev.vibris.protocol.v2.DumpTexture
+import dev.vibris.protocol.v2.GetGpuMetrics
+import dev.vibris.protocol.v2.InspectShader
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
@@ -18,19 +18,12 @@ class RuntimeActionProtocolTest {
             Action.newBuilder()
                 .setCapturePass(
                     CapturePass.newBuilder()
-                        .setPass("begin1")
-                        .setPath("vibris/capture"),
+                        .setPassId("begin1")
+                        .setArtifactName("vibris-capture"),
                 )
                 .build(),
         )
-        assertEquals(RuntimeAction.CapturePass("begin1", "vibris/capture"), pass)
-
-        val buffers = RuntimeActionProtocol.toApi(
-            Action.newBuilder()
-                .setListBuffers(EmptyAction.getDefaultInstance())
-                .build(),
-        )
-        assertEquals(RuntimeAction.ListBuffers, buffers)
+        assertEquals(RuntimeAction.CapturePass("begin1", "vibris-capture"), pass)
 
         val metrics = RuntimeActionProtocol.toApi(
             Action.newBuilder()
@@ -40,7 +33,7 @@ class RuntimeActionProtocolTest {
         assertEquals(RuntimeAction.GpuMetrics(17), metrics)
 
         val inspection = RuntimeActionProtocol.toApi(
-            Action.newBuilder().setInspectShader(EmptyAction.getDefaultInstance()).build(),
+            Action.newBuilder().setInspectShader(InspectShader.getDefaultInstance()).build(),
         )
         assertEquals(RuntimeAction.InspectShader, inspection)
     }
@@ -55,7 +48,7 @@ class RuntimeActionProtocolTest {
         )
         assertInvalid(
             Action.newBuilder()
-                .setCaptureMulti(CaptureMulti.newBuilder().setType("unknown"))
+                .setCaptureMulti(CaptureMulti.newBuilder().setCaptureType("unknown"))
                 .build(),
         )
         assertInvalid(
@@ -70,7 +63,7 @@ class RuntimeActionProtocolTest {
         )
         assertInvalid(
             Action.newBuilder()
-                .setDumpTextureV2(DumpTextureV2.getDefaultInstance())
+                .setDumpTexture(DumpTexture.getDefaultInstance())
                 .build(),
         )
     }

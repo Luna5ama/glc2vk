@@ -1,8 +1,8 @@
 package dev.vibris.core;
 
-import dev.vibris.protocol.v1.JobCompleted;
-import dev.vibris.protocol.v1.JobResult;
-import dev.vibris.protocol.v1.ServerMessage;
+import dev.vibris.protocol.v2.JobCompleted;
+import dev.vibris.protocol.v2.JobResult;
+import dev.vibris.protocol.v2.ServerMessage;
 import io.grpc.stub.StreamObserver;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -34,9 +34,8 @@ class ArtifactTerminalDeliveryTest {
             @Override
             public void onNext(ServerMessage message) {
                 assertTrue(message.hasJobCompleted());
-                Path manifest = Path.of(message.getJobCompleted().getResult().getManifestPath());
                 assertTrue(Files.isDirectory(committed.directory()));
-                assertTrue(Files.isRegularFile(manifest));
+                assertTrue(Files.isRegularFile(committed.manifest()));
                 assertFalse(hasTemporaryDirectory(manager.root()));
                 observed.set(true);
             }
@@ -101,9 +100,10 @@ class ArtifactTerminalDeliveryTest {
     }
 
     private static ServerMessage completedMessage(ArtifactManager.CommittedJob committed, String requestId) {
-        JobResult result = JobResult.newBuilder().setManifestPath(committed.manifest().toString()).build();
+        JobResult result = JobResult.newBuilder().setResultManifestId(requestId + "-manifest").build();
         return TerminalResult.completed(JobCompleted.newBuilder()
-            .setRequestId(requestId).setResult(result).build()).message("message", requestId, WORKSPACE_ID);
+            .setJobId(requestId).setRequestId(requestId).setResult(result).build())
+            .message("message", requestId, WORKSPACE_ID);
     }
 
     private static boolean hasTemporaryDirectory(Path root) {

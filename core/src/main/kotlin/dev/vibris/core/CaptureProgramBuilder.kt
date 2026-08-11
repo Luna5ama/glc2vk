@@ -2,8 +2,8 @@ package dev.vibris.core
 
 import dev.vibris.api.CapturePlan
 import dev.vibris.api.ResourceCatalog
-import dev.vibris.protocol.v1.ErrorCode
-import dev.vibris.protocol.v1.VisualThresholds
+import dev.vibris.protocol.v2.ErrorCode
+import dev.vibris.protocol.v2.VisualThresholds
 import java.util.Locale
 
 internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_ACTIONS) {
@@ -15,19 +15,15 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
 
     @Throws(RuntimeJobExecutor.Failure::class)
     fun actions(job: CoreJob, catalog: ResourceCatalog): ActionProgram {
-        if (job.submission.actions.actionsCount.toLong() > expandedActionLimit) throw invalid("Action limit exceeded.")
+        if (!job.submission.hasActionSequence()) throw invalid("Only action-sequence jobs are executable.")
+        if (job.submission.actionSequence.actionsCount.toLong() > expandedActionLimit) {
+            throw invalid("Action limit exceeded.")
+        }
         if (job.submission.hasResultArtifacts()) {
             val options = job.submission.resultArtifacts
-            if ((!options.json && !options.csv) ||
-                options.kind !in RESULT_ARTIFACT_KINDS ||
+            if ((!options.writeJson && !options.writeCsv) ||
                 options.convertedUnitsList.any { it != "us" && it != "ms" } ||
-                options.convertedUnitsList.distinct().size != options.convertedUnitsCount ||
-                options.attempt == 0 ||
-                options.previousAttemptsCount > 5 ||
-                options.previousAttemptsList.any {
-                    it.attempt == 0 || it.attempt >= options.attempt || it.status.isBlank()
-                } ||
-                options.previousAttemptsList.map { it.attempt }.distinct().size != options.previousAttemptsCount
+                options.convertedUnitsList.distinct().size != options.convertedUnitsCount
             ) {
                 throw invalid("Result artifact options are invalid.")
             }
@@ -37,7 +33,6 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
         val artifactNames = HashSet<String>()
         var estimatedBytes = 0L
         var groupActionIndex = -1
-        var captureCount = 0
         var comparisons = 0
         fun flushGroup() {
             estimatedBytes = flush(
@@ -50,14 +45,13 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
             )
             groupActionIndex = -1
         }
-        for ((actionIndex, action) in job.submission.actions.actionsList.withIndex()) {
+        for ((actionIndex, action) in job.submission.actionSequence.actionsList.withIndex()) {
             when {
                 action.hasLoadShader() -> {
                     flushGroup()
                     val load = action.loadShader
                     if (
-                        load.sourceUuid.isBlank() || load.sourceId.isBlank() || load.configId.isBlank() ||
-                        load.caseId.isBlank()
+                        load.sourceUuid.isBlank() || load.sourceId.isBlank() || load.configId.isBlank()
                     ) {
                         throw invalid("Shader load references are incomplete.")
                     }
@@ -78,7 +72,7 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                     if (action.waitFrames.frameCount <= 0) throw invalid("Frame count must be positive.")
                     steps.add(ActionStep.waitFrames(actionIndex, action.waitFrames.frameCount))
                 }
-                action.hasTakeScreenshot() || action.hasDumpTextureV2() || action.hasDumpBuffer() -> {
+                action.hasTakeScreenshot() || action.hasDumpTexture() || action.hasDumpBuffer() -> {
                     val afterFrames = if (action.hasTakeScreenshot()) action.takeScreenshot.afterFrames else 0
                     if (afterFrames < 0) throw invalid("Screenshot frame delay is too large.")
                     if (afterFrames > 0) {
@@ -96,12 +90,17 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                 }
                 action.hasCompareCaptures() -> {
                     flushGroup()
-                    captureCount = steps.count { it.type == ActionType.CAPTURE }
                     val compare = action.compareCaptures
+                    val captures = steps.withIndex().filter { it.value.type == ActionType.CAPTURE }
+                    val baselineCapture = captures.indexOfFirst {
+                        it.value.actionIndex == compare.baselineActionIndex
+                    }
+                    val candidateCapture = captures.indexOfFirst {
+                        it.value.actionIndex == compare.candidateActionIndex
+                    }
                     if (
-                        comparisons++ != 0 || compare.baselineCaptureIndex >= captureCount ||
-                        compare.candidateCaptureIndex >= captureCount ||
-                        compare.baselineCaptureIndex == compare.candidateCaptureIndex ||
+                        comparisons++ != 0 || baselineCapture < 0 || candidateCapture < 0 ||
+                        baselineCapture == candidateCapture ||
                         compare.baselineLabel.isBlank() || compare.candidateLabel.isBlank() ||
                         (compare.hasThresholds() && !validThresholds(compare.thresholds))
                     ) {
@@ -111,8 +110,8 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                         ActionStep.compare(
                             actionIndex,
                             Comparison(
-                                compare.baselineCaptureIndex,
-                                compare.candidateCaptureIndex,
+                                baselineCapture,
+                                candidateCapture,
                                 compare.baselineLabel,
                                 compare.candidateLabel,
                                 if (compare.hasThresholds()) compare.thresholds else null,
@@ -131,21 +130,6 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
         val firstActivation = steps.indexOfFirst { it.type == ActionType.ACTIVATE || it.type == ActionType.LOAD }
         if (firstActivation > 0) {
             throw invalid("Source activation must be the first action.")
-        }
-        if (job.submission.hasBenchmarkCase()) {
-            val identity = job.submission.benchmarkCase
-            val loads = steps.filter { it.type == ActionType.LOAD }
-            val samples = steps.filter {
-                it.type == ActionType.RUNTIME && it.runtimeAction?.hasGetGpuMetrics() == true
-            }
-            if (
-                loads.size != 1 || samples.size != 1 ||
-                loads.single().loadShader?.caseId != identity.caseId ||
-                !job.submission.hasResultArtifacts() ||
-                job.submission.resultArtifacts.kind !in ISOLATED_RESULT_ARTIFACT_KINDS
-            ) {
-                throw invalid("An isolated benchmark case must contain exactly one matching load and GPU sample.")
-            }
         }
         return ActionProgram(java.util.List.copyOf(steps), estimatedBytes)
     }
@@ -169,11 +153,11 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
         val capture: CapturePlan?,
         val comparison: Comparison?,
         val actionIndex: Int,
-        val runtimeAction: dev.vibris.protocol.v1.Action?,
-        val loadShader: dev.vibris.protocol.v1.LoadShader?,
+        val runtimeAction: dev.vibris.protocol.v2.Action?,
+        val loadShader: dev.vibris.protocol.v2.LoadShader?,
     ) {
         companion object {
-            fun load(actionIndex: Int, load: dev.vibris.protocol.v1.LoadShader) =
+            fun load(actionIndex: Int, load: dev.vibris.protocol.v2.LoadShader) =
                 ActionStep(ActionType.LOAD, null, 0, null, null, actionIndex, null, load)
             fun activate(actionIndex: Int, uuid: String) =
                 ActionStep(ActionType.ACTIVATE, uuid, 0, null, null, actionIndex, null, null)
@@ -187,7 +171,7 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                 ActionStep(ActionType.PATCHED_SHADERS, null, 0, capture, null, actionIndex, null, null)
             fun compare(actionIndex: Int, comparison: Comparison) =
                 ActionStep(ActionType.COMPARE, null, 0, null, comparison, actionIndex, null, null)
-            fun runtime(actionIndex: Int, action: dev.vibris.protocol.v1.Action) =
+            fun runtime(actionIndex: Int, action: dev.vibris.protocol.v2.Action) =
                 ActionStep(ActionType.RUNTIME, null, 0, null, null, actionIndex, action, null)
         }
     }
@@ -206,9 +190,6 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
 
     companion object {
         private const val DEFAULT_MAX_ACTIONS = 64
-        private val RESULT_ARTIFACT_KINDS = setOf("profile", "profile_matrix", "benchmark_ab")
-        private val ISOLATED_RESULT_ARTIFACT_KINDS = setOf("profile_matrix", "benchmark_ab")
-
         private fun validThresholds(value: VisualThresholds): Boolean =
             value.pixelErrorThreshold in 0.0..1.0 &&
                 (!value.hasMaxMeanAbsoluteError() || value.maxMeanAbsoluteError in 0.0..1.0) &&
@@ -238,7 +219,7 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                 Math.addExact(estimatedBytes, planned.estimatedBytes)
             } catch (_: ArithmeticException) {
                 throw RuntimeJobExecutor.Failure(
-                    ErrorCode.ARTIFACT_JOB_TOO_LARGE,
+                    ErrorCode.ERROR_CODE_ARTIFACT_TOO_LARGE,
                     "Artifact estimate is too large.",
                 )
             }
@@ -248,6 +229,6 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
             if (!names.add(name.lowercase(Locale.ROOT))) throw invalid("Capture artifact names are repeated.")
         }
 
-        private fun invalid(message: String) = RuntimeJobExecutor.Failure(ErrorCode.CAPTURE_FAILED, message)
+        private fun invalid(message: String) = RuntimeJobExecutor.Failure(ErrorCode.ERROR_CODE_CAPTURE_FAILED, message)
     }
 }

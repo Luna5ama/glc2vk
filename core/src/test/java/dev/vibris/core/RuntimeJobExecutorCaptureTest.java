@@ -2,27 +2,22 @@ package dev.vibris.core;
 
 import dev.vibris.api.CaptureResult;
 import dev.vibris.api.ResourceCatalog;
-import dev.vibris.protocol.v1.Action;
-import dev.vibris.protocol.v1.ActionSequence;
-import dev.vibris.protocol.v1.ActivateSource;
-import dev.vibris.protocol.v1.ArtifactFormat;
-import dev.vibris.protocol.v1.ArtifactKind;
-import dev.vibris.protocol.v1.TakeScreenshot;
-import dev.vibris.protocol.v1.DumpBuffer;
-import dev.vibris.protocol.v1.DumpTextureV2;
-import dev.vibris.protocol.v1.ErrorCode;
-import dev.vibris.protocol.v1.EmptyAction;
-import dev.vibris.protocol.v1.GetGpuMetrics;
-import dev.vibris.protocol.v1.GetPatchedShaders;
-import dev.vibris.protocol.v1.JobActionKind;
-import dev.vibris.protocol.v1.JobStage;
-import dev.vibris.protocol.v1.LoadShader;
-import dev.vibris.protocol.v1.NamedShaderConfig;
-import dev.vibris.protocol.v1.PreparedSourceRef;
-import dev.vibris.protocol.v1.SceneContext;
-import dev.vibris.protocol.v1.ShaderConfig;
-import dev.vibris.protocol.v1.SubmitJob;
-import dev.vibris.protocol.v1.WaitFrames;
+import dev.vibris.protocol.v2.Action;
+import dev.vibris.protocol.v2.ActionKind;
+import dev.vibris.protocol.v2.ActionSequence;
+import dev.vibris.protocol.v2.ActivateSource;
+import dev.vibris.protocol.v2.ArtifactFormat;
+import dev.vibris.protocol.v2.ArtifactKind;
+import dev.vibris.protocol.v2.DumpBuffer;
+import dev.vibris.protocol.v2.DumpTexture;
+import dev.vibris.protocol.v2.ErrorCode;
+import dev.vibris.protocol.v2.GetPatchedShaders;
+import dev.vibris.protocol.v2.JobSpec;
+import dev.vibris.protocol.v2.PreparedSourceRef;
+import dev.vibris.protocol.v2.ReceiptStatus;
+import dev.vibris.protocol.v2.SceneContext;
+import dev.vibris.protocol.v2.TakeScreenshot;
+import dev.vibris.protocol.v2.TextureSelector;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -40,11 +35,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RuntimeJobExecutorCaptureTest {
+    private static final String WORKSPACE_ID = "11111111-1111-4111-8111-111111111111";
+
     @TempDir
     Path temp;
 
     @Test
-    void capturesOneBundleIntoOneCommittedJob() throws Exception {
+    void capturesScreenshotTextureAndBufferIntoStrictV2Artifacts() throws Exception {
         Fixture fixture = new Fixture();
         ResourceCatalog.ResourceDescriptor screenshot = resource(
             "final", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 77, 16);
@@ -53,32 +50,49 @@ class RuntimeJobExecutorCaptureTest {
         ResourceCatalog.ResourceDescriptor buffer = resource(
             "radiance_cache", ResourceCatalog.ResourceKind.BUFFER, 77, 8);
         fixture.runtime.catalog = new ResourceCatalog(List.of(screenshot, texture, buffer));
-        fixture.runtime.captureResult = captureResult(77, Map.of(
-            "screenshot", screenshot, "colortex0", texture, "radiance_cache", buffer));
+        LinkedHashMap<String, ResourceCatalog.ResourceDescriptor> captured = new LinkedHashMap<>();
+        captured.put("screenshot", screenshot);
+        captured.put("colortex0", texture);
+        captured.put("radiance_cache", buffer);
+        fixture.runtime.captureResult = captureResult(77, captured);
         fixture.runtime.captureFiles.put("screenshot.png", new byte[]{1, 2, 3});
         fixture.runtime.captureFiles.put("colortex0.bin", new byte[]{4, 5, 6, 7});
         fixture.runtime.captureFiles.put("colortex0.json", "{}".getBytes(StandardCharsets.UTF_8));
         fixture.runtime.captureFiles.put("radiance_cache.bin", new byte[]{8, 9});
         fixture.runtime.captureFiles.put("radiance_cache.json", "{}".getBytes(StandardCharsets.UTF_8));
 
-        TerminalResult terminal = fixture.executor.execute(fixture.job(bundleActions()), ignored -> {});
+        TerminalResult terminal = fixture.executor.execute(fixture.job(ActionSequence.newBuilder()
+            .addActions(Action.newBuilder().setTakeScreenshot(TakeScreenshot.newBuilder()
+                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setArtifactName("screenshot")))
+            .addActions(Action.newBuilder().setDumpTexture(DumpTexture.newBuilder()
+                .setResource(TextureSelector.newBuilder().setLogicalName("colortex0"))
+                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_BIN).setArtifactName("colortex0")))
+            .addActions(Action.newBuilder().setDumpBuffer(DumpBuffer.newBuilder()
+                .setLogicalName("radiance_cache").setArtifactName("radiance_cache")))
+            .build()), ignored -> {});
 
         var result = terminal.completed().getResult();
-        assertEquals(List.of("link:A", "reload", "context", "frames", "capture"),
-            fixture.runtime.events);
-        assertEquals(List.of(77L), result.getFrameIdsList());
-        assertEquals(2, result.getArtifactsCount());
-        assertEquals(3, result.getArtifactGroupsCount());
+        assertEquals(List.of("link:A", "reload", "context", "capture"), fixture.runtime.events);
+        assertEquals(7, result.getArtifactsCount());
         assertEquals(List.of(
-            ArtifactKind.ARTIFACT_KIND_SHADER_COMPILE_LOG,
-            ArtifactKind.ARTIFACT_KIND_MANIFEST),
+                ArtifactKind.ARTIFACT_KIND_SCREENSHOT,
+                ArtifactKind.ARTIFACT_KIND_TEXTURE,
+                ArtifactKind.ARTIFACT_KIND_TEXTURE,
+                ArtifactKind.ARTIFACT_KIND_BUFFER,
+                ArtifactKind.ARTIFACT_KIND_BUFFER,
+                ArtifactKind.ARTIFACT_KIND_SHADER_COMPILE_LOG,
+                ArtifactKind.ARTIFACT_KIND_MANIFEST),
             result.getArtifactsList().stream().map(artifact -> artifact.getKind()).toList());
-        Path manifest = Path.of(result.getManifestPath());
-        assertTrue(Files.isRegularFile(manifest));
-        assertTrue(Files.isRegularFile(manifest.resolveSibling("shader.log")));
-        assertTrue(Files.isRegularFile(manifest.resolveSibling("colortex0.json")));
-        assertTrue(Files.isRegularFile(manifest.resolveSibling("radiance_cache.json")));
-        assertEquals(1, Files.list(fixture.artifactRoot).count(), "one workspace owns the committed job");
+        assertEquals(List.of(
+                ActionKind.ACTION_KIND_ACTIVATE_SOURCE,
+                ActionKind.ACTION_KIND_TAKE_SCREENSHOT),
+            result.getActionReceiptsList().stream().map(receipt -> receipt.getKind()).toList());
+        assertTrue(result.getActionReceiptsList().stream()
+            .allMatch(receipt -> receipt.getStatus() == ReceiptStatus.RECEIPT_STATUS_OK));
+        assertTrue(result.getArtifactsList().stream()
+            .map(artifact -> Path.of(artifact.getRelativePath()))
+            .allMatch(Files::isRegularFile));
+        assertFalse(result.getResultManifestId().isBlank());
     }
 
     @Test
@@ -86,87 +100,62 @@ class RuntimeJobExecutorCaptureTest {
         Fixture fixture = new Fixture();
         fixture.runtime.catalog = new ResourceCatalog(List.of(
             resource("final", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 1, 16)));
-        ActionSequence actions = ActionSequence.newBuilder().addActions(Action.newBuilder().setDumpTextureV2(
-            DumpTextureV2.newBuilder().setLogicalName("missing").setFormat(ArtifactFormat.ARTIFACT_FORMAT_BIN)
-                .setArtifactName("missing"))).build();
+        ActionSequence actions = ActionSequence.newBuilder()
+            .addActions(Action.newBuilder().setDumpTexture(DumpTexture.newBuilder()
+                .setResource(TextureSelector.newBuilder().setLogicalName("missing"))
+                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_BIN).setArtifactName("missing")))
+            .build();
 
         RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
             () -> fixture.executor.execute(fixture.job(actions), ignored -> {}));
 
-        assertEquals(ErrorCode.CAPTURE_RESOURCE_NOT_FOUND, failure.code);
+        assertEquals(ErrorCode.ERROR_CODE_RESOURCE_NOT_FOUND, failure.code);
         assertFalse(fixture.runtime.events.contains("capture"));
         try (var files = Files.walk(fixture.artifactRoot)) {
-            assertEquals(1, files.count(), "catalog rejection must not create a temp or final job directory");
+            assertEquals(1, files.count());
         }
     }
 
     @Test
-    void runtimeQuotaOverrunUsesTypedFailure() throws Exception {
+    void runtimeQuotaOverrunUsesTypedFailureAndRollsBack() throws Exception {
         Fixture fixture = new Fixture(64);
         ResourceCatalog.ResourceDescriptor screenshot = resource(
             "final", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 1, 0);
         fixture.runtime.catalog = new ResourceCatalog(List.of(screenshot));
         fixture.runtime.captureResult = captureResult(1, Map.of("screenshot", screenshot));
         fixture.runtime.captureFiles.put("screenshot.png", new byte[128]);
-        ActionSequence actions = ActionSequence.newBuilder().addActions(Action.newBuilder().setTakeScreenshot(
-            TakeScreenshot.newBuilder().setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)
-                .setArtifactName("screenshot"))).build();
 
         RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
-            () -> fixture.executor.execute(fixture.job(actions), ignored -> {}));
+            () -> fixture.executor.execute(fixture.job(screenshotActions()), ignored -> {}));
 
-        assertEquals(ErrorCode.ARTIFACT_JOB_TOO_LARGE, failure.code);
-        try (var files = Files.walk(fixture.artifactRoot)) {
-            assertFalse(files.anyMatch(path -> path.getFileName().toString().endsWith(".tmp") ||
-                path.getFileName().toString().equals("manifest.json")),
-                "quota failure must remove the temporary artifact job");
-        }
+        assertEquals(ErrorCode.ERROR_CODE_ARTIFACT_TOO_LARGE, failure.code);
+        assertNoTemporaryOrManifest(fixture.artifactRoot);
     }
 
     @Test
-    void missingRuntimeArtifactFailsBeforeManifestRename() throws Exception {
+    void missingRuntimeArtifactFailsBeforeManifestCommit() throws Exception {
         Fixture fixture = new Fixture();
         ResourceCatalog.ResourceDescriptor screenshot = resource(
             "final", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 1, 16);
         fixture.runtime.catalog = new ResourceCatalog(List.of(screenshot));
         fixture.runtime.captureResult = captureResult(1, Map.of("screenshot", screenshot));
-        ActionSequence actions = ActionSequence.newBuilder().addActions(Action.newBuilder().setTakeScreenshot(
-            TakeScreenshot.newBuilder().setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)
-                .setArtifactName("screenshot"))).build();
 
         RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
-            () -> fixture.executor.execute(fixture.job(actions), ignored -> {}));
+            () -> fixture.executor.execute(fixture.job(screenshotActions()), ignored -> {}));
 
-        assertEquals(ErrorCode.CAPTURE_FAILED, failure.code);
-        try (var files = Files.walk(fixture.artifactRoot)) {
-            assertFalse(files.anyMatch(path -> path.getFileName().toString().endsWith(".tmp") ||
-                path.getFileName().toString().equals("manifest.json")),
-                "missing expected output must fail before a finalized directory is visible");
-        }
+        assertEquals(ErrorCode.ERROR_CODE_CAPTURE_FAILED, failure.code);
+        assertNoTemporaryOrManifest(fixture.artifactRoot);
     }
 
     @Test
-    void rejectsMoreThanExpandedOverlayLimit() throws Exception {
-        Fixture fixture = new Fixture();
-        ActionSequence.Builder actions = ActionSequence.newBuilder();
-        for (int index = 0; index < 137; index++) {
-            actions.addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(0)));
-        }
-
-        RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
-            () -> fixture.executor.execute(fixture.job(actions.build()), ignored -> {}));
-
-        assertEquals(ErrorCode.CAPTURE_FAILED, failure.code);
-        assertFalse(fixture.runtime.events.contains("capture"));
-    }
-
-    @Test
-    void capturesPatchedShadersAsDynamicArtifactGroup() throws Exception {
+    void capturesPatchedShadersWithStrictV2ArtifactMetadata() throws Exception {
         Fixture fixture = new Fixture();
         ResourceCatalog.ResourceDescriptor resource = resource(
             "patched_shaders", ResourceCatalog.ResourceKind.PATCHED_SHADERS, 81, 12);
-        fixture.runtime.patchedShaderFiles.put("patched.001_begin.vsh", "vertex".getBytes(StandardCharsets.UTF_8));
-        fixture.runtime.patchedShaderFiles.put("patched.002_begin.json", "{\"ok\":true}".getBytes(StandardCharsets.UTF_8));
+        fixture.runtime.patchedShaderFiles.put("patched.001_begin.vsh",
+            "vertex".getBytes(StandardCharsets.UTF_8));
+        fixture.runtime.patchedShaderFiles.put("patched.002_begin.json",
+            "{\"ok\":true}".getBytes(StandardCharsets.UTF_8));
         fixture.runtime.patchedShaderResult = new CaptureResult(81, List.of(new CaptureResult.ArtifactGroup(
             "patched", resource, List.of(
                 new CaptureResult.CapturedArtifact("patched.001_begin.vsh",
@@ -174,105 +163,35 @@ class RuntimeJobExecutorCaptureTest {
                     dev.vibris.api.CapturePlan.ArtifactRole.SUBRESOURCE, 0),
                 new CaptureResult.CapturedArtifact("patched.002_begin.json",
                     dev.vibris.api.CapturePlan.ArtifactFormat.JSON,
-                    dev.vibris.api.CapturePlan.ArtifactRole.SUBRESOURCE, 1)))));
-        ActionSequence actions = ActionSequence.newBuilder().addActions(Action.newBuilder()
-            .setGetPatchedShaders(GetPatchedShaders.newBuilder().setArtifactName("patched"))).build();
+                    dev.vibris.api.CapturePlan.ArtifactRole.METADATA, 0)))));
 
-        TerminalResult terminal = fixture.executor.execute(fixture.job(actions), ignored -> {});
-
-        var result = terminal.completed().getResult();
-        assertEquals(List.of("link:A", "reload", "context", "capture_patched_shaders"), fixture.runtime.events);
-        assertEquals(1, result.getArtifactGroupsCount());
-        assertEquals(ArtifactKind.ARTIFACT_KIND_PATCHED_SHADER,
-            result.getArtifactGroups(0).getArtifacts(0).getKind());
-        assertEquals(dev.vibris.protocol.v1.ArtifactFormat.ARTIFACT_FORMAT_TEXT,
-            result.getArtifactGroups(0).getArtifacts(0).getFormat());
-        Path directory = Path.of(result.getManifestPath()).getParent();
-        assertEquals("vertex", Files.readString(directory.resolve("patched.001_begin.vsh")));
-        assertEquals("{\"ok\":true}", Files.readString(directory.resolve("patched.002_begin.json")));
-    }
-
-    @Test
-    void rejectsScreenshotDelayOutsideRuntimeIntRange() throws Exception {
-        Fixture fixture = new Fixture();
-        ActionSequence actions = ActionSequence.newBuilder().addActions(Action.newBuilder().setTakeScreenshot(
-            TakeScreenshot.newBuilder().setAfterFrames(-1))).build();
-
-        RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
-            () -> fixture.executor.execute(fixture.job(actions), ignored -> {}));
-
-        assertEquals(ErrorCode.CAPTURE_FAILED, failure.code);
-        assertFalse(fixture.runtime.events.contains("frames"));
-        assertFalse(fixture.runtime.events.contains("capture"));
-    }
-
-    @Test
-    void executesRuntimeActionsInOrderAndReturnsTypedResults() throws Exception {
-        Fixture fixture = new Fixture();
-        fixture.runtime.actionResponses.add("{\"loaded\":true}");
-        fixture.runtime.actionResponses.add("{\"p50\":1.25}");
-        ActionSequence actions = ActionSequence.newBuilder()
-            .addActions(Action.newBuilder().setInspectShader(EmptyAction.getDefaultInstance()))
-            .addActions(Action.newBuilder().setGetGpuMetrics(GetGpuMetrics.newBuilder().setFrames(8)))
-            .build();
-
-        var progress = new java.util.ArrayList<JobStage>();
-        TerminalResult terminal = fixture.executor.execute(fixture.job(actions), progress::add);
-
-        assertEquals(List.of("link:A", "reload", "context", "action:InspectShader", "action:GpuMetrics"),
-            fixture.runtime.events);
-        assertEquals(List.of(1, 2), terminal.completed().getResult().getActionResultsList().stream()
-            .map(result -> result.getActionIndex()).toList());
-        assertEquals(List.of(JobActionKind.JOB_ACTION_KIND_INSPECT_SHADER,
-                JobActionKind.JOB_ACTION_KIND_GET_GPU_METRICS),
-            terminal.completed().getResult().getActionResultsList().stream()
-                .map(result -> result.getKind()).toList());
-        assertEquals(List.of("{\"loaded\":true}", "{\"p50\":1.25}"),
-            terminal.completed().getResult().getActionResultsList().stream()
-                .map(result -> result.getJson()).toList());
-        assertTrue(progress.contains(JobStage.JOB_STAGE_SAMPLING));
-    }
-
-    @Test
-    void failedMatrixCaptureDoesNotDiscardLaterCaseArtifacts() throws Exception {
-        Fixture fixture = new Fixture();
-        ResourceCatalog.ResourceDescriptor screenshot = resource(
-            "final", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 91, 16);
-        fixture.runtime.catalog = new ResourceCatalog(List.of(screenshot));
-        fixture.runtime.captureResult = captureResult(91, Map.of("case-b--screenshot", screenshot));
-        fixture.runtime.captureFailuresAfterWrite.add(new IllegalStateException("first case failed"));
-        fixture.runtime.captureFileBatches.add(Map.of("case-a--screenshot.png", new byte[]{9}));
-        fixture.runtime.captureFileBatches.add(Map.of("case-b--screenshot.png", new byte[]{1, 2, 3}));
-        ActionSequence actions = ActionSequence.newBuilder()
-            .addActions(load(fixture.source, "config-a", "case-a"))
-            .addActions(Action.newBuilder().setTakeScreenshot(TakeScreenshot.newBuilder()
-                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setArtifactName("case-a--screenshot")))
-            .addActions(load(fixture.source, "config-b", "case-b"))
-            .addActions(Action.newBuilder().setTakeScreenshot(TakeScreenshot.newBuilder()
-                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setArtifactName("case-b--screenshot")))
-            .build();
-
-        TerminalResult terminal = fixture.executor.execute(fixture.matrixJob(actions), ignored -> {});
+        TerminalResult terminal = fixture.executor.execute(fixture.job(ActionSequence.newBuilder()
+            .addActions(Action.newBuilder().setGetPatchedShaders(GetPatchedShaders.newBuilder()
+                .setArtifactName("patched")))
+            .build()), ignored -> {});
 
         var result = terminal.completed().getResult();
-        assertTrue(result.getActionResultsList().stream()
-            .anyMatch(action -> action.getJson().contains("\"case_id\":\"case-a\"") &&
-                action.getJson().contains("\"success\":false")));
-        assertTrue(result.getArtifactGroupsList().stream().flatMap(group -> group.getArtifactsList().stream())
-            .anyMatch(artifact -> artifact.getFileName().equals("case-b--screenshot.png")));
-        assertFalse(result.getArtifactGroupsList().stream().flatMap(group -> group.getArtifactsList().stream())
-            .anyMatch(artifact -> artifact.getFileName().equals("case-a--screenshot.png")));
+        assertEquals(ActionKind.ACTION_KIND_GET_PATCHED_SHADERS,
+            result.getActionReceipts(1).getKind());
+        assertEquals(2, result.getArtifactsList().stream()
+            .filter(artifact -> artifact.getKind() == ArtifactKind.ARTIFACT_KIND_PATCHED_SHADER)
+            .count());
+        assertTrue(result.getArtifactsList().stream()
+            .filter(artifact -> artifact.getKind() == ArtifactKind.ARTIFACT_KIND_PATCHED_SHADER)
+            .allMatch(artifact -> Files.isRegularFile(Path.of(artifact.getRelativePath()))));
     }
 
-    private static ActionSequence bundleActions() {
-        return ActionSequence.newBuilder()
-            .addActions(Action.newBuilder().setTakeScreenshot(TakeScreenshot.newBuilder()
-                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG).setArtifactName("screenshot").setAfterFrames(2)))
-            .addActions(Action.newBuilder().setDumpTextureV2(DumpTextureV2.newBuilder().setLogicalName("colortex0")
-                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_BIN).setArtifactName("colortex0")))
-            .addActions(Action.newBuilder().setDumpBuffer(DumpBuffer.newBuilder().setLogicalName("radiance_cache")
-                .setArtifactName("radiance_cache")))
-            .build();
+    private static ActionSequence screenshotActions() {
+        return ActionSequence.newBuilder().addActions(Action.newBuilder().setTakeScreenshot(
+            TakeScreenshot.newBuilder().setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)
+                .setArtifactName("screenshot"))).build();
+    }
+
+    private static void assertNoTemporaryOrManifest(Path root) throws Exception {
+        try (var files = Files.walk(root)) {
+            assertFalse(files.anyMatch(path -> path.getFileName().toString().endsWith(".tmp") ||
+                path.getFileName().toString().equals("manifest.json")));
+        }
     }
 
     private static CaptureResult captureResult(
@@ -327,28 +246,14 @@ class RuntimeJobExecutorCaptureTest {
                     ActivateSource.newBuilder().setSourceUuid(source.uuid())))
                 .addAllActions(actions.getActionsList())
                 .build();
-            SubmitJob submission = SubmitJob.newBuilder().setRequestId("request")
-                .setWorkspaceId("11111111-1111-4111-8111-111111111111")
+            JobSpec spec = JobSpec.newBuilder()
+                .setJobId("job-" + UUID.randomUUID())
                 .setContext(SceneContext.newBuilder().setSaveId("save")
                     .setDimensionId("minecraft:overworld").setFov(70.0))
-                .setActions(sequence).build();
-            CoreJob job = new CoreJob(submission, "message", null);
-            job.initialize(List.of(source));
-            return job;
-        }
-
-        CoreJob matrixJob(ActionSequence actions) {
-            SubmitJob submission = SubmitJob.newBuilder().setRequestId("matrix")
-                .setWorkspaceId("11111111-1111-4111-8111-111111111111")
-                .setContext(SceneContext.newBuilder().setSaveId("save")
-                    .setDimensionId("minecraft:overworld").setFov(70.0))
-                .addShaderConfigs(NamedShaderConfig.newBuilder().setId("config-a")
-                    .setConfig(ShaderConfig.newBuilder().putValues("MODE", "a")))
-                .addShaderConfigs(NamedShaderConfig.newBuilder().setId("config-b")
-                    .setConfig(ShaderConfig.newBuilder().putValues("MODE", "b")))
-                .setActions(actions)
+                .addSources(source.reference())
+                .setActionSequence(sequence)
                 .build();
-            CoreJob job = new CoreJob(submission, "message", null);
+            CoreJob job = new CoreJob(spec, spec.getJobId(), WORKSPACE_ID, "message", null);
             job.initialize(List.of(source));
             return job;
         }
@@ -358,8 +263,11 @@ class RuntimeJobExecutorCaptureTest {
                 String uuid = UUID.randomUUID().toString();
                 Path directory = Files.createDirectory(pending.resolve(uuid));
                 Path file = Files.writeString(directory.resolve("main.glsl"), "A");
-                PreparedSourceRef reference = PreparedSourceRef.newBuilder().setUuid(uuid).setFileCount(1)
-                    .setTotalBytes(Files.size(file)).build();
+                PreparedSourceRef reference = PreparedSourceRef.newBuilder()
+                    .setSourceUuid(uuid)
+                    .setFileCount(1)
+                    .setTotalBytes(Files.size(file))
+                    .build();
                 List<SourceRegistry.Lease> leases = registry.reserve(registry.validate(List.of(reference)));
                 registry.accept(leases);
                 return leases.getFirst();
@@ -367,12 +275,6 @@ class RuntimeJobExecutorCaptureTest {
                 throw new IllegalStateException(exception);
             }
         }
-    }
-
-    private static Action.Builder load(SourceRegistry.Lease source, String config, String caseId) {
-        return Action.newBuilder().setLoadShader(LoadShader.newBuilder()
-            .setSourceUuid(source.uuid()).setSourceId("source").setConfigId(config)
-            .setCaseId(caseId).setContinueOnFailure(true));
     }
 
     private static final class RecordingLink implements ShaderLink {
@@ -390,6 +292,7 @@ class RuntimeJobExecutorCaptureTest {
 
         @Override
         public void detach() {
+            events.add("detach");
         }
 
         @Override

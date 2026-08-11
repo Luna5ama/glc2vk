@@ -1,23 +1,22 @@
 package dev.vibris.core
 
 import dev.vibris.api.CancellationToken
-import dev.vibris.protocol.v1.SubmitJob
+import dev.vibris.protocol.v2.JobSpec
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ScheduledFuture
 
 internal class CoreJob(
-    @JvmField val submission: SubmitJob,
+    @JvmField val submission: JobSpec,
+    @JvmField val requestId: String,
+    @JvmField val workspaceId: String,
     @JvmField val messageId: String,
     @Volatile @JvmField var session: ControlSession?,
 ) {
     @JvmField
-    val requestId: String = submission.requestId
-
-    @JvmField
-    val workspaceId: String = submission.workspaceId
-
-    @JvmField
     val acceptedNanos: Long = System.nanoTime()
+
+    @JvmField
+    val acceptedAtUnixMs: Long = System.currentTimeMillis()
 
     @JvmField
     val cancellation: CancellationToken.Source = CancellationToken.source()

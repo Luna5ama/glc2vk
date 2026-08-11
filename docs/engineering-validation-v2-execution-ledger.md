@@ -80,8 +80,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T00 | P0 | Vibris | Persist v2 execution ledger | DONE | `T00 persist engineering validation v2 ledger` |
 | T01 | P0 | Vibris | Replace protocol with strict v2 wire contract | DONE | `T01 replace control protocol with strict v2` |
 | T02 | P0 | Vibris | Publish compact typed MCP v2 tools | DONE | `T02 publish compact typed MCP v2 tools` |
-| T02A | P0 | Vibris | Restore a strict v2 Core compilation baseline | READY | `T02A migrate Core directly to strict v2` |
-| T03 | P0 | Vibris | Add truthful runtime lease and status waiting | PENDING | `T03 expose runtime lease and status transitions` |
+| T02A | P0 | Vibris | Restore a strict v2 Core compilation baseline | DONE | `T02A migrate Core directly to strict v2` |
+| T03 | P0 | Vibris | Add truthful runtime lease and status waiting | READY | `T03 expose runtime lease and status transitions` |
 | T04 | P0 | Vibris | Generalize durable resumable jobs | PENDING | `T04 add durable resumable workflow jobs` |
 | T05 | P0 | Vibris | Add transactional restoration and recovery | PENDING | `T05 make runtime mutations transactional` |
 | T06 | P0 | Vibris | Define effective shader settings contract | PENDING | `T06 expose resolved shader settings contract` |
@@ -276,7 +276,7 @@ Evidence:
 
 ### T02A — Restore a strict v2 Core compilation baseline
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T02
 
@@ -325,10 +325,16 @@ Evidence:
 
 - Discovery receipt: `.\gradlew.bat :vibris-core:test --offline` failed in `:vibris-core:compileKotlin` because `dev.vibris.protocol.v1` no longer exists after T01; `rg -l "dev\\.vibris\\.protocol\\.v1" core/src/main core/src/test` reported 44 files.
 - A temporary package-only rewrite was fully reverted before this ledger control-plane commit; only the pre-existing protected files and untracked `capture\a.spv` remained dirty.
+- Ported maintained Core production and tests directly to `dev.vibris.protocol.v2`: strict envelopes carry request/workspace identity, jobs use `JobSpec`, status/readiness/resources use v2 messages, action execution returns v2 `ActionReceipt` / `JobResult`, and artifact metadata uses the v2 identity/path fields.
+- Removed the obsolete v1-only `BenchmarkCaseIsolation` baseline instead of retaining an alias or shim; later transactional restoration remains assigned to T05.
+- `rg -n "dev\\.vibris\\.protocol\\.v1|vibris\\.control\\.v1" core/src/main core/src/test` returned no matches.
+- `.\gradlew.bat :vibris-protocol-java:test :vibris-core:test --offline --console=plain` passed; the Core suite completed 83 tests with zero failures.
+- Protected `ThreadBoundVibrisRuntimeAdapter.kt` and `ThreadBoundVibrisRuntimeAdapterTest.kt` stayed outside task staging with their pre-existing `11/4` and `8/6` numstat respectively; untracked `capture\a.spv` also stayed outside staging.
+- Commit: this task's commit with subject `T02A migrate Core directly to strict v2`.
 
 ### T03 — Add truthful runtime lease and status waiting
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T02A
 
@@ -1303,3 +1309,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T01 - generated strict v2 Java/C++ protocol; Java 5/5 and native CTest 5/5 passed; v1 and missing versions reject as UNSUPPORTED_VERSION - Commit title: T01 replace control protocol with strict v2`
 - `2026-08-11 - T02 - published exactly eight typed MCP v2 tools; native CTest 5/5 and direct schema/stdio fixtures passed; removed old control client and v1 stdio fixture dependency - Commit title: T02 publish compact typed MCP v2 tools`
 - `2026-08-11 - T02A inserted - T03 baseline exposed 44 Core files still importing the deleted v1 Java package and broader removed-v1 API usage; inserted a strict-v2 Core migration remediation before T03 - Control-plane commit title: roadmap insert T02A strict v2 Core remediation`
+- `2026-08-11 - T02A - migrated maintained Core directly to strict v2 jobs, status, actions, artifacts, and tests; removed v1-only benchmark isolation; protocol/Core tests passed with 83 Core tests and zero v1 references - Commit title: T02A migrate Core directly to strict v2`

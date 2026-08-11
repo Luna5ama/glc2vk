@@ -3,11 +3,10 @@ package dev.vibris.core
 import dev.vibris.api.VibrisRuntimeAdapter
 import dev.vibris.core.request.RequestRegistry
 import dev.vibris.core.request.RequestState
-import dev.vibris.protocol.v1.ClientMessage
-import dev.vibris.protocol.v1.ErrorCode
-import dev.vibris.protocol.v1.JobStage
-import dev.vibris.protocol.v1.ServerMessage
-import dev.vibris.protocol.v1.SubmitJob
+import dev.vibris.protocol.v2.ClientMessage
+import dev.vibris.protocol.v2.ErrorCode
+import dev.vibris.protocol.v2.JobStage
+import dev.vibris.protocol.v2.ServerMessage
 import java.nio.file.Path
 import java.time.Clock
 import java.time.Duration
@@ -70,12 +69,14 @@ class VibrisCoreEngine internal constructor(
         activeRequestId.takeIf(String::isNotBlank)?.let { ActiveJob(it, activeStage) }
 
     internal fun submit(session: ControlSession, message: ClientMessage) {
-        val submission = message.submitJob
-        val requestId = submission.requestId
-        if (requestId.isBlank() || requestId != message.requestId ||
-            submission.workspaceId != session.workspaceId()
-        ) {
-            failImmediate(session, message, ErrorCode.INTERNAL_ERROR, "Job envelope is inconsistent.")
+        if (!message.submitJob.hasJob()) {
+            failImmediate(session, message, ErrorCode.ERROR_CODE_INVALID_REQUEST, "Job specification is required.")
+            return
+        }
+        val submission = message.submitJob.job
+        val requestId = message.requestId
+        if (requestId.isBlank() || submission.jobId.isBlank() || message.workspaceId != session.workspaceId()) {
+            failImmediate(session, message, ErrorCode.ERROR_CODE_INVALID_REQUEST, "Job envelope is inconsistent.")
             return
         }
         var candidates: List<SourceRegistry.Candidate> = emptyList()
@@ -85,15 +86,15 @@ class VibrisCoreEngine internal constructor(
         } catch (failure: SourceRegistry.Failure) {
             validationFailure = failure
         }
-        val job = CoreJob(submission, message.messageId, session)
+        val job = CoreJob(submission, requestId, session.workspaceId(), message.messageId, session)
         synchronized(this) {
             if (closed || !activator.ready()) {
-                failImmediate(session, message, ErrorCode.SERVER_NOT_READY, "Vibris is not ready.")
+                failImmediate(session, message, ErrorCode.ERROR_CODE_SERVER_NOT_AVAILABLE, "Vibris is not ready.")
                 return
             }
             val accepted = requests.accept(requestId, session.workspaceId())
             if (accepted.kind == RequestRegistry.AcceptKind.OWNER_MISMATCH) {
-                failImmediate(session, message, ErrorCode.INTERNAL_ERROR, "Request belongs to another workspace.")
+                failImmediate(session, message, ErrorCode.ERROR_CODE_INTERNAL, "Request belongs to another workspace.")
                 return
             }
             if (accepted.kind == RequestRegistry.AcceptKind.CACHED_FINAL) {
@@ -110,7 +111,7 @@ class VibrisCoreEngine internal constructor(
                 return
             }
             if (accepted.kind == RequestRegistry.AcceptKind.FULL) {
-                failImmediate(session, message, ErrorCode.QUEUE_FULL, "The request registry is full.")
+                failImmediate(session, message, ErrorCode.ERROR_CODE_QUEUE_FULL, "The request registry is full.")
                 return
             }
             if (validationFailure != null) {
@@ -128,7 +129,7 @@ class VibrisCoreEngine internal constructor(
             if (!scheduler.submit(requestId, job.workspaceId, Runnable { execute(job) })) {
                 liveJobs.remove(requestId)
                 sources.reject(leases)
-                finishRejected(session, message, ErrorCode.QUEUE_FULL, "The global execution queue is full.")
+                finishRejected(session, message, ErrorCode.ERROR_CODE_QUEUE_FULL, "The global execution queue is full.")
                 return
             }
             sources.accept(leases)
@@ -138,22 +139,22 @@ class VibrisCoreEngine internal constructor(
         }
     }
 
-    internal fun cancel(session: ControlSession, requestId: String) {
+    internal fun cancel(session: ControlSession, jobId: String) {
         val job = synchronized(this) {
-            val current = liveJobs[requestId]
+            val current = liveJobs.values.firstOrNull { it.submission.jobId == jobId }
             if (current == null || current.workspaceId != session.workspaceId()) {
                 return
             }
             current.bind(session)
             current.cancellation.cancel()
-            if (!scheduler.cancel(requestId)) {
+            if (!scheduler.cancel(current.requestId)) {
                 return
             }
             current
         }
         finish(
             job,
-            ProtocolMessages.failure(requestId, ErrorCode.CANCELLED, "Job was cancelled."),
+            ProtocolMessages.failure(job.requestId, ErrorCode.ERROR_CODE_CANCELLED, "Job was cancelled."),
             RequestState.CANCELLED,
             false,
         )
@@ -193,7 +194,7 @@ class VibrisCoreEngine internal constructor(
                 return
             }
         }
-        cancel(session, job.requestId)
+        cancel(session, job.submission.jobId)
     }
 
     private fun execute(job: CoreJob) {
@@ -209,7 +210,7 @@ class VibrisCoreEngine internal constructor(
                         job,
                         ProtocolMessages.failure(
                             job.requestId,
-                            ErrorCode.QUEUE_TIMEOUT,
+                            ErrorCode.ERROR_CODE_QUEUE_TIMEOUT,
                             "Job expired in the execution queue.",
                         ),
                         RequestState.FAILED,
@@ -232,14 +233,14 @@ class VibrisCoreEngine internal constructor(
                 job,
                 ProtocolMessages.failure(
                     job.requestId,
-                    ErrorCode.CANCELLED,
+                    ErrorCode.ERROR_CODE_CANCELLED,
                     "Job execution was interrupted.",
                 ),
                 RequestState.CANCELLED,
                 false,
             )
         } catch (failure: RuntimeJobExecutor.Failure) {
-            val state = if (failure.code == ErrorCode.CANCELLED) {
+            val state = if (failure.code == ErrorCode.ERROR_CODE_CANCELLED) {
                 RequestState.CANCELLED
             } else {
                 RequestState.FAILED
@@ -310,7 +311,7 @@ class VibrisCoreEngine internal constructor(
             failImmediate(
                 session,
                 message,
-                ErrorCode.INTERNAL_ERROR,
+                ErrorCode.ERROR_CODE_INTERNAL,
                 "Request validation is still in progress.",
             )
             return
@@ -352,7 +353,7 @@ class VibrisCoreEngine internal constructor(
             ArrayList(liveJobs.values)
         }
         for (job in jobs) {
-            cancel(job.session!!, job.requestId)
+            cancel(job.session!!, job.submission.jobId)
         }
         EngineShutdown.close(runtime, disconnectTimer, scheduler, activator)
         updateMetrics()
