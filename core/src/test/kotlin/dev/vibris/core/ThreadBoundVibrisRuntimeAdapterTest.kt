@@ -15,38 +15,40 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.util.concurrent.CompletionStage
-import java.util.concurrent.atomic.AtomicInteger
 
 class ThreadBoundVibrisRuntimeAdapterTest {
     @Test
-    fun reportsPendingFrameWorkAndNotifiesOnlyOnIdleToActiveTransitions() {
+    fun reportsPendingFrameWorkAndNotifiesOnActivityTransitions() {
         val frames = RenderedFrameClock()
-        val activityNotifications = AtomicInteger()
+        val activityStates = ArrayList<Boolean>()
         val adapter = ThreadBoundVibrisRuntimeAdapter(
             StubHost(),
             frames,
             null,
-            activityNotifications::incrementAndGet,
+            activityStates::add,
         )
 
         assertTrue(adapter.isIdle())
         val first = adapter.waitRenderedFrames(1, CancellationToken.none())
         val second = adapter.waitRenderedFrames(2, CancellationToken.none())
         assertFalse(adapter.isIdle())
-        assertEquals(1, activityNotifications.get())
+        assertEquals(listOf(true), activityStates)
 
         frames.renderedFrame()
         assertEquals(1L, first.toCompletableFuture().join())
         assertFalse(adapter.isIdle())
+        assertEquals(listOf(true), activityStates)
         frames.renderedFrame()
         assertEquals(2L, second.toCompletableFuture().join())
         assertTrue(adapter.isIdle())
+        assertEquals(listOf(true, false), activityStates)
 
         val third = adapter.waitRenderedFrames(1, CancellationToken.none())
-        assertEquals(2, activityNotifications.get())
+        assertEquals(listOf(true, false, true), activityStates)
         frames.renderedFrame()
         assertEquals(3L, third.toCompletableFuture().join())
         assertTrue(adapter.isIdle())
+        assertEquals(listOf(true, false, true, false), activityStates)
         adapter.close()
     }
 

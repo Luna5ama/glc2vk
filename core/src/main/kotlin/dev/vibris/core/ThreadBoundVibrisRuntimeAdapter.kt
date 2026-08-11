@@ -20,13 +20,14 @@ import java.util.concurrent.CompletionStage
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.BiConsumer
+import java.util.function.Consumer
 import java.util.function.Supplier
 
 class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
     host: VibrisRuntimeHost?,
     frames: RenderedFrameClock?,
     private val frameWaitObserver: BiConsumer<Long, Long>? = null,
-    private val activityObserver: Runnable? = null,
+    private val activityObserver: Consumer<Boolean>? = null,
 ) : VibrisRuntimeAdapter {
     private val host = Objects.requireNonNull(host, "host")!!
     private val frames = Objects.requireNonNull(frames, "frames")!!
@@ -190,13 +191,19 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
         val becameActive = pendingOperations.getAndIncrement() == 0
         val stage = try {
             if (becameActive) {
-                activityObserver?.run()
+                activityObserver?.accept(true)
             }
             action.get()
         } catch (throwable: Throwable) {
-            pendingOperations.decrementAndGet()
+            operationFinished()
             return CompletableFuture.failedFuture(throwable)
         }
-        return stage.whenComplete { _, _ -> pendingOperations.decrementAndGet() }
+        return stage.whenComplete { _, _ -> operationFinished() }
+    }
+
+    private fun operationFinished() {
+        if (pendingOperations.decrementAndGet() == 0) {
+            activityObserver?.accept(false)
+        }
     }
 }
