@@ -201,7 +201,9 @@ void append_actions(const Json& inputs, const SourceMap& sources, const ConfigMa
 
 void append_load(proto::ActionSequence& sequence, const proto::PreparedSourceRef& source,
     std::string source_id, std::string config_id, const proto::ShaderConfig& config) {
-    auto* value = sequence.add_actions()->mutable_load_shader();
+    auto* action = sequence.add_actions();
+    action->set_prelude(true);
+    auto* value = action->mutable_load_shader();
     value->set_source_uuid(source.source_uuid());
     value->set_source_id(std::move(source_id));
     value->set_config_id(std::move(config_id));
@@ -277,6 +279,8 @@ void build_matrix(const Json& arguments, const SourceMap& sources, const ConfigM
             value->set_source_id(source_id);
             value->set_config_id(config_id);
             value->mutable_config()->CopyFrom(require_config(configs, config_id));
+            append_load(*value->mutable_actions(), require_source(sources, source_id),
+                source_id, config_id, value->config());
             append_actions(template_actions, sources, configs, *value->mutable_actions(), value->case_id() + "--");
         }
     }
@@ -473,7 +477,9 @@ ToolOutcome JobProtocol::terminal(const proto::ServerMessage& message) {
         const auto& failed = message.job_failed();
         const auto mapped = protobuf_json(failed);
         Json details{{"job_id", failed.job_id()}, {"request_id", failed.request_id()},
-            {"artifacts", mapped.value("artifacts", Json::array())}};
+            {"artifacts", mapped.value("artifacts", Json::array())},
+            {"action_receipts", mapped.value("action_receipts", Json::array())},
+            {"prelude_receipts", mapped.value("prelude_receipts", Json::array())}};
         if (mapped.contains("restoration")) details["restoration"] = mapped.at("restoration");
         for (const auto& [key, value] : failed.error().details()) details[key] = value;
         return ToolFailure{

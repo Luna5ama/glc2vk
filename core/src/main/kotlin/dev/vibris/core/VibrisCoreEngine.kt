@@ -429,6 +429,8 @@ class VibrisCoreEngine internal constructor(
                     failure.message!!,
                     failure.artifacts,
                     failure.restoration ?: executor.restorationReceipt(),
+                    failure.actionReceipts,
+                    failure.preludeReceipts,
                 ),
                 state,
                 false,

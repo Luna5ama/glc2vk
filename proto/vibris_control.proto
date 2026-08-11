@@ -498,6 +498,7 @@ message Action {
         DumpTextureAfterPass dump_texture_after_pass = 16;
         DumpBufferAfterPass dump_buffer_after_pass = 17;
     }
+    bool prelude = 30;
 }
 
 enum ActionKind {
@@ -735,6 +736,8 @@ message JobFailed {
     ProtocolError error = 3;
     optional RestorationReceipt restoration = 4;
     repeated ArtifactMetadata artifacts = 5;
+    repeated ActionReceipt action_receipts = 6;
+    repeated ActionReceipt prelude_receipts = 7;
 }
 
 message ServerShuttingDown {
@@ -787,10 +790,15 @@ message ActionReceipt {
         ResourceCatalog resource_catalog = 17;
         PatchedShadersReceipt patched_shaders = 18;
         EmptyReceipt empty = 19;
+        ResetTemporalReceipt reset_temporal = 20;
     }
 }
 
 message EmptyReceipt {}
+
+message ResetTemporalReceipt {
+    uint64 completed_at_unix_ms = 1;
+}
 
 message WaitFramesReceipt {
     uint32 requested_frames = 1;
@@ -813,6 +821,7 @@ message CaptureReceipt {
     optional uint32 pass_occurrence = 3;
     ResourceDescriptor resource = 4;
     repeated ArtifactMetadata artifacts = 5;
+    optional WaitFramesReceipt internal_wait = 6;
 }
 
 message CompareReceipt {

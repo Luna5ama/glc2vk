@@ -86,8 +86,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T05 | P0 | Vibris | Add transactional restoration and recovery | DONE | `T05 make runtime mutations transactional` |
 | T06 | P0 | Vibris | Define effective shader settings contract | DONE | `T06 expose resolved shader settings contract` |
 | T07 | P0 | Iris | Implement effective settings in Iris host | DONE | `T07 report effective shader settings from Iris` |
-| T08 | P1 | Vibris | Return one ordered receipt per action | READY | `T08 return complete ordered action receipts` |
-| T09 | P0 | Vibris | Define compile catalog runtime contract | PENDING | `T09 define compile validation catalog contract` |
+| T08 | P1 | Vibris | Return one ordered receipt per action | DONE | `T08 return complete ordered action receipts` |
+| T09 | P0 | Vibris | Define compile catalog runtime contract | READY | `T09 define compile validation catalog contract` |
 | T10 | P0 | Iris | Emit complete Iris compile catalog | PENDING | `T10 emit Iris program compile catalog` |
 | T11 | P0 | Vibris | Add compile_validate recipe | PENDING | `T11 add compile validation recipe` |
 | T12 | P0 | Vibris | Expand immutable benchmark provenance | PENDING | `T12 expand benchmark provenance and stale checks` |
@@ -633,7 +633,7 @@ Evidence:
 
 ### T08 — Return one ordered receipt per action
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T07
 
@@ -678,11 +678,28 @@ Blockers:
 
 Evidence:
 
-- Pending.
+- Added a strict receipt book over the wire action sequence. It assigns separate contiguous indices to generated
+  preludes and user actions, requires every slot to reach `OK`, `FAILED`, or `CANCELLED`, and preserves completed
+  receipts plus explicit failure/cancellation errors when a later action fails.
+- Grouped screenshot, texture, and buffer readbacks still execute as one runtime capture while returning one receipt
+  per original action with only that action's resource and artifacts. Screenshot frame delays are represented by an
+  `internal_wait` in the screenshot receipt and no synthetic wait action or index is exposed.
+- Load/activate receipts now include source UUID/hash, complete effective settings, scene hash, and completion time;
+  waits include frame bounds and completed counts; reset, patched-shader, compare, and failure paths now return typed
+  terminal receipts. Failed terminals carry both `action_receipts` and `prelude_receipts` through Core and MCP.
+- Recipe- and matrix-generated shader loads are marked as preludes. Contract tests prove one prelude receipt plus
+  contiguous user-action receipts and preserve both receipt lists in failed MCP terminal details.
+- `2026-08-11`: `.\gradlew.bat :vibris-protocol-java:test :vibris-core:test --offline --console=plain` passed with
+  protocol Java 5/5 and Core 97/97 tests; focused action/capture coverage passed 13/13, all with zero failures, errors,
+  or skips. The native `vibris-job-protocol-tests` target built successfully and
+  `ctest --preset release -R 'Action|JobProtocol' --output-on-failure` passed 2/2 tests.
+- Vibris protected adapter files remained at their pre-existing `11/4` and `8/6` numstats, `capture/a.spv` remained
+  untracked and unread, and no deployment or process restart occurred.
+- Commit: this task's commit with subject `T08 return complete ordered action receipts`.
 
 ### T09 — Define compile catalog runtime contract
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T08
 
@@ -1341,7 +1358,7 @@ Queue order is authoritative and serial even where technical dependencies could 
 - [ ] Long jobs are durable, queryable, resumable when safe, and never duplicate completed or uncertain side effects.
 - [ ] All state-mutating validation restores source, effective settings, scene, and temporal state with receipts.
 - [x] Preserve returns complete effective settings, origins, diff, and stable hash.
-- [ ] Every input action produces exactly one ordered receipt.
+- [x] Every input action produces exactly one ordered receipt.
 - [ ] Compile validation reports every intended program/pass and baseline diagnostic changes without GPU warmup.
 - [ ] Every result contains complete immutable provenance and correct shader-content stale semantics.
 - [ ] Benchmark decisions enforce target/sibling/sentinel guardrails, measured noise, confidence, order, drift, compile, visual, provenance, and restoration gates.
@@ -1367,3 +1384,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T03 - exposed authoritative runtime lease, fair cross-workspace queue, truthful readiness/error/transitions, safe cancellation, and event-driven status waits; Core 86/86 and native filtered CTest 7/7 passed - Commit title: T03 expose runtime lease and status transitions`
 - `2026-08-11 - T06 - required complete runtime-resolved shader settings, deterministic origins/default diff/hash, and propagated them through mutation/restoration provenance; API 6/6 and Core 95/95 passed - Commit title: T06 expose resolved shader settings contract`
 - `2026-08-11 - T07 - Iris snapshots active settings before preserve reloads and returns complete post-install values/defaults/origins/hash; bridge tests 10/10 and Iris offline build passed; external commit 7096295b3875a13b6f00607b6f30d0649bd4f68f - Commit title: T07 report effective shader settings from Iris`
+- `2026-08-11 - T08 - returned one terminal receipt per input action, separated generated preludes, retained grouped-capture indices, nested screenshot waits, and preserved partial receipts on failure; protocol Java 5/5, Core 97/97, focused 13/13, and native CTest 2/2 passed - Commit title: T08 return complete ordered action receipts`

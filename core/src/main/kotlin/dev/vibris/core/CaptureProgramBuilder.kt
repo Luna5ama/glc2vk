@@ -29,10 +29,9 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
             }
         }
         val steps = ArrayList<ActionStep>()
-        val group = ArrayList<CapturePlan.Target>()
+        val group = ArrayList<PendingCapture>()
         val artifactNames = HashSet<String>()
         var estimatedBytes = 0L
-        var groupActionIndex = -1
         var comparisons = 0
         fun flushGroup() {
             estimatedBytes = flush(
@@ -41,9 +40,7 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                 catalog,
                 artifactNames,
                 estimatedBytes,
-                groupActionIndex,
             )
-            groupActionIndex = -1
         }
         for ((actionIndex, action) in job.submission.actionSequence.actionsList.withIndex()) {
             when {
@@ -75,12 +72,12 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                 action.hasTakeScreenshot() || action.hasDumpTexture() || action.hasDumpBuffer() -> {
                     val afterFrames = if (action.hasTakeScreenshot()) action.takeScreenshot.afterFrames else 0
                     if (afterFrames < 0) throw invalid("Screenshot frame delay is too large.")
-                    if (afterFrames > 0) {
-                        flushGroup()
-                        steps.add(ActionStep.waitFrames(actionIndex, afterFrames))
-                    }
-                    if (group.isEmpty()) groupActionIndex = actionIndex
-                    CapturePlanBuilder.addAction(group, action, catalog)
+                    if (afterFrames > 0) flushGroup()
+                    val targets = ArrayList<CapturePlan.Target>(1)
+                    CapturePlanBuilder.addAction(targets, action, catalog)
+                    if (targets.size != 1) throw invalid("Capture action did not resolve to exactly one target.")
+                    group.add(PendingCapture(actionIndex, targets.single(), afterFrames))
+                    if (afterFrames > 0) flushGroup()
                 }
                 action.hasGetPatchedShaders() -> {
                     flushGroup()
@@ -91,16 +88,19 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                 action.hasCompareCaptures() -> {
                     flushGroup()
                     val compare = action.compareCaptures
-                    val captures = steps.withIndex().filter { it.value.type == ActionType.CAPTURE }
-                    val baselineCapture = captures.indexOfFirst {
-                        it.value.actionIndex == compare.baselineActionIndex
-                    }
-                    val candidateCapture = captures.indexOfFirst {
-                        it.value.actionIndex == compare.candidateActionIndex
-                    }
+                    val captures = steps.asSequence()
+                        .filter { it.type == ActionType.CAPTURE }
+                        .flatMap { step ->
+                            step.captureActions.asSequence().map { capture ->
+                                capture.actionIndex to CapturePlan(listOf(step.capture!!.targets[capture.targetIndex]))
+                            }
+                        }
+                        .toMap()
+                    val baselineCapture = captures[compare.baselineActionIndex]
+                    val candidateCapture = captures[compare.candidateActionIndex]
                     if (
-                        comparisons++ != 0 || baselineCapture < 0 || candidateCapture < 0 ||
-                        baselineCapture == candidateCapture ||
+                        comparisons++ != 0 || baselineCapture == null || candidateCapture == null ||
+                        compare.baselineActionIndex == compare.candidateActionIndex ||
                         compare.baselineLabel.isBlank() || compare.candidateLabel.isBlank() ||
                         (compare.hasThresholds() && !validThresholds(compare.thresholds))
                     ) {
@@ -155,31 +155,39 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
         val actionIndex: Int,
         val runtimeAction: dev.vibris.protocol.v2.Action?,
         val loadShader: dev.vibris.protocol.v2.LoadShader?,
+        val captureActions: List<CaptureAction>,
     ) {
         companion object {
             fun load(actionIndex: Int, load: dev.vibris.protocol.v2.LoadShader) =
-                ActionStep(ActionType.LOAD, null, 0, null, null, actionIndex, null, load)
+                ActionStep(ActionType.LOAD, null, 0, null, null, actionIndex, null, load, emptyList())
             fun activate(actionIndex: Int, uuid: String) =
-                ActionStep(ActionType.ACTIVATE, uuid, 0, null, null, actionIndex, null, null)
+                ActionStep(ActionType.ACTIVATE, uuid, 0, null, null, actionIndex, null, null, emptyList())
             fun reset(actionIndex: Int) =
-                ActionStep(ActionType.RESET, null, 0, null, null, actionIndex, null, null)
+                ActionStep(ActionType.RESET, null, 0, null, null, actionIndex, null, null, emptyList())
             fun waitFrames(actionIndex: Int, frames: Int) =
-                ActionStep(ActionType.WAIT, null, frames, null, null, actionIndex, null, null)
-            fun capture(actionIndex: Int, capture: CapturePlan) =
-                ActionStep(ActionType.CAPTURE, null, 0, capture, null, actionIndex, null, null)
+                ActionStep(ActionType.WAIT, null, frames, null, null, actionIndex, null, null, emptyList())
+            fun capture(capture: CapturePlan, actions: List<CaptureAction>) =
+                ActionStep(ActionType.CAPTURE, null, 0, capture, null, actions.first().actionIndex, null, null, actions)
             fun patchedShaders(actionIndex: Int, capture: CapturePlan) =
-                ActionStep(ActionType.PATCHED_SHADERS, null, 0, capture, null, actionIndex, null, null)
+                ActionStep(ActionType.PATCHED_SHADERS, null, 0, capture, null, actionIndex, null, null, emptyList())
             fun compare(actionIndex: Int, comparison: Comparison) =
-                ActionStep(ActionType.COMPARE, null, 0, null, comparison, actionIndex, null, null)
+                ActionStep(ActionType.COMPARE, null, 0, null, comparison, actionIndex, null, null, emptyList())
             fun runtime(actionIndex: Int, action: dev.vibris.protocol.v2.Action) =
-                ActionStep(ActionType.RUNTIME, null, 0, null, null, actionIndex, action, null)
+                ActionStep(ActionType.RUNTIME, null, 0, null, null, actionIndex, action, null, emptyList())
         }
     }
 
     @JvmRecord
+    data class CaptureAction(
+        val actionIndex: Int,
+        val targetIndex: Int,
+        val beforeFrames: Int,
+    )
+
+    @JvmRecord
     data class Comparison(
-        val baselineCaptureIndex: Int,
-        val candidateCaptureIndex: Int,
+        val baselinePlan: CapturePlan,
+        val candidatePlan: CapturePlan,
         val baselineLabel: String,
         val candidateLabel: String,
         val thresholds: VisualThresholds?,
@@ -187,6 +195,12 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
 
     @JvmRecord
     data class ActionProgram(val steps: List<ActionStep>, val estimatedBytes: Long)
+
+    private data class PendingCapture(
+        val actionIndex: Int,
+        val target: CapturePlan.Target,
+        val beforeFrames: Int,
+    )
 
     companion object {
         private const val DEFAULT_MAX_ACTIONS = 64
@@ -201,20 +215,27 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
 
         @Throws(RuntimeJobExecutor.Failure::class)
         private fun flush(
-            group: MutableList<CapturePlan.Target>,
+            group: MutableList<PendingCapture>,
             steps: MutableList<ActionStep>,
             catalog: ResourceCatalog,
             artifactNames: MutableSet<String>,
             estimatedBytes: Long,
-            actionIndex: Int,
         ): Long {
             if (group.isEmpty()) return estimatedBytes
-            val planned = CapturePlanBuilder.plan(java.util.List.copyOf(group), catalog)
+            val pending = java.util.List.copyOf(group)
+            val planned = CapturePlanBuilder.plan(pending.map(PendingCapture::target), catalog)
             for (target in planned.capture.targets) {
                 target.outputs.forEach { requireUnique(artifactNames, it.fileName) }
             }
             group.clear()
-            steps.add(ActionStep.capture(actionIndex, planned.capture))
+            steps.add(
+                ActionStep.capture(
+                    planned.capture,
+                    pending.mapIndexed { index, capture ->
+                        CaptureAction(capture.actionIndex, index, capture.beforeFrames)
+                    },
+                ),
+            )
             return try {
                 Math.addExact(estimatedBytes, planned.estimatedBytes)
             } catch (_: ArithmeticException) {

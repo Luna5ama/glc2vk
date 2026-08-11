@@ -64,6 +64,9 @@ void strict_v2_request_contains_typed_texture_and_buffer_actions() {
 	require(job.job_id() == request_id && job.has_action_sequence() &&
 		job.restore_state().on_success() && job.restore_state().on_error(),
 		"strict v2 job identity or restoration policy is missing");
+	require(job.action_sequence().actions(0).has_load_shader() &&
+		job.action_sequence().actions(0).prelude(),
+		"recipe-generated shader load was exposed as an ordinary input action");
 	bool texture = false;
 	bool buffer = false;
 	for (const auto& action : job.action_sequence().actions()) {
@@ -76,6 +79,26 @@ void strict_v2_request_contains_typed_texture_and_buffer_actions() {
 		}
 	}
 	require(texture && buffer, "typed strict-v2 texture/buffer capture actions were not encoded");
+}
+
+void matrix_auto_load_is_a_prelude_receipt_action() {
+	const Json arguments{
+		{"actions", Json::array({{{"type", "wait_frames"}, {"frames", 2}}})},
+		{"sources", Json::array({{{"id", "candidate"}, {"kind", "workspace"}}})},
+		{"configs", Json::array({{{"id", "quality"}, {"values", {{"SAMPLES", 4}}}}})},
+		{"matrix", {{"sources", Json::array({"candidate"})}, {"configs", Json::array({"quality"})}}},
+	};
+	const std::vector sources{source()};
+	const auto request = JobProtocol::request(
+		"vibris_run_matrix", arguments, config(), scene(), sources, std::string(request_id));
+	const auto& cases = request.submit_job().job().matrix().cases();
+	require(cases.size() == 1 && cases[0].actions().actions_size() == 2,
+		"matrix case did not contain one auto-load and one requested action");
+	require(cases[0].actions().actions(0).has_load_shader() &&
+		cases[0].actions().actions(0).prelude() &&
+		cases[0].actions().actions(1).has_wait_frames() &&
+		!cases[0].actions().actions(1).prelude(),
+		"matrix auto-load and requested action were not separated by prelude semantics");
 }
 
 void recovery_request_has_no_scene_or_source_dependency() {
@@ -94,11 +117,24 @@ void recovery_request_has_no_scene_or_source_dependency() {
 	value->mutable_error()->set_message("manual repair required");
 	value->mutable_restoration()->set_status(proto::RECEIPT_STATUS_FAILED);
 	value->mutable_restoration()->set_expected_source_uuid("safe-source");
+	auto* prelude = value->add_prelude_receipts();
+	prelude->set_action_index(0);
+	prelude->set_kind(proto::ACTION_KIND_LOAD_SHADER);
+	prelude->set_status(proto::RECEIPT_STATUS_OK);
+	prelude->mutable_runtime_mutation()->set_source_uuid("safe-source");
+	auto* action = value->add_action_receipts();
+	action->set_action_index(0);
+	action->set_kind(proto::ACTION_KIND_WAIT_FRAMES);
+	action->set_status(proto::RECEIPT_STATUS_FAILED);
+	action->mutable_error()->set_code(proto::ERROR_CODE_EXECUTION_TIMEOUT);
 	const auto outcome = JobProtocol::terminal(failed);
 	const auto* error = std::get_if<ToolFailure>(&outcome);
 	require(error != nullptr && error->details.contains("restoration") &&
-		error->details.at("restoration").at("expected_source_uuid") == "safe-source",
-		"recovery failure mapping dropped the structured restoration receipt");
+		error->details.at("restoration").at("expected_source_uuid") == "safe-source" &&
+		error->details.at("prelude_receipts").size() == 1 &&
+		error->details.at("action_receipts").size() == 1 &&
+		error->details.at("action_receipts").at(0).at("action_index") == 0,
+		"recovery failure mapping dropped restoration or ordered action receipts");
 }
 
 void explicit_restore_policy_is_not_overridden() {
@@ -173,6 +209,7 @@ void resume_registration_and_terminal_mapping_are_strict_v2() {
 int main() {
 	try {
 		strict_v2_request_contains_typed_texture_and_buffer_actions();
+		matrix_auto_load_is_a_prelude_receipt_action();
 		recovery_request_has_no_scene_or_source_dependency();
 		explicit_restore_policy_is_not_overridden();
 		accepted_request_reconnects_with_resume_only();

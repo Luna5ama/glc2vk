@@ -1,6 +1,7 @@
 package dev.vibris.core
 
 import dev.vibris.core.request.RequestState
+import dev.vibris.protocol.v2.ActionReceipt
 import dev.vibris.protocol.v2.ArtifactMetadata
 import dev.vibris.protocol.v2.ClientMessage
 import dev.vibris.protocol.v2.ErrorCode
@@ -66,15 +67,29 @@ internal object ProtocolMessages {
         message: String,
         artifacts: List<ArtifactMetadata>,
         restoration: RestorationReceipt?,
+    ): TerminalResult = failure(
+        jobId,
+        requestId,
+        code,
+        message,
+        artifacts,
+        restoration,
+        emptyList(),
+        emptyList(),
+    )
+
+    @JvmStatic
+    fun failure(
+        jobId: String,
+        requestId: String,
+        code: ErrorCode,
+        message: String,
+        artifacts: List<ArtifactMetadata>,
+        restoration: RestorationReceipt?,
+        actionReceipts: List<ActionReceipt>,
+        preludeReceipts: List<ActionReceipt>,
     ): TerminalResult {
-        val error = ProtocolError.newBuilder()
-            .setCode(code)
-            .setMessage(message)
-            .setRetryable(
-                code == ErrorCode.ERROR_CODE_QUEUE_FULL ||
-                    code == ErrorCode.ERROR_CODE_QUEUE_TIMEOUT ||
-                    code == ErrorCode.ERROR_CODE_EXECUTION_TIMEOUT,
-            )
+        val error = error(code, message)
         if (artifacts.isNotEmpty()) {
             error.setLogPath(artifacts.first().relativePath)
         }
@@ -91,6 +106,8 @@ internal object ProtocolMessages {
             .setRequestId(requestId)
             .setError(error)
             .addAllArtifacts(artifacts)
+            .addAllActionReceipts(actionReceipts)
+            .addAllPreludeReceipts(preludeReceipts)
         restoration?.let(failed::setRestoration)
         return TerminalResult.failed(failed.build())
     }
@@ -130,4 +147,14 @@ internal object ProtocolMessages {
             .setMessageId(messageId)
             .setRequestId(requestId)
             .setWorkspaceId(workspaceId)
+
+    @JvmStatic
+    fun error(code: ErrorCode, message: String): ProtocolError.Builder = ProtocolError.newBuilder()
+        .setCode(code)
+        .setMessage(message)
+        .setRetryable(
+            code == ErrorCode.ERROR_CODE_QUEUE_FULL ||
+                code == ErrorCode.ERROR_CODE_QUEUE_TIMEOUT ||
+                code == ErrorCode.ERROR_CODE_EXECUTION_TIMEOUT,
+        )
 }

@@ -85,14 +85,53 @@ class RuntimeJobExecutorCaptureTest {
             result.getArtifactsList().stream().map(artifact -> artifact.getKind()).toList());
         assertEquals(List.of(
                 ActionKind.ACTION_KIND_ACTIVATE_SOURCE,
-                ActionKind.ACTION_KIND_TAKE_SCREENSHOT),
+                ActionKind.ACTION_KIND_TAKE_SCREENSHOT,
+                ActionKind.ACTION_KIND_DUMP_TEXTURE,
+                ActionKind.ACTION_KIND_DUMP_BUFFER),
             result.getActionReceiptsList().stream().map(receipt -> receipt.getKind()).toList());
+        assertEquals(List.of(0, 1, 2, 3),
+            result.getActionReceiptsList().stream().map(receipt -> receipt.getActionIndex()).toList());
         assertTrue(result.getActionReceiptsList().stream()
             .allMatch(receipt -> receipt.getStatus() == ReceiptStatus.RECEIPT_STATUS_OK));
+        assertEquals(1, result.getActionReceipts(1).getCapture().getArtifactsCount());
+        assertEquals("final", result.getActionReceipts(1).getCapture().getResource().getLogicalName());
+        assertEquals(2, result.getActionReceipts(2).getCapture().getArtifactsCount());
+        assertEquals("colortex0", result.getActionReceipts(2).getCapture().getResource().getLogicalName());
+        assertEquals(2, result.getActionReceipts(3).getCapture().getArtifactsCount());
+        assertEquals("radiance_cache", result.getActionReceipts(3).getCapture().getResource().getLogicalName());
         assertTrue(result.getArtifactsList().stream()
             .map(artifact -> Path.of(artifact.getRelativePath()))
             .allMatch(Files::isRegularFile));
         assertFalse(result.getResultManifestId().isBlank());
+    }
+
+    @Test
+    void keepsScreenshotFrameDelayInsideItsSingleCaptureReceipt() throws Exception {
+        Fixture fixture = new Fixture();
+        ResourceCatalog.ResourceDescriptor screenshot = resource(
+            "final", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 2, 16);
+        fixture.runtime.catalog = new ResourceCatalog(List.of(screenshot));
+        fixture.runtime.captureResult = captureResult(2, Map.of("delayed", screenshot));
+        fixture.runtime.captureFiles.put("delayed.png", new byte[]{1, 2, 3});
+
+        TerminalResult terminal = fixture.executor.execute(fixture.job(ActionSequence.newBuilder()
+            .addActions(Action.newBuilder().setTakeScreenshot(TakeScreenshot.newBuilder()
+                .setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG)
+                .setArtifactName("delayed")
+                .setAfterFrames(2)))
+            .build()), ignored -> {});
+
+        var result = terminal.completed().getResult();
+        assertEquals(List.of("link:A", "reload", "context", "frames", "capture"), fixture.runtime.events);
+        assertEquals(2, result.getActionReceiptsCount());
+        var screenshotReceipt = result.getActionReceipts(1);
+        assertEquals(1, screenshotReceipt.getActionIndex());
+        assertEquals(ActionKind.ACTION_KIND_TAKE_SCREENSHOT, screenshotReceipt.getKind());
+        assertTrue(screenshotReceipt.hasCapture());
+        assertTrue(screenshotReceipt.getCapture().hasInternalWait());
+        assertEquals(2, screenshotReceipt.getCapture().getInternalWait().getRequestedFrames());
+        assertEquals(0, screenshotReceipt.getCapture().getInternalWait().getStartFrame());
+        assertEquals(2, screenshotReceipt.getCapture().getInternalWait().getEndFrame());
     }
 
     @Test
@@ -173,6 +212,9 @@ class RuntimeJobExecutorCaptureTest {
         var result = terminal.completed().getResult();
         assertEquals(ActionKind.ACTION_KIND_GET_PATCHED_SHADERS,
             result.getActionReceipts(1).getKind());
+        assertTrue(result.getActionReceipts(1).hasPatchedShaders());
+        assertEquals(81, result.getActionReceipts(1).getPatchedShaders().getShaderGeneration());
+        assertEquals(2, result.getActionReceipts(1).getPatchedShaders().getArtifactsCount());
         assertEquals(2, result.getArtifactsList().stream()
             .filter(artifact -> artifact.getKind() == ArtifactKind.ARTIFACT_KIND_PATCHED_SHADER)
             .count());

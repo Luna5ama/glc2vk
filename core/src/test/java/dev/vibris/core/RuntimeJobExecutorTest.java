@@ -67,6 +67,10 @@ class RuntimeJobExecutorTest {
             terminal.completed().getResult().getActionReceipts(0).getKind());
         assertEquals(source.uuid,
             terminal.completed().getResult().getActionReceipts(0).getRuntimeMutation().getSourceUuid());
+        assertFalse(terminal.completed().getResult().getActionReceipts(0)
+            .getRuntimeMutation().getSourceSha256().isBlank());
+        assertFalse(terminal.completed().getResult().getActionReceipts(0)
+            .getRuntimeMutation().getSceneSha256().isBlank());
         var effective = terminal.completed().getResult().getActionReceipts(0)
             .getRuntimeMutation().getEffectiveSettings();
         assertEquals(runtimeSettings.settingsSha256(), effective.getSettingsSha256());
@@ -80,6 +84,10 @@ class RuntimeJobExecutorTest {
             terminal.completed().getResult().getActionReceipts(1).getStatus());
         assertEquals(3,
             terminal.completed().getResult().getActionReceipts(1).getWaitFrames().getCompletedFrames());
+        assertEquals(0,
+            terminal.completed().getResult().getActionReceipts(1).getWaitFrames().getStartFrame());
+        assertEquals(3,
+            terminal.completed().getResult().getActionReceipts(1).getWaitFrames().getEndFrame());
     }
 
     @Test
@@ -121,6 +129,60 @@ class RuntimeJobExecutorTest {
 
         assertEquals(ErrorCode.ERROR_CODE_INTERNAL, failure.code);
         assertFalse(fixture.runtime.events.contains("frames"));
+        assertEquals(List.of(0, 1, 2),
+            failure.actionReceipts.stream().map(receipt -> receipt.getActionIndex()).toList());
+        assertEquals(List.of(
+                ReceiptStatus.RECEIPT_STATUS_OK,
+                ReceiptStatus.RECEIPT_STATUS_FAILED,
+                ReceiptStatus.RECEIPT_STATUS_CANCELLED),
+            failure.actionReceipts.stream().map(receipt -> receipt.getStatus()).toList());
+        assertTrue(failure.actionReceipts.get(1).hasError());
+        assertEquals(ErrorCode.ERROR_CODE_INTERNAL, failure.actionReceipts.get(1).getError().getCode());
+        assertTrue(failure.actionReceipts.get(2).hasError());
+        assertEquals(ErrorCode.ERROR_CODE_CANCELLED, failure.actionReceipts.get(2).getError().getCode());
+        assertTrue(failure.preludeReceipts.isEmpty());
+
+        var terminal = ProtocolMessages.failure(
+            job.submission.getJobId(),
+            job.requestId,
+            failure.code,
+            failure.getMessage(),
+            failure.artifacts,
+            failure.restoration,
+            failure.actionReceipts,
+            failure.preludeReceipts);
+        assertEquals(3, terminal.failed().getActionReceiptsCount());
+    }
+
+    @Test
+    void routesSynthesizedLoadToPreludeAndKeepsUserIndicesContiguous() throws Exception {
+        Fixture fixture = new Fixture();
+        Source source = fixture.source("A");
+        CoreJob job = fixture.job(source, ActionSequence.newBuilder()
+            .addActions(Action.newBuilder()
+                .setPrelude(true)
+                .setLoadShader(LoadShader.newBuilder()
+                    .setSourceUuid(source.uuid)
+                    .setSourceId("candidate")
+                    .setConfigId("preserve")
+                    .setConfig(ShaderConfig.newBuilder().setPreserveCurrent(true))))
+            .addActions(Action.newBuilder().setResetTemporalState(ResetTemporalState.getDefaultInstance()))
+            .addActions(Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(2)))
+            .build());
+
+        TerminalResult terminal = fixture.executor.execute(job, ignored -> {});
+        var result = terminal.completed().getResult();
+
+        assertEquals(1, result.getPreludeReceiptsCount());
+        assertEquals(3, result.getPreludeReceiptsCount() + result.getActionReceiptsCount());
+        assertEquals(0, result.getPreludeReceipts(0).getActionIndex());
+        assertEquals(ActionKind.ACTION_KIND_LOAD_SHADER, result.getPreludeReceipts(0).getKind());
+        assertEquals(List.of(0, 1),
+            result.getActionReceiptsList().stream().map(receipt -> receipt.getActionIndex()).toList());
+        assertEquals(ActionKind.ACTION_KIND_RESET_TEMPORAL_STATE, result.getActionReceipts(0).getKind());
+        assertTrue(result.getActionReceipts(0).hasResetTemporal());
+        assertTrue(result.getActionReceipts(0).getResetTemporal().getCompletedAtUnixMs() > 0);
+        assertEquals(ActionKind.ACTION_KIND_WAIT_FRAMES, result.getActionReceipts(1).getKind());
     }
 
     @Test

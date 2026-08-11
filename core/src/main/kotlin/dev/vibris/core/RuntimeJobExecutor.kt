@@ -9,6 +9,7 @@ import dev.vibris.api.ReloadResult
 import dev.vibris.api.SceneContext
 import dev.vibris.api.TemporalResetResult
 import dev.vibris.api.VibrisRuntimeAdapter
+import dev.vibris.protocol.v2.ActionReceipt
 import dev.vibris.protocol.v2.ArtifactMetadata
 import dev.vibris.protocol.v2.ErrorCode
 import dev.vibris.protocol.v2.JobCompleted
@@ -132,10 +133,10 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         progress: Consumer<JobStage>,
         deadline: Long,
         frames: Int,
-    ) {
+    ): Long {
         progress.accept(JobStage.JOB_STAGE_WARMING_UP)
         probe.event(job.requestId, "WARMING_UP")
-        await(runtime.waitRenderedFrames(frames, job.cancellation.token()), job, deadline)
+        return await(runtime.waitRenderedFrames(frames, job.cancellation.token()), job, deadline)
     }
 
     fun runtime(): VibrisRuntimeAdapter = runtime
@@ -530,19 +531,48 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         @JvmField val diagnostics: List<ReloadResult.Diagnostic>,
         @JvmField val restoration: RestorationReceipt?,
         @JvmField val holdOwnership: Boolean,
+        @JvmField val actionReceipts: List<ActionReceipt>,
+        @JvmField val preludeReceipts: List<ActionReceipt>,
     ) : Exception(message) {
         constructor(code: ErrorCode, message: String?) :
-            this(code, message, java.util.List.of(), java.util.List.of(), null, false)
+            this(
+                code,
+                message,
+                java.util.List.of(),
+                java.util.List.of(),
+                null,
+                false,
+                java.util.List.of(),
+                java.util.List.of(),
+            )
 
         constructor(code: ErrorCode, message: String?, artifact: ArtifactMetadata) :
-            this(code, message, java.util.List.of(artifact), java.util.List.of(), null, false)
+            this(
+                code,
+                message,
+                java.util.List.of(artifact),
+                java.util.List.of(),
+                null,
+                false,
+                java.util.List.of(),
+                java.util.List.of(),
+            )
 
         internal constructor(
             code: ErrorCode,
             message: String?,
             restoration: RestorationReceipt?,
             holdOwnership: Boolean = false,
-        ) : this(code, message, java.util.List.of(), java.util.List.of(), restoration, holdOwnership)
+        ) : this(
+            code,
+            message,
+            java.util.List.of(),
+            java.util.List.of(),
+            restoration,
+            holdOwnership,
+            java.util.List.of(),
+            java.util.List.of(),
+        )
 
         fun withRestoration(value: RestorationReceipt): Failure = Failure(
             code,
@@ -551,6 +581,19 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             diagnostics,
             value,
             holdOwnership,
+            actionReceipts,
+            preludeReceipts,
+        ).also { replacement -> suppressed.forEach(replacement::addSuppressed) }
+
+        fun withActionReceipts(actions: List<ActionReceipt>, preludes: List<ActionReceipt>): Failure = Failure(
+            code,
+            message,
+            artifacts,
+            diagnostics,
+            restoration,
+            holdOwnership,
+            java.util.List.copyOf(actions),
+            java.util.List.copyOf(preludes),
         ).also { replacement -> suppressed.forEach(replacement::addSuppressed) }
     }
 

@@ -9,8 +9,11 @@ import dev.vibris.protocol.v2.ArtifactKind
 import dev.vibris.protocol.v2.ArtifactMetadata
 import dev.vibris.protocol.v2.ArtifactRole
 import dev.vibris.protocol.v2.CompareReceipt
+import dev.vibris.protocol.v2.CaptureReceipt
 import dev.vibris.protocol.v2.ErrorCode
 import dev.vibris.protocol.v2.JobResult
+import dev.vibris.protocol.v2.PatchedShadersReceipt
+import dev.vibris.protocol.v2.WaitFramesReceipt
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
@@ -118,6 +121,35 @@ internal class CaptureProtocolArtifacts {
         return result.build()
     }
 
+    fun captureReceipt(
+        plan: CapturePlan,
+        captured: CaptureResult,
+        targetIndex: Int,
+        committed: JobResult,
+        internalWait: WaitFramesReceipt?,
+    ): CaptureReceipt {
+        val target = plan.targets[targetIndex]
+        val group = captured.groups.first { it.name == target.artifactName }
+        val receipt = CaptureReceipt.newBuilder()
+            .setFrameId(captured.frameId)
+            .setResource(toProtocol(group.resource, target))
+            .addAllArtifacts(receiptArtifacts(target, committed))
+        internalWait?.let(receipt::setInternalWait)
+        return receipt.build()
+    }
+
+    fun patchedShadersReceipt(
+        plan: CapturePlan,
+        captured: CaptureResult,
+        committed: JobResult,
+    ): PatchedShadersReceipt {
+        val target = plan.targets.single()
+        return PatchedShadersReceipt.newBuilder()
+            .setShaderGeneration(captured.frameId)
+            .addAllArtifacts(receiptArtifacts(target, committed))
+            .build()
+    }
+
     private fun validateResult(plan: CapturePlan, result: CaptureResult) {
         if (result.groups.size != plan.targets.size) {
             throw RuntimeJobExecutor.Failure(
@@ -187,6 +219,13 @@ internal class CaptureProtocolArtifacts {
         .setByteSize(file.byteSize)
         .setCreatedAtUnixMs(System.currentTimeMillis())
         .build()
+
+    private fun receiptArtifacts(target: CapturePlan.Target, committed: JobResult): List<ArtifactMetadata> {
+        val names = target.outputs.mapTo(HashSet()) { it.fileName }
+        return committed.artifactsList.filter { artifact ->
+            Path.of(artifact.relativePath).fileName.toString() in names
+        }
+    }
 
     private fun toProtocol(
         resource: ResourceCatalog.ResourceDescriptor,

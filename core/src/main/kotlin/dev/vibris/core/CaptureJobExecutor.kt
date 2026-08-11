@@ -6,8 +6,11 @@ import dev.vibris.api.CaptureResult
 import dev.vibris.api.ReloadResult
 import dev.vibris.api.ResourceCatalog
 import dev.vibris.protocol.v2.CompareReceipt
+import dev.vibris.protocol.v2.CaptureReceipt
 import dev.vibris.protocol.v2.ErrorCode
 import dev.vibris.protocol.v2.JobResult
+import dev.vibris.protocol.v2.PatchedShadersReceipt
+import dev.vibris.protocol.v2.WaitFramesReceipt
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 
@@ -30,13 +33,10 @@ internal class CaptureJobExecutor(
             .filter { it.type == CaptureProgramBuilder.ActionType.CAPTURE ||
                 it.type == CaptureProgramBuilder.ActionType.PATCHED_SHADERS }
             .map { it.capture!! }
-        val comparisonPlans = program.steps
-            .filter { it.type == CaptureProgramBuilder.ActionType.CAPTURE }
-            .map { it.capture!! }
         val prepared = if (captures.isEmpty() && !ProfileResultArtifacts.requested(job.submission)) {
             null
         } else {
-            prepare(job, captures, comparisonPlans, program.estimatedBytes, diagnostics)
+            prepare(job, captures, program.estimatedBytes, diagnostics)
         }
         return ActionPrepared(program, prepared)
     }
@@ -45,7 +45,6 @@ internal class CaptureJobExecutor(
     private fun prepare(
         job: CoreJob,
         capturePlans: List<CapturePlan>,
-        comparisonPlans: List<CapturePlan>,
         estimate: Long,
         diagnostics: List<ReloadResult.Diagnostic>,
     ): Prepared {
@@ -59,7 +58,7 @@ internal class CaptureJobExecutor(
                 job.requestId,
                 Math.addExact(estimate, shaderLog.size.toLong()),
             )
-            return Prepared(transaction, capturePlans, comparisonPlans, diagnostics)
+            return Prepared(transaction, capturePlans, diagnostics)
         } catch (exception: Exception) {
             closeAfterFailure(transaction, exception)
             throw failure(exception)
@@ -111,8 +110,8 @@ internal class CaptureJobExecutor(
         try {
             return comparisons.compare(
                 prepared.transaction,
-                prepared.comparisonPlans[comparison.baselineCaptureIndex],
-                prepared.comparisonPlans[comparison.candidateCaptureIndex],
+                comparison.baselinePlan,
+                comparison.candidatePlan,
                 comparison.baselineLabel,
                 comparison.candidateLabel,
                 comparison.thresholds,
@@ -122,14 +121,32 @@ internal class CaptureJobExecutor(
         }
     }
 
+    fun captureReceipt(
+        plan: CapturePlan,
+        captured: CaptureResult,
+        capture: CaptureProgramBuilder.CaptureAction,
+        committed: JobResult,
+        internalWait: WaitFramesReceipt?,
+    ): CaptureReceipt = protocol.captureReceipt(
+        plan,
+        captured,
+        capture.targetIndex,
+        committed,
+        internalWait,
+    )
+
+    fun patchedShadersReceipt(
+        plan: CapturePlan,
+        captured: CaptureResult,
+        committed: JobResult,
+    ): PatchedShadersReceipt = protocol.patchedShadersReceipt(plan, captured, committed)
+
     inner class Prepared internal constructor(
         internal val transaction: ArtifactManager.JobTransaction,
         capturePlans: List<CapturePlan>,
-        comparisonPlans: List<CapturePlan>,
         diagnostics: List<ReloadResult.Diagnostic>,
     ) : AutoCloseable {
         internal val plans: List<CapturePlan> = java.util.List.copyOf(capturePlans)
-        internal val comparisonPlans: List<CapturePlan> = java.util.List.copyOf(comparisonPlans)
         internal val diagnostics = ArrayList(diagnostics)
         private var shaderLogWritten = false
 
