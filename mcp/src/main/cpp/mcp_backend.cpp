@@ -119,9 +119,9 @@ private:
               process_id_(detail::generate_uuid()),
               source_handler_(binding_.root),
               artifact_link_(binding_.root, workspace_id_),
-              profile_matrix_(binding_.root, workspace_id_,
-                  [this](ProfileMatrixCaseExecution execution) {
-                      return run_profile_case(std::move(execution));
+              jobs_(binding_.root, workspace_id_,
+                  [this](DurableJobStepExecution execution) {
+                      return run_durable_step(std::move(execution));
                   }) {}
 
         ToolOutcome dispatch(std::string_view name, const Json& arguments) {
@@ -133,13 +133,13 @@ private:
                 return ToolFailure{"SERVER_NOT_AVAILABLE",
                     "Managed artifact v2 operations are not available from this runtime.", true};
             }
-            if (name == "vibris_run_recipe" &&
-                arguments.value("recipe", std::string{}) == "profile_matrix") {
-                return start_profile_matrix(arguments);
-            }
             if (name == "vibris_run_recipe" || name == "vibris_run_actions" || name == "vibris_run_matrix") {
-                if (profile_matrix_.running()) {
-                    return ToolFailure{"PROFILE_MATRIX_BUSY", "A profile matrix workflow is active.", true};
+                const bool durable = arguments.value("execution", std::string("sync")) == "async" ||
+                    (name == "vibris_run_recipe" &&
+                        arguments.value("recipe", std::string{}) == "profile_matrix");
+                if (durable) return start_durable_job(name, arguments);
+                if (jobs_.running()) {
+                    return ToolFailure{"JOB_BUSY", "A durable job is active.", true};
                 }
                 return run_job(name, arguments);
             }
@@ -159,7 +159,7 @@ private:
         }
 
         std::optional<GrpcClientStats> shutdown() {
-            profile_matrix_.shutdown();
+            jobs_.shutdown();
             source_handler_.clear();
             release_client();
             if (!used_client_) return std::nullopt;
@@ -293,14 +293,10 @@ private:
         }
 
         ToolOutcome job(const Json& arguments) {
-            auto control_arguments = arguments;
-            const auto operation = arguments.at("operation").get<std::string>();
-            control_arguments["operation"] = operation == "query" || operation == "result" ? "status" : operation;
-            if (operation == "resume") control_arguments["execution"] = "async";
-            return profile_matrix_.control(control_arguments);
+            return jobs_.control(arguments);
         }
 
-        ToolOutcome run_profile_case(ProfileMatrixCaseExecution execution) {
+        ToolOutcome run_durable_step(DurableJobStepExecution execution) {
             const auto context = scene_from_json(execution.arguments.at("__vibris_scene_context"));
             return unary<control::GetServerInfoResponse>(
                 [this](auto completion) { return client().get_server_info(std::move(completion)); },
@@ -324,12 +320,12 @@ private:
                 });
         }
 
-        ToolOutcome start_profile_matrix(const Json& arguments) {
-            return with_scene(arguments, [this, &arguments](const auto& config, const auto& preset) -> ToolOutcome {
+        ToolOutcome start_durable_job(std::string_view name, const Json& arguments) {
+            return with_scene(arguments, [this, name, &arguments](const auto& config, const auto& preset) -> ToolOutcome {
                 auto enriched = arguments;
                 enriched["__vibris_scene_context"] = scene_json(preset.context());
                 enriched["__vibris_preset"] = preset_json(preset);
-                return profile_matrix_.start(enriched, config);
+                return jobs_.start(name, enriched, config);
             });
         }
 
@@ -389,7 +385,7 @@ private:
         SourceHandler source_handler_;
         WorkspaceArtifactLink artifact_link_;
         std::unique_ptr<GrpcClient> grpc_;
-        ProfileMatrixWorkflow profile_matrix_;
+        DurableJobWorkflow jobs_;
         GrpcClientStats aggregate_{};
         bool used_client_ = false;
     };

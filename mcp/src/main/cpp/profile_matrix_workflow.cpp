@@ -1,6 +1,7 @@
 #include "profile_matrix_workflow.hpp"
 
 #include "config_document.hpp"
+#include "paired_benchmark.hpp"
 #include "source_preparer.hpp"
 #include "state_error.hpp"
 
@@ -9,10 +10,12 @@
 #include <Windows.h>
 
 #include <algorithm>
-#include <array>
+#include <chrono>
 #include <cstdint>
 #include <fstream>
 #include <limits>
+#include <numeric>
+#include <sstream>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -22,696 +25,862 @@ namespace {
 
 namespace fs = std::filesystem;
 
-constexpr std::uintmax_t maximum_checkpoint_bytes = 64ULL * 1024ULL * 1024ULL;
+constexpr std::uintmax_t maximum_document_bytes = 64ULL * 1024ULL * 1024ULL;
+constexpr std::size_t maximum_steps = 4096;
 
 [[noreturn]] void checkpoint_error(std::string message, bool retryable = false) {
-    throw StateError("PROFILE_CHECKPOINT_ERROR", std::move(message), retryable);
+	throw StateError("JOB_CHECKPOINT_ERROR", std::move(message), retryable);
 }
 
 [[noreturn]] void invalid_job() {
-    throw StateError("INVALID_PROFILE_JOB", "The profile matrix job checkpoint is invalid.");
+	throw StateError("INVALID_JOB", "The durable job is invalid.");
+}
+
+std::int64_t unix_ms() {
+	return std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
 bool reparse_point(const fs::path& path) {
-    const auto attributes = GetFileAttributesW(path.c_str());
-    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+	const auto attributes = GetFileAttributesW(path.c_str());
+	return attributes != INVALID_FILE_ATTRIBUTES &&
+		(attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 }
 
 void ensure_directory(const fs::path& path) {
-    std::error_code error;
-    fs::create_directories(path, error);
-    if (error || !fs::is_directory(path, error) || error || reparse_point(path)) {
-        checkpoint_error("The profile checkpoint directory is unavailable or unsafe.", true);
-    }
-    const auto parent = path.parent_path();
-    if (!parent.empty() && reparse_point(parent)) {
-        checkpoint_error("The workspace .vibris directory must not be a reparse point.");
-    }
+	std::error_code error;
+	fs::create_directories(path, error);
+	if (error || !fs::is_directory(path, error) || error || reparse_point(path)) {
+		checkpoint_error("The durable job directory is unavailable or unsafe.", true);
+	}
+	const auto parent = path.parent_path();
+	if (!parent.empty() && reparse_point(parent)) {
+		checkpoint_error("A durable job parent directory must not be a reparse point.");
+	}
 }
 
 void write_all(HANDLE output, std::string_view value) {
-    std::size_t offset = 0;
-    while (offset < value.size()) {
-        const auto remaining = value.size() - offset;
-        const auto requested = static_cast<DWORD>(
-            std::min<std::size_t>(remaining, std::numeric_limits<DWORD>::max()));
-        DWORD written = 0;
-        if (!WriteFile(output, value.data() + offset, requested, &written, nullptr) || written == 0) {
-            checkpoint_error("Unable to write the profile checkpoint.", true);
-        }
-        offset += written;
-    }
+	std::size_t offset = 0;
+	while (offset < value.size()) {
+		const auto requested = static_cast<DWORD>(std::min<std::size_t>(
+			value.size() - offset, std::numeric_limits<DWORD>::max()));
+		DWORD written = 0;
+		if (!WriteFile(output, value.data() + offset, requested, &written, nullptr) || written == 0) {
+			checkpoint_error("Unable to write durable job state.", true);
+		}
+		offset += written;
+	}
 }
 
-void atomic_write(const fs::path& path, std::string value) {
-    ensure_directory(path.parent_path());
-    const auto temporary = path.parent_path() /
-        (path.filename().string() + ".tmp-" + detail::generate_uuid());
-    HANDLE output = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
-        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
-    if (output == INVALID_HANDLE_VALUE) checkpoint_error("Unable to create a temporary profile checkpoint.", true);
-    bool published = false;
-    try {
-        write_all(output, value);
-        if (!FlushFileBuffers(output)) checkpoint_error("Unable to flush the profile checkpoint.", true);
-        if (!CloseHandle(output)) checkpoint_error("Unable to close the profile checkpoint.", true);
-        output = INVALID_HANDLE_VALUE;
-        if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-            checkpoint_error("Unable to publish the profile checkpoint.", true);
-        }
-        published = true;
-    } catch (...) {
-        if (output != INVALID_HANDLE_VALUE) CloseHandle(output);
-        DeleteFileW(temporary.c_str());
-        throw;
-    }
-    if (!published) DeleteFileW(temporary.c_str());
+void atomic_write(const fs::path& path, std::string value, const bool replace) {
+	ensure_directory(path.parent_path());
+	const auto temporary = path.parent_path() /
+		(path.filename().string() + ".tmp-" + detail::generate_uuid());
+	HANDLE output = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+		FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
+	if (output == INVALID_HANDLE_VALUE) checkpoint_error("Unable to create durable job state.", true);
+	try {
+		write_all(output, value);
+		if (!FlushFileBuffers(output)) {
+			CloseHandle(output);
+			output = INVALID_HANDLE_VALUE;
+			checkpoint_error("Unable to flush durable job state.", true);
+		}
+		if (!CloseHandle(output)) {
+			output = INVALID_HANDLE_VALUE;
+			checkpoint_error("Unable to close durable job state.", true);
+		}
+		output = INVALID_HANDLE_VALUE;
+		const auto flags = MOVEFILE_WRITE_THROUGH | (replace ? MOVEFILE_REPLACE_EXISTING : 0);
+		if (!MoveFileExW(temporary.c_str(), path.c_str(), flags)) {
+			checkpoint_error("Unable to publish durable job state.", true);
+		}
+	} catch (...) {
+		if (output != INVALID_HANDLE_VALUE) CloseHandle(output);
+		DeleteFileW(temporary.c_str());
+		throw;
+	}
 }
 
-std::string read_file(const fs::path& path) {
-    std::error_code error;
-    const auto status = fs::symlink_status(path, error);
-    if (error || !fs::is_regular_file(status) || fs::is_symlink(status) || reparse_point(path)) {
-        checkpoint_error("The requested profile checkpoint does not exist or is unsafe.");
-    }
-    const auto size = fs::file_size(path, error);
-    if (error || size == 0 || size > maximum_checkpoint_bytes) invalid_job();
-    std::ifstream input(path, std::ios::binary);
-    if (!input) checkpoint_error("Unable to read the profile checkpoint.", true);
-    std::string value(static_cast<std::size_t>(size), '\0');
-    input.read(value.data(), static_cast<std::streamsize>(value.size()));
-    if (!input || input.gcount() != static_cast<std::streamsize>(value.size())) {
-        checkpoint_error("Unable to read the complete profile checkpoint.", true);
-    }
-    return value;
+void append_line(const fs::path& path, std::string value) {
+	ensure_directory(path.parent_path());
+	HANDLE output = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr,
+		OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
+	if (output == INVALID_HANDLE_VALUE) checkpoint_error("Unable to open the durable event log.", true);
+	try {
+		write_all(output, value);
+		if (!FlushFileBuffers(output)) {
+			CloseHandle(output);
+			output = INVALID_HANDLE_VALUE;
+			checkpoint_error("Unable to flush the durable event log.", true);
+		}
+		if (!CloseHandle(output)) {
+			output = INVALID_HANDLE_VALUE;
+			checkpoint_error("Unable to close the durable event log.", true);
+		}
+	} catch (...) {
+		if (output != INVALID_HANDLE_VALUE) CloseHandle(output);
+		throw;
+	}
+}
+
+std::string read_file(const fs::path& path, const bool allow_empty = false) {
+	std::error_code error;
+	const auto status = fs::symlink_status(path, error);
+	if (error || !fs::is_regular_file(status) || fs::is_symlink(status) || reparse_point(path)) {
+		checkpoint_error("The requested durable job document does not exist or is unsafe.");
+	}
+	const auto size = fs::file_size(path, error);
+	if (error || (!allow_empty && size == 0) || size > maximum_document_bytes) invalid_job();
+	std::ifstream input(path, std::ios::binary);
+	if (!input) checkpoint_error("Unable to read durable job state.", true);
+	std::string value(static_cast<std::size_t>(size), '\0');
+	input.read(value.data(), static_cast<std::streamsize>(value.size()));
+	if ((!value.empty() && !input) || input.gcount() != static_cast<std::streamsize>(value.size())) {
+		checkpoint_error("Unable to read complete durable job state.", true);
+	}
+	return value;
+}
+
+std::string receipt_name(const std::size_t index) {
+	auto value = std::to_string(index);
+	value.insert(value.begin(), 8 - std::min<std::size_t>(8, value.size()), '0');
+	return value + ".json";
+}
+
+Json stored_config(const JobContext& config) {
+	return Json::parse(detail::serialize_config(config));
+}
+
+JobContext parsed_config(const Json& value, std::string_view workspace_id) {
+	auto config = detail::parse_config(value.dump(), detail::ConfigDocumentKind::persisted);
+	if (config.workspace_id != workspace_id) invalid_job();
+	return config;
 }
 
 const Json& named_value(const Json& values, std::string_view id, std::string_view kind) {
-    const auto found = std::ranges::find_if(values, [id](const Json& value) {
-        return value.at("id").get_ref<const std::string&>() == id;
-    });
-    if (found == values.end()) throw std::invalid_argument(std::string(kind) + " ID is not declared");
-    return *found;
+	const auto found = std::ranges::find_if(values, [id](const Json& value) {
+		return value.at("id").get_ref<const std::string&>() == id;
+	});
+	if (found == values.end()) throw std::invalid_argument(std::string(kind) + " ID is not declared");
+	return *found;
 }
 
-Json checkpoint_config(const JobContext& config) {
-    return Json::parse(detail::serialize_config(config));
+Json freeze_source(SourcePreparer& preparer, std::vector<PreparedSource>& snapshots,
+	const Json& source, const std::string& job_id) {
+	const auto kind = source.value("kind", std::string("workspace"));
+	snapshots.emplace_back(kind == "commit"
+		? preparer.prepare_commit(source.at("revision").get<std::string>())
+		: preparer.prepare_workspace());
+	const auto& reference = snapshots.back().reference();
+	const bool commit = reference.origin().has_commit();
+	return {{"kind", "snapshot"},
+		{"job_id", job_id},
+		{"snapshot_uuid", reference.source_uuid()},
+		{"origin_kind", commit ? "commit" : "workspace"},
+		{"origin_name", commit ? reference.origin().commit().repository_id()
+			: reference.origin().workspace().display_name()},
+		{"requested_revision", reference.requested_revision()},
+		{"resolved_revision", reference.resolved_revision()},
+		{"file_count", reference.file_count()},
+		{"total_bytes", reference.total_bytes()}};
 }
 
-Json freeze_sources(const fs::path& workspace_root, const fs::path& state_directory,
-    const std::string& job_id, const Json& sources) {
-    const auto snapshot_root = state_directory / job_id / "sources";
-    ensure_directory(snapshot_root);
-    SourcePreparer preparer(
-        workspace_root, snapshot_root, {.max_total_bytes = 512ULL * 1024ULL * 1024ULL, .max_files = 100'000});
-    std::vector<PreparedSource> snapshots;
-    Json frozen = Json::array();
-    snapshots.reserve(sources.size());
-    for (const auto& declared : sources) {
-        const auto kind = declared.at("kind").get<std::string>();
-        snapshots.emplace_back(kind == "commit"
-            ? preparer.prepare_commit(declared.at("revision").get<std::string>())
-            : preparer.prepare_workspace());
-        const auto& prepared = snapshots.back();
-        const auto& reference = prepared.reference();
-        const bool commit = reference.origin().has_commit();
-        frozen.push_back({{"id", declared.at("id")},
-                          {"kind", "snapshot"},
-                          {"job_id", job_id},
-                          {"snapshot_uuid", reference.source_uuid()},
-                          {"origin_kind", commit ? "commit" : "workspace"},
-                          {"origin_name", commit ? reference.origin().commit().repository_id()
-                                                  : reference.origin().workspace().display_name()},
-                          {"requested_revision", reference.requested_revision()},
-                          {"resolved_revision", reference.resolved_revision()},
-                          {"file_count", reference.file_count()},
-                          {"total_bytes", reference.total_bytes()}});
-    }
-    for (auto& snapshot : snapshots) snapshot.release();
-    return frozen;
+Json freeze_arguments(const fs::path& workspace_root, const fs::path& state_directory,
+	const std::string& job_id, Json arguments) {
+	const auto snapshot_root = state_directory / job_id / "sources";
+	ensure_directory(snapshot_root);
+	SourcePreparer preparer(workspace_root, snapshot_root,
+		{.max_total_bytes = 512ULL * 1024ULL * 1024ULL, .max_files = 100'000});
+	std::vector<PreparedSource> snapshots;
+	auto freeze_field = [&](const char* name) {
+		if (arguments.contains(name)) arguments[name] = freeze_source(preparer, snapshots, arguments.at(name), job_id);
+	};
+	freeze_field("source");
+	freeze_field("baseline");
+	freeze_field("candidate");
+	for (const auto* variant : {"a", "b"}) {
+		if (arguments.contains(variant) && arguments.at(variant).contains("source")) {
+			arguments[variant]["source"] = freeze_source(
+				preparer, snapshots, arguments.at(variant).at("source"), job_id);
+		}
+	}
+	if (arguments.contains("sources")) {
+		for (auto& source : arguments.at("sources")) {
+			auto id = source.at("id");
+			source = freeze_source(preparer, snapshots, source, job_id);
+			source["id"] = std::move(id);
+		}
+	}
+	for (auto& snapshot : snapshots) snapshot.release();
+	return arguments;
 }
 
-JobContext parse_checkpoint_config(const Json& value, std::string_view workspace_id) {
-    auto config = detail::parse_config(value.dump(), detail::ConfigDocumentKind::persisted);
-    if (config.workspace_id != workspace_id) invalid_job();
-    return config;
+Json profile_matrix_steps(const Json& arguments, std::string_view job_id) {
+	Json result = Json::array();
+	for (const auto& source_axis : arguments.at("matrix").at("sources")) {
+		const auto source_id = source_axis.get<std::string>();
+		auto source = named_value(arguments.at("sources"), source_id, "source");
+		source.erase("id");
+		for (const auto& config_axis : arguments.at("matrix").at("configs")) {
+			const auto config_id = config_axis.get<std::string>();
+			const auto& config = named_value(arguments.at("configs"), config_id, "config");
+			Json nested{{"recipe", "profile"}, {"frames", arguments.at("frames")}, {"source", source},
+				{"__vibris_case_id", source_id + "--" + config_id}, {"__vibris_source_id", source_id},
+				{"__vibris_config_id", config_id}, {"__vibris_workflow_id", job_id},
+				{"__vibris_result_kind", "profile_matrix"}};
+			for (const auto* field : {"warmup_frames", "result_detail", "metric_filter", "statistics",
+				"converted_units", "max_retries", "result_csv", "__vibris_scene_context", "__vibris_preset"}) {
+				if (arguments.contains(field)) nested[field] = arguments.at(field);
+			}
+			if (config.contains("values")) nested["config"] = config.at("values");
+			result.push_back({{"id", source_id + "--" + config_id}, {"kind", "case"},
+				{"tool_name", "vibris_run_recipe"}, {"arguments", std::move(nested)}});
+		}
+	}
+	return result;
 }
 
-Json case_specs(const Json& arguments) {
-    Json result = Json::array();
-    for (const auto& source_axis : arguments.at("matrix").at("sources")) {
-        const auto source_id = source_axis.get<std::string>();
-        auto source = named_value(arguments.at("sources"), source_id, "source");
-        source.erase("id");
-        for (const auto& config_axis : arguments.at("matrix").at("configs")) {
-            const auto config_id = config_axis.get<std::string>();
-            const auto& named_config = named_value(arguments.at("configs"), config_id, "config");
-            result.push_back({
-                {"case_id", source_id + "--" + config_id},
-                {"source_id", source_id},
-                {"config_id", config_id},
-                {"source", source},
-                {"config", named_config.contains("values") ? named_config.at("values") : Json(nullptr)},
-                {"result", nullptr},
-                {"pending_attempts", Json::array()},
-                {"pending_error", nullptr},
-            });
-        }
-    }
-    return result;
+Json matrix_steps(const Json& arguments) {
+	Json result = Json::array();
+	for (const auto& source_axis : arguments.at("matrix").at("sources")) {
+		const auto source_id = source_axis.get<std::string>();
+		for (const auto& config_axis : arguments.at("matrix").at("configs")) {
+			const auto config_id = config_axis.get<std::string>();
+			Json nested = arguments;
+			nested["sources"] = Json::array({named_value(arguments.at("sources"), source_id, "source")});
+			nested["configs"] = Json::array({named_value(arguments.at("configs"), config_id, "config")});
+			nested["matrix"] = {{"sources", Json::array({source_id})}, {"configs", Json::array({config_id})}};
+			result.push_back({{"id", source_id + "--" + config_id}, {"kind", "case"},
+				{"tool_name", "vibris_run_matrix"}, {"arguments", std::move(nested)}});
+		}
+	}
+	return result;
 }
 
-bool retry_interruption(const Json& error) {
-    if (!error.is_object()) return false;
-    constexpr std::array codes{
-        "SERVER_OFFLINE", "SERVER_RESTARTED", "SERVER_NOT_READY", "QUEUE_FULL",
-        "QUEUE_TIMEOUT", "EXECUTION_TIMEOUT",
-    };
-    const auto code = error.value("error_code", std::string{});
-    return std::ranges::find(codes, code) != codes.end();
+Json benchmark_steps(const Json& arguments, std::string_view job_id, const std::size_t warmup) {
+	Json result = Json::array();
+	for (const auto& item : paired_benchmark_plan(arguments)) {
+		auto nested = paired_benchmark_profile_arguments(arguments, item, job_id, warmup);
+		if (arguments.contains("__vibris_scene_context")) {
+			nested["__vibris_scene_context"] = arguments.at("__vibris_scene_context");
+		}
+		result.push_back({{"id", item.case_id}, {"kind", item.phase},
+			{"tool_name", "vibris_run_recipe"},
+			{"arguments", std::move(nested)}});
+	}
+	if (arguments.contains("visual")) {
+		auto nested = paired_benchmark_visual_arguments(arguments, warmup);
+		if (arguments.contains("__vibris_scene_context")) {
+			nested["__vibris_scene_context"] = arguments.at("__vibris_scene_context");
+		}
+		result.push_back({{"id", "visual"}, {"kind", "visual"},
+			{"tool_name", "vibris_run_recipe"},
+			{"arguments", std::move(nested)}});
+	}
+	return result;
+}
+
+Json plan_steps(std::string_view tool_name, const Json& arguments,
+	std::string_view job_id, const std::size_t warmup) {
+	if (tool_name == "vibris_run_recipe" && arguments.value("recipe", std::string{}) == "profile_matrix") {
+		return profile_matrix_steps(arguments, job_id);
+	}
+	if (tool_name == "vibris_run_recipe" && arguments.value("recipe", std::string{}) == "benchmark_ab") {
+		return benchmark_steps(arguments, job_id, warmup);
+	}
+	if (tool_name == "vibris_run_matrix") return matrix_steps(arguments);
+	if (arguments.contains("cases") && arguments.at("cases").is_array() && !arguments.at("cases").empty()) {
+		Json result = Json::array();
+		std::size_t index = 0;
+		for (const auto& item : arguments.at("cases")) {
+			auto nested = arguments;
+			nested.erase("cases");
+			if (item.is_object()) nested.update(item);
+			result.push_back({{"id", "case-" + std::to_string(index++)}, {"kind", "case"},
+				{"tool_name", tool_name}, {"arguments", std::move(nested)}});
+		}
+		return result;
+	}
+	return Json::array({{{"id", "step-0"}, {"kind", "job"},
+		{"tool_name", tool_name}, {"arguments", arguments}}});
 }
 
 Json failure_json(const ToolFailure& failure) {
-    return {{"success", false}, {"error_code", failure.code}, {"message", failure.message},
-            {"retryable", failure.retryable}, {"details", failure.details}};
+	return {{"success", false}, {"error_code", failure.code}, {"message", failure.message},
+		{"retryable", failure.retryable}, {"details", failure.details}};
 }
 
-Json case_arguments(const Json& document, const Json& spec) {
-    const auto& original = document.at("arguments");
-    Json result{{"recipe", "profile"}, {"frames", original.at("frames")}};
-    constexpr std::array copied{
-        "warmup_frames", "result_detail", "metric_filter", "statistics", "converted_units",
-        "max_retries", "result_csv",
-    };
-    for (const auto* field : copied) {
-        if (original.contains(field)) result[field] = original.at(field);
-    }
-    if (original.contains("__vibris_scene_context")) {
-        result["__vibris_scene_context"] = original.at("__vibris_scene_context");
-    }
-    if (original.contains("__vibris_preset")) result["__vibris_preset"] = original.at("__vibris_preset");
-    result["source"] = spec.at("source");
-    if (!spec.at("config").is_null()) result["config"] = spec.at("config");
-    result["__vibris_case_id"] = spec.at("case_id");
-    result["__vibris_source_id"] = spec.at("source_id");
-    result["__vibris_config_id"] = spec.at("config_id");
-    result["__vibris_workflow_id"] = document.at("job_id");
-    result["__vibris_result_kind"] = "profile_matrix";
-    if (!spec.at("pending_attempts").empty()) {
-        result["__vibris_previous_attempts"] = spec.at("pending_attempts");
-    }
-    return result;
+ToolOutcome receipt_outcome(const Json& receipt) {
+	if (receipt.at("success").get<bool>()) return receipt.at("result");
+	const auto& error = receipt.at("error");
+	return ToolFailure{error.at("error_code").get<std::string>(), error.at("message").get<std::string>(),
+		error.value("retryable", false), error.value("details", Json::object())};
 }
 
-void append_values(Json& target, const Json& source, std::string_view field) {
-    const auto values = source.find(std::string(field));
-    if (values == source.end() || !values->is_array()) return;
-    for (const auto& value : *values) target.push_back(value);
+bool terminal_state(std::string_view state) {
+	return state == "completed" || state == "cancelled";
 }
 
-std::size_t attempt_count(const Json& value) {
-    if (!value.is_object()) return 0;
-    return value.value("attempt_count", value.value("attempts", Json::array()).size());
+} // namespace
+
+DurableJobWorkflow::DurableJobWorkflow(
+	fs::path workspace_root, std::string workspace_id, DurableJobStepExecutor executor)
+	: workspace_root_(fs::absolute(workspace_root).lexically_normal()),
+	  state_directory_(workspace_root_ / ".vibris" / "jobs"),
+	  workspace_id_(std::move(workspace_id)), executor_(std::move(executor)) {
+	if (!detail::is_uuid(workspace_id_) || !executor_) {
+		throw std::invalid_argument("invalid durable job workflow configuration");
+	}
 }
 
-bool has_metrics(const Json& value) {
-    if (!value.is_object()) return false;
-    if (value.value("status", std::string{}) == "passed") return true;
-    const auto metrics = value.find("metrics");
-    if (metrics == value.end() || !metrics->is_object()) return false;
-    const auto timings = metrics->find("gpuTimings");
-    if (timings != metrics->end() && timings->is_object() && !timings->empty()) return true;
-    const auto programs = metrics->find("gpuProgramTimings");
-    return programs != metrics->end() && programs->is_array() &&
-        std::any_of(programs->begin(), programs->end(), [](const Json& program) {
-            if (!program.is_object()) return false;
-            const auto statistics = program.find("statistics");
-            return statistics != program.end() && statistics->is_object() && !statistics->empty();
-        });
+DurableJobWorkflow::~DurableJobWorkflow() {
+	shutdown();
 }
 
-Json pending_case(const Json& spec, const Json& arguments, const std::uint32_t default_warmup) {
-    Json result{{"case_id", spec.at("case_id")},
-                {"source_id", spec.at("source_id")},
-                {"config_id", spec.at("config_id")},
-                {"status", "pending"},
-                {"error", spec.at("pending_error")},
-                {"frames", arguments.at("frames")},
-                {"warmup_frames", arguments.value("warmup_frames", default_warmup)},
-                {"metrics", nullptr},
-                {"provenance", nullptr},
-                {"attempt_count", spec.at("pending_attempts").size()},
-                {"retry_exhausted", false},
-                {"attempts", spec.at("pending_attempts")}};
-    return result;
+DurableJobWorkflow::Record DurableJobWorkflow::create_record(
+	std::string_view tool_name, const Json& supplied_arguments, const JobContext& config) const {
+	const auto job_id = detail::generate_uuid();
+	const auto execution_mode = supplied_arguments.value("execution", std::string("sync"));
+	auto arguments = supplied_arguments;
+	arguments.erase("execution");
+	arguments = freeze_arguments(workspace_root_, state_directory_, job_id, std::move(arguments));
+	auto steps = plan_steps(tool_name, arguments, job_id, config.default_warmup_frames);
+	if (steps.empty() || steps.size() > maximum_steps) {
+		throw StateError("INVALID_JOB", "A durable job must contain between 1 and 4096 steps.");
+	}
+	const auto created = unix_ms();
+	Json request{{"schema_version", 2}, {"workspace_id", workspace_id_}, {"job_id", job_id},
+		{"kind", arguments.value("recipe", std::string(tool_name))}, {"tool_name", tool_name},
+		{"created_unix_ms", created}, {"config", stored_config(config)},
+		{"arguments", std::move(arguments)}, {"steps", std::move(steps)}};
+	Json state{{"schema_version", 2}, {"workspace_id", workspace_id_}, {"job_id", job_id},
+		{"kind", request.at("kind")}, {"workflow_state", "queued"}, {"stage", "queued"},
+		{"next_step", 0}, {"completed_steps", 0}, {"total_steps", request.at("steps").size()},
+		{"current_step", nullptr}, {"current_request_id", nullptr}, {"current_request_accepted", false},
+		{"cancel_requested", false}, {"last_error", nullptr}, {"event_sequence", 0},
+		{"execution_mode", execution_mode},
+		{"created_unix_ms", created}, {"updated_unix_ms", created}, {"step_started_unix_ms", nullptr},
+		{"duration_samples_ms", Json::array()}, {"eta_ms", nullptr}};
+	return {std::move(request), std::move(state)};
 }
 
-bool terminal_workflow(std::string_view state) {
-    return state == "completed" || state == "cancelled";
+DurableJobWorkflow::Record DurableJobWorkflow::load(std::string_view job_id) const {
+	if (!detail::is_uuid(job_id)) invalid_job();
+	std::scoped_lock lock(store_mutex_);
+	try {
+		const auto root = state_directory_ / std::string(job_id);
+		auto request = Json::parse(read_file(root / "request.json"));
+		auto state = Json::parse(read_file(root / "state.json"));
+		if (!request.is_object() || !state.is_object()) invalid_job();
+		if (request.value("schema_version", 0) != 2 || state.value("schema_version", 0) != 2) {
+			throw StateError("UNSUPPORTED_VERSION", "Only durable job schema version 2 is supported.");
+		}
+		if (request.value("workspace_id", std::string{}) != workspace_id_ ||
+			state.value("workspace_id", std::string{}) != workspace_id_ ||
+			request.value("job_id", std::string{}) != job_id || state.value("job_id", std::string{}) != job_id ||
+			!request.contains("steps") || !request.at("steps").is_array() || request.at("steps").empty() ||
+			request.at("steps").size() > maximum_steps ||
+			state.value("total_steps", std::size_t{}) != request.at("steps").size() ||
+			state.value("next_step", maximum_steps + 1) > request.at("steps").size()) invalid_job();
+		static_cast<void>(parsed_config(request.at("config"), workspace_id_));
+		const auto event_path = root / "events.jsonl";
+		std::error_code event_error;
+		if (fs::exists(event_path, event_error)) {
+			std::istringstream input(read_file(event_path, true));
+			std::string line;
+			std::uint64_t tail = 0;
+			while (std::getline(input, line)) {
+				if (line.empty()) continue;
+				const auto sequence = Json::parse(line).at("sequence").get<std::uint64_t>();
+				if (sequence <= tail) invalid_job();
+				tail = sequence;
+			}
+			state["event_sequence"] = std::max(state.value("event_sequence", std::uint64_t{}), tail);
+		}
+		return {std::move(request), std::move(state)};
+	} catch (const StateError&) {
+		throw;
+	} catch (const Json::exception&) {
+		invalid_job();
+	}
 }
 
+void DurableJobWorkflow::save_state(const Json& state) const {
+	const auto job_id = state.value("job_id", std::string{});
+	if (!detail::is_uuid(job_id) || state.value("workspace_id", std::string{}) != workspace_id_) invalid_job();
+	auto text = state.dump(2);
+	if (text.size() > maximum_document_bytes) checkpoint_error("Durable job state exceeded 64 MiB.");
+	text.push_back('\n');
+	std::scoped_lock lock(store_mutex_);
+	atomic_write(state_directory_ / job_id / "state.json", std::move(text), true);
 }
 
-ProfileMatrixWorkflow::ProfileMatrixWorkflow(
-    fs::path workspace_root, std::string workspace_id, ProfileMatrixCaseExecutor executor)
-    : workspace_root_(fs::absolute(workspace_root).lexically_normal()),
-      state_directory_(workspace_root_ / ".vibris" / "profile-matrix"),
-      workspace_id_(std::move(workspace_id)), executor_(std::move(executor)) {
-    if (!detail::is_uuid(workspace_id_) || !executor_) {
-        throw std::invalid_argument("invalid profile matrix workflow configuration");
-    }
+void DurableJobWorkflow::publish_request(const Json& request) const {
+	auto text = request.dump(2);
+	text.push_back('\n');
+	std::scoped_lock lock(store_mutex_);
+	atomic_write(state_directory_ / request.at("job_id").get<std::string>() / "request.json",
+		std::move(text), false);
 }
 
-ProfileMatrixWorkflow::~ProfileMatrixWorkflow() {
-    shutdown();
+void DurableJobWorkflow::append_event(Json& state, std::string_view type, std::string_view stage,
+	const Json& step, std::string_view request_id, const bool accepted) const {
+	const auto sequence = state.value("event_sequence", std::uint64_t{}) + 1;
+	Json event{{"sequence", sequence}, {"unix_ms", unix_ms()}, {"type", type}, {"stage", stage},
+		{"workflow_state", state.at("workflow_state")}, {"step", step}, {"accepted", accepted}};
+	if (!request_id.empty()) event["request_id"] = request_id;
+	auto line = event.dump();
+	line.push_back('\n');
+	{
+		std::scoped_lock lock(store_mutex_);
+		append_line(state_directory_ / state.at("job_id").get<std::string>() / "events.jsonl", std::move(line));
+	}
+	state["event_sequence"] = sequence;
+	state["updated_unix_ms"] = unix_ms();
 }
 
-Json ProfileMatrixWorkflow::create_checkpoint(const Json& arguments, const JobContext& config) const {
-    Json stored_arguments = arguments;
-    stored_arguments.erase("execution");
-    const auto job_id = detail::generate_uuid();
-    stored_arguments["sources"] = freeze_sources(
-        workspace_root_, state_directory_, job_id, stored_arguments.at("sources"));
-    auto specs = case_specs(stored_arguments);
-    return {{"schema_version", 1},
-            {"workspace_id", workspace_id_},
-            {"job_id", job_id},
-            {"kind", "profile_matrix"},
-            {"workflow_state", "queued"},
-            {"config", checkpoint_config(config)},
-            {"arguments", std::move(stored_arguments)},
-            {"case_specs", std::move(specs)},
-            {"artifacts", Json::array()},
-            {"job_attempts", Json::array()},
-            {"progress_events", Json::array()},
-            {"current_request_id", nullptr},
-            {"current_request_accepted", false},
-            {"last_error", nullptr},
-            {"progress", {{"requested_cases", arguments.at("matrix").at("sources").size() *
-                                                   arguments.at("matrix").at("configs").size()},
-                           {"completed_cases", 0},
-                           {"current_case_number", nullptr},
-                           {"current_case_id", nullptr},
-                           {"stage", "queued"}}}};
+Json DurableJobWorkflow::events(std::string_view job_id, const std::uint64_t cursor) const {
+	Json result = Json::array();
+	const auto path = state_directory_ / std::string(job_id) / "events.jsonl";
+	std::error_code error;
+	if (!fs::exists(path, error)) return result;
+	std::scoped_lock lock(store_mutex_);
+	std::istringstream input(read_file(path, true));
+	std::string line;
+	std::uint64_t previous = 0;
+	while (std::getline(input, line)) {
+		if (line.empty()) continue;
+		auto event = Json::parse(line);
+		const auto sequence = event.at("sequence").get<std::uint64_t>();
+		if (sequence <= previous) invalid_job();
+		previous = sequence;
+		if (sequence > cursor) result.push_back(std::move(event));
+	}
+	return result;
 }
 
-Json ProfileMatrixWorkflow::load(std::string_view job_id) const {
-    if (!detail::is_uuid(job_id)) invalid_job();
-    std::scoped_lock lock(store_mutex_);
-    try {
-        auto document = Json::parse(read_file(state_directory_ / (std::string(job_id) + ".json")));
-        if (!document.is_object() || document.value("schema_version", 0) != 1 ||
-            document.value("workspace_id", std::string{}) != workspace_id_ ||
-            document.value("job_id", std::string{}) != job_id ||
-            document.value("kind", std::string{}) != "profile_matrix" ||
-            !document.contains("arguments") || !document.at("arguments").is_object() ||
-            !document.contains("config") || !document.at("config").is_object() ||
-            !document.contains("case_specs") || !document.at("case_specs").is_array() ||
-            document.at("case_specs").empty() || document.at("case_specs").size() > 1024) {
-            invalid_job();
-        }
-        static_cast<void>(parse_checkpoint_config(document.at("config"), workspace_id_));
-        return document;
-    } catch (const StateError&) {
-        throw;
-    } catch (const Json::exception&) {
-        invalid_job();
-    }
+std::optional<Json> DurableJobWorkflow::load_receipt(
+	std::string_view job_id, const std::size_t index) const {
+	const auto path = state_directory_ / std::string(job_id) / "receipts" / receipt_name(index);
+	std::error_code error;
+	if (!fs::exists(path, error)) return std::nullopt;
+	std::scoped_lock lock(store_mutex_);
+	return Json::parse(read_file(path));
 }
 
-void ProfileMatrixWorkflow::save(const Json& document) const {
-    const auto job_id = document.value("job_id", std::string{});
-    if (!detail::is_uuid(job_id) || document.value("workspace_id", std::string{}) != workspace_id_) invalid_job();
-    auto text = document.dump(2);
-    if (text.size() > maximum_checkpoint_bytes) {
-        checkpoint_error("The profile checkpoint exceeded its 64 MiB limit.");
-    }
-    text.push_back('\n');
-    std::scoped_lock lock(store_mutex_);
-    atomic_write(state_directory_ / (job_id + ".json"), std::move(text));
+void DurableJobWorkflow::publish_receipt(
+	std::string_view job_id, const std::size_t index, const Json& receipt) const {
+	auto text = receipt.dump(2);
+	text.push_back('\n');
+	std::scoped_lock lock(store_mutex_);
+	atomic_write(state_directory_ / std::string(job_id) / "receipts" / receipt_name(index),
+		std::move(text), false);
 }
 
-Json ProfileMatrixWorkflow::result(const Json& document) const {
-    const auto& specs = document.at("case_specs");
-    const auto& arguments = document.at("arguments");
-    std::size_t receipts = 0;
-    std::size_t passed = 0;
-    std::size_t failed = 0;
-    std::size_t incomplete = 0;
-    std::size_t with_metrics = 0;
-    std::size_t retried = 0;
-    std::size_t total_attempts = 0;
-    Json cases = Json::array();
-    const auto default_warmup = document.at("config").value("default_warmup_frames", std::uint32_t{});
-    for (const auto& spec : specs) {
-        Json value = spec.at("result").is_object() ? spec.at("result") :
-            pending_case(spec, arguments, default_warmup);
-        if (spec.at("result").is_object()) {
-            ++receipts;
-            const auto status = value.value("status", std::string{});
-            if (status == "passed") ++passed;
-            else if (status == "failed") ++failed;
-            else ++incomplete;
-        }
-        if (has_metrics(value)) ++with_metrics;
-        const auto attempts = attempt_count(value);
-        total_attempts += attempts;
-        if (attempts > 1) ++retried;
-        cases.push_back(std::move(value));
-    }
-    const auto state = document.at("workflow_state").get<std::string>();
-    const bool completed = state == "completed";
-    std::string status = state;
-    if (completed) {
-        status = incomplete != 0 ? "incomplete" : (failed == 0 ? "completed" : "completed_with_failures");
-    }
-    Json stages = Json::array();
-    for (const auto& event : document.at("progress_events")) {
-        const auto& stage = event.at("stage");
-        if (std::ranges::find(stages, stage) == stages.end()) stages.push_back(stage);
-    }
-    const auto detail = arguments.value("result_detail", std::string("metrics"));
-    Json output{{"success", completed && passed == specs.size()},
-                {"kind", "profile_matrix"},
-                {"job_id", document.at("job_id")},
-                {"workflow_state", state},
-                {"status", std::move(status)},
-                {"resumable", !completed && state != "running" && state != "cancellation_requested"},
-                {"result_detail", detail},
-                {"gpu_timing_unit", "ns"},
-                {"requested_cases", specs.size()},
-                {"completed_cases", passed + failed},
-                {"cases_with_metrics", with_metrics},
-                {"missing_cases", specs.size() - with_metrics},
-                {"failed_cases", failed},
-                {"retried_cases", retried},
-                {"total_attempts", total_attempts},
-                {"max_retries", arguments.value("max_retries", 2)},
-                {"passed", passed},
-                {"failed", failed},
-                {"incomplete", incomplete},
-                {"receipt_count", receipts},
-                {"progress", document.at("progress")},
-                {"progress_stages", std::move(stages)},
-                {"last_error", document.at("last_error")},
-                {"cases", std::move(cases)},
-                {"artifacts", document.at("artifacts")},
-                {"job_attempts", document.at("job_attempts")}};
-    if (detail == "full") output["progress_events"] = document.at("progress_events");
-    return output;
+void DurableJobWorkflow::publish_result(std::string_view job_id, const Json& result) const {
+	auto text = result.dump(2);
+	text.push_back('\n');
+	std::scoped_lock lock(store_mutex_);
+	const auto path = state_directory_ / std::string(job_id) / "result.json";
+	std::error_code error;
+	if (fs::exists(path, error)) {
+		if (Json::parse(read_file(path)) != result) invalid_job();
+		return;
+	}
+	atomic_write(path, std::move(text), false);
 }
 
-ToolOutcome ProfileMatrixWorkflow::start(const Json& arguments, const JobContext& config) {
-    reap_finished();
-    {
-        std::scoped_lock lock(worker_mutex_);
-        if (worker_running_) {
-            return ToolFailure{"PROFILE_MATRIX_BUSY", "Another profile matrix workflow is active.", true,
-                               {{"job_id", active_job_id_}}};
-        }
-    }
-    auto document = create_checkpoint(arguments, config);
-    const auto job_id = document.at("job_id").get<std::string>();
-    save(document);
-    return begin(job_id, arguments.value("execution", std::string("sync")) == "async");
+Json DurableJobWorkflow::final_result(const Record& record) const {
+	const auto& request = record.request;
+	const auto& state = record.state;
+	Json receipts = Json::array();
+	for (std::size_t index = 0; index < state.at("completed_steps").get<std::size_t>(); ++index) {
+		const auto receipt = load_receipt(request.at("job_id").get<std::string>(), index);
+		if (!receipt) invalid_job();
+		receipts.push_back(*receipt);
+	}
+	const auto kind = request.at("kind").get<std::string>();
+	if (kind == "benchmark_ab") {
+		std::size_t next = 0;
+		const auto outcome = run_paired_benchmark(request.at("arguments"), request.at("job_id").get<std::string>(),
+			parsed_config(request.at("config"), workspace_id_).default_warmup_frames,
+			[&](const Json&) { return receipt_outcome(receipts.at(next++)); },
+			request.at("arguments").contains("visual")
+				? PairedVisualExecutor([&](const Json&) { return receipt_outcome(receipts.at(next++)); })
+				: PairedVisualExecutor{});
+		return std::get<Json>(outcome);
+	}
+	if (kind == "profile_matrix") {
+		Json cases = Json::array();
+		Json artifacts = Json::array();
+		std::size_t passed = 0;
+		std::size_t failed = 0;
+		for (const auto& receipt : receipts) {
+			const auto outcome = receipt_outcome(receipt);
+			if (const auto* value = std::get_if<Json>(&outcome)) {
+				for (const auto& item : value->value("cases", Json::array())) {
+					if (item.value("status", std::string{}) == "passed") ++passed;
+					else ++failed;
+					cases.push_back(item);
+				}
+				for (const auto& item : value->value("artifacts", Json::array())) artifacts.push_back(item);
+			} else ++failed;
+		}
+		return {{"success", failed == 0 && passed == request.at("steps").size()}, {"kind", kind},
+			{"job_id", request.at("job_id")}, {"status", failed == 0 ? "completed" : "completed_with_failures"},
+			{"requested_cases", request.at("steps").size()}, {"completed_cases", receipts.size()},
+			{"passed", passed}, {"failed", failed}, {"cases", std::move(cases)},
+			{"artifacts", std::move(artifacts)}};
+	}
+	if (request.at("tool_name") == "vibris_run_matrix") {
+		Json cases = Json::array();
+		Json artifacts = Json::array();
+		bool success = true;
+		for (const auto& receipt : receipts) {
+			success = success && receipt.at("success").get<bool>();
+			if (!receipt.at("success").get<bool>()) continue;
+			const auto& value = receipt.at("result");
+			success = success && value.value("success", true);
+			for (const auto& item : value.value("cases", Json::array())) cases.push_back(item);
+			for (const auto& item : value.value("artifacts", Json::array())) artifacts.push_back(item);
+		}
+		return {{"success", success}, {"kind", "matrix"}, {"job_id", request.at("job_id")},
+			{"status", success ? "completed" : "completed_with_failures"},
+			{"cases", std::move(cases)}, {"artifacts", std::move(artifacts)}};
+	}
+	if (receipts.size() == 1 && receipts.front().at("success").get<bool>()) {
+		auto result = receipts.front().at("result");
+		if (result.is_object()) result["job_id"] = request.at("job_id");
+		return result;
+	}
+	Json results = Json::array();
+	bool success = true;
+	for (const auto& receipt : receipts) {
+		success = success && receipt.at("success").get<bool>() &&
+			(!receipt.at("result").is_object() || receipt.at("result").value("success", true));
+		results.push_back(receipt);
+	}
+	return {{"success", success}, {"kind", kind}, {"job_id", request.at("job_id")},
+		{"status", "completed"}, {"results", std::move(results)}};
 }
 
-ToolOutcome ProfileMatrixWorkflow::control(const Json& arguments) {
-    reap_finished();
-    const auto operation = arguments.at("operation").get<std::string>();
-    const auto job_id = arguments.at("job_id").get<std::string>();
-    if (operation == "status") return result(load(job_id));
-    if (operation == "cancel") {
-        std::jthread cancelling;
-        bool synchronous = false;
-        {
-            std::scoped_lock lock(worker_mutex_);
-            if (worker_running_ && active_job_id_ == job_id) {
-                if (worker_.joinable()) {
-                    worker_.request_stop();
-                    cancelling = std::move(worker_);
-                } else {
-                    synchronous = true;
-                }
-            }
-        }
-        if (synchronous) {
-            return ToolFailure{"PROFILE_MATRIX_BUSY",
-                "A synchronous profile matrix cannot be cancelled from another request.", true,
-                {{"job_id", job_id}}};
-        }
-        if (cancelling.joinable()) cancelling.join();
-        auto document = load(job_id);
-        if (!terminal_workflow(document.at("workflow_state").get<std::string>())) {
-            document["workflow_state"] = "cancelled";
-            document["progress"]["stage"] = "cancelled";
-            save(document);
-        }
-        return result(document);
-    }
-    if (operation != "resume") invalid_job();
-    auto document = load(job_id);
-    const auto state = document.at("workflow_state").get<std::string>();
-    if (state == "completed") return result(document);
-    {
-        std::scoped_lock lock(worker_mutex_);
-        if (worker_running_) {
-            if (active_job_id_ == job_id) return result(document);
-            return ToolFailure{"PROFILE_MATRIX_BUSY", "Another profile matrix workflow is active.", true,
-                               {{"job_id", active_job_id_}}};
-        }
-    }
-    document["workflow_state"] = "queued";
-    document["progress"]["stage"] = "queued";
-    document["last_error"] = nullptr;
-    save(document);
-    return begin(job_id, arguments.value("execution", std::string("async")) == "async");
+Json DurableJobWorkflow::snapshot(
+	const Record& record, const std::uint64_t event_cursor, const bool include_result) const {
+	const auto& state = record.state;
+	const auto workflow_state = state.at("workflow_state").get<std::string>();
+	const bool retryable_pause = workflow_state == "paused" &&
+		(state.at("current_request_accepted").get<bool>() ||
+			(state.at("last_error").is_object() && state.at("last_error").value("retryable", false)));
+	Json result{{"schema_version", 2}, {"job_id", state.at("job_id")}, {"kind", state.at("kind")},
+		{"workflow_state", workflow_state}, {"stage", state.at("stage")},
+		{"resumable", retryable_pause || workflow_state == "cancelled"},
+		{"cancelable", (workflow_state == "queued" || workflow_state == "running") &&
+			state.value("execution_mode", std::string("sync")) == "async"},
+		{"progress", {{"completed_steps", state.at("completed_steps")}, {"total_steps", state.at("total_steps")},
+			{"current_step", state.at("current_step")}, {"eta_ms", state.at("eta_ms")}}},
+		{"current_request_id", state.at("current_request_id")},
+		{"current_request_accepted", state.at("current_request_accepted")},
+		{"last_error", state.at("last_error")}, {"event_cursor", state.at("event_sequence")},
+		{"events", events(state.at("job_id").get<std::string>(), event_cursor)}};
+	if (include_result && workflow_state == "completed") {
+		result["result"] = Json::parse(read_file(
+			state_directory_ / state.at("job_id").get<std::string>() / "result.json"));
+	}
+	return result;
 }
 
-Json ProfileMatrixWorkflow::active_status() const {
-    std::string job_id;
-    {
-        std::scoped_lock lock(worker_mutex_);
-        if (!worker_running_) return {{"active", false}};
-        job_id = active_job_id_;
-    }
-    const auto snapshot = result(load(job_id));
-    return {{"active", true},
-            {"job_id", snapshot.at("job_id")},
-            {"workflow_state", snapshot.at("workflow_state")},
-            {"status", snapshot.at("status")},
-            {"resumable", snapshot.at("resumable")},
-            {"requested_cases", snapshot.at("requested_cases")},
-            {"receipt_count", snapshot.at("receipt_count")},
-            {"cases_with_metrics", snapshot.at("cases_with_metrics")},
-            {"progress", snapshot.at("progress")},
-            {"last_error", snapshot.at("last_error")}};
+ToolOutcome DurableJobWorkflow::start(
+	std::string_view tool_name, const Json& arguments, const JobContext& config) {
+	reap_finished();
+	{
+		std::scoped_lock lock(worker_mutex_);
+		if (worker_running_) return ToolFailure{"JOB_BUSY", "Another durable job is active.", true,
+			{{"job_id", active_job_id_}}};
+	}
+	auto record = create_record(tool_name, arguments, config);
+	const auto job_id = record.request.at("job_id").get<std::string>();
+	publish_request(record.request);
+	append_event(record.state, "created", "queued");
+	save_state(record.state);
+	return begin(job_id, arguments.value("execution", std::string("sync")) == "async");
 }
 
-bool ProfileMatrixWorkflow::running() const {
-    std::scoped_lock lock(worker_mutex_);
-    return worker_running_;
+ToolOutcome DurableJobWorkflow::control(const Json& arguments) {
+	reap_finished();
+	const auto operation = arguments.at("operation").get<std::string>();
+	const auto job_id = arguments.at("job_id").get<std::string>();
+	const auto cursor = arguments.value("event_cursor", std::uint64_t{});
+	if (operation == "query") return snapshot(load(job_id), cursor, false);
+	if (operation == "result") {
+		auto record = load(job_id);
+		if (record.state.at("workflow_state") == "cancelled") {
+			auto value = snapshot(record, cursor, false);
+			Json receipts = Json::array();
+			for (std::size_t index = 0;
+				index < record.state.at("completed_steps").get<std::size_t>(); ++index) {
+				if (const auto receipt = load_receipt(job_id, index)) receipts.push_back(*receipt);
+			}
+			value["result"] = {{"success", false}, {"kind", record.request.at("kind")},
+				{"job_id", job_id}, {"status", "cancelled"},
+				{"completed_steps", record.state.at("completed_steps")},
+				{"total_steps", record.state.at("total_steps")}, {"receipts", std::move(receipts)}};
+			return value;
+		}
+		if (record.state.at("workflow_state") != "completed") {
+			return ToolFailure{"JOB_NOT_TERMINAL", "The durable job has not completed.", true,
+				{{"job_id", job_id}, {"workflow_state", record.state.at("workflow_state")}}};
+		}
+		return snapshot(record, cursor, true);
+	}
+	if (operation == "cancel") {
+		std::jthread cancelling;
+		{
+			std::scoped_lock lock(worker_mutex_);
+			if (worker_running_ && active_job_id_ == job_id && !worker_.joinable()) {
+				return ToolFailure{"JOB_BUSY",
+					"A synchronous durable job cannot be cancelled from another request.", true,
+					{{"job_id", job_id}}};
+			}
+			if (worker_running_ && active_job_id_ == job_id && worker_.joinable()) {
+				worker_.request_stop();
+				cancelling = std::move(worker_);
+			}
+		}
+		if (cancelling.joinable()) cancelling.join();
+		auto record = load(job_id);
+		if (!terminal_state(record.state.at("workflow_state").get<std::string>())) {
+			record.state["workflow_state"] = "cancelled";
+			record.state["stage"] = "cancelled";
+			record.state["cancel_requested"] = true;
+			append_event(record.state, "cancelled", "cancelled", record.state.at("current_step"),
+				record.state.at("current_request_id").is_string()
+					? record.state.at("current_request_id").get<std::string>() : std::string{},
+				record.state.at("current_request_accepted").get<bool>());
+			save_state(record.state);
+		}
+		return snapshot(record, cursor, false);
+	}
+	if (operation != "resume") invalid_job();
+	auto record = load(job_id);
+	const auto state = record.state.at("workflow_state").get<std::string>();
+	if (state == "completed") return snapshot(record, cursor, true);
+	if (state != "paused" && state != "cancelled") {
+		return ToolFailure{"JOB_NOT_RESUMABLE", "The durable job is not paused or cancelled.", false,
+			{{"job_id", job_id}, {"workflow_state", state}}};
+	}
+	const bool retryable = state == "cancelled" || record.state.at("current_request_accepted").get<bool>() ||
+		(record.state.at("last_error").is_object() && record.state.at("last_error").value("retryable", false));
+	if (!retryable) {
+		return ToolFailure{"JOB_NOT_RESUMABLE", "The durable job has no safe retry or accepted request to resume.",
+			false, {{"job_id", job_id}, {"workflow_state", state}}};
+	}
+	{
+		std::scoped_lock lock(worker_mutex_);
+		if (worker_running_) return ToolFailure{"JOB_BUSY", "Another durable job is active.", true,
+			{{"job_id", active_job_id_}}};
+	}
+	record.state["workflow_state"] = "queued";
+	record.state["stage"] = "queued";
+	record.state["cancel_requested"] = false;
+	record.state["last_error"] = nullptr;
+	record.state["execution_mode"] = "async";
+	record.state["step_started_unix_ms"] = nullptr;
+	append_event(record.state, "resumed", "queued", record.state.at("current_step"));
+	save_state(record.state);
+	return begin(job_id, true);
 }
 
-ToolOutcome ProfileMatrixWorkflow::begin(std::string job_id, const bool asynchronous) {
-    {
-        std::scoped_lock lock(worker_mutex_);
-        if (worker_running_) {
-            return ToolFailure{"PROFILE_MATRIX_BUSY", "Another profile matrix workflow is active.", true,
-                               {{"job_id", active_job_id_}}};
-        }
-        worker_running_ = true;
-        active_job_id_ = job_id;
-    }
-    if (asynchronous) {
-        worker_ = std::jthread([this, job_id](const std::stop_token stop) { execute(job_id, stop); });
-        return result(load(job_id));
-    }
-    execute(job_id, {});
-    return result(load(job_id));
+Json DurableJobWorkflow::active_status() const {
+	std::string job_id;
+	{
+		std::scoped_lock lock(worker_mutex_);
+		if (!worker_running_) return {{"active", false}};
+		job_id = active_job_id_;
+	}
+	auto value = snapshot(load(job_id), 0, false);
+	value["active"] = true;
+	return value;
 }
 
-void ProfileMatrixWorkflow::execute(std::string job_id, const std::stop_token stop) noexcept {
-    try {
-        auto document = load(job_id);
-        document["workflow_state"] = "running";
-        document["progress"]["stage"] = "loading";
-        save(document);
-        auto config = parse_checkpoint_config(document.at("config"), workspace_id_);
-        auto& specs = document.at("case_specs");
-        for (std::size_t index = 0; index < specs.size(); ++index) {
-            auto& spec = specs[index];
-            if (spec.at("result").is_object()) continue;
-            if (stop.stop_requested()) {
-                document["workflow_state"] = "cancelled";
-                document["progress"]["stage"] = "cancelled";
-                if (!document.value("current_request_accepted", false)) {
-                    document["current_request_id"] = nullptr;
-                }
-                save(document);
-                finish_active(job_id);
-                return;
-            }
-            document["progress"]["current_case_number"] = index + 1;
-            document["progress"]["current_case_id"] = spec.at("case_id");
-            document["progress"]["stage"] = "loading";
-            document["progress"]["completed_cases"] = index;
-            save(document);
-
-            const auto existing_request = document.at("current_request_id").is_string()
-                ? std::optional<std::string>(document.at("current_request_id").get<std::string>())
-                : std::nullopt;
-            ProfileMatrixCaseExecution execution{
-                .arguments = case_arguments(document, spec),
-                .config = config,
-                .resume_request_id = existing_request,
-                .stop = stop,
-            };
-            execution.progress = [this, &document, &spec](std::string_view request_id,
-                std::string_view stage, const bool accepted) {
-                if (!request_id.empty()) {
-                    document["current_request_id"] = request_id;
-                    document["current_request_accepted"] = accepted;
-                }
-                document["progress"]["stage"] = stage;
-                auto event = Json{{"case_id", spec.at("case_id")}, {"stage", stage}, {"accepted", accepted}};
-                if (!request_id.empty()) event["request_id"] = request_id;
-                auto& events = document.at("progress_events");
-                if (events.size() < 4096 && (events.empty() || events.back() != event)) {
-                    events.push_back(std::move(event));
-                }
-                save(document);
-            };
-
-            auto outcome = executor_(std::move(execution));
-            if (stop.stop_requested()) {
-                document["workflow_state"] = "cancelled";
-                document["progress"]["stage"] = "cancelled";
-                if (!document.value("current_request_accepted", false)) {
-                    document["current_request_id"] = nullptr;
-                }
-                save(document);
-                finish_active(job_id);
-                return;
-            }
-            if (const auto* failure = std::get_if<ToolFailure>(&outcome)) {
-                const auto error = failure_json(*failure);
-                if (failure->code == "CANCELLED") {
-                    document["workflow_state"] = "cancelled";
-                    document["progress"]["stage"] = "cancelled";
-                    document["current_request_id"] = nullptr;
-                } else {
-                    document["workflow_state"] = "paused";
-                    document["progress"]["stage"] = "paused";
-                }
-                document["last_error"] = error;
-                spec["pending_error"] = error;
-                save(document);
-                finish_active(job_id);
-                return;
-            }
-
-            const auto& response = std::get<Json>(outcome);
-            append_values(document.at("artifacts"), response, "artifacts");
-            append_values(document.at("job_attempts"), response, "job_attempts");
-            if (!response.contains("cases") || !response.at("cases").is_array() ||
-                response.at("cases").size() != 1) {
-                checkpoint_error("A profile case returned an invalid normalized result.");
-            }
-            auto profile_case = response.at("cases").front();
-            if (profile_case.value("case_id", std::string{}) != spec.at("case_id").get<std::string>()) {
-                checkpoint_error("A profile case returned a receipt for a different case identity.");
-            }
-            const auto& error = profile_case.at("error");
-            if (retry_interruption(error)) {
-                auto attempts = profile_case.value("attempts", Json::array());
-                const bool outstanding = document.value("current_request_accepted", false) &&
-                    document.at("current_request_id").is_string();
-                if (outstanding && !attempts.empty()) attempts.erase(attempts.end() - 1);
-                spec["pending_attempts"] = std::move(attempts);
-                spec["pending_error"] = error;
-                document["workflow_state"] = "paused";
-                document["progress"]["stage"] = "paused";
-                document["last_error"] = error;
-                if (!outstanding) document["current_request_id"] = nullptr;
-                save(document);
-                finish_active(job_id);
-                return;
-            }
-
-            spec["result"] = std::move(profile_case);
-            spec["pending_attempts"] = Json::array();
-            spec["pending_error"] = nullptr;
-            document["current_request_id"] = nullptr;
-            document["current_request_accepted"] = false;
-            document["last_error"] = nullptr;
-            document["progress"]["completed_cases"] = index + 1;
-            document["progress"]["stage"] = "checkpointing";
-            save(document);
-        }
-        document["workflow_state"] = "completed";
-        document["progress"]["completed_cases"] = specs.size();
-        document["progress"]["current_case_number"] = nullptr;
-        document["progress"]["current_case_id"] = nullptr;
-        document["progress"]["stage"] = "completed";
-        document["current_request_id"] = nullptr;
-        document["current_request_accepted"] = false;
-        auto& events = document.at("progress_events");
-        const auto completed = Json{{"case_id", nullptr}, {"stage", "completed"}, {"accepted", true}};
-        if (events.size() < 4096) events.push_back(completed);
-        else events.back() = completed;
-        save(document);
-    } catch (const StateError& error) {
-        try {
-            auto document = load(job_id);
-            document["workflow_state"] = "paused";
-            document["progress"]["stage"] = "paused";
-            document["last_error"] = failure_json(
-                ToolFailure{std::string(error.code()), error.what(), error.retryable()});
-            save(document);
-        } catch (...) {
-        }
-    } catch (const std::exception& error) {
-        try {
-            auto document = load(job_id);
-            document["workflow_state"] = "paused";
-            document["progress"]["stage"] = "paused";
-            document["last_error"] = failure_json(
-                ToolFailure{"INTERNAL_ERROR", error.what(), false});
-            save(document);
-        } catch (...) {
-        }
-    }
-    finish_active(job_id);
+bool DurableJobWorkflow::running() const {
+	std::scoped_lock lock(worker_mutex_);
+	return worker_running_;
 }
 
-void ProfileMatrixWorkflow::finish_active(std::string_view job_id) noexcept {
-    std::scoped_lock lock(worker_mutex_);
-    if (active_job_id_ == job_id) {
-        worker_running_ = false;
-        active_job_id_.clear();
-    }
+ToolOutcome DurableJobWorkflow::begin(std::string job_id, const bool asynchronous) {
+	{
+		std::scoped_lock lock(worker_mutex_);
+		if (worker_running_) return ToolFailure{"JOB_BUSY", "Another durable job is active.", true,
+			{{"job_id", active_job_id_}}};
+		worker_running_ = true;
+		active_job_id_ = job_id;
+	}
+	if (asynchronous) {
+		worker_ = std::jthread([this, job_id](const std::stop_token stop) { execute(job_id, stop); });
+		return snapshot(load(job_id), 0, false);
+	}
+	execute(job_id, {});
+	auto record = load(job_id);
+	return record.state.at("workflow_state") == "completed"
+		? ToolOutcome(snapshot(record, 0, true)) : ToolOutcome(snapshot(record, 0, false));
 }
 
-void ProfileMatrixWorkflow::reap_finished() {
-    std::jthread completed;
-    {
-        std::scoped_lock lock(worker_mutex_);
-        if (!worker_running_ && worker_.joinable()) completed = std::move(worker_);
-    }
-    if (completed.joinable()) completed.join();
+void DurableJobWorkflow::execute(std::string job_id, const std::stop_token stop) noexcept {
+	try {
+		auto record = load(job_id);
+		auto& state = record.state;
+		state["workflow_state"] = "running";
+		state["stage"] = "running";
+		append_event(state, "started", "running", state.at("current_step"));
+		save_state(state);
+		const auto config = parsed_config(record.request.at("config"), workspace_id_);
+		const auto& steps = record.request.at("steps");
+		while (state.at("next_step").get<std::size_t>() < steps.size()) {
+			const auto index = state.at("next_step").get<std::size_t>();
+			const auto& step = steps.at(index);
+			if (const auto receipt = load_receipt(job_id, index)) {
+				state["next_step"] = index + 1;
+				state["completed_steps"] = index + 1;
+				state["current_step"] = nullptr;
+				state["current_request_id"] = nullptr;
+				state["current_request_accepted"] = false;
+				state["step_started_unix_ms"] = nullptr;
+				append_event(state, "receipt_recovered", "checkpointed", step);
+				save_state(state);
+				continue;
+			}
+			if (stop.stop_requested()) {
+				state["workflow_state"] = "cancelled";
+				state["stage"] = "cancelled";
+				state["cancel_requested"] = true;
+				append_event(state, "cancelled", "cancelled", step);
+				save_state(state);
+				finish_active(job_id);
+				return;
+			}
+			state["current_step"] = index;
+			state["stage"] = "executing";
+			if (state.at("step_started_unix_ms").is_null()) state["step_started_unix_ms"] = unix_ms();
+			append_event(state, "step_started", "executing", step,
+				state.at("current_request_id").is_string()
+					? state.at("current_request_id").get<std::string>() : std::string{},
+				state.at("current_request_accepted").get<bool>());
+			save_state(state);
+			DurableJobStepExecution execution{
+				.tool_name = step.at("tool_name").get<std::string>(),
+				.arguments = step.at("arguments"),
+				.config = config,
+				.resume_request_id = state.at("current_request_accepted").get<bool>() &&
+					state.at("current_request_id").is_string()
+						? std::optional<std::string>(state.at("current_request_id").get<std::string>())
+						: std::nullopt,
+				.stop = stop,
+			};
+			execution.progress = [this, &state, &step](std::string_view request_id,
+				std::string_view stage, const bool accepted) {
+				if (!request_id.empty()) state["current_request_id"] = request_id;
+				state["current_request_accepted"] = accepted;
+				state["stage"] = stage;
+				append_event(state, "progress", stage, step, request_id, accepted);
+				save_state(state);
+			};
+			auto outcome = executor_(std::move(execution));
+			if (const auto* failure = std::get_if<ToolFailure>(&outcome)) {
+				state["workflow_state"] = stop.stop_requested() || failure->code == "CANCELLED"
+					? "cancelled" : "paused";
+				state["stage"] = state.at("workflow_state");
+				state["last_error"] = failure_json(*failure);
+				if (!state.at("current_request_accepted").get<bool>()) state["current_request_id"] = nullptr;
+				append_event(state, "interrupted", state.at("stage").get<std::string>(), step,
+					state.at("current_request_id").is_string()
+						? state.at("current_request_id").get<std::string>() : std::string{},
+					state.at("current_request_accepted").get<bool>());
+				save_state(state);
+				finish_active(job_id);
+				return;
+			}
+			Json receipt{{"schema_version", 2}, {"job_id", job_id}, {"step_index", index},
+				{"step_id", step.at("id")}, {"success", true}, {"result", std::get<Json>(outcome)},
+				{"error", nullptr}, {"completed_unix_ms", unix_ms()}};
+			publish_receipt(job_id, index, receipt);
+			const auto duration = unix_ms() - state.at("step_started_unix_ms").get<std::int64_t>();
+			state["duration_samples_ms"].push_back(std::max<std::int64_t>(0, duration));
+			state["next_step"] = index + 1;
+			state["completed_steps"] = index + 1;
+			state["current_step"] = nullptr;
+			state["current_request_id"] = nullptr;
+			state["current_request_accepted"] = false;
+			state["step_started_unix_ms"] = nullptr;
+			state["last_error"] = nullptr;
+			state["stage"] = "checkpointed";
+			if (state.at("duration_samples_ms").size() >= 2) {
+				const auto& samples = state.at("duration_samples_ms");
+				const auto total = std::accumulate(samples.begin(), samples.end(), std::int64_t{},
+					[](const std::int64_t sum, const Json& value) { return sum + value.get<std::int64_t>(); });
+				state["eta_ms"] = total / static_cast<std::int64_t>(samples.size()) *
+					static_cast<std::int64_t>(steps.size() - index - 1);
+			}
+			append_event(state, "step_checkpointed", "checkpointed", step);
+			save_state(state);
+		}
+		state["workflow_state"] = "completed";
+		state["stage"] = "completed";
+		state["eta_ms"] = 0;
+		append_event(state, "completed", "completed");
+		const auto result = final_result(record);
+		publish_result(job_id, result);
+		save_state(state);
+	} catch (const StateError& error) {
+		try {
+			auto record = load(job_id);
+			record.state["workflow_state"] = "paused";
+			record.state["stage"] = "paused";
+			record.state["last_error"] = failure_json(
+				ToolFailure{std::string(error.code()), error.what(), error.retryable()});
+			append_event(record.state, "failed", "paused", record.state.at("current_step"));
+			save_state(record.state);
+		} catch (...) {}
+	} catch (const std::exception& error) {
+		try {
+			auto record = load(job_id);
+			record.state["workflow_state"] = "paused";
+			record.state["stage"] = "paused";
+			record.state["last_error"] = failure_json(ToolFailure{"INTERNAL_ERROR", error.what(), false});
+			append_event(record.state, "failed", "paused", record.state.at("current_step"));
+			save_state(record.state);
+		} catch (...) {}
+	}
+	finish_active(job_id);
 }
 
-void ProfileMatrixWorkflow::shutdown() {
-    std::jthread active;
-    {
-        std::scoped_lock lock(worker_mutex_);
-        if (worker_.joinable()) {
-            worker_.request_stop();
-            active = std::move(worker_);
-        }
-    }
-    if (active.joinable()) active.join();
+void DurableJobWorkflow::finish_active(std::string_view job_id) noexcept {
+	std::scoped_lock lock(worker_mutex_);
+	if (active_job_id_ == job_id) {
+		worker_running_ = false;
+		active_job_id_.clear();
+	}
 }
 
+void DurableJobWorkflow::reap_finished() {
+	std::jthread completed;
+	{
+		std::scoped_lock lock(worker_mutex_);
+		if (!worker_running_ && worker_.joinable()) completed = std::move(worker_);
+	}
+	if (completed.joinable()) completed.join();
 }
+
+void DurableJobWorkflow::shutdown() {
+	std::jthread active;
+	{
+		std::scoped_lock lock(worker_mutex_);
+		if (worker_.joinable()) {
+			worker_.request_stop();
+			active = std::move(worker_);
+		}
+	}
+	if (active.joinable()) active.join();
+}
+
+} // namespace vibris::mcp

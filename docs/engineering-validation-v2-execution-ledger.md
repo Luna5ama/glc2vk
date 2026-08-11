@@ -82,8 +82,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T02 | P0 | Vibris | Publish compact typed MCP v2 tools | DONE | `T02 publish compact typed MCP v2 tools` |
 | T02A | P0 | Vibris | Restore a strict v2 Core compilation baseline | DONE | `T02A migrate Core directly to strict v2` |
 | T03 | P0 | Vibris | Add truthful runtime lease and status waiting | DONE | `T03 expose runtime lease and status transitions` |
-| T04 | P0 | Vibris | Generalize durable resumable jobs | READY | `T04 add durable resumable workflow jobs` |
-| T05 | P0 | Vibris | Add transactional restoration and recovery | PENDING | `T05 make runtime mutations transactional` |
+| T04 | P0 | Vibris | Generalize durable resumable jobs | DONE | `T04 add durable resumable workflow jobs` |
+| T05 | P0 | Vibris | Add transactional restoration and recovery | READY | `T05 make runtime mutations transactional` |
 | T06 | P0 | Vibris | Define effective shader settings contract | PENDING | `T06 expose resolved shader settings contract` |
 | T07 | P0 | Iris | Implement effective settings in Iris host | PENDING | `T07 report effective shader settings from Iris` |
 | T08 | P1 | Vibris | Return one ordered receipt per action | PENDING | `T08 return complete ordered action receipts` |
@@ -394,7 +394,7 @@ Evidence:
 
 ### T04 — Generalize durable resumable jobs
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T03
 
@@ -440,11 +440,19 @@ Blockers:
 
 Evidence:
 
-- Pending.
+- `DurableJobWorkflow` now owns the strict-v2 `.vibris\jobs\<job_id>` layout: immutable `request.json` and frozen `sources\`, atomic `state.json`, append-only `events.jsonl`, immutable per-step `receipts\NNNNNNNN.json`, and immutable terminal `result.json`; it never reads or migrates `.vibris\profile-matrix`.
+- Profile matrices and action matrices are expanded into one durable step per selected source/config case; paired benchmarks use the canonical deterministic planner and checkpoint every comparison, same-source control, and optional visual step. Generic case arrays provide the same engine for later compile-validation and long-running starters.
+- `vibris_run_recipe`, `vibris_run_actions`, and `vibris_run_matrix` accept durable async execution; `vibris_job` implements only strict-v2 query/result/cancel/resume operations. A cancelled job exposes partial receipts, and `resumable`, `cancelable`, and ETA are derived from safe request state, execution mode, and at least two observed step durations.
+- Accepted Core requests retain their request identity across interruption and are resumed through strict-v2 `ResumeJob`; unaccepted requests may be safely submitted again. `SynchronousJobRunner` now applies this rule to generic recipes and matrices as well as profiles, with no blind accepted-side-effect replay.
+- The durable restart fixture interrupted case 18 after 17 immutable receipts, reconstructed a new workflow instance, resumed `request-18`, completed the remaining 21 calls, and proved exactly 38 unique completed case identities plus a monotonic append-only event sequence.
+- The fixture inspected the generated job directory while live and proved `request.json`, `state.json`, `events.jsonl`, `sources\`, 17 partial receipts before restart, 38 receipts after completion, unchanged immutable request bytes, and a published `result.json`. Matrix, compile-like generic cases, async cancel/resume, and 16 paired measurement/control plus one visual checkpoint were also covered.
+- Visual Studio CMake `cmake --build --preset release --target vibris-profile-matrix-workflow-tests vibris-job-protocol-tests` passed; `ctest --preset release -R "Workflow|Checkpoint|Resume|JobProtocol"` passed 5/5. The MCP production target also built, and action-schema plus paired-benchmark regression coverage passed 6/6 (11/11 in the combined focused run).
+- Protected `ThreadBoundVibrisRuntimeAdapter.kt` and `ThreadBoundVibrisRuntimeAdapterTest.kt` remained outside task staging with their pre-existing `11/4` and `8/6` numstat; untracked `capture\a.spv` also remained outside staging.
+- Commit: this task's commit with subject `T04 add durable resumable workflow jobs`.
 
 ### T05 — Add transactional restoration and recovery
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T04
 

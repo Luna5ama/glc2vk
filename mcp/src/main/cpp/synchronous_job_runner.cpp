@@ -986,7 +986,9 @@ ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& ar
                     return submit_once("vibris_run_recipe", visual_arguments, server, context, control);
                 });
         }
-        auto outcome = submit_once(tool_name, arguments, server, context, control);
+        auto outcome = control.resume_request_id
+            ? resume_once(*control.resume_request_id, control)
+            : submit_once(tool_name, arguments, server, context, control);
         if (auto* result = std::get_if<Json>(&outcome)) {
             (*result)["kind"] = recipe;
             if (recipe == "ab_compare") {
@@ -1017,7 +1019,9 @@ ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& ar
         }
         return outcome;
     }
-    auto outcome = submit_once(tool_name, arguments, server, context, control);
+    auto outcome = control.resume_request_id
+        ? resume_once(*control.resume_request_id, control)
+        : submit_once(tool_name, arguments, server, context, control);
     if (tool_name == "vibris_run_matrix" && std::holds_alternative<Json>(outcome)) {
         return matrix_result(std::get<Json>(outcome), arguments);
     }

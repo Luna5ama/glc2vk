@@ -889,4 +889,26 @@ ToolOutcome run_paired_benchmark(const Json& arguments, std::string_view workflo
     return result;
 }
 
+std::vector<PairedBenchmarkStep> paired_benchmark_plan(const Json& arguments) {
+	std::vector<PairedBenchmarkStep> result;
+	for (const auto& item : plan(arguments)) {
+		result.push_back({item.phase, item.round, item.slot, item.variant,
+			item.physical_source, item.case_id});
+	}
+	return result;
+}
+
+Json paired_benchmark_profile_arguments(const Json& arguments,
+	const PairedBenchmarkStep& step, std::string_view workflow_id,
+	const std::size_t default_warmup_frames) {
+	return profile_arguments(arguments,
+		{step.phase, step.round, step.slot, step.variant, step.physical_source, step.case_id},
+		workflow_id, default_warmup_frames);
+}
+
+Json paired_benchmark_visual_arguments(
+	const Json& arguments, const std::size_t default_warmup_frames) {
+	return visual_arguments(arguments, default_warmup_frames);
+}
+
 } // namespace vibris::mcp

@@ -28,7 +28,7 @@ void prepare_one(SourcePreparer& preparer, const std::filesystem::path& workspac
         const auto job_id = source->at("job_id").get<std::string>();
         const auto snapshot_uuid = source->at("snapshot_uuid").get<std::string>();
         if (!detail::is_uuid(job_id) || !detail::is_uuid(snapshot_uuid)) {
-            throw StateError("PROFILE_CHECKPOINT_ERROR", "Queued source snapshot identity is invalid.", false);
+            throw StateError("JOB_CHECKPOINT_ERROR", "Queued source snapshot identity is invalid.", false);
         }
         control::PreparedSourceRef provenance;
         provenance.set_file_count(source->at("file_count").get<std::uint64_t>());
@@ -43,7 +43,7 @@ void prepare_one(SourcePreparer& preparer, const std::filesystem::path& workspac
             provenance.mutable_origin()->mutable_workspace()->set_display_name(
                 source->at("origin_name").get<std::string>());
         }
-        const auto snapshot = workspace_root / ".vibris" / "profile-matrix" /
+        const auto snapshot = workspace_root / ".vibris" / "jobs" /
             job_id / "sources" / snapshot_uuid;
         prepared.emplace_back(preparer.prepare_snapshot(snapshot, provenance));
         return;

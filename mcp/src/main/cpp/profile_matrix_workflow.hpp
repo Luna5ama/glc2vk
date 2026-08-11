@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <cstdint>
 #include <mutex>
 #include <optional>
 #include <stop_token>
@@ -14,7 +15,8 @@
 
 namespace vibris::mcp {
 
-struct ProfileMatrixCaseExecution final {
+struct DurableJobStepExecution final {
+    std::string tool_name;
     Json arguments;
     JobContext config;
     std::optional<std::string> resume_request_id;
@@ -22,30 +24,49 @@ struct ProfileMatrixCaseExecution final {
     std::function<void(std::string_view request_id, std::string_view stage, bool accepted)> progress;
 };
 
-using ProfileMatrixCaseExecutor = std::function<ToolOutcome(ProfileMatrixCaseExecution)>;
+using DurableJobStepExecutor = std::function<ToolOutcome(DurableJobStepExecution)>;
 
-class ProfileMatrixWorkflow final {
+class DurableJobWorkflow final {
 public:
-    ProfileMatrixWorkflow(
+    DurableJobWorkflow(
         std::filesystem::path workspace_root,
         std::string workspace_id,
-        ProfileMatrixCaseExecutor executor);
-    ~ProfileMatrixWorkflow();
+        DurableJobStepExecutor executor);
+    ~DurableJobWorkflow();
 
-    ProfileMatrixWorkflow(const ProfileMatrixWorkflow&) = delete;
-    ProfileMatrixWorkflow& operator=(const ProfileMatrixWorkflow&) = delete;
+    DurableJobWorkflow(const DurableJobWorkflow&) = delete;
+    DurableJobWorkflow& operator=(const DurableJobWorkflow&) = delete;
 
-    [[nodiscard]] ToolOutcome start(const Json& arguments, const JobContext& config);
+    [[nodiscard]] ToolOutcome start(
+        std::string_view tool_name,
+        const Json& arguments,
+        const JobContext& config);
     [[nodiscard]] ToolOutcome control(const Json& arguments);
     [[nodiscard]] Json active_status() const;
     [[nodiscard]] bool running() const;
     void shutdown();
 
 private:
-    [[nodiscard]] Json create_checkpoint(const Json& arguments, const JobContext& config) const;
-    [[nodiscard]] Json load(std::string_view job_id) const;
-    void save(const Json& document) const;
-    [[nodiscard]] Json result(const Json& document) const;
+    struct Record final {
+        Json request;
+        Json state;
+    };
+
+    [[nodiscard]] Record create_record(
+        std::string_view tool_name,
+        const Json& arguments,
+        const JobContext& config) const;
+    [[nodiscard]] Record load(std::string_view job_id) const;
+    void save_state(const Json& state) const;
+    void publish_request(const Json& request) const;
+    void append_event(Json& state, std::string_view type, std::string_view stage,
+        const Json& step = nullptr, std::string_view request_id = {}, bool accepted = false) const;
+    [[nodiscard]] Json events(std::string_view job_id, std::uint64_t cursor = 0) const;
+    [[nodiscard]] std::optional<Json> load_receipt(std::string_view job_id, std::size_t index) const;
+    void publish_receipt(std::string_view job_id, std::size_t index, const Json& receipt) const;
+    void publish_result(std::string_view job_id, const Json& result) const;
+    [[nodiscard]] Json snapshot(const Record& record, std::uint64_t event_cursor, bool include_result) const;
+    [[nodiscard]] Json final_result(const Record& record) const;
     [[nodiscard]] ToolOutcome begin(std::string job_id, bool asynchronous);
     void execute(std::string job_id, std::stop_token stop) noexcept;
     void finish_active(std::string_view job_id) noexcept;
@@ -54,7 +75,7 @@ private:
     std::filesystem::path workspace_root_;
     std::filesystem::path state_directory_;
     std::string workspace_id_;
-    ProfileMatrixCaseExecutor executor_;
+    DurableJobStepExecutor executor_;
     mutable std::mutex store_mutex_;
     mutable std::mutex worker_mutex_;
     std::jthread worker_;

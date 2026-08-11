@@ -269,25 +269,29 @@ Json build_definitions() {
                    "Run a standard shader workflow for the explicit Git worktree and scene preset. "
                    "load_and_screenshot loads one "
                    "shader source and config, waits for the requested warmup frames, and saves a screenshot. Profile "
-                   "recipes return normalized cases with summary, metrics, or full result detail. Profile matrices "
-                   "support sync/async execution; all query, result, resume and cancellation operations use vibris_job. "
+                   "recipes return normalized cases with summary, metrics, or full result detail. Long-running "
+                   "recipes support durable sync/async execution; query, result, resume and cancellation use vibris_job. "
                    "benchmark_ab runs repeated paired ABBA, ABAB, or seeded randomized profiles plus same-commit "
                    "controls and returns guarded confidence and measured-noise comparisons; optional visual "
                    "thresholds add a deterministic screenshot gate and a combined performance/visual verdict.",
                    recipe_schema(), false),
         definition("vibris_run_actions",
-                   "Run one ordered shader action sequence for the explicit Git worktree and scene preset.",
+                   "Run one ordered shader action sequence synchronously or as a durable async job for the explicit "
+                   "Git worktree and scene preset.",
                    scoped(closed_object({{"sources", named_sources_schema()},
                                          {"configs", named_configs_schema()},
+                                         {"execution", enum_string({"sync", "async"})},
                                          {"actions", {{"type", "array"}, {"items", action_schema()}, {"maxItems", 64}}}},
                                         {"actions"}), true), false),
         definition("vibris_run_matrix",
-                   "Run the action template for every selected source/config combination in the explicit Git "
+                   "Run the action template synchronously or as a durable async job for every selected source/config "
+                   "combination in the explicit Git "
                    "worktree and scene preset. Each combination "
                    "automatically begins with load_shader; do not include load_shader in the action template.",
                    scoped(closed_object({{"sources", named_sources_schema()},
                                          {"configs", named_configs_schema()},
                                          {"matrix", matrix_axes_schema()},
+                                         {"execution", enum_string({"sync", "async"})},
                                          {"actions", {{"type", "array"}, {"items", action_schema()}, {"maxItems", 64}}}},
                                         {"sources", "configs", "matrix", "actions"}), true), false),
         definition("vibris_job",
