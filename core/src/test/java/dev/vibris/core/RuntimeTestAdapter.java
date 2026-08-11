@@ -4,6 +4,7 @@ import dev.vibris.api.ArtifactSink;
 import dev.vibris.api.CancellationToken;
 import dev.vibris.api.CapturePlan;
 import dev.vibris.api.CaptureResult;
+import dev.vibris.api.CompileCatalog;
 import dev.vibris.api.ContextApplyResult;
 import dev.vibris.api.EffectiveShaderSettings;
 import dev.vibris.api.ReloadResult;
@@ -22,7 +23,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.function.Consumer;
 import java.util.function.Function;
 
 final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
@@ -41,6 +41,7 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     TemporalResetResult reset = new TemporalResetResult(true);
     ResourceCatalog catalog = ResourceCatalog.empty();
     CaptureResult captureResult = new CaptureResult(0, List.of());
+    CompileCatalog compileCatalog = CompileCatalog.empty(0);
     final Map<String, byte[]> captureFiles = new LinkedHashMap<>();
     CaptureResult patchedShaderResult = new CaptureResult(0, List.of());
     final Map<String, byte[]> patchedShaderFiles = new LinkedHashMap<>();
@@ -50,7 +51,7 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     final List<SceneContext> contexts = new ArrayList<>();
     List<ScenePreset> presets = List.of();
     Runnable beforeReloadResult = () -> {};
-    Consumer<RuntimeAction> actionObserver = ignored -> {};
+    Runnable beforeCompileCatalogResult = () -> {};
     RuntimeException closeFailure;
     int closeCount;
 
@@ -98,6 +99,13 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     }
 
     @Override
+    public CompletionStage<CompileCatalog> getCompileCatalog(CancellationToken cancellation) {
+        events.add("compile_catalog");
+        beforeCompileCatalogResult.run();
+        return CompletableFuture.completedFuture(compileCatalog);
+    }
+
+    @Override
     public CompletionStage<Long> waitRenderedFrames(int frameCount, CancellationToken cancellation) {
         events.add("frames");
         if (!waitOperations.isEmpty()) return waitOperations.removeFirst().apply(cancellation);
@@ -112,7 +120,6 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     @Override
     public CompletionStage<String> executeAction(RuntimeAction action) {
         events.add("action:" + action.getClass().getSimpleName());
-        actionObserver.accept(action);
         if (!actionStages.isEmpty()) return actionStages.removeFirst();
         String response = actionResponses.isEmpty() ? "{}" : actionResponses.removeFirst();
         return CompletableFuture.completedFuture(response);

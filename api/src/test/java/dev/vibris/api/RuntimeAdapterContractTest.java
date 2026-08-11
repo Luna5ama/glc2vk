@@ -35,7 +35,10 @@ class RuntimeAdapterContractTest {
         assertTrue(adapter.getStatus().toCompletableFuture().join().ready());
         assertEquals(context, adapter.ensureWorldAndContext(context, cancellation.token())
             .toCompletableFuture().join().context());
-        assertTrue(adapter.reloadVibrisShaderpack(null, cancellation.token()).toCompletableFuture().join().successful());
+        assertTrue(adapter.reloadVibrisShaderpack(null, cancellation.token())
+            .toCompletableFuture().join().successful());
+        assertEquals(0, adapter.getCompileCatalog(cancellation.token())
+            .toCompletableFuture().join().shaderGeneration());
         assertEquals(7, adapter.waitRenderedFrames(7, cancellation.token()).toCompletableFuture().join());
         assertEquals(9, adapter.capture(
             CapturePlan.empty(), name -> new ByteArrayOutputStream(), cancellation.token()
@@ -144,6 +147,69 @@ class RuntimeAdapterContractTest {
     }
 
     @Test
+    void compileCatalogCoversEveryTerminalStateAndHasStableIdentities() {
+        String sourceHash = "a".repeat(64);
+        var compileError = CompileCatalog.Diagnostic.of(
+            CompileCatalog.DiagnosticSeverity.ERROR, "composite.fsh", 17, 3, "compile failed", "compile.log"
+        );
+        var linkError = CompileCatalog.Diagnostic.of(
+            CompileCatalog.DiagnosticSeverity.ERROR, "final", 0, 0, "link failed", "link.log"
+        );
+        var warning = CompileCatalog.Diagnostic.of(
+            CompileCatalog.DiagnosticSeverity.WARNING, "composite.fsh", 4, 1, "unused value"
+        );
+        var graphics = CompileCatalog.ProgramEntry.of(
+            "graphics", "composite", List.of(CompileCatalog.ShaderStage.FRAGMENT, CompileCatalog.ShaderStage.VERTEX),
+            CompileCatalog.CompileState.SUCCEEDED, CompileCatalog.CompileState.SUCCEEDED,
+            sourceHash, List.of(warning)
+        );
+        var compute = CompileCatalog.ProgramEntry.of(
+            "compute", "prepare", List.of(CompileCatalog.ShaderStage.COMPUTE),
+            CompileCatalog.CompileState.SUCCEEDED, CompileCatalog.CompileState.SUCCEEDED,
+            "b".repeat(64), List.of()
+        );
+        var missing = CompileCatalog.ProgramEntry.of(
+            "missing", "shadow", List.of(CompileCatalog.ShaderStage.VERTEX, CompileCatalog.ShaderStage.FRAGMENT),
+            CompileCatalog.CompileState.NOT_PRESENT, CompileCatalog.CompileState.NOT_PRESENT, "", List.of()
+        );
+        var compileFailed = CompileCatalog.ProgramEntry.of(
+            "compile-failed", "deferred",
+            List.of(CompileCatalog.ShaderStage.VERTEX, CompileCatalog.ShaderStage.FRAGMENT),
+            CompileCatalog.CompileState.FAILED, CompileCatalog.CompileState.NOT_APPLICABLE,
+            "c".repeat(64), List.of(warning, compileError)
+        );
+        var linkFailed = CompileCatalog.ProgramEntry.of(
+            "link-failed", "final", List.of(CompileCatalog.ShaderStage.VERTEX, CompileCatalog.ShaderStage.FRAGMENT),
+            CompileCatalog.CompileState.SUCCEEDED, CompileCatalog.CompileState.FAILED,
+            "d".repeat(64), List.of(linkError)
+        );
+
+        List<CompileCatalog.ProgramEntry> unordered = new ArrayList<>(
+            List.of(missing, graphics, linkFailed, compute, compileFailed)
+        );
+        CompileCatalog first = CompileCatalog.of(unordered, 42);
+        java.util.Collections.reverse(unordered);
+        CompileCatalog second = CompileCatalog.of(unordered, 42);
+
+        assertEquals(List.of("compile-failed", "compute", "graphics", "link-failed", "missing"),
+            first.programs().stream().map(CompileCatalog.ProgramEntry::programId).toList());
+        assertEquals(List.of(CompileCatalog.ShaderStage.VERTEX, CompileCatalog.ShaderStage.FRAGMENT),
+            graphics.stages());
+        assertEquals(first.mappingSha256(), second.mappingSha256());
+        assertEquals(first.programs(), second.programs());
+        assertEquals(compileError.fingerprintSha256(), CompileCatalog.Diagnostic.of(
+            CompileCatalog.DiagnosticSeverity.ERROR, "composite.fsh", 17, 3, "compile failed", "other.log"
+        ).fingerprintSha256());
+        assertEquals(List.of(compileError.fingerprintSha256(), warning.fingerprintSha256()).stream().sorted().toList(),
+            compileFailed.diagnostics().stream().map(CompileCatalog.Diagnostic::fingerprintSha256).toList());
+        assertThrows(UnsupportedOperationException.class, () -> first.programs().clear());
+        assertThrows(UnsupportedOperationException.class, () -> graphics.stages().clear());
+        assertThrows(IllegalArgumentException.class, () -> new CompileCatalog(
+            first.programs(), "0".repeat(64), 42
+        ));
+    }
+
+    @Test
     void publicValueValidationRemainsIntact() {
         assertThrows(IllegalArgumentException.class, () -> new SceneContext.Resolution(0, 1080));
         assertTrue(!SceneContext.Resolution.unspecified().isSpecified());
@@ -157,6 +223,11 @@ class RuntimeAdapterContractTest {
     void kotlinDataCarriersPreserveJavaRecordAbi() {
         assertRecord(CapturePlan.class, "targets");
         assertRecord(CaptureResult.class, "frameId", "groups");
+        assertRecord(CompileCatalog.class, "programs", "mappingSha256", "shaderGeneration");
+        assertRecord(CompileCatalog.ProgramEntry.class, "programId", "passId", "stages", "compileState",
+            "linkState", "patchedSourceSha256", "diagnostics");
+        assertRecord(CompileCatalog.Diagnostic.class, "severity", "fileName", "line", "column", "message",
+            "fingerprintSha256", "logPath");
         assertRecord(ContextValidationResult.class, "valid", "errors");
         assertRecord(EffectiveShaderSettings.class, "settings", "settingsSha256");
         assertRecord(EffectiveShaderSettings.Setting.class, "name", "value", "defaultValue", "origin");
@@ -191,6 +262,11 @@ class RuntimeAdapterContractTest {
             Map<String, String> config, CancellationToken cancellation
         ) {
             return CompletableFuture.completedFuture(ReloadResult.success(EffectiveShaderSettings.empty(), List.of()));
+        }
+
+        @Override
+        public CompletionStage<CompileCatalog> getCompileCatalog(CancellationToken cancellation) {
+            return CompletableFuture.completedFuture(CompileCatalog.empty(0));
         }
 
         @Override

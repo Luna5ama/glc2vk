@@ -14,6 +14,7 @@ import dev.vibris.protocol.v2.JobStage
 import dev.vibris.protocol.v2.PatchedShadersReceipt
 import dev.vibris.protocol.v2.ResetTemporalReceipt
 import dev.vibris.protocol.v2.RuntimeMutationReceipt
+import dev.vibris.protocol.v2.ShaderInspectionReceipt
 import dev.vibris.protocol.v2.WaitFramesReceipt
 import java.io.IOException
 import java.util.LinkedHashSet
@@ -49,7 +50,7 @@ internal class ActionJobExecutor(
                             val execution = load(job, load, progress, deadline)
                             diagnostics.addAll(execution.reload.diagnostics)
                             prepared?.addDiagnostics(execution.reload.diagnostics)
-                            owner.await(runtime.executeAction(RuntimeAction.InspectShader), job, deadline)
+                            owner.await(runtime.getCompileCatalog(job.cancellation.token()), job, deadline)
                             receiptBook.put(
                                 step.actionIndex,
                                 receiptBook.success(step.actionIndex)
@@ -163,6 +164,22 @@ internal class ActionJobExecutor(
                             receiptBook.put(
                                 step.actionIndex,
                                 receiptBook.success(step.actionIndex).setComparison(comparison).build(),
+                            )
+                        }
+                        CaptureProgramBuilder.ActionType.INSPECT -> {
+                            val catalog = owner.await(
+                                runtime.getCompileCatalog(job.cancellation.token()),
+                                job,
+                                deadline,
+                            )
+                            receiptBook.put(
+                                step.actionIndex,
+                                receiptBook.success(step.actionIndex)
+                                    .setShaderInspection(
+                                        ShaderInspectionReceipt.newBuilder()
+                                            .setCatalog(CompileCatalogProtocol.toProtocol(catalog)),
+                                    )
+                                    .build(),
                             )
                         }
                         CaptureProgramBuilder.ActionType.RUNTIME -> {

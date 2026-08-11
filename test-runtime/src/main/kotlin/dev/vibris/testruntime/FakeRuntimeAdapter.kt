@@ -4,6 +4,7 @@ import dev.vibris.api.ArtifactSink
 import dev.vibris.api.CancellationToken
 import dev.vibris.api.CapturePlan
 import dev.vibris.api.CaptureResult
+import dev.vibris.api.CompileCatalog
 import dev.vibris.api.ContextApplyResult
 import dev.vibris.api.ReloadResult
 import dev.vibris.api.ResourceCatalog
@@ -61,6 +62,9 @@ class FakeRuntimeAdapter : VibrisRuntimeAdapter {
         cancellation: CancellationToken,
     ): CompletionStage<TemporalResetResult> =
         immediate(cancellation) { TemporalResetResult(true) }
+
+    override fun getCompileCatalog(cancellation: CancellationToken): CompletionStage<CompileCatalog> =
+        immediate(cancellation) { CompileCatalog.empty(0) }
 
     override fun waitRenderedFrames(
         frameCount: Int,
@@ -144,8 +148,6 @@ class FakeRuntimeAdapter : VibrisRuntimeAdapter {
             RuntimeAction.CaptureStatus -> "{\"pending\":false,\"active\":false,\"saving\":false}"
             is RuntimeAction.CapturePass -> "{\"ok\":true,\"path\":\"capture-pass\"}"
             is RuntimeAction.CaptureMulti -> "{\"ok\":true,\"path\":\"capture-multi\"}"
-            RuntimeAction.InspectShader ->
-                "{\"status\":\"ok\",\"pack_loaded\":true,\"shaderpack\":\"vibris\",\"errors\":[]}"
             is RuntimeAction.GpuMetrics ->
                 "{\"avg\":1.0,\"p5\":0.9,\"p50\":1.0,\"p95\":1.1}"
             RuntimeAction.ListBuffers -> "{\"buffers\":[]}"

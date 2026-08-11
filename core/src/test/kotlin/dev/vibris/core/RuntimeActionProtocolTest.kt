@@ -8,6 +8,7 @@ import dev.vibris.protocol.v2.DumpTexture
 import dev.vibris.protocol.v2.GetGpuMetrics
 import dev.vibris.protocol.v2.InspectShader
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 
@@ -32,10 +33,6 @@ class RuntimeActionProtocolTest {
         )
         assertEquals(RuntimeAction.GpuMetrics(17), metrics)
 
-        val inspection = RuntimeActionProtocol.toApi(
-            Action.newBuilder().setInspectShader(InspectShader.getDefaultInstance()).build(),
-        )
-        assertEquals(RuntimeAction.InspectShader, inspection)
     }
 
     @Test
@@ -66,6 +63,9 @@ class RuntimeActionProtocolTest {
                 .setDumpTexture(DumpTexture.getDefaultInstance())
                 .build(),
         )
+        val inspection = Action.newBuilder().setInspectShader(InspectShader.getDefaultInstance()).build()
+        assertFalse(RuntimeActionProtocol.isRuntime(inspection))
+        assertInvalid(inspection)
     }
 
     private fun assertInvalid(action: Action) {

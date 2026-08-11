@@ -4,6 +4,7 @@ import dev.vibris.api.ArtifactSink;
 import dev.vibris.api.CancellationToken;
 import dev.vibris.api.CapturePlan;
 import dev.vibris.api.CaptureResult;
+import dev.vibris.api.CompileCatalog;
 import dev.vibris.api.ContextApplyResult;
 import dev.vibris.api.ReloadResult;
 import dev.vibris.api.ResourceCatalog;
@@ -105,6 +106,11 @@ final class IrisSourceLifecycleTest {
         @Override
         public CompletionStage<TemporalResetResult> resetTemporalState(CancellationToken cancellation) {
             return completed(cancellation, new TemporalResetResult(true));
+        }
+
+        @Override
+        public CompletionStage<CompileCatalog> getCompileCatalog(CancellationToken cancellation) {
+            return completed(cancellation, CompileCatalog.empty(0));
         }
 
         @Override

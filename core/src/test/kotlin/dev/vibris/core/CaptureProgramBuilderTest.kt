@@ -4,6 +4,7 @@ import dev.vibris.api.ResourceCatalog
 import dev.vibris.protocol.v2.Action
 import dev.vibris.protocol.v2.ActionSequence
 import dev.vibris.protocol.v2.GetGpuMetrics
+import dev.vibris.protocol.v2.InspectShader
 import dev.vibris.protocol.v2.JobSpec
 import dev.vibris.protocol.v2.LoadShader
 import dev.vibris.protocol.v2.ResultArtifactOptions
@@ -49,5 +50,28 @@ class CaptureProgramBuilderTest {
         assertEquals(2, program.steps.size)
         assertEquals(CaptureProgramBuilder.ActionType.LOAD, program.steps[0].type)
         assertEquals(CaptureProgramBuilder.ActionType.RUNTIME, program.steps[1].type)
+    }
+
+    @Test
+    fun `shader inspection is a typed query step`() {
+        val submission = JobSpec.newBuilder()
+            .setJobId("inspect-request")
+            .setActionSequence(
+                ActionSequence.newBuilder().addActions(
+                    Action.newBuilder().setInspectShader(InspectShader.getDefaultInstance()),
+                ),
+            )
+            .build()
+        val job = CoreJob(
+            submission,
+            "inspect-request",
+            "11111111-1111-4111-8111-111111111111",
+            "message",
+            null,
+        )
+
+        val program = CaptureProgramBuilder().actions(job, ResourceCatalog.empty())
+
+        assertEquals(CaptureProgramBuilder.ActionType.INSPECT, program.steps.single().type)
     }
 }

@@ -9,7 +9,6 @@ internal object RuntimeActionProtocol {
         Action.ActionCase.GET_CAPTURE_STATUS,
         Action.ActionCase.CAPTURE_PASS,
         Action.ActionCase.CAPTURE_MULTI,
-        Action.ActionCase.INSPECT_SHADER,
         Action.ActionCase.GET_GPU_METRICS,
         -> true
         else -> false
@@ -30,7 +29,6 @@ internal object RuntimeActionProtocol {
                 command.artifactName.takeIf(String::isNotBlank),
             )
         }
-        Action.ActionCase.INSPECT_SHADER -> RuntimeAction.InspectShader
         Action.ActionCase.GET_GPU_METRICS ->
             RuntimeAction.GpuMetrics(action.getGpuMetrics.frames.requireRange("frames", 1, 10_000))
         else -> throw IllegalArgumentException("Action is not a runtime action")

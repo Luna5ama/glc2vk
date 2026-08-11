@@ -4,6 +4,7 @@ import dev.vibris.api.ArtifactSink
 import dev.vibris.api.CancellationToken
 import dev.vibris.api.CapturePlan
 import dev.vibris.api.CaptureResult
+import dev.vibris.api.CompileCatalog
 import dev.vibris.api.ContextApplyResult
 import dev.vibris.api.ReloadResult
 import dev.vibris.api.ResourceCatalog
@@ -52,6 +53,16 @@ class ThreadBoundVibrisRuntimeAdapterTest {
         adapter.close()
     }
 
+    @Test
+    fun queriesCompileCatalogOnTheClientThread() {
+        val frames = RenderedFrameClock()
+        val adapter = ThreadBoundVibrisRuntimeAdapter(StubHost(), frames)
+
+        val catalog = adapter.getCompileCatalog(CancellationToken.none()).toCompletableFuture().join()
+        assertEquals(7L, catalog.shaderGeneration)
+        adapter.close()
+    }
+
     private class StubHost : VibrisRuntimeHost {
         override fun isClientThread(): Boolean = true
 
@@ -65,6 +76,8 @@ class ThreadBoundVibrisRuntimeAdapterTest {
         ): CompletionStage<ContextApplyResult> = unsupported()
 
         override fun reload(config: Map<String, String>?, cancellation: CancellationToken): ReloadResult = unsupported()
+
+        override fun compileCatalog(cancellation: CancellationToken): CompileCatalog = CompileCatalog.empty(7)
 
         override fun resetTemporal(cancellation: CancellationToken): TemporalResetResult = unsupported()
 

@@ -1,6 +1,7 @@
 package dev.vibris.core;
 
 import dev.vibris.api.EffectiveShaderSettings;
+import dev.vibris.api.CompileCatalog;
 import dev.vibris.api.ReloadResult;
 import dev.vibris.api.TemporalResetResult;
 import dev.vibris.protocol.v2.Action;
@@ -9,6 +10,7 @@ import dev.vibris.protocol.v2.ActionSequence;
 import dev.vibris.protocol.v2.ActivateSource;
 import dev.vibris.protocol.v2.ErrorCode;
 import dev.vibris.protocol.v2.JobSpec;
+import dev.vibris.protocol.v2.InspectShader;
 import dev.vibris.protocol.v2.LoadShader;
 import dev.vibris.protocol.v2.PreparedSourceRef;
 import dev.vibris.protocol.v2.ReceiptStatus;
@@ -59,7 +61,7 @@ class RuntimeJobExecutorTest {
 
         TerminalResult terminal = fixture.executor.execute(job, ignored -> {});
 
-        assertEquals(List.of("link:A", "reload", "context", "reset", "action:InspectShader", "frames"),
+        assertEquals(List.of("link:A", "reload", "context", "reset", "compile_catalog", "frames"),
             fixture.runtime.events);
         assertEquals("32", fixture.runtime.lastShaderConfig.get("SETTING_SAMPLE_COUNT"));
         assertEquals(2, terminal.completed().getResult().getActionReceiptsCount());
@@ -183,6 +185,38 @@ class RuntimeJobExecutorTest {
         assertTrue(result.getActionReceipts(0).hasResetTemporal());
         assertTrue(result.getActionReceipts(0).getResetTemporal().getCompletedAtUnixMs() > 0);
         assertEquals(ActionKind.ACTION_KIND_WAIT_FRAMES, result.getActionReceipts(1).getKind());
+    }
+
+    @Test
+    void shaderInspectionReturnsTheCanonicalTypedCatalog() throws Exception {
+        Fixture fixture = new Fixture();
+        Source source = fixture.source("A");
+        var diagnostic = CompileCatalog.Diagnostic.of(
+            CompileCatalog.DiagnosticSeverity.ERROR, "final.fsh", 9, 2, "link failed"
+        );
+        fixture.runtime.compileCatalog = CompileCatalog.of(List.of(
+            CompileCatalog.ProgramEntry.of(
+                "final", "final", List.of(CompileCatalog.ShaderStage.VERTEX, CompileCatalog.ShaderStage.FRAGMENT),
+                CompileCatalog.CompileState.SUCCEEDED, CompileCatalog.CompileState.FAILED,
+                "a".repeat(64), List.of(diagnostic)
+            )
+        ), 12);
+        CoreJob job = fixture.job(source, ActionSequence.newBuilder()
+            .addActions(Action.newBuilder().setInspectShader(InspectShader.getDefaultInstance()))
+            .build());
+
+        TerminalResult terminal = fixture.executor.execute(job, ignored -> {});
+        var receipt = terminal.completed().getResult().getActionReceipts(0);
+        var catalog = receipt.getShaderInspection().getCatalog();
+
+        assertEquals(List.of("compile_catalog"), fixture.runtime.events);
+        assertEquals(ActionKind.ACTION_KIND_INSPECT_SHADER, receipt.getKind());
+        assertEquals(fixture.runtime.compileCatalog.mappingSha256(), catalog.getMappingSha256());
+        assertEquals(12, catalog.getShaderGeneration());
+        assertEquals(dev.vibris.protocol.v2.CompileState.COMPILE_STATE_FAILED,
+            catalog.getPrograms(0).getLinkState());
+        assertEquals(diagnostic.fingerprintSha256(),
+            catalog.getPrograms(0).getDiagnostics(0).getFingerprintSha256());
     }
 
     @Test

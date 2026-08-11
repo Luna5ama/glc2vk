@@ -4,6 +4,7 @@ import dev.vibris.api.ArtifactSink
 import dev.vibris.api.CancellationToken
 import dev.vibris.api.CapturePlan
 import dev.vibris.api.CaptureResult
+import dev.vibris.api.CompileCatalog
 import dev.vibris.api.ContextApplyResult
 import dev.vibris.api.ContextValidationResult
 import dev.vibris.api.RuntimeAction
@@ -85,6 +86,9 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
                 cancellation,
             )
         }
+
+    override fun getCompileCatalog(cancellation: CancellationToken): CompletionStage<CompileCatalog> =
+        trackActivity { onClient(Supplier { host.compileCatalog(cancellation) }, cancellation) }
 
     override fun resetTemporalState(cancellation: CancellationToken): CompletionStage<TemporalResetResult> =
         trackActivity { onClient(Supplier { host.resetTemporal(cancellation) }, cancellation) }

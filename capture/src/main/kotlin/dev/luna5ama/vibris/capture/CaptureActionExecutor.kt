@@ -25,7 +25,6 @@ class CaptureActionExecutor(
         RuntimeAction.CaptureStatus -> captureStatus()
         is RuntimeAction.CapturePass -> queuePass(action)
         is RuntimeAction.CaptureMulti -> queueMulti(action)
-        RuntimeAction.InspectShader -> shader.inspect()
         is RuntimeAction.GpuMetrics -> error("GPU metrics are asynchronous")
         RuntimeAction.ListTextures -> shader.texturesJson()
         RuntimeAction.ListBuffers -> shader.buffersJson()

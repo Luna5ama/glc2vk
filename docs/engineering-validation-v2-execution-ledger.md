@@ -89,8 +89,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T06 | P0 | Vibris | Define effective shader settings contract | DONE | `T06 expose resolved shader settings contract` |
 | T07 | P0 | Iris | Implement effective settings in Iris host | DONE | `T07 report effective shader settings from Iris` |
 | T08 | P1 | Vibris | Return one ordered receipt per action | DONE | `T08 return complete ordered action receipts` |
-| T09 | P0 | Vibris | Define compile catalog runtime contract | READY | `T09 define compile validation catalog contract` |
-| T10 | P0 | Iris | Emit complete Iris compile catalog | PENDING | `T10 emit Iris program compile catalog` |
+| T09 | P0 | Vibris | Define compile catalog runtime contract | DONE | `T09 define compile validation catalog contract` |
+| T10 | P0 | Iris | Emit complete Iris compile catalog | READY | `T10 emit Iris program compile catalog` |
 | T11 | P0 | Vibris | Add compile_validate recipe | PENDING | `T11 add compile validation recipe` |
 | T12 | P0 | Vibris | Expand immutable benchmark provenance | PENDING | `T12 expand benchmark provenance and stale checks` |
 | T13 | P0 | Vibris | Enforce statistical benchmark guardrails | PENDING | `T13 enforce benchmark semantic guardrails` |
@@ -701,7 +701,7 @@ Evidence:
 
 ### T09 — Define compile catalog runtime contract
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T08
 
@@ -758,10 +758,29 @@ Evidence:
   `1.21.11-shaderdev` at `6322cb2833edfddbfa64d0ac6001988c4d49efd1` with only the recorded runtime directories.
   All declared auxiliary worktrees remain clean at their recorded HEADs; T09 is safe to resume as the sole `READY`
   task after this control-plane commit.
+- Added immutable `CompileCatalog` API records for uniquely ordered program/pass entries, graphics and compute stages,
+  terminal compile/link states, patched-source SHA-256 identities, shader generation, and a domain-separated mapping
+  hash derived only from the canonical intended mapping.
+- Added domain-separated diagnostic fingerprints over severity, file, line, column, and message. Catalog factories sort
+  entries and diagnostics without making fingerprints depend on discovery/log ordering or artifact log paths, while
+  canonical constructors reject duplicate identities, invalid state combinations, and mismatched hashes.
+- Replaced the string `RuntimeAction.InspectShader` route with a required cancellable runtime catalog query through
+  `VibrisRuntimeAdapter`, `ThreadBoundVibrisRuntimeAdapter`, and `VibrisRuntimeHost`. `inspect_shader` is now a
+  dedicated execution step returning `ShaderInspectionReceipt`; load synchronization also consumes the typed query
+  directly and never parses or preserves the old global error string.
+- Contract coverage includes graphics, compute, missing, compile-failed, and link-failed entries, stable identities
+  under reordered inputs, every API record boundary, lossless protobuf mapping, typed action receipts, client-thread
+  routing, and cancellation/restoration behavior. `RuntimeAction.InspectShader` references are absent repository-wide.
+- `2026-08-11`: `.\gradlew.bat :vibris-api:test :vibris-core:test :vibris-capture:compileKotlin --offline` passed with
+  API 7/7 and Core 101/101 tests and zero failures or errors; capture action compilation passed after removal of the old
+  sealed-action branch. A broader integration compile remains independently blocked before integration compilation by
+  the pre-existing `test-runtime` v1 probe references assigned to T18; no compatibility remediation was pulled forward.
+- The protected untracked `capture/a.spv` remained unread and unstaged. No deployment or process restart occurred.
+- Commit: this task's commit with subject `T09 define compile validation catalog contract`.
 
 ### T10 — Emit complete Iris compile catalog
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T09
 
@@ -1403,3 +1422,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T08 - returned one terminal receipt per input action, separated generated preludes, retained grouped-capture indices, nested screenshot waits, and preserved partial receipts on failure; protocol Java 5/5, Core 97/97, focused 13/13, and native CTest 2/2 passed - Commit title: T08 return complete ordered action receipts`
 - `2026-08-11 - T09 blocked - operational compile-catalog query requires the still-dirty protected ThreadBound runtime adapter; no fallback or compatibility path was added and T10 was not started - Control-plane commit title: roadmap block T09 on protected runtime adapter`
 - `2026-08-11 - T09 unblocked - user committed the protected Vibris adapter/test as b7a0931d85042442c0360a38c50e30d811be9486 and Iris lifecycle as 6322cb2833edfddbfa64d0ac6001988c4d49efd1; tracked dirt is resolved and T09 is READY - Control-plane commit title: roadmap unblock T09 after user merges`
+- `2026-08-11 - T09 - defined canonical compile catalogs and stable diagnostic fingerprints, replaced string shader inspection with a typed runtime query/receipt, and passed API 7/7 plus Core 101/101 tests - Commit title: T09 define compile validation catalog contract`

@@ -4,11 +4,11 @@ import dev.vibris.api.ArtifactSink;
 import dev.vibris.api.CancellationToken;
 import dev.vibris.api.CapturePlan;
 import dev.vibris.api.CaptureResult;
+import dev.vibris.api.CompileCatalog;
 import dev.vibris.api.ContextApplyResult;
 import dev.vibris.api.ReloadResult;
 import dev.vibris.api.ResourceCatalog;
 import dev.vibris.api.RuntimeStatus;
-import dev.vibris.api.RuntimeAction;
 import dev.vibris.api.SceneContext;
 import dev.vibris.api.TemporalResetResult;
 import dev.vibris.api.VibrisRuntimeAdapter;
@@ -84,12 +84,8 @@ final class CaptureTestRuntime implements VibrisRuntimeAdapter {
     }
 
     @Override
-    public CompletionStage<String> executeAction(RuntimeAction action) {
-        if (action == RuntimeAction.InspectShader.INSTANCE) {
-            return CompletableFuture.completedFuture(
-                "{\"status\":\"ok\",\"pack_loaded\":true,\"shaderpack\":\"vibris\",\"errors\":[]}");
-        }
-        return VibrisRuntimeAdapter.super.executeAction(action);
+    public CompletionStage<CompileCatalog> getCompileCatalog(CancellationToken cancellation) {
+        return CompletableFuture.completedFuture(CompileCatalog.empty(0));
     }
 
     @Override

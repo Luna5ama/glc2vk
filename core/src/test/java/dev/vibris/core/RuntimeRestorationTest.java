@@ -106,7 +106,7 @@ class RuntimeRestorationTest {
         Source candidate = fixture.source("candidate");
         CoreJob job = fixture.mutatingJob(candidate,
             Action.newBuilder().setWaitFrames(WaitFrames.newBuilder().setFrameCount(2)).build());
-        fixture.runtime.actionObserver = ignored -> job.cancellation.cancel();
+        fixture.runtime.beforeCompileCatalogResult = job.cancellation::cancel;
 
         RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
             () -> fixture.executor.execute(job, ignored -> {}));

@@ -40,6 +40,8 @@ interface VibrisRuntimeAdapter : AutoCloseable {
         cancellation: CancellationToken,
     ): CompletionStage<ReloadResult>
 
+    fun getCompileCatalog(cancellation: CancellationToken): CompletionStage<CompileCatalog>
+
     fun resetTemporalState(cancellation: CancellationToken): CompletionStage<TemporalResetResult>
 
     fun waitRenderedFrames(frameCount: Int, cancellation: CancellationToken): CompletionStage<Long>

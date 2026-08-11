@@ -119,6 +119,10 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                         ),
                     )
                 }
+                action.hasInspectShader() -> {
+                    flushGroup()
+                    steps.add(ActionStep.inspect(actionIndex))
+                }
                 RuntimeActionProtocol.isRuntime(action) -> {
                     flushGroup()
                     steps.add(ActionStep.runtime(actionIndex, action))
@@ -142,6 +146,7 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
         CAPTURE,
         PATCHED_SHADERS,
         COMPARE,
+        INSPECT,
         RUNTIME,
     }
 
@@ -172,6 +177,8 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                 ActionStep(ActionType.PATCHED_SHADERS, null, 0, capture, null, actionIndex, null, null, emptyList())
             fun compare(actionIndex: Int, comparison: Comparison) =
                 ActionStep(ActionType.COMPARE, null, 0, null, comparison, actionIndex, null, null, emptyList())
+            fun inspect(actionIndex: Int) =
+                ActionStep(ActionType.INSPECT, null, 0, null, null, actionIndex, null, null, emptyList())
             fun runtime(actionIndex: Int, action: dev.vibris.protocol.v2.Action) =
                 ActionStep(ActionType.RUNTIME, null, 0, null, null, actionIndex, action, null, emptyList())
         }

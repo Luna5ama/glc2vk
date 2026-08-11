@@ -4,6 +4,7 @@ import dev.vibris.api.ArtifactSink
 import dev.vibris.api.CancellationToken
 import dev.vibris.api.CapturePlan
 import dev.vibris.api.CaptureResult
+import dev.vibris.api.CompileCatalog
 import dev.vibris.api.ContextApplyResult
 import dev.vibris.api.ContextValidationResult
 import dev.vibris.api.RuntimeAction
@@ -34,6 +35,8 @@ interface VibrisRuntimeHost : AutoCloseable {
     fun applyContext(context: SceneContext, cancellation: CancellationToken): CompletionStage<ContextApplyResult>
 
     fun reload(config: Map<String, String>?, cancellation: CancellationToken): ReloadResult
+
+    fun compileCatalog(cancellation: CancellationToken): CompileCatalog
 
     fun resetTemporal(cancellation: CancellationToken): TemporalResetResult
 
