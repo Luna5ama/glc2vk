@@ -330,6 +330,22 @@ private:
         }
 
         ToolOutcome run_job(std::string_view name, const Json& arguments) {
+            if (name == "vibris_run_recipe" &&
+                arguments.value("recipe", std::string{}) == "recover_runtime") {
+                JobContext config;
+                config.workspace_id = workspace_id_;
+                control::SceneContext context;
+                return unary<control::GetServerInfoResponse>(
+                    [this](auto completion) { return client().get_server_info(std::move(completion)); },
+                    [this, &arguments, &context, &config](const auto& response) -> ToolOutcome {
+                        if (!response.has_server()) {
+                            throw StateError(
+                                "SERVER_NOT_READY", "The local Vibris server did not provide server info.", true);
+                        }
+                        return SynchronousJobRunner(client(), source_handler_, config).run(
+                            "vibris_run_recipe", arguments, response.server(), context);
+                    });
+            }
             return with_scene(arguments,
                 [this, name, &arguments](const auto& config, const auto& preset) -> ToolOutcome {
                     const auto context = preset.context();

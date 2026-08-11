@@ -86,11 +86,79 @@ internal class SourceActivator(
     }
 
     @Synchronized
+    @Throws(Failure::class)
+    fun activeSnapshot(): SourceRegistry.Lease? = try {
+        sources.activeSnapshot()
+    } catch (failure: SourceRegistry.Failure) {
+        ready = false
+        throw Failure(failure.code, failure.message, failure)
+    }
+
+    @Synchronized
+    @Throws(Failure::class)
+    fun restore(source: SourceRegistry.Lease?) {
+        if (closed) {
+            throw Failure(ErrorCode.ERROR_CODE_SERVER_NOT_AVAILABLE, "Source activation is closed.")
+        }
+        try {
+            if (source == null) {
+                link.detach()
+                sources.detachActive()
+                return
+            }
+            if (sources.isActive(source)) {
+                sources.requireOwned(source)
+                return
+            }
+            val activation = sources.beginActivation(source)
+            try {
+                link.switchTo(source) { requireOwned(source) }
+                sources.commitActivation(activation)
+            } catch (failure: ShaderLink.Failure) {
+                if (failure.stable()) {
+                    sources.retryActivation(activation)
+                } else {
+                    sources.failActivation(activation)
+                }
+                throw failure
+            }
+        } catch (failure: SourceRegistry.Failure) {
+            ready = false
+            throw Failure(ErrorCode.ERROR_CODE_RESTORE_FAILED, failure.message, failure)
+        } catch (failure: ShaderLink.Failure) {
+            ready = false
+            throw Failure(ErrorCode.ERROR_CODE_RESTORE_FAILED, failure.message, failure)
+        } catch (failure: RuntimeException) {
+            ready = false
+            throw Failure(ErrorCode.ERROR_CODE_RESTORE_FAILED, failure.message, failure)
+        }
+    }
+
+    @Synchronized
     fun ready(): Boolean = ready && !closed
 
     @Synchronized
     fun markNotReady() {
         ready = false
+    }
+
+    @Synchronized
+    @Throws(Failure::class)
+    fun markReadyAfterVerification() {
+        if (closed) {
+            throw Failure(ErrorCode.ERROR_CODE_SERVER_NOT_AVAILABLE, "Source activation is closed.")
+        }
+        try {
+            link.retainsActiveSource()
+            sources.requireActiveOwned()
+            ready = true
+        } catch (failure: SourceRegistry.Failure) {
+            ready = false
+            throw Failure(ErrorCode.ERROR_CODE_RECOVERY_FAILED, failure.message, failure)
+        } catch (failure: ShaderLink.Failure) {
+            ready = false
+            throw Failure(ErrorCode.ERROR_CODE_RECOVERY_FAILED, failure.message, failure)
+        }
     }
 
     @Synchronized

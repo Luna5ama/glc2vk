@@ -113,6 +113,12 @@ Json benchmark_visual_schema() {
     return schema;
 }
 
+Json restore_policy_schema() {
+    return closed_object({{"on_success", {{"type", "boolean"}}},
+                          {"on_error", {{"type", "boolean"}}}},
+                         {"on_success", "on_error"});
+}
+
 Json source_variant_schema() {
     return closed_object({{"label", {{"type", "string"}, {"minLength", 1}}}, {"source", source_schema()}},
                          {"label", "source"});
@@ -128,9 +134,10 @@ Json recipe_schema() {
     const auto max_retries = bounded_integer(0, 5);
     const auto execution = enum_string({"sync", "async"});
     const Json config{{"type", "object"}};
-    return scoped(closed_object({
+    auto schema = scoped(closed_object({
         {"recipe", enum_string({"profile", "profile_matrix", "benchmark_ab", "load_and_screenshot",
-                                 "capture_debug_bundle", "ab_compare"})},
+                                 "capture_debug_bundle", "ab_compare", "recover_runtime"})},
+        {"preset_id", {{"type", "string"}, {"minLength", 1}}},
         {"source", source_schema()},
         {"baseline", source_schema()},
         {"candidate", source_schema()},
@@ -153,6 +160,7 @@ Json recipe_schema() {
         {"converted_units", converted_units},
         {"max_retries", max_retries},
         {"execution", execution},
+        {"restore_state", restore_policy_schema()},
         {"result_csv", {{"type", "boolean"}}},
         {"screenshot_format", enum_string({"png"})},
         {"screenshot", {{"type", "boolean"}}},
@@ -161,7 +169,8 @@ Json recipe_schema() {
         {"captures", {{"type", "array"}, {"items", capture_schema()}, {"minItems", 1}, {"maxItems", 64}}},
         {"visual", benchmark_visual_schema()},
         {"visual_thresholds", visual_thresholds_schema()},
-    }, {"recipe"}), true);
+    }, {"recipe"}), false);
+    return schema;
 }
 
 Json action_schema() {
@@ -273,14 +282,18 @@ Json build_definitions() {
                    "recipes support durable sync/async execution; query, result, resume and cancellation use vibris_job. "
                    "benchmark_ab runs repeated paired ABBA, ABAB, or seeded randomized profiles plus same-commit "
                    "controls and returns guarded confidence and measured-noise comparisons; optional visual "
-                   "thresholds add a deterministic screenshot gate and a combined performance/visual verdict.",
+                   "thresholds add a deterministic screenshot gate and a combined performance/visual verdict. "
+                   "recover_runtime is the only recipe without a preset or source; it reapplies and verifies the "
+                   "retained safe snapshot after a transactional restore failure.",
                    recipe_schema(), false),
         definition("vibris_run_actions",
                    "Run one ordered shader action sequence synchronously or as a durable async job for the explicit "
-                   "Git worktree and scene preset.",
+                   "Git worktree and scene preset. restore_state defaults to true for both terminal outcomes; an "
+                   "explicit false/false load may establish the first verified Core-owned runtime snapshot.",
                    scoped(closed_object({{"sources", named_sources_schema()},
                                          {"configs", named_configs_schema()},
                                          {"execution", enum_string({"sync", "async"})},
+                                         {"restore_state", restore_policy_schema()},
                                          {"actions", {{"type", "array"}, {"items", action_schema()}, {"maxItems", 64}}}},
                                         {"actions"}), true), false),
         definition("vibris_run_matrix",
@@ -442,9 +455,24 @@ std::optional<std::string> validate_operation_shape(const std::string_view name,
     };
     if (name == "vibris_run_recipe") {
         const auto recipe = arguments.at("recipe").get<std::string>();
+        if (recipe == "recover_runtime") {
+            for (const auto& [key, ignored] : arguments.items()) {
+                static_cast<void>(ignored);
+                if (key != "recipe" && key != "worktree_root") {
+                    return "arguments." + key + " is not allowed for recover_runtime";
+                }
+            }
+            return std::nullopt;
+        }
+        if (!arguments.contains("preset_id")) return "arguments.preset_id is required";
         if (recipe == "profile") return require({"frames"});
-        if (recipe == "profile_matrix") return require({"sources", "configs", "matrix", "frames"});
-        if (recipe == "benchmark_ab") return require({"baseline", "candidate", "frames"});
+        if (recipe == "profile_matrix" || recipe == "benchmark_ab") {
+            if (arguments.contains("restore_state")) {
+                return "arguments.restore_state is not allowed for always-restored workloads";
+            }
+            return recipe == "profile_matrix" ? require({"sources", "configs", "matrix", "frames"}) :
+                require({"baseline", "candidate", "frames"});
+        }
         if (recipe == "ab_compare") return require({"a", "b", "captures"});
     }
     if (name == "vibris_artifacts") {

@@ -184,6 +184,23 @@ internal class SourceRegistry @JvmOverloads constructor(
 
     @Synchronized
     @Throws(Failure::class)
+    fun activeSnapshot(): Lease? {
+        requireActiveOwned()
+        return activeSource
+    }
+
+    @Synchronized
+    fun detachActive() {
+        val active = activeSource ?: return
+        val before = active.record.state()
+        active.record.deactivate()
+        record(active, before, active.record.state())
+        activeSource = null
+        deleteIfEligible(active)
+    }
+
+    @Synchronized
+    @Throws(Failure::class)
     fun retainActive(): Lease? {
         val active = activeSource ?: return null
         requireOwned(active)

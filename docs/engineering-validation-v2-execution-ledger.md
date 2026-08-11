@@ -83,8 +83,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T02A | P0 | Vibris | Restore a strict v2 Core compilation baseline | DONE | `T02A migrate Core directly to strict v2` |
 | T03 | P0 | Vibris | Add truthful runtime lease and status waiting | DONE | `T03 expose runtime lease and status transitions` |
 | T04 | P0 | Vibris | Generalize durable resumable jobs | DONE | `T04 add durable resumable workflow jobs` |
-| T05 | P0 | Vibris | Add transactional restoration and recovery | READY | `T05 make runtime mutations transactional` |
-| T06 | P0 | Vibris | Define effective shader settings contract | PENDING | `T06 expose resolved shader settings contract` |
+| T05 | P0 | Vibris | Add transactional restoration and recovery | DONE | `T05 make runtime mutations transactional` |
+| T06 | P0 | Vibris | Define effective shader settings contract | READY | `T06 expose resolved shader settings contract` |
 | T07 | P0 | Iris | Implement effective settings in Iris host | PENDING | `T07 report effective shader settings from Iris` |
 | T08 | P1 | Vibris | Return one ordered receipt per action | PENDING | `T08 return complete ordered action receipts` |
 | T09 | P0 | Vibris | Define compile catalog runtime contract | PENDING | `T09 define compile validation catalog contract` |
@@ -452,7 +452,7 @@ Evidence:
 
 ### T05 — Add transactional restoration and recovery
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T04
 
@@ -497,11 +497,18 @@ Blockers:
 
 Evidence:
 
-- Pending.
+- `BenchmarkCaseIsolation` now retains the Core-owned source plus immutable Core-observed settings and scene state before a mutating job. It enforces `restore_state.on_success/on_error`, forces restoration for matrix, compile-validation, and benchmark workloads, hashes expected and actual source/settings/scene identities, and emits a typed `RestorationReceipt` for successful, failed, cancelled, timed-out, rejected, and no-mutation terminal paths.
+- `RuntimeJobExecutor` restores with `CancellationToken.none()` and an uninterruptible bounded wait, verifies the source identity/content, successful settings reload, exact returned scene, and temporal reset, then attaches the receipt to `JobResult` or `JobFailed`. The first safe snapshot is established only through an explicit non-restoring load, and the MCP contract exposes both restore booleans directly.
+- A restore failure marks activation unsafe, retains both the prior snapshot reference and original job sources, preserves the original runtime lease ID in `RECOVERING`, rejects ordinary jobs, and never force-releases the held ownership. `recover_runtime` is idempotent when already safe and otherwise retries the retained snapshot; readiness is restored only after verification, while failures include exact no-restart manual recovery instructions and the failed receipt.
+- The existing eight-tool MCP surface now exposes source-free `vibris_run_recipe { recipe: "recover_runtime" }` without a preset, encodes the dedicated v2 recovery workload, skips source preparation, and preserves failed restoration receipts in structured tool error details. Scene recipes still require `preset_id`, and recovery rejects unrelated fields.
+- `\.\gradlew.bat :vibris-core:test --offline --console=plain` passed 95/95. The focused `RuntimeRestorationTest` plus engine ownership test passed 9/9 and covers success, temporal-only restoration, ordinary failure, cancellation, execution timeout, restore failure, repeated recovery failure/success, idempotent recovery, lease retention, admission blocking, and readiness release.
+- Visual Studio CMake built `vibris-action-schema-tests`, `vibris-job-protocol-tests`, and the production `vibris-mcp` target. `ctest --preset release -R "ActionSchema|JobProtocol"` passed 2/2.
+- No deploy or process restart occurred. Protected `ThreadBoundVibrisRuntimeAdapter.kt` and `ThreadBoundVibrisRuntimeAdapterTest.kt` remained outside task staging at their pre-existing `11/4` and `8/6` numstat; untracked `capture\a.spv` also remained untouched.
+- Commit: this task's commit with subject `T05 make runtime mutations transactional`.
 
 ### T06 — Define effective shader settings contract
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T05
 

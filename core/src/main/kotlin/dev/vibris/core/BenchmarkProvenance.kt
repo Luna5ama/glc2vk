@@ -12,6 +12,8 @@ internal object BenchmarkProvenance {
         settings.toSortedMap().forEach { (key, value) -> put(key, value) }
     })
 
+    fun sceneHash(context: SceneContext): String = sha256(context(context))
+
     fun presetHash(presetId: String, version: String, displayName: String, context: SceneContext): String =
         sha256(buildJsonObject {
             put("preset_id", presetId)

@@ -11,6 +11,7 @@ import dev.vibris.protocol.v2.JobStage
 import dev.vibris.protocol.v2.JobState
 import dev.vibris.protocol.v2.ProtocolError
 import dev.vibris.protocol.v2.ProtocolVersion
+import dev.vibris.protocol.v2.RestorationReceipt
 import dev.vibris.protocol.v2.ServerMessage
 
 internal object ProtocolMessages {
@@ -46,7 +47,7 @@ internal object ProtocolMessages {
         requestId: String,
         code: ErrorCode,
         message: String,
-    ): TerminalResult = failure(jobId, requestId, code, message, emptyList())
+    ): TerminalResult = failure(jobId, requestId, code, message, emptyList(), null)
 
     @JvmStatic
     fun failure(
@@ -55,6 +56,16 @@ internal object ProtocolMessages {
         code: ErrorCode,
         message: String,
         artifacts: List<ArtifactMetadata>,
+    ): TerminalResult = failure(jobId, requestId, code, message, artifacts, null)
+
+    @JvmStatic
+    fun failure(
+        jobId: String,
+        requestId: String,
+        code: ErrorCode,
+        message: String,
+        artifacts: List<ArtifactMetadata>,
+        restoration: RestorationReceipt?,
     ): TerminalResult {
         val error = ProtocolError.newBuilder()
             .setCode(code)
@@ -67,14 +78,21 @@ internal object ProtocolMessages {
         if (artifacts.isNotEmpty()) {
             error.setLogPath(artifacts.first().relativePath)
         }
-        return TerminalResult.failed(
-            JobFailed.newBuilder()
-                .setJobId(jobId)
-                .setRequestId(requestId)
-                .setError(error)
-                .addAllArtifacts(artifacts)
-                .build(),
-        )
+        if (code == ErrorCode.ERROR_CODE_RESTORE_FAILED || code == ErrorCode.ERROR_CODE_RECOVERY_FAILED) {
+            error.putDetails(
+                "manual_recovery",
+                restoration?.takeIf { it.hasError() }
+                    ?.error?.detailsMap?.get("manual_recovery")
+                    ?: BenchmarkCaseIsolation.MANUAL_RECOVERY,
+            )
+        }
+        val failed = JobFailed.newBuilder()
+            .setJobId(jobId)
+            .setRequestId(requestId)
+            .setError(error)
+            .addAllArtifacts(artifacts)
+        restoration?.let(failed::setRestoration)
+        return TerminalResult.failed(failed.build())
     }
 
     @JvmStatic

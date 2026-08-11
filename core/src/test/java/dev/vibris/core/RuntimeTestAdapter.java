@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     final List<String> events = new ArrayList<>();
@@ -29,6 +30,7 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     final ArrayDeque<CompletionStage<ReloadResult>> reloadStages = new ArrayDeque<>();
     final ArrayDeque<String> actionResponses = new ArrayDeque<>();
     final ArrayDeque<CompletionStage<String>> actionStages = new ArrayDeque<>();
+    final ArrayDeque<Function<CancellationToken, CompletionStage<Long>>> waitOperations = new ArrayDeque<>();
     final ArrayDeque<RuntimeException> captureFailures = new ArrayDeque<>();
     final ArrayDeque<RuntimeException> captureFailuresAfterWrite = new ArrayDeque<>();
     final ArrayDeque<Map<String, byte[]>> captureFileBatches = new ArrayDeque<>();
@@ -95,6 +97,7 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     @Override
     public CompletionStage<Long> waitRenderedFrames(int frameCount, CancellationToken cancellation) {
         events.add("frames");
+        if (!waitOperations.isEmpty()) return waitOperations.removeFirst().apply(cancellation);
         return completed(cancellation, (long) frameCount);
     }
 

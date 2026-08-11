@@ -112,6 +112,28 @@ void exact_filters_and_job_control() {
     old_control["preset_id"] = "scene";
     require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_recipe", old_control)),
         "legacy recipe control operation was accepted");
+
+    auto recovery = scope;
+    recovery["recipe"] = "recover_runtime";
+    require(std::holds_alternative<Json>(registry.invoke("vibris_run_recipe", recovery)),
+        "source-free recovery recipe was rejected");
+    recovery["preset_id"] = "scene";
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_recipe", recovery)),
+        "recovery recipe accepted an unrelated scene preset");
+    auto profile = scope;
+    profile["recipe"] = "profile";
+    profile["frames"] = 4;
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_recipe", profile)),
+        "scene recipe accepted a missing preset");
+    auto benchmark = scope;
+    benchmark["preset_id"] = "scene";
+    benchmark["recipe"] = "benchmark_ab";
+    benchmark["baseline"] = {{"kind", "workspace"}};
+    benchmark["candidate"] = {{"kind", "workspace"}};
+    benchmark["frames"] = 4;
+    benchmark["restore_state"] = {{"on_success", false}, {"on_error", false}};
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_recipe", benchmark)),
+        "always-restored benchmark accepted a disabled restore policy");
 }
 
 void typed_actions_reject_aliases() {
@@ -126,6 +148,10 @@ void typed_actions_reject_aliases() {
     });
     require(std::holds_alternative<Json>(registry.invoke("vibris_run_actions", request)),
         "typed v2 resource actions were rejected");
+    request["restore_state"] = {{"on_success", false}, {"on_error", false}};
+    require(std::holds_alternative<Json>(registry.invoke("vibris_run_actions", request)),
+        "explicit transactional restore policy was rejected");
+    request.erase("restore_state");
 
     for (const auto* old_type : {"list_textures", "list_buffers", "dump_texture_v2"}) {
         request["actions"] = Json::array({{{"type", old_type}}});

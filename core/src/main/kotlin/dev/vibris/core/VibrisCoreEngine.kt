@@ -69,6 +69,7 @@ class VibrisCoreEngine internal constructor(
     private var closed = false
     private var activeRequestId = ""
     private var activeStage = JobStage.JOB_STAGE_UNSPECIFIED
+    private var recoveryOwner: RecoveryOwner? = null
 
     constructor(pendingRoot: Path, runtime: VibrisRuntimeAdapter) :
         this(pendingRoot, runtime, ShaderLink.transientLink(), ShaderLogSink.none())
@@ -121,7 +122,19 @@ class VibrisCoreEngine internal constructor(
         val projection = projectionLocked(schedulerSnapshot)
         val active = schedulerSnapshot.active
         val activeJob = active?.metadata?.requestId?.let(liveJobs::get)
-        val lease = active?.let {
+        val lease = recoveryOwner?.let { owner ->
+            RuntimeLease.newBuilder()
+                .setLeaseId(leaseId(owner.metadata, owner.startedAtUnixMs))
+                .setWorkspaceId(owner.metadata.workspaceId)
+                .setWorktreeRoot(owner.metadata.worktreeRoot)
+                .setJobId(owner.metadata.jobId)
+                .setRequestId(owner.metadata.requestId)
+                .setOperation(owner.metadata.operation)
+                .setStage(JobStage.JOB_STAGE_RECOVERING)
+                .setStartedAtUnixMs(owner.startedAtUnixMs)
+                .setCancellationRequested(false)
+                .build()
+        } ?: active?.let {
             RuntimeLease.newBuilder()
                 .setLeaseId(leaseId(it))
                 .setWorkspaceId(it.metadata.workspaceId)
@@ -212,14 +225,22 @@ class VibrisCoreEngine internal constructor(
         }
         var candidates: List<SourceRegistry.Candidate> = emptyList()
         var validationFailure: SourceRegistry.Failure? = null
-        try {
-            candidates = sources.validate(submission.sourcesList, submission.sourcesCount)
-        } catch (failure: SourceRegistry.Failure) {
-            validationFailure = failure
+        val recovery = submission.hasRecoverRuntime()
+        if (!recovery) {
+            try {
+                candidates = sources.validate(submission.sourcesList, submission.sourcesCount)
+            } catch (failure: SourceRegistry.Failure) {
+                validationFailure = failure
+            }
+        } else if (submission.sourcesCount != 0) {
+            validationFailure = SourceRegistry.Failure(
+                ErrorCode.ERROR_CODE_INVALID_REQUEST,
+                "recover_runtime must not carry prepared shader sources.",
+            )
         }
         val job = CoreJob(submission, requestId, session.workspaceId(), message.messageId, session)
         synchronized(this) {
-            if (closed || !activator.ready()) {
+            if (closed || !activator.ready() && !recovery) {
                 failImmediate(session, message, ErrorCode.ERROR_CODE_SERVER_NOT_AVAILABLE, "Vibris is not ready.")
                 return
             }
@@ -290,6 +311,8 @@ class VibrisCoreEngine internal constructor(
                     queued.requestId,
                     ErrorCode.ERROR_CODE_CANCELLED,
                     "Job was cancelled.",
+                    emptyList(),
+                    executor.restorationReceipt(),
                 ),
                 RequestState.CANCELLED,
                 false,
@@ -344,6 +367,8 @@ class VibrisCoreEngine internal constructor(
                             job.requestId,
                             ErrorCode.ERROR_CODE_QUEUE_TIMEOUT,
                             "Job expired in the execution queue.",
+                            emptyList(),
+                            executor.restorationReceipt(),
                         ),
                         RequestState.FAILED,
                         false,
@@ -369,6 +394,8 @@ class VibrisCoreEngine internal constructor(
                     job.requestId,
                     ErrorCode.ERROR_CODE_CANCELLED,
                     "Job execution was interrupted.",
+                    emptyList(),
+                    executor.restorationReceipt(),
                 ),
                 RequestState.CANCELLED,
                 false,
@@ -381,6 +408,8 @@ class VibrisCoreEngine internal constructor(
                     job.requestId,
                     ErrorCode.ERROR_CODE_CANCELLED,
                     "Job execution was cancelled.",
+                    emptyList(),
+                    executor.restorationReceipt(),
                 ),
                 RequestState.CANCELLED,
                 false,
@@ -399,20 +428,38 @@ class VibrisCoreEngine internal constructor(
                     failure.code,
                     failure.message!!,
                     failure.artifacts,
+                    failure.restoration ?: executor.restorationReceipt(),
                 ),
                 state,
                 false,
+                !failure.holdOwnership,
             )
         } finally {
             if (started) probe.jobStopped()
+            Thread.interrupted()
             updateMetrics()
         }
     }
 
-    private fun finish(job: CoreJob, terminal: TerminalResult, state: RequestState, successful: Boolean) {
+    private fun finish(
+        job: CoreJob,
+        terminal: TerminalResult,
+        state: RequestState,
+        successful: Boolean,
+        releaseSources: Boolean = true,
+    ) {
         val session = synchronized(this) {
             if (liveJobs.remove(job.requestId) == null) return
-            activator.release(job.sources)
+            if (releaseSources) {
+                activator.release(job.sources)
+            } else if (recoveryOwner == null) {
+                val startedAtUnixMs = scheduler.snapshot().active
+                    ?.takeIf { it.metadata.requestId == job.requestId }
+                    ?.startedAtUnixMs
+                    ?: System.currentTimeMillis()
+                recoveryOwner = RecoveryOwner(metadata(job), startedAtUnixMs)
+            }
+            if (successful && job.submission.hasRecoverRuntime()) recoveryOwner = null
             requests.finish(job.requestId, state, terminal)
             terminalJobs[job.submission.jobId] = terminalSummary(job, state)
             while (terminalJobs.size > TERMINAL_JOB_CAPACITY) {
@@ -456,7 +503,14 @@ class VibrisCoreEngine internal constructor(
         detail: String,
     ) {
         val jobId = message.submitJob.job.jobId.ifBlank { message.requestId }
-        val terminal = ProtocolMessages.failure(jobId, message.requestId, code, detail)
+        val terminal = ProtocolMessages.failure(
+            jobId,
+            message.requestId,
+            code,
+            detail,
+            emptyList(),
+            executor.restorationReceipt(),
+        )
         synchronized(this) {
             requests.finish(message.requestId, RequestState.FAILED, terminal)
             terminalJobs[jobId] = rejectedSummary(message, jobId)
@@ -533,12 +587,14 @@ class VibrisCoreEngine internal constructor(
     }
 
     private fun projectionLocked(schedulerSnapshot: FairJobScheduler.Snapshot = scheduler.snapshot()): Projection {
-        val coreOnline = !closed && activator.ready()
+        val recoveryPending = executor.hasPendingRecovery()
+        val coreOnline = !closed && (activator.ready() || recoveryPending)
         val active = schedulerSnapshot.active
-        val hasWork = active != null || schedulerSnapshot.queued.isNotEmpty()
+        val hasWork = active != null || schedulerSnapshot.queued.isNotEmpty() || recoveryPending
         val phase = when {
             closed -> RuntimePhase.RUNTIME_PHASE_DISCONNECTED
             !coreOnline -> RuntimePhase.RUNTIME_PHASE_FAILED
+            recoveryPending && active == null -> RuntimePhase.RUNTIME_PHASE_RECOVERING
             active != null -> runtimePhase(currentStage(active.metadata.requestId))
             schedulerSnapshot.queued.isNotEmpty() -> RuntimePhase.RUNTIME_PHASE_EXECUTING
             !runtimeObserved -> RuntimePhase.RUNTIME_PHASE_CONNECTING
@@ -554,7 +610,8 @@ class VibrisCoreEngine internal constructor(
             runtimeStatus.ready -> ServerState.SERVER_STATE_AVAILABLE
             else -> ServerState.SERVER_STATE_FAILED
         }
-        val canAccept = coreOnline && scheduler.canAccept() && requests.liveSize() < LIVE_REQUEST_CAPACITY
+        val canAccept = coreOnline && !recoveryPending && scheduler.canAccept() &&
+            requests.liveSize() < LIVE_REQUEST_CAPACITY
         return Projection(
             state,
             phase,
@@ -683,6 +740,11 @@ class VibrisCoreEngine internal constructor(
 
     internal data class ActiveJob(val requestId: String, val stage: JobStage)
 
+    private data class RecoveryOwner(
+        val metadata: FairJobScheduler.JobMetadata,
+        val startedAtUnixMs: Long,
+    )
+
     companion object {
         const val REQUEST_REGISTRY_CAPACITY = 192
         const val MAX_STATUS_WAIT_MS = 300_000L
@@ -733,6 +795,11 @@ class VibrisCoreEngine internal constructor(
             (active.metadata.requestId + '\u0000' + active.startedAtUnixMs)
                 .toByteArray(StandardCharsets.UTF_8),
         ).toString()
+
+        private fun leaseId(metadata: FairJobScheduler.JobMetadata, startedAtUnixMs: Long): String =
+            UUID.nameUUIDFromBytes(
+                (metadata.requestId + '\u0000' + startedAtUnixMs).toByteArray(StandardCharsets.UTF_8),
+            ).toString()
 
         private fun runtimePhase(stage: JobStage): RuntimePhase = when (stage) {
             JobStage.JOB_STAGE_ACTIVATING_SOURCE,

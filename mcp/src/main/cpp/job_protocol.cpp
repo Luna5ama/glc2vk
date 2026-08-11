@@ -285,6 +285,10 @@ void build_matrix(const Json& arguments, const SourceMap& sources, const ConfigM
 void build_recipe(const Json& arguments, const JobContext& config, const SourceMap& sources,
     const ConfigMap& configs, proto::JobSpec& job) {
     const auto recipe = arguments.at("recipe").get<std::string>();
+    if (recipe == "recover_runtime") {
+        job.mutable_recover_runtime();
+        return;
+    }
     if (recipe == "profile_matrix") {
         Json actions = Json::array();
         const auto warmup = arguments.value("warmup_frames", config.default_warmup_frames);
@@ -432,8 +436,11 @@ proto::ClientMessage JobProtocol::request(const std::string_view tool_name, cons
     job->set_preset_id(arguments.value("preset_id", std::string{}));
     job->mutable_context()->CopyFrom(context);
     job->mutable_context()->set_fov(config.fov);
-    job->mutable_restore_state()->set_on_success(true);
-    job->mutable_restore_state()->set_on_error(true);
+    const auto restore = arguments.find("restore_state");
+    job->mutable_restore_state()->set_on_success(
+        restore == arguments.end() || restore->value("on_success", true));
+    job->mutable_restore_state()->set_on_error(
+        restore == arguments.end() || restore->value("on_error", true));
     configure_result_artifacts(arguments, *job->mutable_result_artifacts());
     for (const auto& source : sources) job->add_sources()->CopyFrom(source);
 
@@ -464,8 +471,10 @@ ToolOutcome JobProtocol::terminal(const proto::ServerMessage& message) {
     }
     if (message.has_job_failed()) {
         const auto& failed = message.job_failed();
+        const auto mapped = protobuf_json(failed);
         Json details{{"job_id", failed.job_id()}, {"request_id", failed.request_id()},
-            {"artifacts", protobuf_json(failed).value("artifacts", Json::array())}};
+            {"artifacts", mapped.value("artifacts", Json::array())}};
+        if (mapped.contains("restoration")) details["restoration"] = mapped.at("restoration");
         for (const auto& [key, value] : failed.error().details()) details[key] = value;
         return ToolFailure{
             lower_enum_name(proto::ErrorCode_Name(failed.error().code()), "ERROR_CODE_"),

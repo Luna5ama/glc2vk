@@ -78,6 +78,39 @@ void strict_v2_request_contains_typed_texture_and_buffer_actions() {
 	require(texture && buffer, "typed strict-v2 texture/buffer capture actions were not encoded");
 }
 
+void recovery_request_has_no_scene_or_source_dependency() {
+	const auto request = JobProtocol::request("vibris_run_recipe", {{"recipe", "recover_runtime"}},
+		config(), proto::SceneContext{}, {}, std::string(request_id));
+	const auto& job = request.submit_job().job();
+	require(job.has_recover_runtime() && job.sources().empty() && job.preset_id().empty(),
+		"recover_runtime was not encoded as a source-free strict-v2 workload");
+
+	proto::ServerMessage failed;
+	failed.set_request_id(std::string(request_id));
+	auto* value = failed.mutable_job_failed();
+	value->set_job_id(std::string(request_id));
+	value->set_request_id(std::string(request_id));
+	value->mutable_error()->set_code(proto::ERROR_CODE_RECOVERY_FAILED);
+	value->mutable_error()->set_message("manual repair required");
+	value->mutable_restoration()->set_status(proto::RECEIPT_STATUS_FAILED);
+	value->mutable_restoration()->set_expected_source_uuid("safe-source");
+	const auto outcome = JobProtocol::terminal(failed);
+	const auto* error = std::get_if<ToolFailure>(&outcome);
+	require(error != nullptr && error->details.contains("restoration") &&
+		error->details.at("restoration").at("expected_source_uuid") == "safe-source",
+		"recovery failure mapping dropped the structured restoration receipt");
+}
+
+void explicit_restore_policy_is_not_overridden() {
+	const Json arguments{{"actions", Json::array()},
+		{"restore_state", {{"on_success", false}, {"on_error", false}}}};
+	const auto request = JobProtocol::request("vibris_run_actions", arguments,
+		config(), scene(), {}, std::string(request_id));
+	const auto& restore = request.submit_job().job().restore_state();
+	require(!restore.on_success() && !restore.on_error(),
+		"explicit restore_state policy was replaced by hard-coded defaults");
+}
+
 void accepted_request_reconnects_with_resume_only() {
 	PendingRequestRegistry registry(2);
 	const std::vector sources{source()};
@@ -140,6 +173,8 @@ void resume_registration_and_terminal_mapping_are_strict_v2() {
 int main() {
 	try {
 		strict_v2_request_contains_typed_texture_and_buffer_actions();
+		recovery_request_has_no_scene_or_source_dependency();
+		explicit_restore_policy_is_not_overridden();
 		accepted_request_reconnects_with_resume_only();
 		resume_registration_and_terminal_mapping_are_strict_v2();
 		std::cout << "PASS JobProtocolStrictV2Resume\n";

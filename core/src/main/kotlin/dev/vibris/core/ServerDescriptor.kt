@@ -35,6 +35,7 @@ internal class ServerDescriptor @JvmOverloads constructor(
         .addCapabilities(Capability.CAPABILITY_CONTROL_STREAM)
         .addCapabilities(Capability.CAPABILITY_RUNTIME_LEASE)
         .addCapabilities(Capability.CAPABILITY_STATUS_WAIT)
+        .addCapabilities(Capability.CAPABILITY_TRANSACTIONAL_RESTORE)
         .setLimits(
             ServerLimits.newBuilder()
                 .setMaxSourceBytes(maxSourceBytes)

@@ -22,6 +22,8 @@ internal object ShaderReloadFailure {
                 message,
                 java.util.List.of(artifact),
                 reload.diagnostics,
+                null,
+                false,
             )
         } catch (_: IOException) {
             RuntimeJobExecutor.Failure(
@@ -29,6 +31,8 @@ internal object ShaderReloadFailure {
                 message,
                 java.util.List.of(),
                 reload.diagnostics,
+                null,
+                false,
             )
         }
     }

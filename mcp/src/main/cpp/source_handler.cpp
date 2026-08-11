@@ -71,6 +71,11 @@ SourceHandler::~SourceHandler() {
 
 void SourceHandler::prepare(
     std::string_view tool_name, const Json& arguments, const control::ServerHello& server) {
+    if (tool_name == "vibris_run_recipe" &&
+        arguments.value("recipe", std::string{}) == "recover_runtime") {
+        source_batches_.emplace_back();
+        return;
+    }
     SourcePreparer preparer(
         workspace_root_, std::filesystem::path(server.pending_source_root()), server_limits(server));
     std::list<PreparedSource> prepared;
