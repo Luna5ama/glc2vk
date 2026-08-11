@@ -93,7 +93,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T10 | P0 | Iris | Emit complete Iris compile catalog | DONE | `T10 emit Iris program compile catalog` |
 | T11 | P0 | Vibris | Add compile_validate recipe | DONE | `T11 add compile validation recipe` |
 | T12 | P0 | Vibris | Expand immutable benchmark provenance | DONE | `T12 expand benchmark provenance and stale checks` |
-| T13 | P0 | Vibris | Enforce statistical benchmark guardrails | READY | `T13 enforce benchmark semantic guardrails` |
+| T12A | P0 | Vibris | Normalize strict-v2 execution receipts | READY | `T12A normalize strict v2 execution receipts` |
+| T13 | P0 | Vibris | Enforce statistical benchmark guardrails | PENDING | `T13 enforce benchmark semantic guardrails` |
 | T14 | P0 | Vibris | Replace artifacts with managed v2 manifests | PENDING | `T14 add managed artifact v2 lifecycle` |
 | T15 | P0 | Vibris | Define named pass resource dump contract | PENDING | `T15 define named pass resource dump contract` |
 | T16 | P0 | Iris | Implement named Iris pass boundary hooks | PENDING | `T16 capture resources after named Iris passes` |
@@ -969,11 +970,80 @@ Evidence:
 - Protected untracked `capture\a.spv` remained outside task staging. Commit: this task's commit with subject
   `T12 expand benchmark provenance and stale checks`.
 
-### T13 — Enforce statistical benchmark guardrails
+### T12A — Normalize strict-v2 execution receipts
 
 Status: `READY`
 
 Dependencies: T12
+
+Repository: `I:\code\vibris`
+
+Worktree: `I:\code\vibris`
+
+Branch: `main`
+
+Primary files:
+
+- `I:\code\vibris\mcp\src\main\cpp\synchronous_job_runner.cpp`
+- `I:\code\vibris\mcp\src\main\cpp\job_protocol.cpp`
+- `I:\code\vibris\mcp\src\test\cpp\synchronous_job_fixture.hpp`
+- Focused strict-v2 result-normalization tests under `I:\code\vibris\mcp\src\test\cpp\`
+
+Scope:
+
+- Replace the native profile, matrix, and A/B visual projection's assumptions about removed result-kind,
+  `action_results`, manifest-path, and frame-id fields with the canonical strict-v2 `JobResult` envelope,
+  `action_receipts`, `prelude_receipts`, typed receipt details, top-level provenance, restoration, artifacts, and
+  result-manifest identity.
+- Normalize typed GPU metrics, compile-catalog inspection, runtime mutation, comparison, provenance, and restoration
+  exactly once for downstream profile and paired-benchmark consumers.
+- Replace stale native fake-server fixtures with current v2 messages and add focused execution-path coverage.
+
+Non-scope:
+
+- Do not implement T13 metric roles, statistical calculations, benchmark decisions, or guardrail thresholds.
+- Do not accept the removed result shape through fallback, alias, dual-read, or compatibility branches.
+
+Acceptance:
+
+- Production native execution no longer reads removed raw `JobResult.action_results`, nested provenance, or a
+  synthetic provenance `complete` flag.
+- Profile, matrix, and visual results consume only strict-v2 typed receipts and preserve one ordered normalized
+  receipt, complete top-level provenance, and the authoritative restoration receipt without duplication.
+- Current-v2 fixtures pass, and an old result shape is rejected instead of translated.
+
+Verification:
+
+- `cmake --build --preset release --target vibris-synchronous-job-runner-tests vibris-job-protocol-tests`
+- `ctest --preset release -R "StrictV2Result|ProfileNormalization|MatrixNormalization|JobProtocol"`
+- Static search proving production result consumers contain no removed raw-field reads or synthetic compatibility
+  branches.
+
+Expected commit title: `T12A normalize strict v2 execution receipts`
+
+Blockers:
+
+- None known. This remediation was inserted when T13 entry auditing proved the current protocol exposes
+  `JobResult.action_receipts`, top-level `ResultProvenance`, and `RestorationReceipt`, while production normalization
+  still dereferences raw `action_results`, requires a nonexistent provenance `complete` field, and the native fake
+  server still constructs removed v1 result fields.
+
+Evidence:
+
+- Discovery receipt: `proto/vibris_control.proto` declares `JobResult.provenance`, `action_receipts`,
+  `prelude_receipts`, and `restoration`; `synchronous_job_runner.cpp` still reads `job.at("action_results")` at two
+  execution paths and requires `provenance.value("complete", false)`; `synchronous_job_fixture.hpp` still calls
+  removed `set_kind`, `set_manifest_path`, `add_frame_ids`, and `add_action_results` methods.
+- T13 product files, runtime state, deployment, and processes were not changed. Protected `capture\a.spv` remained
+  untracked and unread.
+- Control-plane commit: this ledger-only insertion with subject
+  `roadmap insert T12A strict v2 result remediation`.
+
+### T13 — Enforce statistical benchmark guardrails
+
+Status: `PENDING`
+
+Dependencies: T12A
 
 Repository: `I:\code\vibris`
 
@@ -1372,7 +1442,7 @@ Evidence:
 
 Status: `PENDING`
 
-Dependencies: T01, T02, T02A, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20
+Dependencies: T01, T02, T02A, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T12A, T13, T14, T15, T16, T17, T18, T19, T20
 
 Repository: `I:\code\vibris`
 
@@ -1425,7 +1495,7 @@ Evidence:
 
 ```text
 T00 -> T01 -> T02 -> T02A -> T03 -> T04 -> T05 -> T06 -> T07 -> T08 -> T09
-    -> T10 -> T11 -> T12 -> T13 -> T14 -> T15 -> T16 -> T17 -> T18
+    -> T10 -> T11 -> T12 -> T12A -> T13 -> T14 -> T15 -> T16 -> T17 -> T18
     -> T19 -> T20 -> T99
 ```
 
@@ -1472,3 +1542,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T10 - Iris emits complete canonical program/pass compile catalogs with terminal diagnostics and patched-source identities only after pipeline/reload completion; external commit 0ccdadd3a9b80891d147ace95a3c3919b7055b76; bridge tests 11/11 and offline Iris build passed - Owner receipt commit title: T10 record Iris compile catalog receipt`
 - `2026-08-11 - T11 - added durable sync/async compile_validate for single and matrix cases with optional baseline, canonical catalog and stable diagnostic diffs, per-case checkpoints/provenance, fail-closed compile gates, and forced runtime restoration; Core focused 10/10 and native filtered CTest 3/3 passed - Commit title: T11 add compile validation recipe`
 - `2026-08-11 - T12 - expanded immutable source/result provenance, separated HEAD movement from shader-content staleness with deterministic completion deltas, retained provenance through durable checkpoints, and proved active source UUIDs on compile/action receipts; Core 103/103, focused native 7/7, and source/checkpoint regression 14/14 passed - Commit title: T12 expand benchmark provenance and stale checks`
+- `2026-08-11 - T12A inserted - T13 entry auditing found native profile/matrix normalization and fake-server fixtures still consuming removed pre-v2 result fields instead of strict-v2 action receipts, top-level provenance, and restoration; inserted a no-compatibility receipt-normalization remediation before statistical guardrails - Control-plane commit title: roadmap insert T12A strict v2 result remediation`
