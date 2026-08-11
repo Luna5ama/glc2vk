@@ -97,8 +97,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T13 | P0 | Vibris | Enforce statistical benchmark guardrails | DONE | `T13 enforce benchmark semantic guardrails` |
 | T14 | P0 | Vibris | Replace artifacts with managed v2 manifests | DONE | `T14 add managed artifact v2 lifecycle` |
 | T15 | P0 | Vibris | Define named pass resource dump contract | DONE | `T15 define named pass resource dump contract` |
-| T16 | P0 | Iris | Implement named Iris pass boundary hooks | READY | `T16 capture resources after named Iris passes` |
-| T17 | P0 | Vibris | Integrate after-pass texture and buffer jobs | PENDING | `T17 integrate after-pass resource dump jobs` |
+| T16 | P0 | Iris | Implement named Iris pass boundary hooks | DONE | `T16 capture resources after named Iris passes` |
+| T17 | P0 | Vibris | Integrate after-pass texture and buffer jobs | READY | `T17 integrate after-pass resource dump jobs` |
 | T18 | P0 | Vibris | Complete strict v2 cutover and documentation | PENDING | `T18 complete strict v2 cutover` |
 | T19 | P0 | Vibris | Run offline integrated acceptance | PENDING | `T19 verify offline v2 integration` |
 | T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | PENDING | `T20 record live v2 acceptance` |
@@ -1249,7 +1249,7 @@ Evidence:
 
 ### T16 — Implement named Iris pass boundary hooks
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T15
 
@@ -1297,11 +1297,29 @@ Blockers:
 
 Evidence:
 
-- Pending external implementation and owner-repository receipt.
+- Iris external implementation commit: `38a7d2eaf88939983e0e01f731ccd4c627fbf6a9` with subject
+  `T16 capture resources after named Iris passes`; the commit is the current `1.21.11-shaderdev` HEAD, its parent is
+  the previously recorded Iris HEAD `0ccdadd3a9b80891d147ace95a3c3919b7055b76`, and it is an ancestor of the branch.
+- Pipeline construction registers uniquely ordered begin, prepare, deferred, composite, final, and shadow-composite
+  descriptors. Each pass retains its exact post-pass flip snapshot; `current` selects the next-stage-readable side,
+  `alternate` selects its opposite, and `main` / `alt` resolve deterministic physical textures without accepting
+  physical-name suffixes in the logical selector.
+- One-shot requests execute only after compute barriers and after each graphics `RenderPass` closes. Texture and SSBO
+  readbacks move into owned CPU memory while pixel-pack and buffer bindings remain restored; PNG encoding and artifact
+  writes run off the render thread. Unknown, cancelled, timed-out, completed, and destroyed-pipeline requests leave no
+  pending boundary registration, and no gbuffer, terrain, ordinary-shadow, shader-debug-routing, fallback, alias, or
+  compatibility path was added.
+- `2026-08-11`: `.\gradlew.bat :fabric:vibrisBridgeTest :common:compileJava :fabric:build --offline
+  --console=plain` passed with 43 actionable tasks. Bridge results contain 15/15 tests with zero failures, errors, or
+  skips; focused coverage proves pass order, main/shadow flip state, all four texture views, exact one-shot receipts,
+  and unknown/cancelled/timed-out cleanup. Live GL acceptance remains assigned to T20.
+- Iris protected `.codex\`, `.vibris\`, and `common\logs\` remained untracked and unstaged. Vibris protected
+  `capture\a.spv` remained untracked and unread. No deployment or Minecraft/launcher restart occurred; this
+  owner-repository receipt is ledger-only.
 
 ### T17 — Integrate after-pass texture and buffer jobs
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T16
 
@@ -1607,3 +1625,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T12A - normalized profile, matrix, inspection, GPU metrics, and A/B visual results from strict-v2 typed receipts only; replaced the v1 fake-server fixture; focused CTest 4/4 and broader visual/paired/checkpoint regression 9/9 passed with zero removed-field or compatibility reads - Commit title: T12A normalize strict v2 execution receipts`
 - `2026-08-11 - T13 - enforced typed target/sibling/sentinel guardrails, paired p50/p95 confidence and measured-noise decisions, order/reversal/drift reporting, and mandatory compile/provenance/restoration/visual/statistical gates; release targets built and focused CTest passed 12/12 - Commit title: T13 enforce benchmark semantic guardrails`
 - `2026-08-11 - T14 - replaced artifacts with strict-v2 TTL/hash/grouped manifests, capacity reservations, ownership-safe list/detail/delete, worktree-local MCP paths, and durable expired metadata; Core 94/94 plus focused native 3/3 passed - Commit title: T14 add managed artifact v2 lifecycle`
+- `2026-08-11 - T16 - Iris registered ordered named pass boundaries, captured flip-correct texture/SSBO snapshots only after compute/graphics completion, moved encoding/writes off-thread, and removed cancelled/timed-out hooks; external commit 38a7d2eaf88939983e0e01f731ccd4c627fbf6a9; bridge tests 15/15 and offline Iris build passed - Owner receipt commit title: T16 record Iris named pass capture receipt`
