@@ -469,6 +469,59 @@ Json matrix_result(Json job, const Json& arguments) {
     return job;
 }
 
+bool compile_program_succeeded(const Json& program) {
+    return program.value("compile_state", std::string{}) == "COMPILE_STATE_SUCCEEDED" &&
+        program.value("link_state", std::string{}) == "COMPILE_STATE_SUCCEEDED";
+}
+
+Json compile_validation_result(Json terminal, const Json& arguments) {
+    const auto& raw = terminal.at("result");
+    const auto& validation = raw.at("compile_validation");
+    Json cases = Json::array();
+    std::size_t passed = 0;
+    std::size_t failed = 0;
+    for (const auto& value : validation.value("cases", Json::array())) {
+        const auto& catalog = value.at("catalog");
+        const auto programs = catalog.value("programs", Json::array());
+        const bool compiled = !programs.empty() &&
+            std::ranges::all_of(programs, compile_program_succeeded);
+        const auto& provenance = value.at("provenance");
+        const bool provenance_complete = provenance.is_object() &&
+            !provenance.value("workspace_id", std::string{}).empty() &&
+            !provenance.value("source_snapshot_sha256", std::string{}).empty() &&
+            !provenance.value("active_source_uuid", std::string{}).empty() &&
+            !provenance.value("pass_mapping_sha256", std::string{}).empty();
+        const bool ok = compiled && provenance_complete;
+        ok ? ++passed : ++failed;
+        Json item{{"case_id", value.at("case_id")},
+                  {"source_id", arguments.value("__vibris_source_id", std::string("source"))},
+                  {"config_id", arguments.value("__vibris_config_id", std::string("config"))},
+                  {"status", ok ? "passed" : "failed"},
+                  {"catalog", catalog},
+                  {"added_diagnostics", value.value("added_diagnostics", Json::array())},
+                  {"resolved_diagnostics", value.value("resolved_diagnostics", Json::array())},
+                  {"unchanged_diagnostics", value.value("unchanged_diagnostics", Json::array())},
+                  {"provenance", provenance}};
+        if (!ok) item["error"] = {{"success", false},
+            {"error_code", compiled ? "INCOMPLETE_PROVENANCE" : "SHADER_COMPILE_FAILED"},
+            {"message", compiled ? "Compile validation provenance is incomplete."
+                                  : "One or more intended shader programs did not compile and link."},
+            {"retryable", false}};
+        cases.push_back(std::move(item));
+    }
+    const auto restoration = raw.value("restoration", Json::object());
+    const bool restored = restoration.value("status", std::string{}) == "RECEIPT_STATUS_OK";
+    if (!restored) ++failed;
+    return {{"success", failed == 0}, {"kind", "compile_validate"},
+            {"status", failed == 0 ? "completed" : "completed_with_failures"},
+            {"requested_cases", validation.value("cases", Json::array()).size()},
+            {"completed_cases", validation.value("cases", Json::array()).size()},
+            {"passed", passed}, {"failed", failed}, {"cases", std::move(cases)},
+            {"restoration", restoration}, {"artifacts", raw.value("artifacts", Json::array())},
+            {"job_id", terminal.value("job_id", std::string{})},
+            {"request_id", terminal.value("request_id", std::string{})}};
+}
+
 struct ProfileCaseSpec final {
     std::string case_id;
     std::string source_id;
@@ -985,6 +1038,13 @@ ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& ar
                 [this, &server, &context, &control](const Json& visual_arguments) -> ToolOutcome {
                     return submit_once("vibris_run_recipe", visual_arguments, server, context, control);
                 });
+        }
+        if (recipe == "compile_validate") {
+            auto outcome = control.resume_request_id
+                ? resume_once(*control.resume_request_id, control)
+                : submit_once(tool_name, arguments, server, context, control);
+            if (!std::holds_alternative<Json>(outcome)) return outcome;
+            return compile_validation_result(std::get<Json>(std::move(outcome)), arguments);
         }
         auto outcome = control.resume_request_id
             ? resume_once(*control.resume_request_id, control)

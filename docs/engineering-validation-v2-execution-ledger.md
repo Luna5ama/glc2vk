@@ -91,8 +91,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T08 | P1 | Vibris | Return one ordered receipt per action | DONE | `T08 return complete ordered action receipts` |
 | T09 | P0 | Vibris | Define compile catalog runtime contract | DONE | `T09 define compile validation catalog contract` |
 | T10 | P0 | Iris | Emit complete Iris compile catalog | DONE | `T10 emit Iris program compile catalog` |
-| T11 | P0 | Vibris | Add compile_validate recipe | READY | `T11 add compile validation recipe` |
-| T12 | P0 | Vibris | Expand immutable benchmark provenance | PENDING | `T12 expand benchmark provenance and stale checks` |
+| T11 | P0 | Vibris | Add compile_validate recipe | DONE | `T11 add compile validation recipe` |
+| T12 | P0 | Vibris | Expand immutable benchmark provenance | READY | `T12 expand benchmark provenance and stale checks` |
 | T13 | P0 | Vibris | Enforce statistical benchmark guardrails | PENDING | `T13 enforce benchmark semantic guardrails` |
 | T14 | P0 | Vibris | Replace artifacts with managed v2 manifests | PENDING | `T14 add managed artifact v2 lifecycle` |
 | T15 | P0 | Vibris | Define named pass resource dump contract | PENDING | `T15 define named pass resource dump contract` |
@@ -844,7 +844,7 @@ Evidence:
 
 ### T11 — Add compile_validate recipe
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T10
 
@@ -887,11 +887,25 @@ Blockers:
 
 Evidence:
 
-- Pending.
+- Added a strict typed `compile_validate` recipe for one source/config or a selected source/config matrix, with an
+  optional independently prepared baseline/config. Compile jobs submit the protocol `CompileValidationRequest`
+  workload directly and never synthesize render actions, warmup, or GPU sampling.
+- Core reloads each case, queries the complete canonical compile catalog even when shader compilation fails, computes
+  deterministic fingerprint-sorted added/resolved/unchanged diagnostic sets, returns per-case provenance, fails closed
+  on incomplete baseline/global reload state, and uses the forced transactional restoration receipt.
+- Both synchronous and asynchronous compile validation run through the durable workflow. Matrix selections become one
+  immutable checkpoint per case under `.vibris/jobs`, and final results aggregate every case, artifact, pass/fail count,
+  catalog, diagnostic diff, and provenance without duplicating completed steps.
+- `cmake --build --preset release --target vibris-job-protocol-tests vibris-action-schema-tests
+  vibris-profile-matrix-workflow-tests` passed. `ctest --preset release -R "Compile|JobProtocol|ActionSchema"` passed
+  3/3: strict typed protocol mapping, recipe schema rejection/acceptance, and compile-matrix checkpoint aggregation.
+- `.\gradlew.bat :vibris-core:test --tests dev.vibris.core.RuntimeJobExecutorTest --console=plain` passed 10/10,
+  including complete catalog/diff/restoration without frame waits and fail-closed baseline compilation.
+- Protected `capture/a.spv` remained untracked and unstaged; no deployment or runtime restart occurred.
 
 ### T12 — Expand immutable benchmark provenance
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T11
 
@@ -1409,7 +1423,7 @@ Queue order is authoritative and serial even where technical dependencies could 
 - [ ] All state-mutating validation restores source, effective settings, scene, and temporal state with receipts.
 - [x] Preserve returns complete effective settings, origins, diff, and stable hash.
 - [x] Every input action produces exactly one ordered receipt.
-- [ ] Compile validation reports every intended program/pass and baseline diagnostic changes without GPU warmup.
+- [x] Compile validation reports every intended program/pass and baseline diagnostic changes without GPU warmup.
 - [ ] Every result contains complete immutable provenance and correct shader-content stale semantics.
 - [ ] Benchmark decisions enforce target/sibling/sentinel guardrails, measured noise, confidence, order, drift, compile, visual, provenance, and restoration gates.
 - [ ] Artifact v2 supports TTL, hash manifests, request/job grouping, capacity prediction, ownership-safe list/detail/delete, and worktree-local paths.
@@ -1439,3 +1453,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T09 unblocked - user committed the protected Vibris adapter/test as b7a0931d85042442c0360a38c50e30d811be9486 and Iris lifecycle as 6322cb2833edfddbfa64d0ac6001988c4d49efd1; tracked dirt is resolved and T09 is READY - Control-plane commit title: roadmap unblock T09 after user merges`
 - `2026-08-11 - T09 - defined canonical compile catalogs and stable diagnostic fingerprints, replaced string shader inspection with a typed runtime query/receipt, and passed API 7/7 plus Core 101/101 tests - Commit title: T09 define compile validation catalog contract`
 - `2026-08-11 - T10 - Iris emits complete canonical program/pass compile catalogs with terminal diagnostics and patched-source identities only after pipeline/reload completion; external commit 0ccdadd3a9b80891d147ace95a3c3919b7055b76; bridge tests 11/11 and offline Iris build passed - Owner receipt commit title: T10 record Iris compile catalog receipt`
+- `2026-08-11 - T11 - added durable sync/async compile_validate for single and matrix cases with optional baseline, canonical catalog and stable diagnostic diffs, per-case checkpoints/provenance, fail-closed compile gates, and forced runtime restoration; Core focused 10/10 and native filtered CTest 3/3 passed - Commit title: T11 add compile validation recipe`

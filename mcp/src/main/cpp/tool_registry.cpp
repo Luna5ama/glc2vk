@@ -135,7 +135,7 @@ Json recipe_schema() {
     const auto execution = enum_string({"sync", "async"});
     const Json config{{"type", "object"}};
     auto schema = scoped(closed_object({
-        {"recipe", enum_string({"profile", "profile_matrix", "benchmark_ab", "load_and_screenshot",
+        {"recipe", enum_string({"profile", "profile_matrix", "compile_validate", "benchmark_ab", "load_and_screenshot",
                                  "capture_debug_bundle", "ab_compare", "recover_runtime"})},
         {"preset_id", {{"type", "string"}, {"minLength", 1}}},
         {"source", source_schema()},
@@ -147,6 +147,7 @@ Json recipe_schema() {
         {"configs", named_configs_schema()},
         {"matrix", matrix_axes_schema()},
         {"config", config},
+        {"baseline_config", config},
         {"warmup_frames", frames},
         {"frames", metric_frames},
         {"rounds", bounded_integer(2, 20)},
@@ -466,6 +467,33 @@ std::optional<std::string> validate_operation_shape(const std::string_view name,
         }
         if (!arguments.contains("preset_id")) return "arguments.preset_id is required";
         if (recipe == "profile") return require({"frames"});
+        if (recipe == "compile_validate") {
+            if (arguments.contains("restore_state")) {
+                return "arguments.restore_state is not allowed for always-restored workloads";
+            }
+            const bool matrix = arguments.contains("sources") || arguments.contains("configs") ||
+                arguments.contains("matrix");
+            if (matrix) {
+                if (arguments.contains("source") || arguments.contains("config")) {
+                    return "arguments.source and arguments.config cannot be mixed with a compile matrix";
+                }
+                if (const auto missing = require({"sources", "configs", "matrix"})) return missing;
+            }
+            if (arguments.contains("baseline_config") && !arguments.contains("baseline")) {
+                return "arguments.baseline is required when arguments.baseline_config is present";
+            }
+            constexpr std::array allowed{"recipe", "worktree_root", "preset_id", "source", "config",
+                "baseline", "baseline_config", "sources", "configs", "matrix", "execution",
+                "result_csv", "converted_units", "__vibris_case_id", "__vibris_source_id",
+                "__vibris_config_id", "__vibris_workflow_id", "__vibris_result_kind"};
+            for (const auto& [key, ignored] : arguments.items()) {
+                static_cast<void>(ignored);
+                if (std::ranges::find(allowed, key) == allowed.end()) {
+                    return "arguments." + key + " is not allowed for compile_validate";
+                }
+            }
+            return std::nullopt;
+        }
         if (recipe == "profile_matrix" || recipe == "benchmark_ab") {
             if (arguments.contains("restore_state")) {
                 return "arguments.restore_state is not allowed for always-restored workloads";

@@ -360,7 +360,9 @@ if(BUILD_TESTING)
     set_tests_properties(JobProtocolStrictV2Resume PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
     add_test(NAME ActionSchemaV2ToolContract COMMAND vibris-action-schema-tests)
     add_test(NAME ProfileMatrixCheckpointResume COMMAND vibris-profile-matrix-workflow-tests)
+    add_test(NAME CompileValidationCheckpointResume COMMAND vibris-profile-matrix-workflow-tests)
     set_tests_properties(ProfileMatrixCheckpointResume PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
+    set_tests_properties(CompileValidationCheckpointResume PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
     foreach(scenario
             PairedOrderStrategies
             PairedAggregation

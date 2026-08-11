@@ -4,6 +4,7 @@ import dev.vibris.api.CancellationToken
 import dev.vibris.api.CapturePlan
 import dev.vibris.api.CaptureResult
 import dev.vibris.api.ContextApplyResult
+import dev.vibris.api.CompileCatalog
 import dev.vibris.api.EffectiveShaderSettings
 import dev.vibris.api.ReloadResult
 import dev.vibris.api.SceneContext
@@ -33,6 +34,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     private val captures = CaptureJobExecutor(shaderLogs as? ArtifactManager, maxActions)
     private val awaiter = RuntimeAwaiter(probe)
     private val actions = ActionJobExecutor(this.runtime, probe, captures, this)
+    private val compileValidation = CompileValidationJobExecutor(this)
     @Volatile
     private var activeContext: SceneContext? = null
 
@@ -57,7 +59,11 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             activeContext,
         )
         try {
-            var completed = actions.execute(job, progress, deadline)
+            var completed = if (job.submission.hasCompileValidation()) {
+                compileValidation.execute(job, progress, deadline)
+            } else {
+                actions.execute(job, progress, deadline)
+            }
             val restoration = terminalize(job, isolation, true, progress)
             completed = completed.toBuilder().setRestoration(restoration).build()
             isolation.release(activator)
@@ -174,6 +180,43 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         val context = applyContext(job, progress, deadline)
         reset(job, progress, deadline)
         return LoadResult(reload, context)
+    }
+
+    @Throws(Failure::class)
+    fun compileShader(
+        job: CoreJob,
+        source: SourceRegistry.Lease,
+        config: dev.vibris.protocol.v2.ShaderConfig,
+        progress: Consumer<JobStage>,
+        deadline: Long,
+    ): CompileResult {
+        val settings = if (config.preserveCurrent) null else config.valuesMap
+        val activation = if (activator.isActive(source)) null else try {
+            progress.accept(JobStage.JOB_STAGE_ACTIVATING_SOURCE)
+            probe.event(job.requestId, "ACTIVATING_SOURCE")
+            activator.begin(source)
+        } catch (failure: SourceActivator.Failure) {
+            throw Failure(failure.code, failure.message)
+        }
+        try {
+            val reload = reload(job, settings, progress, deadline)
+            val catalog = await(runtime.getCompileCatalog(job.cancellation.token()), job, deadline)
+            val loadedAtUnixMs = System.currentTimeMillis()
+            if (activation != null) {
+                try {
+                    activator.commit(activation)
+                } catch (failure: SourceActivator.Failure) {
+                    throw Failure(failure.code, failure.message)
+                }
+            }
+            return CompileResult(reload, catalog, loadedAtUnixMs)
+        } catch (failure: Failure) {
+            if (activation != null) {
+                val restored = activator.rollback(activation)
+                if (!restored) activator.fail(activation)
+            }
+            throw failure
+        }
     }
 
     @Throws(Failure::class)
@@ -522,6 +565,12 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     data class LoadResult(
         val reload: ReloadResult,
         val context: ContextApplyResult,
+    )
+
+    data class CompileResult(
+        val reload: ReloadResult,
+        val catalog: CompileCatalog,
+        val loadedAtUnixMs: Long,
     )
 
     class Failure internal constructor(

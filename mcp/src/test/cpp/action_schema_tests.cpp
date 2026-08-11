@@ -180,6 +180,42 @@ void typed_actions_reject_aliases() {
         "physical texture suffix alias was accepted in an A/B capture recipe");
 }
 
+void compile_validation_shape_is_strict_and_typed() {
+    const ToolRegistry registry([](std::string_view, const Json& arguments) { return arguments; });
+    Json single{{"worktree_root", "I:\\shader-worktree"}, {"preset_id", "scene"},
+        {"recipe", "compile_validate"}, {"execution", "sync"},
+        {"source", {{"kind", "workspace"}}}, {"config", {{"QUALITY", 2}}},
+        {"baseline", {{"kind", "commit"}, {"revision", "HEAD~1"}}},
+        {"baseline_config", {{"QUALITY", 1}}}};
+    require(std::holds_alternative<Json>(registry.invoke("vibris_run_recipe", single)),
+        "typed single compile_validate recipe was rejected");
+
+    Json matrix{{"worktree_root", "I:\\shader-worktree"}, {"preset_id", "scene"},
+        {"recipe", "compile_validate"}, {"execution", "async"},
+        {"sources", Json::array({{{"id", "candidate"}, {"kind", "workspace"}}})},
+        {"configs", Json::array({{{"id", "quality"}, {"values", {{"QUALITY", 2}}}}})},
+        {"matrix", {{"sources", Json::array({"candidate"})}, {"configs", Json::array({"quality"})}}}};
+    require(std::holds_alternative<Json>(registry.invoke("vibris_run_recipe", matrix)),
+        "typed async compile validation matrix was rejected");
+
+    auto invalid = single;
+    invalid["restore_state"] = {{"on_success", false}, {"on_error", false}};
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_recipe", invalid)),
+        "compile_validate accepted caller-controlled restoration");
+    invalid = single;
+    invalid["frames"] = 4;
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_recipe", invalid)),
+        "compile_validate accepted render sampling fields");
+    invalid = matrix;
+    invalid["source"] = {{"kind", "workspace"}};
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_recipe", invalid)),
+        "compile_validate mixed single and matrix source forms");
+    invalid = single;
+    invalid.erase("baseline");
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_recipe", invalid)),
+        "compile_validate accepted baseline_config without a baseline source");
+}
+
 void bounded_single_structured_result() {
     constexpr std::string_view marker = "FULL_PAYLOAD_MARKER";
     const ToolRegistry registry([](std::string_view, const Json&) {
@@ -208,6 +244,7 @@ int main() {
         exact_v2_tool_catalog();
         exact_filters_and_job_control();
         typed_actions_reject_aliases();
+        compile_validation_shape_is_strict_and_typed();
         bounded_single_structured_result();
         std::cout << "PASS ActionSchemaV2ToolContract\n";
         return 0;

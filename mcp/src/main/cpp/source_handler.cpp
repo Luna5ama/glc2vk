@@ -82,9 +82,19 @@ void SourceHandler::prepare(
     const auto recipe = arguments.value("recipe", std::string{});
     if (tool_name == "vibris_run_matrix" ||
         (tool_name == "vibris_run_recipe" && recipe == "profile_matrix") ||
+        (tool_name == "vibris_run_recipe" && recipe == "compile_validate" && arguments.contains("sources")) ||
         (tool_name == "vibris_run_actions" && arguments.contains("sources"))) {
         for (const auto& source : arguments.at("sources")) {
             prepare_one(preparer, workspace_root_, &source, prepared);
+        }
+        if (recipe == "compile_validate" && arguments.contains("baseline")) {
+            prepare_one(preparer, workspace_root_, &arguments.at("baseline"), prepared);
+        }
+    } else if (tool_name == "vibris_run_recipe" && recipe == "compile_validate") {
+        const auto source = arguments.find("source");
+        prepare_one(preparer, workspace_root_, source == arguments.end() ? nullptr : &*source, prepared);
+        if (arguments.contains("baseline")) {
+            prepare_one(preparer, workspace_root_, &arguments.at("baseline"), prepared);
         }
     } else if (tool_name == "vibris_run_recipe" && recipe == "ab_compare") {
         prepare_one(preparer, workspace_root_, &arguments.at("a").at("source"), prepared);

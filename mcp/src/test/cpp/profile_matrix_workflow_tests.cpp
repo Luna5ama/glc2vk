@@ -224,6 +224,45 @@ void generic_plans_checkpoint_each_case() {
 	require(rejected, "a non-v2 durable request was read instead of failing with UNSUPPORTED_VERSION");
 }
 
+void compile_matrix_checkpoints_and_aggregates_every_case() {
+	WorkspaceFixture workspace;
+	std::set<std::string> cases;
+	DurableJobWorkflow workflow(workspace.worktree(), std::string(workspace_id),
+		[&](DurableJobStepExecution execution) -> ToolOutcome {
+			require(execution.tool_name == "vibris_run_recipe" &&
+				execution.arguments.at("recipe") == "compile_validate" &&
+				!execution.arguments.contains("matrix"),
+				"compile matrix step was not reduced to one typed compile_validate case");
+			const auto case_id = execution.arguments.at("__vibris_case_id").get<std::string>();
+			require(cases.insert(case_id).second, "compile matrix executed a case more than once");
+			return Json{{"success", true}, {"kind", "compile_validate"}, {"status", "completed"},
+				{"cases", Json::array({{{"case_id", case_id}, {"status", "passed"},
+					{"catalog", {{"programs", Json::array()}}}, {"provenance", {{"complete", true}}}}})},
+				{"artifacts", Json::array()}};
+		});
+	Json arguments{{"recipe", "compile_validate"},
+		{"sources", Json::array({{{"id", "source"}, {"kind", "workspace"}}})},
+		{"configs", Json::array({
+			{{"id", "low"}, {"values", {{"QUALITY", 1}}}},
+			{{"id", "medium"}, {"values", {{"QUALITY", 2}}}},
+			{{"id", "high"}, {"values", {{"QUALITY", 3}}}}})},
+		{"matrix", {{"sources", Json::array({"source"})},
+			{"configs", Json::array({"low", "medium", "high"})}}},
+		{"__vibris_scene_context", scene()}, {"execution", "sync"}};
+	const auto started = std::get<Json>(workflow.start("vibris_run_recipe", arguments, config()));
+	const auto job_id = started.at("job_id").get<std::string>();
+	const auto result = std::get<Json>(workflow.control(
+		{{"operation", "result"}, {"job_id", job_id}, {"event_cursor", 0}}));
+	require(cases.size() == 3 && started.at("progress").at("completed_steps") == 3 &&
+		result.at("result").at("requested_cases") == 3 &&
+		result.at("result").at("passed") == 3 && result.at("result").at("cases").size() == 3,
+		"compile validation matrix did not checkpoint and aggregate every selected case");
+	const auto receipt_root = workspace.worktree() / ".vibris" / "jobs" / job_id / "receipts";
+	require(std::distance(std::filesystem::directory_iterator(receipt_root),
+		std::filesystem::directory_iterator{}) == 3,
+		"compile validation matrix did not persist one receipt per case");
+}
+
 void matrix_and_benchmark_use_step_plans() {
 	WorkspaceFixture workspace;
 	std::size_t matrix_calls = 0;
@@ -292,6 +331,7 @@ int main() {
 		interruption_after_17_resumes_at_18();
 		cancellation_is_truthful_and_resumable();
 		generic_plans_checkpoint_each_case();
+		compile_matrix_checkpoints_and_aggregates_every_case();
 		matrix_and_benchmark_use_step_plans();
 		std::cout << "PASS DurableWorkflowCheckpointResume\n";
 		return 0;

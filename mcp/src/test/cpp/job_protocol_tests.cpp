@@ -50,6 +50,12 @@ proto::PreparedSourceRef source() {
 	return result;
 }
 
+proto::PreparedSourceRef source(std::string uuid) {
+	auto result = source();
+	result.set_source_uuid(std::move(uuid));
+	return result;
+}
+
 void strict_v2_request_contains_typed_texture_and_buffer_actions() {
 	const Json arguments{{"recipe", "capture_debug_bundle"}, {"source", {{"kind", "workspace"}}},
 		{"textures", Json::array({"colortex0"})}, {"buffers", Json::array({"scene_ssbo"})},
@@ -99,6 +105,48 @@ void matrix_auto_load_is_a_prelude_receipt_action() {
 		cases[0].actions().actions(1).has_wait_frames() &&
 		!cases[0].actions().actions(1).prelude(),
 		"matrix auto-load and requested action were not separated by prelude semantics");
+}
+
+void compile_validation_uses_typed_uuid_cases_without_render_actions() {
+	const Json arguments{{"recipe", "compile_validate"}, {"preset_id", "quality"},
+		{"source", {{"kind", "workspace"}}}, {"config", {{"QUALITY", 2}}},
+		{"baseline", {{"kind", "commit"}, {"revision", "HEAD~1"}}},
+		{"baseline_config", {{"QUALITY", 1}}}};
+	const std::vector sources{
+		source("bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"),
+		source("cccccccc-dddd-4eee-8fff-aaaaaaaaaaaa"),
+	};
+	const auto request = JobProtocol::request(
+		"vibris_run_recipe", arguments, config(), scene(), sources, std::string(request_id));
+	const auto& job = request.submit_job().job();
+	require(job.has_compile_validation() && !job.has_action_sequence() && !job.has_matrix(),
+		"compile_validate was not encoded as its typed workload");
+	require(job.compile_validation().cases_size() == 1 && job.compile_validation().has_baseline(),
+		"compile_validate omitted the requested case or baseline");
+	require(job.compile_validation().cases(0).source_id() == sources[0].source_uuid() &&
+		job.compile_validation().baseline().source_id() == sources[1].source_uuid(),
+		"compile_validate used logical labels instead of prepared source UUIDs");
+	require(job.compile_validation().cases(0).config().values().at("QUALITY") == "2" &&
+		job.compile_validation().baseline().config().values().at("QUALITY") == "1" &&
+		job.restore_state().on_success() && job.restore_state().on_error(),
+		"compile_validate lost typed configs or mandatory restoration");
+
+	proto::ServerMessage completed;
+	auto* terminal = completed.mutable_job_completed();
+	terminal->set_job_id(std::string(request_id));
+	terminal->set_request_id(std::string(request_id));
+	auto* result = terminal->mutable_result()->mutable_compile_validation()->add_cases();
+	result->set_case_id("source--config");
+	result->mutable_catalog()->set_mapping_sha256(std::string(64, 'a'));
+	result->add_added_diagnostics()->set_fingerprint_sha256(std::string(64, 'b'));
+	result->mutable_provenance()->set_workspace_id(std::string(workspace_id));
+	const auto outcome = JobProtocol::terminal(completed);
+	const auto* mapped = std::get_if<Json>(&outcome);
+	require(mapped != nullptr && mapped->at("result").at("compile_validation").at("cases").at(0)
+		.at("catalog").at("mapping_sha256") == std::string(64, 'a') &&
+		mapped->at("result").at("compile_validation").at("cases").at(0)
+		.at("added_diagnostics").at(0).at("fingerprint_sha256") == std::string(64, 'b'),
+		"compile validation terminal mapping dropped catalog or diagnostic diff data");
 }
 
 void recovery_request_has_no_scene_or_source_dependency() {
@@ -210,6 +258,7 @@ int main() {
 	try {
 		strict_v2_request_contains_typed_texture_and_buffer_actions();
 		matrix_auto_load_is_a_prelude_receipt_action();
+		compile_validation_uses_typed_uuid_cases_without_render_actions();
 		recovery_request_has_no_scene_or_source_dependency();
 		explicit_restore_policy_is_not_overridden();
 		accepted_request_reconnects_with_resume_only();

@@ -75,12 +75,22 @@ using ConfigMap = std::unordered_map<std::string, proto::ShaderConfig>;
 SourceMap source_map(const Json& arguments, const std::span<const proto::PreparedSourceRef> sources) {
     SourceMap result;
     if (const auto declared = arguments.find("sources"); declared != arguments.end()) {
-        if (!declared->is_array() || declared->size() != sources.size()) {
+        const bool has_baseline = arguments.value("recipe", std::string{}) == "compile_validate" &&
+            arguments.contains("baseline");
+        if (!declared->is_array() || declared->size() + (has_baseline ? 1U : 0U) != sources.size()) {
             throw std::invalid_argument("prepared source count does not match named declarations");
         }
         for (std::size_t index = 0; index < sources.size(); ++index) {
+            if (index == declared->size()) break;
             result.emplace((*declared)[index].at("id").get<std::string>(), &sources[index]);
         }
+        if (has_baseline) result.emplace("baseline", &sources.back());
+        return result;
+    }
+    if (arguments.value("recipe", std::string{}) == "compile_validate" && arguments.contains("baseline")) {
+        if (sources.size() != 2) throw std::invalid_argument("compile validation source count is invalid");
+        result.emplace("source", &sources[0]);
+        result.emplace("baseline", &sources[1]);
         return result;
     }
     if (sources.size() == 1) result.emplace("source", &sources.front());
@@ -105,6 +115,9 @@ ConfigMap config_map(const Json& arguments) {
         result.emplace("config", shader_config(&*values, false));
     } else {
         result.emplace("config", shader_config(nullptr, true));
+    }
+    if (const auto values = arguments.find("baseline_config"); values != arguments.end()) {
+        result.emplace("baseline_config", shader_config(&*values, false));
     }
     return result;
 }
@@ -300,6 +313,41 @@ void build_recipe(const Json& arguments, const JobContext& config, const SourceM
         actions.push_back({{"type", "get_gpu_metrics"}, {"frames", arguments.at("frames")},
             {"metric_ids", arguments.value("metric_filter", Json::array())}});
         build_matrix(arguments, sources, configs, actions, *job.mutable_matrix());
+        return;
+    }
+    if (recipe == "compile_validate") {
+        auto* validation = job.mutable_compile_validation();
+        const auto append_case = [&](const std::string& case_id, const std::string& source_id,
+                                     const std::string& config_id, const proto::ShaderConfig& shader) {
+            auto* value = validation->add_cases();
+            value->set_case_id(case_id);
+            value->set_source_id(require_source(sources, source_id).source_uuid());
+            value->set_config_id(config_id);
+            value->mutable_config()->CopyFrom(shader);
+        };
+        if (arguments.contains("matrix")) {
+            for (const auto& source_value : arguments.at("matrix").at("sources")) {
+                const auto source_id = source_value.get<std::string>();
+                for (const auto& config_value : arguments.at("matrix").at("configs")) {
+                    const auto config_id = config_value.get<std::string>();
+                    append_case(source_id + "--" + config_id, source_id, config_id,
+                        require_config(configs, config_id));
+                }
+            }
+        } else {
+            append_case(arguments.value("__vibris_case_id", std::string("source--config")), "source",
+                arguments.value("__vibris_config_id", std::string("config")), require_config(configs, "config"));
+        }
+        if (arguments.contains("baseline")) {
+            auto* baseline = validation->mutable_baseline();
+            baseline->set_case_id("baseline");
+            baseline->set_source_id(require_source(sources, "baseline").source_uuid());
+            baseline->set_config_id(arguments.contains("baseline_config") ? "baseline_config" : "config");
+            baseline->mutable_config()->CopyFrom(arguments.contains("baseline_config")
+                ? require_config(configs, "baseline_config")
+                : require_config(configs, arguments.contains("matrix")
+                    ? arguments.at("matrix").at("configs").front().get<std::string>() : "config"));
+        }
         return;
     }
     if (recipe == "benchmark_ab") {

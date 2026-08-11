@@ -241,6 +241,33 @@ Json profile_matrix_steps(const Json& arguments, std::string_view job_id) {
 	return result;
 }
 
+Json compile_validation_steps(const Json& arguments, std::string_view job_id) {
+	if (!arguments.contains("matrix")) return Json::array({{{"id", "compile"}, {"kind", "case"},
+		{"tool_name", "vibris_run_recipe"}, {"arguments", arguments}}});
+	Json result = Json::array();
+	for (const auto& source_axis : arguments.at("matrix").at("sources")) {
+		const auto source_id = source_axis.get<std::string>();
+		auto source = named_value(arguments.at("sources"), source_id, "source");
+		source.erase("id");
+		for (const auto& config_axis : arguments.at("matrix").at("configs")) {
+			const auto config_id = config_axis.get<std::string>();
+			const auto& config = named_value(arguments.at("configs"), config_id, "config");
+			Json nested{{"recipe", "compile_validate"}, {"source", source},
+				{"__vibris_case_id", source_id + "--" + config_id}, {"__vibris_source_id", source_id},
+				{"__vibris_config_id", config_id}, {"__vibris_workflow_id", job_id},
+				{"__vibris_result_kind", "compile_validate"}};
+			for (const auto* field : {"baseline", "baseline_config", "result_csv", "converted_units",
+				"__vibris_scene_context", "__vibris_preset"}) {
+				if (arguments.contains(field)) nested[field] = arguments.at(field);
+			}
+			if (config.contains("values")) nested["config"] = config.at("values");
+			result.push_back({{"id", source_id + "--" + config_id}, {"kind", "case"},
+				{"tool_name", "vibris_run_recipe"}, {"arguments", std::move(nested)}});
+		}
+	}
+	return result;
+}
+
 Json matrix_steps(const Json& arguments) {
 	Json result = Json::array();
 	for (const auto& source_axis : arguments.at("matrix").at("sources")) {
@@ -285,6 +312,9 @@ Json plan_steps(std::string_view tool_name, const Json& arguments,
 	std::string_view job_id, const std::size_t warmup) {
 	if (tool_name == "vibris_run_recipe" && arguments.value("recipe", std::string{}) == "profile_matrix") {
 		return profile_matrix_steps(arguments, job_id);
+	}
+	if (tool_name == "vibris_run_recipe" && arguments.value("recipe", std::string{}) == "compile_validate") {
+		return compile_validation_steps(arguments, job_id);
 	}
 	if (tool_name == "vibris_run_recipe" && arguments.value("recipe", std::string{}) == "benchmark_ab") {
 		return benchmark_steps(arguments, job_id, warmup);
@@ -531,6 +561,27 @@ Json DurableJobWorkflow::final_result(const Record& record) const {
 			{"job_id", request.at("job_id")}, {"status", failed == 0 ? "completed" : "completed_with_failures"},
 			{"requested_cases", request.at("steps").size()}, {"completed_cases", receipts.size()},
 			{"passed", passed}, {"failed", failed}, {"cases", std::move(cases)},
+			{"artifacts", std::move(artifacts)}};
+	}
+	if (kind == "compile_validate") {
+		Json cases = Json::array();
+		Json artifacts = Json::array();
+		std::size_t passed = 0;
+		for (const auto& receipt : receipts) {
+			const auto outcome = receipt_outcome(receipt);
+			if (const auto* value = std::get_if<Json>(&outcome)) {
+				for (const auto& item : value->value("cases", Json::array())) {
+					if (item.value("status", std::string{}) == "passed") ++passed;
+					cases.push_back(item);
+				}
+				for (const auto& item : value->value("artifacts", Json::array())) artifacts.push_back(item);
+			}
+		}
+		const auto failures = request.at("steps").size() - passed;
+		return {{"success", failures == 0}, {"kind", kind},
+			{"job_id", request.at("job_id")}, {"status", failures == 0 ? "completed" : "completed_with_failures"},
+			{"requested_cases", request.at("steps").size()}, {"completed_cases", receipts.size()},
+			{"passed", passed}, {"failed", failures}, {"cases", std::move(cases)},
 			{"artifacts", std::move(artifacts)}};
 	}
 	if (request.at("tool_name") == "vibris_run_matrix") {

@@ -9,6 +9,8 @@ import dev.vibris.protocol.v2.ActionKind;
 import dev.vibris.protocol.v2.ActionSequence;
 import dev.vibris.protocol.v2.ActivateSource;
 import dev.vibris.protocol.v2.ErrorCode;
+import dev.vibris.protocol.v2.CompileValidationCase;
+import dev.vibris.protocol.v2.CompileValidationRequest;
 import dev.vibris.protocol.v2.JobSpec;
 import dev.vibris.protocol.v2.InspectShader;
 import dev.vibris.protocol.v2.LoadShader;
@@ -220,6 +222,79 @@ class RuntimeJobExecutorTest {
     }
 
     @Test
+    void compileValidationReturnsCompleteCatalogDiffAndRestoresWithoutRendering() throws Exception {
+        Fixture fixture = new Fixture();
+        Source baseline = fixture.source("baseline");
+        fixture.runtime.reloads.add(ReloadResult.success(EffectiveShaderSettings.empty(), List.of()));
+        fixture.executor.execute(fixture.loadJob(baseline), ignored -> {});
+        fixture.runtime.events.clear();
+
+        Source candidate = fixture.source("candidate");
+        var unchanged = CompileCatalog.Diagnostic.of(
+            CompileCatalog.DiagnosticSeverity.WARNING, "common.glsl", 4, 1, "shared warning");
+        var added = CompileCatalog.Diagnostic.of(
+            CompileCatalog.DiagnosticSeverity.ERROR, "candidate.fsh", 9, 2, "candidate failed");
+        var resolved = CompileCatalog.Diagnostic.of(
+            CompileCatalog.DiagnosticSeverity.WARNING, "baseline.glsl", 7, 1, "baseline warning");
+        fixture.runtime.reloads.add(ReloadResult.success(EffectiveShaderSettings.empty(), List.of()));
+        fixture.runtime.reloads.add(ReloadResult.failure(List.of(error("candidate failed"))));
+        fixture.runtime.reloads.add(ReloadResult.success(EffectiveShaderSettings.empty(), List.of()));
+        fixture.runtime.compileCatalogs.add(catalog(List.of(unchanged, resolved), false));
+        fixture.runtime.compileCatalogs.add(catalog(List.of(unchanged, added), true));
+
+        CompileValidationRequest validation = CompileValidationRequest.newBuilder()
+            .setBaseline(compileCase("baseline", baseline, "base"))
+            .addCases(compileCase("candidate", candidate, "quality"))
+            .build();
+        TerminalResult terminal = fixture.executor.execute(
+            fixture.compileJob(List.of(baseline, candidate), validation), ignored -> {});
+        var result = terminal.completed().getResult();
+        var compile = result.getCompileValidation().getCases(0);
+
+        assertEquals(1, compile.getAddedDiagnosticsCount());
+        assertEquals(1, compile.getResolvedDiagnosticsCount());
+        assertEquals(1, compile.getUnchangedDiagnosticsCount());
+        assertEquals(added.fingerprintSha256(), compile.getAddedDiagnostics(0).getFingerprintSha256());
+        assertEquals(resolved.fingerprintSha256(), compile.getResolvedDiagnostics(0).getFingerprintSha256());
+        assertEquals(CompileCatalogProtocol.INSTANCE.toProtocol(catalog(List.of(unchanged, added), true)),
+            compile.getCatalog());
+        assertEquals(candidate.uuid, compile.getProvenance().getActiveSourceUuid());
+        assertEquals(ReceiptStatus.RECEIPT_STATUS_OK, result.getRestoration().getStatus());
+        assertEquals(baseline.uuid, fixture.registry.activeUuid());
+        assertFalse(fixture.runtime.events.contains("frames"));
+        assertEquals(1, fixture.runtime.events.stream().filter("context"::equals).count());
+        assertEquals(2, fixture.runtime.events.stream().filter("compile_catalog"::equals).count());
+    }
+
+    @Test
+    void compileValidationFailsClosedWhenBaselineDoesNotCompile() throws Exception {
+        Fixture fixture = new Fixture();
+        Source baseline = fixture.source("baseline");
+        fixture.runtime.reloads.add(ReloadResult.success(EffectiveShaderSettings.empty(), List.of()));
+        fixture.executor.execute(fixture.loadJob(baseline), ignored -> {});
+        fixture.runtime.events.clear();
+
+        Source candidate = fixture.source("candidate");
+        var baselineError = CompileCatalog.Diagnostic.of(
+            CompileCatalog.DiagnosticSeverity.ERROR, "baseline.fsh", 3, 1, "baseline failed");
+        fixture.runtime.reloads.add(ReloadResult.failure(List.of(error("baseline failed"))));
+        fixture.runtime.reloads.add(ReloadResult.success(EffectiveShaderSettings.empty(), List.of()));
+        fixture.runtime.compileCatalogs.add(catalog(baselineError, true));
+        CompileValidationRequest validation = CompileValidationRequest.newBuilder()
+            .setBaseline(compileCase("baseline", baseline, "base"))
+            .addCases(compileCase("candidate", candidate, "quality"))
+            .build();
+
+        RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
+            () -> fixture.executor.execute(fixture.compileJob(List.of(baseline, candidate), validation), ignored -> {}));
+
+        assertEquals(ErrorCode.ERROR_CODE_SHADER_COMPILE_FAILED, failure.code);
+        assertEquals(1, fixture.runtime.events.stream().filter("compile_catalog"::equals).count());
+        assertFalse(fixture.runtime.events.contains("frames"));
+        assertEquals(baseline.uuid, fixture.registry.activeUuid());
+    }
+
+    @Test
     void actionRejectsSourceOutsidePreparedSetBeforeActivation() throws Exception {
         Fixture fixture = new Fixture();
         Source source = fixture.source("A");
@@ -276,6 +351,18 @@ class RuntimeJobExecutorTest {
         return new ReloadResult.Diagnostic(ReloadResult.Severity.ERROR, "composite.fsh", 17, marker);
     }
 
+    private static CompileCatalog catalog(CompileCatalog.Diagnostic diagnostic, boolean failed) {
+        return catalog(List.of(diagnostic), failed);
+    }
+
+    private static CompileCatalog catalog(List<CompileCatalog.Diagnostic> diagnostics, boolean failed) {
+        return CompileCatalog.of(List.of(CompileCatalog.ProgramEntry.of(
+            "final", "final", List.of(CompileCatalog.ShaderStage.FRAGMENT),
+            failed ? CompileCatalog.CompileState.FAILED : CompileCatalog.CompileState.SUCCEEDED,
+            failed ? CompileCatalog.CompileState.NOT_APPLICABLE : CompileCatalog.CompileState.SUCCEEDED,
+            "a".repeat(64), diagnostics)), 8);
+    }
+
     private final class Fixture {
         final RuntimeTestAdapter runtime = new RuntimeTestAdapter();
         final SourceRegistry registry = new SourceRegistry(pending, new CoreProbe());
@@ -315,6 +402,34 @@ class RuntimeJobExecutorTest {
                 .build());
         }
 
+        CoreJob loadJob(Source source) {
+            return job(source, ActionSequence.newBuilder()
+                .addActions(Action.newBuilder().setLoadShader(LoadShader.newBuilder()
+                    .setSourceUuid(source.uuid)
+                    .setSourceId("source")
+                    .setConfigId("config")
+                    .setConfig(ShaderConfig.newBuilder().setPreserveCurrent(true))))
+                .build());
+        }
+
+        CompileValidationCase compileCase(String id, Source source, String configId) {
+            return RuntimeJobExecutorTest.compileCase(id, source, configId);
+        }
+
+        CoreJob compileJob(List<Source> sources, CompileValidationRequest validation) {
+            JobSpec.Builder spec = JobSpec.newBuilder()
+                .setJobId("job-" + UUID.randomUUID())
+                .setContext(SceneContext.newBuilder()
+                    .setSaveId("save")
+                    .setDimensionId("minecraft:overworld")
+                    .setFov(70.0))
+                .setCompileValidation(validation);
+            sources.forEach(source -> spec.addSources(source.lease.reference()));
+            CoreJob job = new CoreJob(spec.build(), spec.getJobId(), WORKSPACE_ID, "message", null);
+            job.initialize(sources.stream().map(Source::lease).toList());
+            return job;
+        }
+
         CoreJob job(Source source, ActionSequence actions) {
             JobSpec spec = JobSpec.newBuilder()
                 .setJobId("job-" + UUID.randomUUID())
@@ -329,6 +444,15 @@ class RuntimeJobExecutorTest {
             job.initialize(List.of(source.lease));
             return job;
         }
+    }
+
+    private static CompileValidationCase compileCase(String id, Source source, String configId) {
+        return CompileValidationCase.newBuilder()
+            .setCaseId(id)
+            .setSourceId(source.uuid)
+            .setConfigId(configId)
+            .setConfig(ShaderConfig.newBuilder().setPreserveCurrent(true))
+            .build();
     }
 
     private static final class RecordingLink implements ShaderLink {

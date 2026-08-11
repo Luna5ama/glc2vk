@@ -29,6 +29,7 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     final List<String> events = new ArrayList<>();
     final ArrayDeque<ReloadResult> reloads = new ArrayDeque<>();
     final ArrayDeque<CompletionStage<ReloadResult>> reloadStages = new ArrayDeque<>();
+    final ArrayDeque<CompileCatalog> compileCatalogs = new ArrayDeque<>();
     final ArrayDeque<String> actionResponses = new ArrayDeque<>();
     final ArrayDeque<CompletionStage<String>> actionStages = new ArrayDeque<>();
     final ArrayDeque<Function<CancellationToken, CompletionStage<Long>>> waitOperations = new ArrayDeque<>();
@@ -102,7 +103,8 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     public CompletionStage<CompileCatalog> getCompileCatalog(CancellationToken cancellation) {
         events.add("compile_catalog");
         beforeCompileCatalogResult.run();
-        return CompletableFuture.completedFuture(compileCatalog);
+        return CompletableFuture.completedFuture(
+            compileCatalogs.isEmpty() ? compileCatalog : compileCatalogs.removeFirst());
     }
 
     @Override

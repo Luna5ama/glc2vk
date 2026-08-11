@@ -136,7 +136,8 @@ private:
             if (name == "vibris_run_recipe" || name == "vibris_run_actions" || name == "vibris_run_matrix") {
                 const bool durable = arguments.value("execution", std::string("sync")) == "async" ||
                     (name == "vibris_run_recipe" &&
-                        arguments.value("recipe", std::string{}) == "profile_matrix");
+                        (arguments.value("recipe", std::string{}) == "profile_matrix" ||
+                         arguments.value("recipe", std::string{}) == "compile_validate"));
                 if (durable) return start_durable_job(name, arguments);
                 if (jobs_.running()) {
                     return ToolFailure{"JOB_BUSY", "A durable job is active.", true};
