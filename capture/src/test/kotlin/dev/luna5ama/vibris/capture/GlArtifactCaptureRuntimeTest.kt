@@ -95,11 +95,14 @@ class GlArtifactCaptureRuntimeTest {
                     .putInt(0x12345678).array()
                 assertContentEquals(expectedGpuBytes, gpuOutput.toByteArray())
 
-                glTextureStorage2D(texture, 1, GL_RGBA8, 2, 1)
-                val pixels = BufferUtils.createByteBuffer(8)
-                    .put(byteArrayOf(255.toByte(), 0, 0, 255.toByte(), 0, 255.toByte(), 0, 255.toByte()))
+                glTextureStorage2D(texture, 1, GL_RGBA8, 2, 2)
+                val pixels = BufferUtils.createByteBuffer(16)
+                    .put(byteArrayOf(
+                        255.toByte(), 0, 0, 255.toByte(), 0, 255.toByte(), 0, 255.toByte(),
+                        0, 0, 255.toByte(), 255.toByte(), 255.toByte(), 255.toByte(), 255.toByte(), 255.toByte(),
+                    ))
                     .flip()
-                glTextureSubImage2D(texture, 0, 0, 0, 2, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixels)
+                glTextureSubImage2D(texture, 0, 0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, pixels)
                 setPackState(packBuffer)
 
                 val rawOutput = ByteArrayOutputStream()
@@ -111,14 +114,17 @@ class GlArtifactCaptureRuntimeTest {
                     rawOutput,
                 )
                 assertEquals(2, rawMetadata.width)
-                assertEquals(1, rawMetadata.height)
+                assertEquals(2, rawMetadata.height)
                 assertEquals(4, rawMetadata.channelCount)
                 assertEquals(ResourceCatalog.ScalarType.UINT8, rawMetadata.scalarType)
-                assertEquals(8, rawMetadata.byteSize)
+                assertEquals(16, rawMetadata.byteSize)
                 assertEquals(rawMetadata, GlArtifactCapture.describeTexture(texture, 0))
                 assertEquals(rawMetadata.byteSize, rawOutput.size().toLong())
                 assertContentEquals(
-                    byteArrayOf(255.toByte(), 0, 0, 255.toByte(), 0, 255.toByte(), 0, 255.toByte()),
+                    byteArrayOf(
+                        255.toByte(), 0, 0, 255.toByte(), 0, 255.toByte(), 0, 255.toByte(),
+                        0, 0, 255.toByte(), 255.toByte(), 255.toByte(), 255.toByte(), 255.toByte(), 255.toByte(),
+                    ),
                     rawOutput.toByteArray(),
                 )
                 assertPackState(packBuffer)
@@ -134,9 +140,11 @@ class GlArtifactCaptureRuntimeTest {
                 assertEquals(rawMetadata, pngMetadata)
                 val image = assertNotNull(ImageIO.read(ByteArrayInputStream(pngOutput.toByteArray())))
                 assertEquals(2, image.width)
-                assertEquals(1, image.height)
-                assertEquals(0xffff0000.toInt(), image.getRGB(0, 0))
-                assertEquals(0xff00ff00.toInt(), image.getRGB(1, 0))
+                assertEquals(2, image.height)
+                assertEquals(0xff0000ff.toInt(), image.getRGB(0, 0))
+                assertEquals(0xffffffff.toInt(), image.getRGB(1, 0))
+                assertEquals(0xffff0000.toInt(), image.getRGB(0, 1))
+                assertEquals(0xff00ff00.toInt(), image.getRGB(1, 1))
                 assertPackState(packBuffer)
             } finally {
                 resetPackState()

@@ -61,7 +61,7 @@ object GlCapturePlanExecutor {
             }
             val descriptor = descriptor(target, metadata, frameId)
             target.outputs.firstOrNull { it.role == CapturePlan.ArtifactRole.METADATA }?.let { spec ->
-                writeMetadata(sink, spec.fileName, descriptor)
+                writeMetadata(sink, spec.fileName, descriptor, payloads.any { it.format == CapturePlan.ArtifactFormat.PNG })
                 outputs.add(captured(spec))
             }
             groups.add(CaptureResult.ArtifactGroup(target.artifactName, descriptor, outputs))
@@ -98,7 +98,13 @@ object GlCapturePlanExecutor {
             }
             val descriptor = descriptor(target, requireNotNull(metadata), frameId)
             target.outputs.firstOrNull { it.role == CapturePlan.ArtifactRole.METADATA }?.let { metadataSpec ->
-                writeMetadata(sink, metadataSpec.fileName, descriptor)
+                writeMetadata(
+                    sink,
+                    metadataSpec.fileName,
+                    descriptor,
+                    target.outputs.any { it.role != CapturePlan.ArtifactRole.METADATA &&
+                        it.format == CapturePlan.ArtifactFormat.PNG },
+                )
                 outputs.add(captured(metadataSpec))
             }
             captured.add(CaptureResult.ArtifactGroup(target.artifactName, descriptor, outputs))
@@ -137,6 +143,7 @@ object GlCapturePlanExecutor {
         sink: ArtifactSink,
         fileName: String,
         resource: ResourceCatalog.ResourceDescriptor,
+        yFlipped: Boolean,
     ) {
         val json = "{\"logical_name\":\"${escape(resource.logicalName)}\"" +
             ",\"kind\":\"${resource.kind}\"" +
@@ -157,7 +164,7 @@ object GlCapturePlanExecutor {
             ",\"endianness\":\"native\"" +
             ",\"packing\":{\"alignment\":1,\"row_length\":0,\"image_height\":0,\"skip_pixels\":0,\"skip_rows\":0,\"skip_images\":0,\"swap_bytes\":false}" +
             ",\"axis_order\":\"X,Y,Z\"" +
-            ",\"y_flipped\":false" +
+            ",\"y_flipped\":$yFlipped" +
             ",\"byte_size\":${resource.byteSize}" +
             ",\"frame_id\":${resource.frameId}}"
         write(sink, fileName) { output -> output.write(json.toByteArray(StandardCharsets.UTF_8)) }

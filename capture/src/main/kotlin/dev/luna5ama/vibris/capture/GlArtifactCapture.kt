@@ -137,9 +137,10 @@ object GlArtifactCapture {
             val image = componentImage(metadata.width, metadata.height, pngChannels, bitDepth)
             val raster = image.raster
             for (y in 0 until metadata.height) {
+                val sourceY = metadata.height - 1 - y
                 for (x in 0 until metadata.width) {
                     for (channel in 0 until pngChannels) {
-                        raster.setSample(x, y, channel, pngSample(layer, y, x, channel, bitDepth))
+                        raster.setSample(x, y, channel, pngSample(layer, sourceY, x, channel, bitDepth))
                     }
                 }
             }

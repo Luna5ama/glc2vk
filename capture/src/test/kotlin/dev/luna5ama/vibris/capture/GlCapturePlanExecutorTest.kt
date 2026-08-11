@@ -49,6 +49,16 @@ class GlCapturePlanExecutorTest {
         assertTrue(sidecar.contains("\"logical_name\":\"colortex0.main\""))
         assertTrue(sidecar.contains("\"endianness\":\"native\""))
         assertTrue(sidecar.contains("\"y_flipped\":false"))
+        val pngTarget = target(ResourceCatalog.ResourceKind.TEXTURE, "colortex1.main", CapturePlan.ArtifactFormat.PNG)
+        val pngSink = MemorySink()
+        GlCapturePlanExecutor.capture(
+            CapturePlan(listOf(pngTarget)), pngSink, 42, CancellationToken.none(), Function { 4 },
+        ) { _, _, _, output ->
+            output.write(4)
+            GlCaptureMetadata(2, 3, 1, "RGBA8", 4, ResourceCatalog.ScalarType.UINT8, 24)
+        }
+        assertTrue(pngSink.artifacts.getValue("colortex1.main.json").decodeToString()
+            .contains("\"y_flipped\":true"))
         assertEquals(42, result.frameId)
         assertEquals(42, result.groups.last().resource.frameId)
     }
