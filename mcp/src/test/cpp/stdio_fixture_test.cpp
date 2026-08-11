@@ -56,17 +56,15 @@ int main(int argc, char** argv) {
         "tools/call",
         "tools/call",
         "tools/call",
-        "tools/call",
     };
     const std::array expected_tools{
-        "vibris_configure",
-        "vibris_get_config",
         "vibris_get_status",
         "vibris_list_presets",
+        "vibris_run_actions",
     };
     return require(
         std::ranges::equal(methods, expected_methods),
-        "fixture must initialize, list tools, configure, then query config, status, and presets") && require(
+        "fixture must initialize, list tools, query status and presets, then run an action") && require(
         std::ranges::equal(tools, expected_tools),
         "fixture tool-call order changed") ? 0 : 1;
 }

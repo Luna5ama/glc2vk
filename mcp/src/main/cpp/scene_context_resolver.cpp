@@ -10,7 +10,7 @@ namespace {
 
 namespace proto = ::vibris::control::v1;
 
-bool matches(const SessionConfig& config, const proto::SceneContext& context) {
+bool matches(const JobContext& config, const proto::SceneContext& context) {
     return context.save_id() == config.save_id && context.dimension_id() == config.dimension_id &&
         context.time_preset_id() == config.time_preset_id &&
         context.camera_preset_id() == config.camera_preset_id && context.fov() == config.fov;
@@ -35,7 +35,7 @@ void validate(const proto::ScenePreset& preset) {
 }
 
 proto::ScenePreset SceneContextResolver::resolve_preset(
-    const SessionConfig& config, const proto::ListPresetsResponse& response) {
+    const JobContext& config, const proto::ListPresetsResponse& response) {
     const proto::ScenePreset* match = nullptr;
     for (const auto& preset : response.presets()) {
         if (!matches(config, preset.context())) continue;
@@ -49,9 +49,9 @@ proto::ScenePreset SceneContextResolver::resolve_preset(
             if (candidate_default) match = &preset;
             continue;
         }
-        invalid("The configured scene matches multiple server presets.");
+        invalid("The selected scene matches multiple server presets.");
     }
-    if (match == nullptr) invalid("The configured scene does not match a server preset.");
+    if (match == nullptr) invalid("The selected scene does not match a server preset.");
     validate(*match);
     return *match;
 }
@@ -70,7 +70,7 @@ proto::ScenePreset SceneContextResolver::resolve_preset(
 }
 
 proto::SceneContext SceneContextResolver::resolve(
-    const SessionConfig& config, const proto::ListPresetsResponse& response) {
+    const JobContext& config, const proto::ListPresetsResponse& response) {
     return resolve_preset(config, response).context();
 }
 

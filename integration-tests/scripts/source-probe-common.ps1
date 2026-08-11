@@ -322,6 +322,29 @@ function Invoke-ProbeMcpTool
         [object] $PeakWorkingSet
     )
 
+    $worktree = [System.IO.Path]::GetFullPath($Process.StartInfo.WorkingDirectory)
+    if ($Arguments -is [System.Collections.IDictionary])
+    {
+        $Arguments["worktree_root"] = $worktree
+        if ($Name -in @("vibris_run_recipe", "vibris_run_actions", "vibris_run_matrix") -and
+            -not ($Name -ceq "vibris_run_recipe" -and $Arguments.Contains("operation")) -and
+            -not $Arguments.Contains("preset_id"))
+        {
+            $Arguments["preset_id"] = "default"
+        }
+    }
+    else
+    {
+        $Arguments | Add-Member -NotePropertyName "worktree_root" -NotePropertyValue $worktree -Force
+        if ($Name -in @("vibris_run_recipe", "vibris_run_actions", "vibris_run_matrix") -and
+            -not ($Name -ceq "vibris_run_recipe" -and
+                $null -ne $Arguments.PSObject.Properties["operation"]) -and
+            $null -eq $Arguments.PSObject.Properties["preset_id"])
+        {
+            $Arguments | Add-Member -NotePropertyName "preset_id" -NotePropertyValue "default" -Force
+        }
+    }
+
     Send-ProbeMcpMessage -Process $Process -Message @{
         jsonrpc = "2.0"
         id = $Id
@@ -342,29 +365,6 @@ function Get-ProbeToolPayload
         throw "Tool response '$($Response.id)' did not contain exactly one text item."
     }
     return $content[0].text | ConvertFrom-Json
-}
-
-function Set-ProbeConfig
-{
-    param(
-        [Parameter(Mandatory)] [System.Diagnostics.Process] $Process,
-        [Parameter(Mandatory)] [int] $TimeoutSeconds
-    )
-
-    $response = Invoke-ProbeMcpTool -Process $Process -Id "source-config" -Name "vibris_configure" `
-        -Arguments @{
-            save_id = "test-save"
-            dimension_id = "minecraft:overworld"
-            time_preset_id = "noon"
-            camera_preset_id = "origin"
-            fov = 70.0
-            default_warmup_frames = 0
-        } -TimeoutSeconds $TimeoutSeconds
-    if ($response.result.isError)
-    {
-        throw "vibris_configure failed: " +
-            ((Get-ProbeToolPayload -Response $response) | ConvertTo-Json -Compress -Depth 20)
-    }
 }
 
 function Assert-ProbeServerPendingRoot

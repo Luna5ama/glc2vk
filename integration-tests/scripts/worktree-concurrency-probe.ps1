@@ -156,9 +156,7 @@ function Assert-ToolList
     Assert-Response -Response $response -Id $Id
     $actual = @($response.Json.result.tools | ForEach-Object { $_.name })
     $expected = @(
-        "vibris_get_config",
         "vibris_list_presets",
-        "vibris_configure",
         "vibris_get_status",
         "vibris_run_recipe",
         "vibris_run_actions",
@@ -175,14 +173,15 @@ function Invoke-Tool
     param(
         [object] $Owned,
         [string] $Id,
-        [string] $Name
+        [string] $Name,
+        [object] $Arguments = @{}
     )
 
     $request = [ordered]@{
         jsonrpc = "2.0"
         id = $Id
         method = "tools/call"
-        params = @{ name = $Name; arguments = @{} }
+        params = @{ name = $Name; arguments = $Arguments }
     } | ConvertTo-Json -Compress -Depth 8
     Send-Request -Owned $Owned -Line $request
     $response = Read-Response -Owned $Owned
@@ -199,7 +198,7 @@ function Invoke-Tool
     return $content[0].text | ConvertFrom-Json
 }
 
-function Assert-UnconfiguredBinding
+function Assert-RequestBinding
 {
     param(
         [object] $Owned,
@@ -207,23 +206,25 @@ function Assert-UnconfiguredBinding
         [string] $ExpectedRoot
     )
 
-    $payload = Invoke-Tool -Owned $Owned -Id $Id -Name "vibris_get_config"
-    if ($payload.configured -ne $false -or $null -ne $payload.config)
-    {
-        throw "MCP process $($Owned.Process.Id) unexpectedly loaded a process-local scene."
+    $payload = Invoke-Tool -Owned $Owned -Id $Id -Name "vibris_get_status" `
+        -Arguments @{ worktree_root = [System.IO.Path]::GetFullPath($ExpectedRoot) }
+    $binding = if ($null -ne $payload.PSObject.Properties["success"] -and $payload.success -eq $false) {
+        $payload.error.details
+    } else {
+        $payload
     }
-    $actualRoot = [System.IO.Path]::GetFullPath([string] $payload.worktree_root)
+    $actualRoot = [System.IO.Path]::GetFullPath([string] $binding.worktree_root)
     $canonicalExpected = [System.IO.Path]::GetFullPath($ExpectedRoot)
     if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals($actualRoot, $canonicalExpected))
     {
         throw "MCP process $($Owned.Process.Id) bound '$actualRoot', expected '$canonicalExpected'."
     }
     $parsed = [guid]::Empty
-    if (-not [guid]::TryParse([string] $payload.workspace_id, [ref] $parsed))
+    if (-not [guid]::TryParse([string] $binding.workspace_id, [ref] $parsed))
     {
         throw "MCP process $($Owned.Process.Id) returned a non-UUID workspace_id."
     }
-    return [string] $payload.workspace_id
+    return [string] $binding.workspace_id
 }
 
 function Initialize-GitRepository
@@ -285,89 +286,71 @@ try
     }
 
     $fixture = Get-Content -LiteralPath $MalformedConfig -Raw | ConvertFrom-Json
-    $oversizedLine = $fixture | ConvertTo-Json -Compress -Depth 16
+    $oversizedRequest = [ordered] @{
+        jsonrpc = "2.0"
+        id = "oversize-config"
+        method = "tools/call"
+        params = [ordered] @{
+            name = "vibris_run_recipe"
+            arguments = [ordered] @{
+                worktree_root = $repoA
+                preset_id = "default"
+                recipe = "profile"
+                source = [ordered] @{ kind = "workspace" }
+                config = [ordered] @{ OVERSIZE = [string] $fixture.params.arguments.save_id }
+                frames = 1
+            }
+        }
+    }
+    $oversizedLine = $oversizedRequest | ConvertTo-Json -Compress -Depth 16
     $oversizedBytes = [System.Text.Encoding]::UTF8.GetByteCount($oversizedLine)
-    $argumentNames = @($fixture.params.arguments.PSObject.Properties.Name | Sort-Object)
-    $expectedNames = @(
-        "camera_preset_id", "default_warmup_frames", "dimension_id",
-        "fov", "save_id", "time_preset_id"
-    )
     if ($fixture.jsonrpc -ne "2.0" -or $fixture.id -ne "oversize-config" -or
-        $fixture.method -ne "tools/call" -or $fixture.params.name -ne "vibris_configure" -or
         -not ($fixture.params.arguments.save_id -is [string]) -or
-        [string]::Join(",", $argumentNames) -cne [string]::Join(",", $expectedNames) -or
         $oversizedBytes -le 65536 -or $oversizedBytes -ge 1048576)
     {
-        throw "Fixture must be schema-valid, preserve id oversize-config, and be between 64 KiB and 1 MiB."
+        throw "Fixture must preserve the oversize payload and produce a request between 64 KiB and 1 MiB."
     }
 
     [void] (New-Item -ItemType Directory -Path $criterionRoot)
     $tempCreated = $true
     Initialize-GitRepository -Path $repoA
     Initialize-GitRepository -Path $repoB
-    $nestedA1 = Join-Path $repoA "nested\task-one"
-    $nestedA2 = Join-Path $repoA "nested\task-two"
-    $nestedB = Join-Path $repoB "nested\task-independent"
-    foreach ($directory in @($nestedA1, $nestedA2, $nestedB))
-    {
-        [void] (New-Item -ItemType Directory -Path $directory -Force)
-    }
-
-    $first = Start-Mcp -WorkingDirectory $nestedA1
-    $second = Start-Mcp -WorkingDirectory $nestedA2
-    Invoke-Initialize -Owned $first -Id "same-a-1-init"
-    Invoke-Initialize -Owned $second -Id "same-a-2-init"
-    Assert-ToolList -Owned $first -Id "same-a-1-tools"
-    Assert-ToolList -Owned $second -Id "same-a-2-tools"
-    $idA1 = Assert-UnconfiguredBinding -Owned $first -Id "same-a-1-config" -ExpectedRoot $repoA
-    $idA2 = Assert-UnconfiguredBinding -Owned $second -Id "same-a-2-config" -ExpectedRoot $repoA
-    if ($idA1 -cne $idA2)
-    {
-        throw "Same-worktree processes returned different workspace IDs."
-    }
-    if (-not [string]::IsNullOrEmpty($first.Arguments) -or -not [string]::IsNullOrEmpty($second.Arguments))
-    {
-        throw "Normal same-worktree instances unexpectedly received command-line arguments."
-    }
+    $shared = Start-Mcp -WorkingDirectory $criterionRoot
+    Invoke-Initialize -Owned $shared -Id "shared-init"
+    Assert-ToolList -Owned $shared -Id "shared-tools"
+    $idA1 = Assert-RequestBinding -Owned $shared -Id "repo-a-first" -ExpectedRoot $repoA
     $identityA = Get-IdentityBytes -Repository $repoA
-
-    $independent = Start-Mcp -WorkingDirectory $nestedB
-    Invoke-Initialize -Owned $independent -Id "repo-b-init"
-    Assert-ToolList -Owned $independent -Id "repo-b-tools"
-    $idB = Assert-UnconfiguredBinding -Owned $independent -Id "repo-b-config" -ExpectedRoot $repoB
+    $idB = Assert-RequestBinding -Owned $shared -Id "repo-b" -ExpectedRoot $repoB
     if ($idB -ceq $idA1)
     {
         throw "Independent repositories returned the same workspace ID."
     }
-    if (-not [string]::IsNullOrEmpty($independent.Arguments))
+    $idA2 = Assert-RequestBinding -Owned $shared -Id "repo-a-second" -ExpectedRoot $repoA
+    if ($idA2 -cne $idA1)
     {
-        throw "Normal independent-repository instance unexpectedly received command-line arguments."
+        throw "Returning to the first worktree changed its workspace ID."
     }
     $identityB = Get-IdentityBytes -Repository $repoB
 
-    Send-Request -Owned $first -Line $oversizedLine
-    $oversizedResponse = Read-Response -Owned $first
+    Send-Request -Owned $shared -Line $oversizedLine
+    $oversizedResponse = Read-Response -Owned $shared
     Assert-Response -Response $oversizedResponse -Id "oversize-config"
     if (-not ($oversizedResponse.Json.PSObject.Properties.Name -contains "error") -or
-        $oversizedResponse.Json.error.data.code -ne "REQUEST_TOO_LARGE" -or
-        $oversizedResponse.Json.error.data.retryable -ne $false -or
+        $oversizedResponse.Json.error.code -ne -32602 -or
         [System.Text.Encoding]::UTF8.GetByteCount($oversizedResponse.Line) -gt 4096)
     {
-        throw "Oversized configure request did not return a bounded structured REQUEST_TOO_LARGE error."
+        throw "Oversized request-scoped shader config did not return a bounded invalid-arguments error."
     }
     Assert-IdentityBytes -Repository $repoA -Expected $identityA -Context "oversized input"
     Assert-IdentityBytes -Repository $repoB -Expected $identityB -Context "oversized input"
-    if ((Assert-UnconfiguredBinding -Owned $first -Id "same-a-1-still-responsive" -ExpectedRoot $repoA) -cne $idA1 -or
-        (Assert-UnconfiguredBinding -Owned $second -Id "same-a-2-still-responsive" -ExpectedRoot $repoA) -cne $idA2)
+    if ((Assert-RequestBinding -Owned $shared -Id "repo-a-still-responsive" -ExpectedRoot $repoA) -cne $idA1 -or
+        (Assert-RequestBinding -Owned $shared -Id "repo-b-still-responsive" -ExpectedRoot $repoB) -cne $idB)
     {
-        throw "Same-worktree processes changed identity after bounded failures."
+        throw "Request-scoped worktree routing changed identity after bounded failures."
     }
 
-    foreach ($owned in @($independent, $second, $first))
-    {
-        Close-Mcp -Owned $owned
-    }
-    Write-Output ("PASS same_root_concurrent=true same_id=$idA1 independent_id=$idB " +
+    Close-Mcp -Owned $shared
+    Write-Output ("PASS one_mcp_multiworktree=true first_id=$idA1 independent_id=$idB " +
         "oversized_bounded=true identity_preserved=true")
 }
 finally

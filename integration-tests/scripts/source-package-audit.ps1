@@ -329,9 +329,7 @@ try
         $_.Groups[1].Value
     })
     $expectedTools = @(
-        "vibris_get_config",
         "vibris_list_presets",
-        "vibris_configure",
         "vibris_get_status",
         "vibris_run_recipe",
         "vibris_run_actions",
@@ -340,7 +338,7 @@ try
     if ([string]::Join("`n", $tools) -cne [string]::Join("`n", $expectedTools) -or
         @($tools | Select-Object -Unique).Count -ne $expectedTools.Count)
     {
-        throw "Native MCP tool registry does not expose exactly the expected 7-tool surface."
+        throw "Native MCP tool registry does not expose exactly the expected 5-tool surface."
     }
     foreach ($legacy in @(
         "mcp\src\main\cpp\debug_tools.cpp",
@@ -533,7 +531,7 @@ try
     }
 
     Write-Output ($descriptorOutput | Where-Object { $_ -like "PASS *" })
-    Write-Output ("PASS source_audit=true transport=grpc source_payload=reference tools=7 " +
+    Write-Output ("PASS source_audit=true transport=grpc source_payload=reference tools=5 " +
         "jvm_language=kotlin native_mcp=cpp core_iris_jgit_imports=0 vibris_mixins=0 " +
         "renderdoc_dependencies=0 package_exe=1 package_iris_jar=1 extra_mod_jars=0 " +
         "delivery_files=2 release_mcp_sha256=$releaseMcpHash requested_iris_sha256=$requestedIrisHash " +

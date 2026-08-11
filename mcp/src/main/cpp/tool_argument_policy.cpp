@@ -1,6 +1,6 @@
 #include "tool_argument_policy.hpp"
 
-#include "session_config.hpp"
+#include "job_context.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -117,10 +117,6 @@ std::optional<InvocationError> validate_named_inputs(
 }
 
 std::optional<InvocationError> validate_argument_policy(std::string_view tool_name, const Json& arguments) {
-    if (tool_name == "vibris_configure" && arguments.dump().size() > kMaxConfigJsonBytes) {
-        return InvocationError{InvocationErrorCode::InvalidArguments, "Config JSON exceeds the 64 KiB limit.",
-                               {{"code", "REQUEST_TOO_LARGE"}, {"retryable", false}}};
-    }
     if (arguments.is_object()) {
         if (const auto error = validate_shader_config(arguments)) return error;
     }

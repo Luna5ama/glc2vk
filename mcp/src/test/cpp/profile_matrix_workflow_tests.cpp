@@ -19,7 +19,7 @@ namespace {
 using vibris::mcp::Json;
 using vibris::mcp::ProfileMatrixCaseExecution;
 using vibris::mcp::ProfileMatrixWorkflow;
-using vibris::mcp::SessionConfig;
+using vibris::mcp::JobContext;
 using vibris::mcp::ToolFailure;
 using vibris::mcp::ToolOutcome;
 using vibris::mcp::test::TempDirectory;
@@ -38,7 +38,7 @@ void require(bool condition, std::string_view message) {
     if (!condition) throw std::runtime_error(std::string(message));
 }
 
-SessionConfig config() {
+JobContext config() {
     return {.workspace_id = std::string(workspace_id),
             .save_id = "shader-test-world",
             .dimension_id = "minecraft:overworld",

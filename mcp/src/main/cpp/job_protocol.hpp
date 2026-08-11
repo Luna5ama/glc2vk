@@ -1,6 +1,6 @@
 #pragma once
 
-#include "session_config.hpp"
+#include "job_context.hpp"
 #include "tool_registry.hpp"
 #include "vibris_control.pb.h"
 
@@ -15,7 +15,7 @@ public:
     [[nodiscard]] static ::vibris::control::v1::ClientMessage request(
         std::string_view tool_name,
         const Json& arguments,
-        const SessionConfig& config,
+        const JobContext& config,
         const ::vibris::control::v1::SceneContext& context,
         std::span<const ::vibris::control::v1::PreparedSourceRef> sources,
         std::string request_id);

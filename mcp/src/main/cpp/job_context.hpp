@@ -8,7 +8,7 @@ namespace vibris::mcp {
 
 inline constexpr std::size_t kMaxConfigJsonBytes = 64 * 1024;
 
-struct SessionConfig final {
+struct JobContext final {
     std::uint32_t schema_version = 1;
     std::string workspace_id;
     std::string shader_directory = "shaders";
@@ -19,7 +19,7 @@ struct SessionConfig final {
     double fov = 70.0;
     std::uint32_t default_warmup_frames = 32;
 
-    bool operator==(const SessionConfig&) const = default;
+    bool operator==(const JobContext&) const = default;
 };
 
 }

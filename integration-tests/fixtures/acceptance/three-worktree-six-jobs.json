@@ -52,13 +52,12 @@
     {
       "label": "A",
       "repository": "repository-1",
-      "configure": {
+      "scene": {
         "save_id": "vibris-automation-world",
         "dimension_id": "minecraft:overworld",
         "time_preset_id": "camera-a",
         "camera_preset_id": "camera-a",
-        "fov": 61.0,
-        "default_warmup_frames": 2
+        "fov": 61.0
       },
       "expected": {
         "weather_preset_id": "clear",
@@ -76,13 +75,12 @@
     {
       "label": "B",
       "repository": "repository-1",
-      "configure": {
+      "scene": {
         "save_id": "vibris-automation-world",
         "dimension_id": "minecraft:the_nether",
         "time_preset_id": "camera-b",
         "camera_preset_id": "camera-b",
-        "fov": 72.0,
-        "default_warmup_frames": 2
+        "fov": 72.0
       },
       "expected": {
         "weather_preset_id": "clear",
@@ -100,13 +98,12 @@
     {
       "label": "C",
       "repository": "repository-2",
-      "configure": {
+      "scene": {
         "save_id": "vibris-automation-world",
         "dimension_id": "minecraft:the_end",
         "time_preset_id": "camera-c",
         "camera_preset_id": "camera-c",
-        "fov": 83.0,
-        "default_warmup_frames": 2
+        "fov": 83.0
       },
       "expected": {
         "weather_preset_id": "clear",

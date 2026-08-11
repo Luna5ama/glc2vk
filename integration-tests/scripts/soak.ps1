@@ -16,7 +16,6 @@ $timeoutSeconds = 600
 $scope = $null
 $mcp = $null
 $failure = $null
-$context = $null
 $mcpStderr = ""
 $minimumJobBytes = [long]::MaxValue
 $expectedSourceBytes = 0L
@@ -187,13 +186,13 @@ function Assert-SoakToolSurface
         -TimeoutSeconds $timeoutSeconds
     $actual = @($response.result.tools | ForEach-Object { $_.name })
     $expected = @(
-        "vibris_get_config", "vibris_list_presets", "vibris_configure",
-        "vibris_get_status", "vibris_run_recipe", "vibris_run_actions", "vibris_run_matrix"
+        "vibris_list_presets", "vibris_get_status", "vibris_run_recipe",
+        "vibris_run_actions", "vibris_run_matrix"
     )
     if ([string]::Join("`n", $actual) -cne [string]::Join("`n", $expected) -or
         @($actual | Select-Object -Unique).Count -ne $expected.Count)
     {
-        throw "Runtime MCP did not expose exactly the expected 7-tool surface."
+        throw "Runtime MCP did not expose exactly the expected 5-tool surface."
     }
 }
 
@@ -251,7 +250,7 @@ try
     $expectedSourceBytes = [long] ((Get-ChildItem -LiteralPath (Join-Path $workspace "shaders") `
         -Recurse -File | Measure-Object -Property Length -Sum).Sum)
 
-    $context = Start-G007Runtime -Scope $scope -Scenario "g008-c003" -TimeoutSeconds $timeoutSeconds
+    [void] (Start-G007Runtime -Scope $scope -Scenario "g008-c003" -TimeoutSeconds $timeoutSeconds)
     $owned = [System.Collections.ArrayList]::new()
     $nativeMetricPath = Join-Path $scope.Root "native-metrics.jsonl"
     $oldPath = [Environment]::GetEnvironmentVariable("PATH", "Process")
@@ -285,19 +284,6 @@ try
     }
     Initialize-ProbeMcp -Process $mcp.Process -TimeoutSeconds $timeoutSeconds
     Assert-SoakToolSurface -Process $mcp.Process
-    $configured = Invoke-ProbeMcpTool -Process $mcp.Process -Id "soak-config" -Name "vibris_configure" `
-        -Arguments @{
-            save_id = $context.save_id
-            dimension_id = $context.dimension_id
-            time_preset_id = $context.time_preset_id
-            camera_preset_id = $context.camera_preset_id
-            fov = $context.fov
-            default_warmup_frames = 0
-        } -TimeoutSeconds $timeoutSeconds
-    if ($configured.result.isError)
-    {
-        throw "vibris_configure failed: $((Get-ProbeToolPayload $configured) | ConvertTo-Json -Compress -Depth 20)"
-    }
     if ($usingSanitizer)
     {
         $native = Get-SoakNativeMetric -Path $nativeMetricPath -AfterSequence $lastNativeSequence
@@ -312,6 +298,7 @@ try
         {
             $response = Invoke-ProbeMcpTool -Process $mcp.Process -Id "soak-job-$iteration" `
                 -Name "vibris_run_recipe" -Arguments @{
+                    preset_id = "automation"
                     recipe = "load_and_screenshot"
                     source = @{ kind = "workspace" }
                     warmup_frames = 0

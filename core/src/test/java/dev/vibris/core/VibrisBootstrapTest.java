@@ -32,6 +32,7 @@ import java.util.concurrent.TimeUnit;
 import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -217,7 +218,7 @@ class VibrisBootstrapTest {
     }
 
     @Test
-    void validatedContextIsAppliedWhenMinecraftStartsAgain() throws Exception {
+    void validatedContextIsNotPersistedAcrossMinecraftRestarts() throws Exception {
         Path pending = Files.createDirectory(temp.resolve("auto-enter-pending"));
         Path artifacts = Files.createDirectory(temp.resolve("auto-enter-artifacts"));
         Path shaderpack = Files.createDirectory(temp.resolve("auto-enter-shaderpack"));
@@ -241,27 +242,11 @@ class VibrisBootstrapTest {
 
         assertTrue(validation.getValid());
         RuntimeTestAdapter restartedRuntime = new RuntimeTestAdapter();
-        restartedRuntime.presets = List.of(new ScenePreset(
-            "rooftop",
-            "Rooftop",
-            new SceneContext(
-                "shader-test-world",
-                "minecraft:overworld",
-                "rooftop",
-                "clear",
-                "rooftop",
-                70.0,
-                new SceneContext.Resolution(1280, 720),
-                "default"
-            )
-        ));
         VibrisBootstrap restarted = VibrisBootstrap.start(temp, restartedRuntime, (address, service) ->
             new TestListener());
-        assertEquals(List.of("context"), restartedRuntime.events);
-        assertEquals("shader-test-world", restartedRuntime.lastContext.saveId());
-        assertEquals("rooftop", restartedRuntime.lastContext.cameraPresetId());
-        assertEquals("clear", restartedRuntime.lastContext.weatherPresetId());
-        assertEquals(new SceneContext.Resolution(1280, 720), restartedRuntime.lastContext.resolution());
+        assertTrue(restartedRuntime.events.isEmpty());
+        assertNull(restartedRuntime.lastContext);
+        assertFalse(Files.exists(temp.resolve("config/vibris/configured-context.pb")));
         restarted.close();
     }
 

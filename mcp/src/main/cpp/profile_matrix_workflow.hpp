@@ -1,6 +1,6 @@
 #pragma once
 
-#include "session_config.hpp"
+#include "job_context.hpp"
 #include "tool_registry.hpp"
 
 #include <filesystem>
@@ -16,7 +16,7 @@ namespace vibris::mcp {
 
 struct ProfileMatrixCaseExecution final {
     Json arguments;
-    SessionConfig config;
+    JobContext config;
     std::optional<std::string> resume_request_id;
     std::stop_token stop;
     std::function<void(std::string_view request_id, std::string_view stage, bool accepted)> progress;
@@ -35,14 +35,14 @@ public:
     ProfileMatrixWorkflow(const ProfileMatrixWorkflow&) = delete;
     ProfileMatrixWorkflow& operator=(const ProfileMatrixWorkflow&) = delete;
 
-    [[nodiscard]] ToolOutcome start(const Json& arguments, const SessionConfig& config);
+    [[nodiscard]] ToolOutcome start(const Json& arguments, const JobContext& config);
     [[nodiscard]] ToolOutcome control(const Json& arguments);
     [[nodiscard]] Json active_status() const;
     [[nodiscard]] bool running() const;
     void shutdown();
 
 private:
-    [[nodiscard]] Json create_checkpoint(const Json& arguments, const SessionConfig& config) const;
+    [[nodiscard]] Json create_checkpoint(const Json& arguments, const JobContext& config) const;
     [[nodiscard]] Json load(std::string_view job_id) const;
     void save(const Json& document) const;
     [[nodiscard]] Json result(const Json& document) const;

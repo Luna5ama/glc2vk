@@ -11,6 +11,6 @@ struct WorkspaceBinding final {
     bool operator==(const WorkspaceBinding&) const = default;
 };
 
-[[nodiscard]] WorkspaceBinding resolve_workspace();
+[[nodiscard]] WorkspaceBinding resolve_workspace(const std::filesystem::path& requested_root);
 
 } // namespace vibris::mcp

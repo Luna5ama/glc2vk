@@ -18,6 +18,7 @@
 #include <barrier>
 #include <cerrno>
 #include <chrono>
+#include <cctype>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -35,7 +36,7 @@
 #include <vector>
 
 namespace fs = std::filesystem;
-using vibris::mcp::SessionConfig;
+using vibris::mcp::JobContext;
 using vibris::mcp::StateError;
 
 namespace {
@@ -58,25 +59,18 @@ private:
 class McpBackend final {
 public:
     McpBackend(const fs::path& root, std::string address)
-        : original_(fs::current_path()) {
-        fs::current_path(root);
-        backend_ = std::make_unique<vibris::mcp::McpBackend>(std::move(address));
-    }
-
-    ~McpBackend() {
-        backend_.reset();
-        std::error_code ignored;
-        fs::current_path(original_, ignored);
-    }
+        : root_(fs::canonical(root)), backend_(std::make_unique<vibris::mcp::McpBackend>(std::move(address))) {}
 
     [[nodiscard]] vibris::mcp::ToolOutcome dispatch(std::string_view name, const vibris::mcp::Json& arguments) {
-        return backend_->dispatch(name, arguments);
+        auto scoped = arguments;
+        if (!scoped.contains("worktree_root")) scoped["worktree_root"] = root_.string();
+        return backend_->dispatch(name, scoped);
     }
 
     [[nodiscard]] std::optional<vibris::mcp::GrpcClientStats> shutdown() { return backend_->shutdown(); }
 
 private:
-    fs::path original_;
+    fs::path root_;
     std::unique_ptr<vibris::mcp::McpBackend> backend_;
 };
 
@@ -151,7 +145,7 @@ ErrorSnapshot capture_state_error(Action&& action) {
     throw std::runtime_error("Expected StateError, but the operation succeeded.");
 }
 
-SessionConfig valid_config() {
+JobContext valid_config() {
     return {
         1,
         "11111111-1111-4111-8111-111111111111",
@@ -179,23 +173,11 @@ void write_bytes(const fs::path& path, std::string_view bytes) {
     require(output.good(), "Unable to write test state file.");
 }
 
-const vibris::mcp::Json& require_json(
+vibris::mcp::Json require_json(
     const vibris::mcp::ToolOutcome& outcome, std::string_view message) {
     const auto* result = std::get_if<vibris::mcp::Json>(&outcome);
     require(result != nullptr, message);
     return *result;
-}
-
-vibris::mcp::Json configure_arguments(
-    std::string_view scene, double fov, std::uint32_t warmup_frames) {
-    return {
-        {"save_id", "save-" + std::string(scene)},
-        {"dimension_id", "dimension-" + std::string(scene)},
-        {"time_preset_id", "time-" + std::string(scene)},
-        {"camera_preset_id", "camera-" + std::string(scene)},
-        {"fov", fov},
-        {"default_warmup_frames", warmup_frames},
-    };
 }
 
 using IdentityIoOperation = vibris::mcp::detail::WorkspaceIdentityIoOperation;
@@ -814,33 +796,7 @@ void workspace_identity_rejects_active_writer() {
 }
 
 void same_worktree_backends_coexist() {
-    // Given: one Git worktree used by two independent MCP backends.
     TempDirectory temp("same-worktree-backends");
-    fs::create_directories(temp.path() / ".git");
-    fs::create_directories(temp.path() / "shaders");
-
-    // When: both backends bind to the same canonical workspace root.
-    McpBackend first(temp.path(), "127.0.0.1:50051");
-    McpBackend second(temp.path(), "127.0.0.1:50051");
-
-    // Then: local MCP state remains available from both instances without backend connectivity.
-    const auto first_config = first.dispatch("vibris_get_config", {});
-    const auto second_config = second.dispatch("vibris_get_config", {});
-    const auto* first_state = std::get_if<vibris::mcp::Json>(&first_config);
-    const auto* second_state = std::get_if<vibris::mcp::Json>(&second_config);
-    require(first_state != nullptr, "First backend did not expose local config.");
-    require(second_state != nullptr, "Second backend did not expose local config.");
-    require(first_state->at("workspace_id") == second_state->at("workspace_id"),
-            "Same-worktree backends observed different workspace IDs.");
-    require(!first_state->at("configured").get<bool>() && first_state->at("config").is_null(),
-            "First backend did not start with an empty process-local scene.");
-    require(!second_state->at("configured").get<bool>() && second_state->at("config").is_null(),
-            "Second backend did not start with an empty process-local scene.");
-}
-
-void process_local_scene_configuration() {
-    TempDirectory temp("process-local-scene");
-    fs::create_directories(temp.path() / ".git");
     fs::create_directories(temp.path() / "shaders");
     const auto pending_root = temp.path() / "pending";
     fs::create_directories(pending_root);
@@ -848,123 +804,115 @@ void process_local_scene_configuration() {
     write_bytes(identity_path,
         vibris::mcp::Json{{"schema_version", 1}, {"workspace_id", valid_config().workspace_id}}.dump(2));
     vibris::mcp::test::BackendStateServer server(pending_root);
-    std::optional<vibris::mcp::GrpcClientStats> first_stats;
-    std::optional<vibris::mcp::GrpcClientStats> second_stats;
 
-    {
-        McpBackend first(temp.path(), server.target());
-        McpBackend second(temp.path(), server.target());
-        const auto identity_bytes = read_bytes(identity_path);
+    McpBackend first(temp.path(), server.target());
+    McpBackend second(temp.path(), server.target());
 
-        const auto first_config_outcome = first.dispatch("vibris_get_config", {});
-        const auto second_config_outcome = second.dispatch("vibris_get_config", {});
-        const auto& first_config = require_json(first_config_outcome, "First backend did not expose local config.");
-        const auto& second_config = require_json(second_config_outcome, "Second backend did not expose local config.");
-        require(first_config.at("workspace_id") == valid_config().workspace_id &&
-                second_config.at("workspace_id") == valid_config().workspace_id,
-            "Same-root backends did not share the durable identity.");
-        require(!first_config.at("configured").get<bool>() && first_config.at("config").is_null() &&
-                !second_config.at("configured").get<bool>() && second_config.at("config").is_null(),
-            "Same-root backends did not start with empty process-local scenes.");
+    const auto& first_status = require_json(
+        first.dispatch("vibris_get_status", {}), "First same-root status failed.");
+    const auto& second_status = require_json(
+        second.dispatch("vibris_get_status", {}), "Second same-root status failed.");
+    require(first_status.at("workspace_id") == valid_config().workspace_id &&
+            second_status.at("workspace_id") == valid_config().workspace_id,
+        "Same-worktree backends observed different durable workspace IDs.");
 
-        const auto first_status_outcome = first.dispatch("vibris_get_status", {});
-        const auto second_status_outcome = second.dispatch("vibris_get_status", {});
-        const auto& first_status = require_json(first_status_outcome, "First preconfigure status failed.");
-        const auto& second_status = require_json(second_status_outcome, "Second preconfigure status failed.");
-        require(first_status.at("workspace_id") == valid_config().workspace_id &&
-                second_status.at("workspace_id") == valid_config().workspace_id,
-            "Preconfigure status omitted the durable workspace ID.");
-        require(!first_status.at("configured").get<bool>() && !second_status.at("configured").get<bool>(),
-            "Preconfigure status reported a process-local scene.");
+    const vibris::mcp::Json actions{
+        {"preset_id", "scene-a"},
+        {"actions", vibris::mcp::Json::array({{{"type", "inspect_shader"}}})},
+    };
+    static_cast<void>(require_json(
+        first.dispatch("vibris_run_actions", actions), "First same-root action failed."));
+    static_cast<void>(require_json(
+        second.dispatch("vibris_run_actions", actions), "Second same-root action failed."));
 
-        const auto scene_a_outcome = first.dispatch("vibris_configure", configure_arguments("a", 61.0, 3));
-        const auto scene_b_outcome = second.dispatch("vibris_configure", configure_arguments("b", 89.0, 7));
-        const auto& scene_a = require_json(scene_a_outcome, "First backend configuration failed.");
-        const auto& scene_b = require_json(scene_b_outcome, "Second backend configuration failed.");
-        require(scene_a.at("workspace_id") == scene_b.at("workspace_id") &&
-                scene_a.at("workspace_id") == valid_config().workspace_id,
-            "Process-local scenes changed the durable workspace identity.");
-        require(scene_a.at("save_id") == "save-a" && scene_b.at("save_id") == "save-b" &&
-                scene_a.at("fov") == 61.0 && scene_b.at("fov") == 89.0,
-            "Same-root backends did not keep distinct process-local scenes.");
-        require(read_bytes(identity_path) == identity_bytes,
-            "Configuration changed the durable identity.");
-
-        const vibris::mcp::Json actions {
-            {"actions", vibris::mcp::Json::array({{{"type", "inspect_shader"}}})}};
-        static_cast<void>(require_json(first.dispatch("vibris_run_actions", actions),
-            "First backend action job failed."));
-        static_cast<void>(require_json(second.dispatch("vibris_run_actions", actions),
-            "Second backend action job failed."));
-        const auto scene_c_outcome = first.dispatch("vibris_configure", configure_arguments("c", 73.0, 11));
-        const auto& scene_c = require_json(scene_c_outcome, "First backend reconfiguration failed.");
-        require(scene_c.at("save_id") == "save-c" && scene_c.at("fov") == 73.0,
-            "First backend did not replace its process-local scene.");
-        static_cast<void>(require_json(first.dispatch("vibris_run_actions", actions),
-            "First backend action job after reconfigure failed."));
-        require(read_bytes(identity_path) == identity_bytes,
-            "Runtime jobs changed the durable identity.");
-
-        first_stats = first.shutdown();
-        second_stats = second.shutdown();
-    }
-
-    require(first_stats && second_stats, "Configured backends did not report gRPC lifecycle statistics.");
-    require(first_stats->worker_threads_started == 1 && first_stats->worker_threads_joined == 1 &&
-            first_stats->pending_requests == 0,
-        "First backend reconnected or leaked gRPC work across configure calls.");
-    require(second_stats->worker_threads_started == 1 && second_stats->worker_threads_joined == 1 &&
-            second_stats->pending_requests == 0,
-        "Second backend reconnected or leaked gRPC work across configure calls.");
-
+    const auto first_stats = first.shutdown();
+    const auto second_stats = second.shutdown();
+    require(first_stats && second_stats && first_stats->worker_threads_started == 1 &&
+            first_stats->worker_threads_joined == 1 && second_stats->worker_threads_started == 1 &&
+            second_stats->worker_threads_joined == 1,
+        "Same-worktree backends did not cleanly own independent gRPC workers.");
     const auto hellos = server.service().hellos();
-    const auto jobs = server.service().jobs();
-    require(hellos.size() == 2, "Same-root backends did not produce exactly one gRPC hello each.");
-    require(jobs.size() == 3, "Fake backend did not observe the expected process-local jobs.");
-    std::unordered_set<std::string> process_ids;
-    for (const auto& hello : hellos) {
-        require(hello.envelope_workspace_id == valid_config().workspace_id &&
-                hello.nested_workspace_id == valid_config().workspace_id,
-            "gRPC hello did not carry the durable workspace identity.");
-        require(hello.message_id == "hello-" + hello.process_id,
-            "gRPC hello message and process identities diverged.");
-        process_ids.insert(hello.process_id);
-    }
-    require(process_ids.size() == 2, "Same-root backends reused a process instance identity.");
-    const std::array expected_saves {std::string("save-a"), std::string("save-b"), std::string("save-c")};
-    const std::array expected_fovs {61.0, 89.0, 73.0};
-    for (std::size_t index = 0; index < jobs.size(); ++index) {
-        require(jobs[index].envelope_workspace_id == valid_config().workspace_id &&
-                jobs[index].nested_workspace_id == valid_config().workspace_id,
-            "Submitted job did not carry the durable workspace identity.");
-        require(process_ids.contains(jobs[index].process_id),
-            "Submitted job did not retain its MCP process identity.");
-        require(jobs[index].context.save_id() == expected_saves[index] &&
-                jobs[index].context.fov() == expected_fovs[index],
-            "Submitted job did not use the expected process-local scene.");
-    }
-    require(server.service().validation_count() == 3,
-        "Fake backend did not validate each process-local configuration.");
-
-    McpBackend restarted(temp.path(), server.target());
-    const auto restart_config_outcome = restarted.dispatch("vibris_get_config", {});
-    const auto& restart_config = require_json(restart_config_outcome, "Restart did not expose local config state.");
-    require(restart_config.at("workspace_id") == valid_config().workspace_id,
-        "Restart changed the durable workspace identity.");
-    require(!restart_config.at("configured").get<bool>() && restart_config.at("config").is_null(),
-        "Restart inherited process-local scene state.");
-    const auto restart_status_outcome = restarted.dispatch("vibris_get_status", {});
-    const auto& restart_status = require_json(restart_status_outcome, "Restart preconfigure status failed.");
-    require(restart_status.at("workspace_id") == valid_config().workspace_id &&
-            !restart_status.at("configured").get<bool>(),
-        "Restart preconfigure status did not expose an unconfigured durable identity.");
-    require(read_bytes(identity_path) ==
-            vibris::mcp::Json{{"schema_version", 1}, {"workspace_id", valid_config().workspace_id}}.dump(2),
-        "Restart rewrote the durable identity.");
-    static_cast<void>(restarted.shutdown());
+    require(hellos.size() == 2 && hellos[0].nested_workspace_id == valid_config().workspace_id &&
+            hellos[1].nested_workspace_id == valid_config().workspace_id &&
+            hellos[0].process_id != hellos[1].process_id,
+        "Same-worktree backends did not share identity while retaining process ownership.");
 }
 
-void typed_preset_discovery_and_configuration() {
+void request_scoped_worktree_routing() {
+    TempDirectory first("request-worktree-a");
+    TempDirectory second("request-worktree-b");
+    fs::create_directories(first.path() / "shaders");
+    fs::create_directories(second.path() / "shaders");
+    const auto pending_root = first.path() / "pending";
+    fs::create_directories(pending_root);
+    const auto first_identity = first.path() / ".vibris" / "workspace.json";
+    const auto second_identity = second.path() / ".vibris" / "workspace.json";
+    const std::string second_workspace_id = "22222222-2222-4222-8222-222222222222";
+    write_bytes(first_identity,
+        vibris::mcp::Json{{"schema_version", 1}, {"workspace_id", valid_config().workspace_id}}.dump(2));
+    write_bytes(second_identity,
+        vibris::mcp::Json{{"schema_version", 1}, {"workspace_id", second_workspace_id}}.dump(2));
+    const auto first_identity_bytes = read_bytes(first_identity);
+    const auto second_identity_bytes = read_bytes(second_identity);
+    vibris::mcp::test::BackendStateServer server(pending_root);
+    vibris::mcp::McpBackend backend(server.target());
+
+    const auto run = [&](const fs::path& root, std::string_view preset) {
+        return require_json(backend.dispatch("vibris_run_actions", {
+            {"worktree_root", fs::canonical(root).string()},
+            {"preset_id", preset},
+            {"actions", vibris::mcp::Json::array({{{"type", "inspect_shader"}}})},
+        }), "Request-scoped action failed.");
+    };
+    const auto& first_a = run(first.path(), "scene-a");
+    require(first_a.at("workspace_id") == valid_config().workspace_id &&
+            first_a.at("worktree_root") == fs::canonical(first.path()).string(),
+        "First request was not scoped to its explicit worktree.");
+    const auto& second_b = run(second.path(), "scene-b");
+    require(second_b.at("workspace_id") == second_workspace_id &&
+            second_b.at("worktree_root") == fs::canonical(second.path()).string(),
+        "Second request was not scoped to its explicit worktree.");
+    auto first_alias = fs::canonical(first.path()).string();
+    first_alias.front() = std::islower(static_cast<unsigned char>(first_alias.front()))
+        ? static_cast<char>(std::toupper(static_cast<unsigned char>(first_alias.front())))
+        : static_cast<char>(std::tolower(static_cast<unsigned char>(first_alias.front())));
+    const auto& first_c = run(fs::path(first_alias), "scene-c");
+    require(first_c.at("workspace_id") == valid_config().workspace_id,
+        "Returning to the first worktree lost its request-scoped runtime.");
+
+    const auto missing_root = backend.dispatch("vibris_get_status", vibris::mcp::Json::object());
+    const auto* missing_failure = std::get_if<vibris::mcp::ToolFailure>(&missing_root);
+    require(missing_failure != nullptr && missing_failure->code == "INVALID_WORKTREE",
+        "Backend accepted a request without worktree_root.");
+
+    const auto stats = backend.shutdown();
+    require(stats && stats->completion_queue_count == 2 && stats->worker_threads_started == 2 &&
+            stats->worker_threads_joined == 2 && stats->pending_requests == 0,
+        "Per-worktree gRPC routing did not cleanly own two runtimes.");
+    const auto hellos = server.service().hellos();
+    const auto jobs = server.service().jobs();
+    require(hellos.size() == 2 && jobs.size() == 3,
+        "Explicit worktree routing created the wrong number of runtime clients or jobs.");
+    std::unordered_set<std::string> hello_workspaces;
+    for (const auto& hello : hellos) hello_workspaces.insert(hello.nested_workspace_id);
+    require(hello_workspaces == std::unordered_set<std::string>{valid_config().workspace_id, second_workspace_id},
+        "Per-worktree clients did not use distinct durable identities.");
+    const std::array expected_workspaces{
+        valid_config().workspace_id, second_workspace_id, valid_config().workspace_id};
+    const std::array expected_saves{std::string("save-a"), std::string("save-b"), std::string("save-c")};
+    for (std::size_t index = 0; index < jobs.size(); ++index) {
+        require(jobs[index].nested_workspace_id == expected_workspaces[index] &&
+                jobs[index].context.save_id() == expected_saves[index],
+            "A request inherited another worktree or preset context.");
+    }
+    require(server.service().validation_count() == 3,
+        "Each request-scoped scene was not independently validated.");
+    require(read_bytes(first_identity) == first_identity_bytes &&
+            read_bytes(second_identity) == second_identity_bytes,
+        "Request execution changed durable workspace identity state.");
+}
+
+void typed_preset_discovery_and_request_scene() {
     TempDirectory temp("typed-preset-discovery");
     fs::create_directories(temp.path() / "shaders");
     const auto pending_root = temp.path() / "pending";
@@ -1001,65 +949,54 @@ void typed_preset_discovery_and_configuration() {
             "Text and tag filters did not combine case-insensitively: " + combined.dump());
     }
 
-    const auto configured_outcome = backend.dispatch("vibris_configure", {
-        {"kind", "preset"}, {"preset_id", "sky-noon-1"},
-    });
-    const auto& configured = require_json(configured_outcome, "Typed preset configuration failed.");
-    require(configured.at("selector") ==
-            vibris::mcp::Json{{"kind", "preset"}, {"preset_id", "sky-noon-1"}},
-        "Typed preset selector was not returned.");
-    require(configured.at("default_warmup_frames") == 32 &&
-            configured.at("save_id") == "save-sky-noon-1",
-        "Typed preset did not resolve the default warmup or scene identity.");
-    const auto& scene = configured.at("resolved_scene_context");
-    require(scene.at("save_id") == "save-sky-noon-1" &&
-            scene.at("dimension_id") == "minecraft:overworld" &&
-            scene.at("time_preset_id") == "sky-noon-1" &&
-            scene.at("weather_preset_id") == "clear" &&
-            scene.at("camera_preset_id") == "sky-noon-1" && scene.at("fov") == 70.0 &&
-            scene.at("resolution") == vibris::mcp::Json{{"width", 64}, {"height", 64}} &&
-            scene.at("settings_preset_id") == "default",
-        "Typed preset receipt omitted part of the complete resolved scene.");
-    const auto& preset = configured.at("scene_preset");
-    require(preset.at("version") == "2" &&
-            preset.at("preset_sha256") == std::string(64, 'a') &&
-            preset.at("tags") == vibris::mcp::Json::array({"sky"}),
-        "Typed preset receipt omitted version, hash, or tags.");
-
-    const auto current_outcome = backend.dispatch("vibris_get_config", {});
-    const auto& current = require_json(current_outcome, "Configured typed preset was not readable.");
-    require(current.at("configured") == true && current.at("config") == configured,
-        "Get config did not retain the complete typed preset receipt.");
+    const auto& executed = require_json(backend.dispatch("vibris_run_actions", {
+        {"preset_id", "sky-noon-1"},
+        {"actions", vibris::mcp::Json::array({{{"type", "inspect_shader"}}})},
+    }), "Request-scoped preset execution failed.");
+    require(executed.at("workspace_id") == valid_config().workspace_id,
+        "Request-scoped preset execution lost its workspace identity.");
     const auto validated = server.service().validated();
     require(validated.size() == 1 && validated.front().weather_preset_id() == "clear" &&
-            validated.front().resolution().width() == 64,
-        "Typed preset validation did not submit the complete resolved context.");
+            validated.front().resolution().width() == 64 &&
+            validated.front().save_id() == "save-sky-noon-1",
+        "Request-scoped preset validation did not submit the complete resolved context.");
 
-    const auto missing = backend.dispatch("vibris_configure", {
-        {"kind", "preset"}, {"preset_id", "not-in-catalog"},
+    const auto missing = backend.dispatch("vibris_run_actions", {
+        {"preset_id", "not-in-catalog"},
+        {"actions", vibris::mcp::Json::array({{{"type", "inspect_shader"}}})},
     });
     const auto* failure = std::get_if<vibris::mcp::ToolFailure>(&missing);
     require(failure != nullptr && failure->code == "INVALID_PRESET" && !failure->retryable,
-        "Unknown typed preset returned the wrong error contract.");
+        "Unknown request-scoped preset returned the wrong error contract.");
     static_cast<void>(backend.shutdown());
 }
 
-void tool_metadata_is_process_local() {
+void tool_metadata_is_request_scoped() {
     const vibris::mcp::ToolRegistry tools;
-    std::size_t matched = 0;
+    require(tools.definitions().size() == 5, "Tool registry did not expose exactly five stateless tools.");
     for (const auto& definition : tools.definitions()) {
         const auto name = definition.at("name").get<std::string>();
-        if (name != "vibris_get_config" && name != "vibris_configure") {
-            continue;
-        }
         const auto description = definition.at("description").get<std::string>();
-        require(description.find("MCP process") != std::string::npos,
-            "Scene tool metadata does not describe process-local state.");
-        require(description.find("persist") == std::string::npos,
-            "Scene tool metadata still describes durable scene persistence.");
-        ++matched;
+        require(description.find("worktree") != std::string::npos,
+            "Tool metadata does not describe explicit worktree routing.");
+        const auto verify_variant = [&](const vibris::mcp::Json& schema) {
+            const auto& required = schema.at("required");
+            require(std::find(required.begin(), required.end(), "worktree_root") != required.end(),
+                "Tool schema omitted required worktree_root.");
+            if (schema.at("properties").contains("preset_id")) {
+                require(std::find(required.begin(), required.end(), "preset_id") != required.end(),
+                    "Job-start schema omitted required preset_id.");
+            }
+        };
+        const auto& schema = definition.at("inputSchema");
+        if (schema.contains("oneOf")) {
+            for (const auto& variant : schema.at("oneOf")) verify_variant(variant);
+        } else {
+            verify_variant(schema);
+        }
+        require(name != "vibris_configure" && name != "vibris_get_config",
+            "Ambient configuration tool remained registered.");
     }
-    require(matched == 2, "Scene tool metadata definitions were not found.");
 }
 
 void resource_lists_are_empty() {
@@ -1105,9 +1042,9 @@ constexpr std::array<TestCase, 19> test_cases {{
     {"WorkspaceIdentityMapsAccessErrors", workspace_identity_maps_access_errors},
     {"WorkspaceIdentityRejectsActiveWriter", workspace_identity_rejects_active_writer},
     {"SameWorktreeBackendsCoexist", same_worktree_backends_coexist},
-    {"ProcessLocalSceneConfiguration", process_local_scene_configuration},
-    {"TypedPresetDiscoveryAndConfiguration", typed_preset_discovery_and_configuration},
-    {"ToolMetadataIsProcessLocal", tool_metadata_is_process_local},
+    {"RequestScopedWorktreeRouting", request_scoped_worktree_routing},
+    {"TypedPresetDiscoveryAndRequestScene", typed_preset_discovery_and_request_scene},
+    {"ToolMetadataIsRequestScoped", tool_metadata_is_request_scoped},
     {"ResourceListsAreEmpty", resource_lists_are_empty},
 }};
 

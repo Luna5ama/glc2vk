@@ -114,7 +114,7 @@ const Json& named_value(const Json& values, std::string_view id, std::string_vie
     return *found;
 }
 
-Json checkpoint_config(const SessionConfig& config) {
+Json checkpoint_config(const JobContext& config) {
     return Json::parse(detail::serialize_config(config));
 }
 
@@ -151,7 +151,7 @@ Json freeze_sources(const fs::path& workspace_root, const fs::path& state_direct
     return frozen;
 }
 
-SessionConfig parse_checkpoint_config(const Json& value, std::string_view workspace_id) {
+JobContext parse_checkpoint_config(const Json& value, std::string_view workspace_id) {
     auto config = detail::parse_config(value.dump(), detail::ConfigDocumentKind::persisted);
     if (config.workspace_id != workspace_id) invalid_job();
     return config;
@@ -286,7 +286,7 @@ ProfileMatrixWorkflow::~ProfileMatrixWorkflow() {
     shutdown();
 }
 
-Json ProfileMatrixWorkflow::create_checkpoint(const Json& arguments, const SessionConfig& config) const {
+Json ProfileMatrixWorkflow::create_checkpoint(const Json& arguments, const JobContext& config) const {
     Json stored_arguments = arguments;
     stored_arguments.erase("execution");
     const auto job_id = detail::generate_uuid();
@@ -421,7 +421,7 @@ Json ProfileMatrixWorkflow::result(const Json& document) const {
     return output;
 }
 
-ToolOutcome ProfileMatrixWorkflow::start(const Json& arguments, const SessionConfig& config) {
+ToolOutcome ProfileMatrixWorkflow::start(const Json& arguments, const JobContext& config) {
     reap_finished();
     {
         std::scoped_lock lock(worker_mutex_);

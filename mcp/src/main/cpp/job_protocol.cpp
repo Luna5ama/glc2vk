@@ -40,7 +40,7 @@ void require_sources(std::span<const proto::PreparedSourceRef> sources, std::siz
     if (sources.size() != expected) throw std::invalid_argument("prepared source count does not match execution");
 }
 
-void scene(const SessionConfig& config, const proto::SceneContext& scene_context, proto::SubmitJob& job) {
+void scene(const JobContext& config, const proto::SceneContext& scene_context, proto::SubmitJob& job) {
     job.set_workspace_id(config.workspace_id);
     job.mutable_context()->CopyFrom(scene_context);
     job.mutable_context()->set_fov(config.fov);
@@ -111,7 +111,7 @@ void wait(proto::ActionSequence& sequence, std::uint32_t frames) {
     if (frames != 0) add_action(sequence)->mutable_wait_frames()->set_frame_count(frames);
 }
 
-void load_and_screenshot_recipe(const Json& arguments, const SessionConfig& config,
+void load_and_screenshot_recipe(const Json& arguments, const JobContext& config,
     std::span<const proto::PreparedSourceRef> sources, proto::ActionSequence& sequence) {
     require_sources(sources, 1);
     load(sequence, sources.front(), "source", "config", "source--config");
@@ -121,7 +121,7 @@ void load_and_screenshot_recipe(const Json& arguments, const SessionConfig& conf
     capture->set_after_frames(arguments.value("warmup_frames", config.default_warmup_frames));
 }
 
-void debug_recipe(const Json& arguments, const SessionConfig& config,
+void debug_recipe(const Json& arguments, const JobContext& config,
     std::span<const proto::PreparedSourceRef> sources, proto::ActionSequence& sequence) {
     require_sources(sources, 1);
     load(sequence, sources.front(), "source", "config", "source--config");
@@ -167,7 +167,7 @@ void add_ab_capture(proto::ActionSequence& sequence, const Json& capture, std::s
     value->set_artifact_name(std::move(artifact_name));
 }
 
-void ab_recipe(const Json& arguments, const SessionConfig& config,
+void ab_recipe(const Json& arguments, const JobContext& config,
     std::span<const proto::PreparedSourceRef> sources, proto::ActionSequence& sequence) {
     require_sources(sources, 2);
     const auto warmup = arguments.value("warmup_frames", config.default_warmup_frames);
@@ -215,7 +215,7 @@ void ab_recipe(const Json& arguments, const SessionConfig& config,
     }
 }
 
-void profile_recipe(const Json& arguments, const SessionConfig& config,
+void profile_recipe(const Json& arguments, const JobContext& config,
     std::span<const proto::PreparedSourceRef> sources, proto::ActionSequence& sequence) {
     require_sources(sources, 1);
     load(
@@ -253,7 +253,7 @@ void profile_artifacts(const Json& arguments, std::string kind, proto::SubmitJob
 void matrix(const Json& arguments, std::span<const proto::PreparedSourceRef> prepared,
     const Json& template_actions, proto::SubmitJob& job);
 
-void recipe(const Json& arguments, const SessionConfig& config,
+void recipe(const Json& arguments, const JobContext& config,
     std::span<const proto::PreparedSourceRef> sources, proto::SubmitJob& job) {
     const auto kind = arguments.at("recipe").get<std::string>();
     if (kind != "profile_matrix") recipe_config(arguments, job);
@@ -543,7 +543,7 @@ ToolOutcome failed(const proto::JobFailed& failed) {
 }
 
 proto::ClientMessage JobProtocol::request(std::string_view tool_name, const Json& arguments,
-    const SessionConfig& config, const proto::SceneContext& context,
+    const JobContext& config, const proto::SceneContext& context,
     std::span<const proto::PreparedSourceRef> sources, std::string request_id) {
     if (request_id.empty() || config.workspace_id.empty()) throw std::invalid_argument("job identity is missing");
     proto::ClientMessage message;

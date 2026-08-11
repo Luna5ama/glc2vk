@@ -26,6 +26,7 @@ $script:RequestId = 0
 $script:InterruptedJobId = $null
 $script:InterruptedAfterReceipts = 0
 $script:ResumeCount = 0
+$script:LivePresetId = $null
 
 function Assert-LiveAcceptance
 {
@@ -69,6 +70,29 @@ function Invoke-LiveTool
         [int] $CallTimeoutSeconds = $TimeoutSeconds
     )
 
+    $hasOperation = if ($Arguments -is [System.Collections.IDictionary]) {
+        $Arguments.Contains("operation")
+    } else {
+        $null -ne $Arguments.PSObject.Properties["operation"]
+    }
+    $isControl = $Name -ceq "vibris_run_recipe" -and $hasOperation
+    if (-not $isControl -and $Name -in @("vibris_run_recipe", "vibris_run_actions", "vibris_run_matrix"))
+    {
+        if ([string]::IsNullOrWhiteSpace($script:LivePresetId))
+        {
+            throw "A request-scoped preset must be selected before running '$Name'."
+        }
+        if ($Arguments -is [System.Collections.IDictionary])
+        {
+            $Arguments["preset_id"] = $script:LivePresetId
+        }
+        else
+        {
+            $Arguments | Add-Member -NotePropertyName "preset_id" `
+                -NotePropertyValue $script:LivePresetId -Force
+        }
+    }
+
     $script:RequestId++
     $id = "t12-live-$($script:RequestId)"
     $response = Invoke-ProbeMcpTool -Process $script:Mcp.Process -Id $id -Name $Name `
@@ -83,22 +107,15 @@ function Invoke-LiveTool
 
 function Set-LivePreset
 {
-    param([Parameter(Mandatory)] [string] $PresetId, [int] $DefaultWarmupFrames = $WarmupFrames)
+    param([Parameter(Mandatory)] [string] $PresetId)
 
-    $configured = Invoke-LiveTool -Name "vibris_configure" -Arguments ([ordered] @{
-        kind = "preset"
-        preset_id = $PresetId
-        default_warmup_frames = $DefaultWarmupFrames
-    })
-    Assert-LiveAcceptance ([string] $configured.selector.kind -ceq "preset") `
-        "Preset '$PresetId' did not return a typed selector."
-    Assert-LiveAcceptance ([string] $configured.selector.preset_id -ceq $PresetId) `
-        "Preset '$PresetId' resolved to another selector."
-    Assert-LiveAcceptance ([string] $configured.scene_preset.preset_id -ceq $PresetId) `
-        "Preset '$PresetId' did not return its scene identity."
-    Assert-LiveAcceptance (-not [string]::IsNullOrWhiteSpace([string] $configured.scene_preset.preset_sha256)) `
+    $catalog = Invoke-LiveTool -Name "vibris_list_presets" -Arguments ([ordered] @{ filter = $PresetId })
+    $matches = @($catalog.presets | Where-Object { [string] $_.preset_id -ceq $PresetId })
+    Assert-LiveAcceptance ($matches.Count -eq 1) "Preset '$PresetId' was not uniquely discoverable."
+    Assert-LiveAcceptance (-not [string]::IsNullOrWhiteSpace([string] $matches[0].preset_sha256)) `
         "Preset '$PresetId' omitted its SHA-256."
-    return $configured
+    $script:LivePresetId = $PresetId
+    return $matches[0]
 }
 
 function New-LiveMatrixArguments
@@ -260,7 +277,7 @@ function Invoke-LivePresetMatrix
     param([Parameter(Mandatory)] [object] $Preset, [switch] $InjectInterruption)
 
     $presetId = [string] $Preset.preset_id
-    Write-Host "preset $presetId configuring"
+    Write-Host "preset $presetId selecting request context"
     [void] (Set-LivePreset -PresetId $presetId)
     if (-not $InjectInterruption)
     {

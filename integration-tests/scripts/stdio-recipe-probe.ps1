@@ -15,11 +15,11 @@ try
 {
     $exePath = Resolve-IrisArtifact -Path $Exe -Label "Release native MCP"
     $messages = Read-G007Messages -Path $Requests
-    if ($messages.Count -ne 4 -or @($messages | Where-Object {
+    if ($messages.Count -ne 3 -or @($messages | Where-Object {
             $_.method -in @("vibris_submit", "vibris_get_result", "vibris_wait")
         }).Count -ne 0)
     {
-        throw "G007-C001 fixture must contain initialize, configure, and exactly two recipe calls only."
+        throw "G007-C001 fixture must contain initialize and exactly two request-scoped recipe calls only."
     }
     $scope = New-G007ProbeScope -Criterion "c001" -WorkspaceRoot $WorkspaceRoot
     [void] (Initialize-G007Workspace -Scope $scope)
@@ -27,11 +27,6 @@ try
 
     $responses = Invoke-G007Mcp -Exe $exePath -WorkspaceRoot $scope.WorkspaceRoot `
         -Messages $messages -TimeoutSeconds $TimeoutSeconds
-    $configured = Get-G007ToolPayload (Get-G007Response -Responses $responses -Id 2)
-    if ($null -ne $configured.PSObject.Properties["success"] -and $configured.success -eq $false)
-    {
-        throw "vibris_configure failed: $($configured | ConvertTo-Json -Compress -Depth 20)"
-    }
     $reload = Get-G007ToolPayload (Get-G007Response -Responses $responses -Id 3)
     $bundle = Get-G007ToolPayload (Get-G007Response -Responses $responses -Id 4)
     Assert-G007CompletedResult -Scope $scope -Payload $reload

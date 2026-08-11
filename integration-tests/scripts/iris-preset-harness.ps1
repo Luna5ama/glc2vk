@@ -7,25 +7,21 @@ function Write-IrisPresetCatalog
 
     $camera = $Context.expected.camera
     $catalog = [ordered] @{
-        schema_version = 1
-        time_presets = @([ordered] @{
-            id = $Context.time_preset_id
+        schema_version = 2
+        presets = @([ordered] @{
+            id = "automation"
+            save_id = $Context.save_id
+            save_name = $Context.save_id
+            dimension_id = $Context.dimension_id
+            position = @([double] $camera.x, [double] $camera.y, [double] $camera.z)
+            yaw = [double] $camera.yaw
+            pitch = [double] $camera.pitch
+            fov = [double] $Context.fov
             tick = [long] $Context.expected.day_time
             weather = $Context.weather_preset_id
-        })
-        settings_presets = @([ordered] @{ id = $Context.settings_preset_id })
-        worlds = @([ordered] @{
-            id = $Context.save_id
-            save_name = $Context.save_id
-            dimensions = @($Context.dimension_id)
-            cameras = @([ordered] @{
-                id = $Context.camera_preset_id
-                dimension_id = $Context.dimension_id
-                position = @([double] $camera.x, [double] $camera.y, [double] $camera.z)
-                yaw = [double] $camera.yaw
-                pitch = [double] $camera.pitch
-                default_fov = [double] $Context.fov
-            })
+            resolution = @([int] $Context.resolution.width, [int] $Context.resolution.height)
+            settings_preset_id = $Context.settings_preset_id
+            tags = @("automation")
         })
     }
     $configRoot = Join-Path $Scope.GameDir "config\vibris"

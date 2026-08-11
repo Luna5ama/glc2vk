@@ -33,7 +33,7 @@ using vibris::mcp::JobProtocol;
 using vibris::mcp::Json;
 using vibris::mcp::PendingRequestRegistry;
 using vibris::mcp::SceneContextResolver;
-using vibris::mcp::SessionConfig;
+using vibris::mcp::JobContext;
 using vibris::mcp::StateError;
 using vibris::mcp::SynchronousJobRunner;
 using vibris::mcp::ToolFailure;
@@ -50,7 +50,7 @@ void require(bool condition, std::string_view message) {
     if (!condition) throw std::runtime_error(std::string(message));
 }
 
-SessionConfig config() {
+JobContext config() {
     return {.workspace_id = "workspace-id",
             .save_id = "shader-test-world",
             .dimension_id = "minecraft:the_nether",

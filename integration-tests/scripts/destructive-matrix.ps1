@@ -275,7 +275,6 @@ function Invoke-MatrixCopyKill
             -Port ([int] $Case.port) -Owned $owned
         $pids.Add($mcp.Process.Id)
         Initialize-ProbeMcp -Process $mcp.Process -TimeoutSeconds $TimeoutSeconds
-        Set-ProbeConfig -Process $mcp.Process -TimeoutSeconds $TimeoutSeconds
         Assert-ProbeServerPendingRoot -Process $mcp.Process -PendingRoot (Join-Path $root "pending") `
             -TimeoutSeconds $TimeoutSeconds
         Send-ProbeMcpMessage -Process $mcp.Process -Message @{

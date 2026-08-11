@@ -324,7 +324,7 @@ Acceptance:
 Completion evidence (2026-08-09):
 
 - The visual-gate implementation, public documentation, focused tests, full Gradle build, and Release CTest suite are
-  complete offline. The automated acceptance fixture configures 19 distinct typed scene contexts and runs one
+  complete offline. The automated acceptance fixture sends 19 distinct request-scoped scene presets and runs one
   two-source matrix with one preserved shader config per preset. It injects an empty-sample retry and an interruption
   after receipt 17, resumes at receipt 18, and verifies 38 unique metric receipts with exact program/source metadata
   and `gpu_timing_unit: "ns"`. Visual receipts additionally fail closed unless both load receipts prove matching
@@ -344,7 +344,7 @@ Completion evidence (2026-08-09):
   `EpipolarScattering.comp.glsl` timings in nanoseconds. The reusable evidence is
   `I:\code\mcshaders\Alpha-Piscium\.vibris\artifact\t12-live-acceptance-20260809-1213.json.matrix.json`.
 - The first paired benchmark exposed two integration omissions: Core rejected nested result artifact kind
-  `benchmark_ab`, and the paired MCP runner dropped the configured scene-preset provenance from its nested profile and
+  `benchmark_ab`, and the paired MCP runner dropped the request-scoped scene-preset provenance from its nested profile and
   visual requests. Both are fixed with focused Core and paired-runner tests. All 16 live paired measurements now pass
   provenance, exact metric identity, equal frame/config/scene guards, and final runtime restoration.
 - The updated delivery is published at `I:\code\vibris\build\delivery-benchmark-reliability` with MCP SHA-256

@@ -97,6 +97,23 @@ function Start-G007Mcp
         [Parameter(Mandatory)] [object[]] $Messages
     )
 
+    foreach ($message in @($Messages | Where-Object { $_.method -ceq "tools/call" }))
+    {
+        $message.params.arguments | Add-Member -NotePropertyName "worktree_root" `
+            -NotePropertyValue ([System.IO.Path]::GetFullPath($WorkspaceRoot)) -Force
+        $name = [string] $message.params.name
+        $isControl = $name -ceq "vibris_run_recipe" -and
+            $null -ne $message.params.arguments.PSObject.Properties["operation"]
+        if (-not $isControl -and $name -in @("vibris_run_recipe", "vibris_run_actions", "vibris_run_matrix"))
+        {
+            if ($null -eq $message.params.arguments.PSObject.Properties["preset_id"])
+            {
+                $message.params.arguments | Add-Member -NotePropertyName "preset_id" `
+                    -NotePropertyValue "automation" -Force
+            }
+        }
+    }
+
     $start = [System.Diagnostics.ProcessStartInfo]::new()
     $start.FileName = [System.IO.Path]::GetFullPath($Exe)
     $arguments = @("--server-address", "127.0.0.1:$script:IrisPort")

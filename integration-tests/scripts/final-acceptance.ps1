@@ -302,7 +302,10 @@ function Invoke-AcceptanceMcp
 
 function New-AcceptanceMessages
 {
-    param([Parameter(Mandatory)] [object] $Client)
+    param(
+        [Parameter(Mandatory)] [object] $Client,
+        [Parameter(Mandatory)] [string] $Worktree
+    )
 
     $messages = [System.Collections.Generic.List[object]]::new()
     $messages.Add([ordered] @{
@@ -315,18 +318,6 @@ function New-AcceptanceMessages
     $messages.Add([ordered] @{
         jsonrpc = "2.0"; method = "notifications/initialized"; params = @{}
     })
-    $messages.Add([ordered] @{
-        jsonrpc = "2.0"; id = 11; method = "tools/call"
-        params = @{ name = "vibris_get_config"; arguments = @{} }
-    })
-    $messages.Add([ordered] @{
-        jsonrpc = "2.0"; id = 12; method = "tools/call"
-        params = @{ name = "vibris_configure"; arguments = $Client.configure }
-    })
-    $messages.Add([ordered] @{
-        jsonrpc = "2.0"; id = 13; method = "tools/call"
-        params = @{ name = "vibris_get_config"; arguments = @{} }
-    })
     foreach ($job in @($Client.jobs))
     {
         $messages.Add([ordered] @{
@@ -334,6 +325,8 @@ function New-AcceptanceMessages
             params = [ordered] @{
                 name = "vibris_run_recipe"
                 arguments = [ordered] @{
+                    worktree_root = [System.IO.Path]::GetFullPath($Worktree)
+                    preset_id = [string] $Client.scene.camera_preset_id
                     recipe = "load_and_screenshot"
                     source = @{ kind = "commit"; revision = [string] $job.revision }
                     warmup_frames = [int] $job.warmup_frames
@@ -369,18 +362,14 @@ function Assert-AcceptanceBinding
     param(
         [Parameter(Mandatory)] [object] $Actual,
         [Parameter(Mandatory)] [string] $ExpectedRoot,
-        [string] $ExpectedWorkspaceId,
-        [Parameter(Mandatory)] [bool] $Configured
+        [string] $ExpectedWorkspaceId
     )
 
     $actualRoot = [System.IO.Path]::GetFullPath([string] $Actual.worktree_root)
     if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals(
-            $actualRoot, [System.IO.Path]::GetFullPath($ExpectedRoot)) -or
-        [bool] $Actual.configured -ne $Configured -or
-        ($Configured -and $null -eq $Actual.config) -or
-        (-not $Configured -and $null -ne $Actual.config))
+            $actualRoot, [System.IO.Path]::GetFullPath($ExpectedRoot)))
     {
-        throw "MCP binding/configuration state was incorrect: " +
+        throw "MCP request binding was incorrect: " +
             ($Actual | ConvertTo-Json -Compress -Depth 10)
     }
     $parsed = [guid]::Empty
@@ -393,42 +382,19 @@ function Assert-AcceptanceBinding
     return [string] $Actual.workspace_id
 }
 
-function Assert-AcceptanceConfig
-{
-    param(
-        [Parameter(Mandatory)] [object] $Actual,
-        [Parameter(Mandatory)] [object] $Expected,
-        [Parameter(Mandatory)] [string] $WorkspaceId
-    )
-
-    $config = if ($null -ne $Actual.PSObject.Properties["config"]) { $Actual.config } else { $Actual }
-    if ([string] $config.workspace_id -cne $WorkspaceId -or
-        [string] $config.shader_directory -cne "shaders" -or
-        [string] $config.save_id -cne [string] $Expected.save_id -or
-        [string] $config.dimension_id -cne [string] $Expected.dimension_id -or
-        [string] $config.time_preset_id -cne [string] $Expected.time_preset_id -or
-        [string] $config.camera_preset_id -cne [string] $Expected.camera_preset_id -or
-        [double] $config.fov -ne [double] $Expected.fov -or
-        [int] $config.default_warmup_frames -ne [int] $Expected.default_warmup_frames)
-    {
-        throw "MCP process-local configuration changed or crossed worktrees: " +
-            ($Actual | ConvertTo-Json -Compress -Depth 10)
-    }
-}
-
 function Assert-AcceptanceContext
 {
     param([Parameter(Mandatory)] [object] $Actual, [Parameter(Mandatory)] [object] $Client)
 
-    $configured = $Client.configure
+    $scene = $Client.scene
     $expected = $Client.expected
-    if ([string] $Actual.save_id -cne [string] $configured.save_id -or
-        [string] $Actual.dimension_id -cne [string] $configured.dimension_id -or
-        [string] $Actual.time_preset_id -cne [string] $configured.time_preset_id -or
+    if ([string] $Actual.save_id -cne [string] $scene.save_id -or
+        [string] $Actual.dimension_id -cne [string] $scene.dimension_id -or
+        [string] $Actual.time_preset_id -cne [string] $scene.time_preset_id -or
         [string] $Actual.weather_preset_id -cne [string] $expected.weather_preset_id -or
-        [string] $Actual.camera_preset_id -cne [string] $configured.camera_preset_id -or
+        [string] $Actual.camera_preset_id -cne [string] $scene.camera_preset_id -or
         [string] $Actual.settings_preset_id -cne [string] $expected.settings_preset_id -or
-        [double] $Actual.fov -ne [double] $configured.fov -or
+        [double] $Actual.fov -ne [double] $scene.fov -or
         [int] $Actual.resolution.width -lt 1 -or [int] $Actual.resolution.height -lt 1 -or
         [long] $Actual.day_time -ne [long] $expected.day_time -or
         [double] $Actual.rain_level -ne [double] $expected.rain_level -or
@@ -687,7 +653,8 @@ try
     $observedOrder = [System.Collections.Generic.List[string]]::new()
     $clientA = @($clients | Where-Object { $_.label -ceq "A" })[0]
     $jobEntries["A"] = Start-AcceptanceMcp -Exe $delivery.Mcp `
-        -WorkingDirectory $clientA.task_directory -Messages (New-AcceptanceMessages -Client $clientA)
+        -WorkingDirectory $clientA.task_directory `
+        -Messages (New-AcceptanceMessages -Client $clientA -Worktree $worktrees["A"])
     $firstContext = Wait-IrisEvent -Scope $scope -Type "context_applied" -TimeoutSeconds $TimeoutSeconds `
         -Match { param($event) -not $seenSources.Contains([string] $event.source_uuid) }
     $firstBinding = Register-AcceptanceContextEvent -Event $firstContext -Scope $scope `
@@ -704,12 +671,14 @@ try
 
     $clientB = @($clients | Where-Object { $_.label -ceq "B" })[0]
     $jobEntries["B"] = Start-AcceptanceMcp -Exe $delivery.Mcp `
-        -WorkingDirectory $clientB.task_directory -Messages (New-AcceptanceMessages -Client $clientB)
+        -WorkingDirectory $clientB.task_directory `
+        -Messages (New-AcceptanceMessages -Client $clientB -Worktree $worktrees["B"])
     $admittedSources["B1"] = Wait-AcceptancePendingMarker -Scope $scope `
         -Marker ([string] $clientB.jobs[0].source_marker) -Minimum 1
     $clientC = @($clients | Where-Object { $_.label -ceq "C" })[0]
     $jobEntries["C"] = Start-AcceptanceMcp -Exe $delivery.Mcp `
-        -WorkingDirectory $clientC.task_directory -Messages (New-AcceptanceMessages -Client $clientC)
+        -WorkingDirectory $clientC.task_directory `
+        -Messages (New-AcceptanceMessages -Client $clientC -Worktree $worktrees["C"])
     if ($InjectSourceCrosstalk)
     {
         $admittedSources["C1"] = Wait-AcceptancePendingMarker -Scope $scope `
@@ -761,25 +730,25 @@ try
         $entry = $jobEntries[$label]
         if ($entry.Arguments -match "workspace-root")
         {
-            throw "Normal MCP $label unexpectedly received a workspace-root override."
+            throw "Normal MCP $label unexpectedly received a legacy workspace-root CLI override."
         }
         $responses = Complete-G007Mcp -Entry $entry -TimeoutSeconds $TimeoutSeconds
         [void] (Assert-AcceptanceInitializeResponse -Responses $responses -Id 10)
-        $unconfigured = Get-G007ToolPayload (Get-G007Response -Responses $responses -Id 11)
-        $workspaceId = Assert-AcceptanceBinding -Actual $unconfigured -ExpectedRoot $worktrees[$label] `
-            -Configured $false
-        $configured = Get-G007ToolPayload (Get-G007Response -Responses $responses -Id 12)
-        $persistedInProcess = Get-G007ToolPayload (Get-G007Response -Responses $responses -Id 13)
-        [void] (Assert-AcceptanceBinding -Actual $persistedInProcess -ExpectedRoot $worktrees[$label] `
-            -ExpectedWorkspaceId $workspaceId -Configured $true)
-        Assert-AcceptanceConfig -Actual $configured -Expected $client.configure -WorkspaceId $workspaceId
-        Assert-AcceptanceConfig -Actual $persistedInProcess -Expected $client.configure -WorkspaceId $workspaceId
-        $workspaceIds[$label] = $workspaceId
+        $workspaceId = $null
         foreach ($job in @($client.jobs))
         {
             $jobKey = [string] $job.id
             $result = Get-G007ToolPayload (Get-G007Response -Responses $responses -Id ([int] $job.message_id))
             Assert-G007CompletedResult -Scope $scope -Payload $result
+            if ([string]::IsNullOrWhiteSpace($workspaceId))
+            {
+                $workspaceId = Assert-AcceptanceBinding -Actual $result -ExpectedRoot $worktrees[$label]
+            }
+            else
+            {
+                [void] (Assert-AcceptanceBinding -Actual $result -ExpectedRoot $worktrees[$label] `
+                    -ExpectedWorkspaceId $workspaceId)
+            }
             $namespace = Split-Path -Parent ([System.IO.Path]::GetFullPath([string] $result.manifest_path))
             if (-not $acceptedJobs.Add($jobKey) -or $artifactByJob.ContainsKey($jobKey) -or
                 -not $artifactNamespaces.Add($namespace))
@@ -788,6 +757,7 @@ try
             }
             $artifactByJob[$jobKey] = $namespace
         }
+        $workspaceIds[$label] = $workspaceId
         Stop-AcceptanceMcp -Entry $entry
         $jobEntries[$label] = $null
     }
@@ -825,15 +795,17 @@ try
             },
             [ordered] @{
                 jsonrpc = "2.0"; id = 2; method = "tools/call"
-                params = @{ name = "vibris_get_config"; arguments = @{} }
+                params = @{ name = "vibris_get_status"; arguments = @{
+                    worktree_root = [System.IO.Path]::GetFullPath($worktrees[$label])
+                } }
             }
         )
         $restart = Invoke-AcceptanceMcp -Exe $delivery.Mcp `
             -WorkingDirectory $client.task_directory -Messages $restartMessages
         [void] (Assert-AcceptanceInitializeResponse -Responses $restart -Id 1)
-        $restartConfig = Get-G007ToolPayload (Get-G007Response -Responses $restart -Id 2)
-        [void] (Assert-AcceptanceBinding -Actual $restartConfig -ExpectedRoot $worktrees[$label] `
-            -ExpectedWorkspaceId $workspaceIds[$label] -Configured $false)
+        $restartStatus = Get-G007ToolPayload (Get-G007Response -Responses $restart -Id 2)
+        [void] (Assert-AcceptanceBinding -Actual $restartStatus -ExpectedRoot $worktrees[$label] `
+            -ExpectedWorkspaceId $workspaceIds[$label])
     }
 
     $events = @(Read-IrisEventLines -Path $scope.EventFile | Where-Object {
@@ -905,7 +877,7 @@ try
 
     $summary = "PASS criterion=G008-C001 mode=$Mode order=A1,B1,C1,A2,B2,C2 " +
         "max_concurrent_jobs=1 worktrees=3 repositories=2 linked_worktrees=1 jobs=6 minecraft=1 " +
-        "restart_identity_stable=true restart_configured=false config_crosstalk=false " +
+        "restart_identity_stable=true request_scoped=true scene_crosstalk=false " +
         "source_crosstalk=false request_source_artifact_1to1=true artifact_namespaces=6 delivery_files=2"
     $eventSummary = [ordered] @{
         schema_version = 1
@@ -925,7 +897,7 @@ try
         max_concurrent_jobs = $maxConcurrent
         iris_port = $script:IrisPort
         iris_runtime_pid = $scope.RuntimePid
-        restart = @{ identity_stable = $true; configured = $false; config = $null }
+        restart = @{ identity_stable = $true; request_scoped = $true }
         owned_pids = @($ownedPids)
     }
 }

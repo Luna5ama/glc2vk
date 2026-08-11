@@ -15,13 +15,38 @@ using vibris::mcp::InvocationErrorCode;
 using vibris::mcp::Json;
 using vibris::mcp::ToolRegistry;
 
+constexpr std::string_view worktree_root = "C:\\shader-worktree";
+
+class TestRegistry final {
+public:
+    explicit TestRegistry(vibris::mcp::ToolDispatch dispatch = {}) : registry_(std::move(dispatch)) {}
+
+    [[nodiscard]] const Json& definitions() const noexcept { return registry_.definitions(); }
+
+    [[nodiscard]] vibris::mcp::InvocationResult invoke(std::string_view name, Json arguments) const {
+        if (name == "vibris_list_presets" || name == "vibris_get_status" ||
+            name == "vibris_run_recipe" || name == "vibris_run_actions" || name == "vibris_run_matrix") {
+            arguments["worktree_root"] = worktree_root;
+        }
+        const bool control = name == "vibris_run_recipe" && arguments.contains("operation");
+        if (!control && (name == "vibris_run_recipe" || name == "vibris_run_actions" ||
+                            name == "vibris_run_matrix")) {
+            arguments["preset_id"] = "scene-a";
+        }
+        return registry_.invoke(name, arguments);
+    }
+
+private:
+    ToolRegistry registry_;
+};
+
 void require(bool condition, std::string_view message) {
     if (!condition) throw std::runtime_error(std::string(message));
 }
 
 void schema_rejects_before_dispatch() {
     std::size_t dispatches = 0;
-    ToolRegistry registry([&](std::string_view, const Json&) {
+    TestRegistry registry([&](std::string_view, const Json&) {
         ++dispatches;
         return Json{{"accepted", true}};
     });
@@ -57,14 +82,14 @@ void schema_rejects_before_dispatch() {
 }
 
 void registry_has_exactly_the_supported_tools() {
-    ToolRegistry registry;
+    TestRegistry registry;
     std::set<std::string> names;
     for (const auto& definition : registry.definitions()) {
         names.insert(definition.at("name").get<std::string>());
     }
     const std::set<std::string> expected{
-        "vibris_get_config", "vibris_list_presets", "vibris_configure",
-        "vibris_get_status", "vibris_run_recipe", "vibris_run_actions", "vibris_run_matrix"};
+        "vibris_list_presets", "vibris_get_status",
+        "vibris_run_recipe", "vibris_run_actions", "vibris_run_matrix"};
     require(registry.definitions().size() == expected.size() && names == expected,
         "Tool registry added a duplicate, atomic, submit, poll, or wait tool.");
     const std::array forbidden_tools{
@@ -79,7 +104,7 @@ void registry_has_exactly_the_supported_tools() {
 
 void atomic_action_schemas_reject_invalid_arguments() {
     std::size_t dispatches = 0;
-    ToolRegistry registry([&](std::string_view, const Json&) {
+    TestRegistry registry([&](std::string_view, const Json&) {
         ++dispatches;
         return Json{{"accepted", true}};
     });
@@ -165,7 +190,7 @@ void atomic_action_schemas_reject_invalid_arguments() {
 
 void registry_exposes_canonical_load_workflows() {
     std::size_t dispatches = 0;
-    ToolRegistry registry([&](std::string_view, const Json&) {
+    TestRegistry registry([&](std::string_view, const Json&) {
         ++dispatches;
         return Json{{"accepted", true}};
     });
@@ -201,62 +226,57 @@ void registry_exposes_canonical_load_workflows() {
     require(matrix_description, "Matrix did not describe its implicit load_shader action.");
 }
 
-void empty_tool_schemas_declare_object_properties() {
+void worktree_scoped_tools_require_explicit_context() {
     ToolRegistry registry;
-    const std::set<std::string> empty_schema_tools{
-        "vibris_get_config", "vibris_get_status"};
-    for (const auto& definition : registry.definitions()) {
-        const auto name = definition.at("name").get<std::string>();
-        if (!empty_schema_tools.contains(name)) continue;
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_list_presets", Json::object())),
+        "Preset discovery accepted a missing worktree_root.");
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_get_status", Json::object())),
+        "Status accepted a missing worktree_root.");
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_actions", {
+        {"worktree_root", std::string(worktree_root)}, {"actions", Json::array()},
+    })), "Action execution accepted a missing preset_id.");
 
-        const auto& properties = definition.at("inputSchema").at("properties");
-        require(properties.is_object(), "Empty tool schema serialized properties as null.");
-        require(properties.empty(), "Empty tool schema unexpectedly declared properties.");
+    for (const auto& definition : registry.definitions()) {
+        const auto& input_schema = definition.at("inputSchema");
+        const auto& variant = input_schema.contains("oneOf") ? input_schema.at("oneOf").front() : input_schema;
+        require(variant.at("properties").contains("worktree_root"),
+            "A tool schema omitted worktree_root.");
     }
 }
 
 void preset_tools_use_typed_schema() {
     std::size_t dispatches = 0;
-    ToolRegistry registry([&](std::string_view name, const Json&) {
+    TestRegistry registry([&](std::string_view name, const Json&) {
         ++dispatches;
-        require(name == "vibris_configure" || name == "vibris_list_presets",
+        require(name == "vibris_run_recipe" || name == "vibris_list_presets",
             "Preset schema dispatched an unrelated tool.");
         return Json{{"accepted", true}};
     });
 
-    require(std::holds_alternative<Json>(registry.invoke("vibris_configure", {
-        {"kind", "preset"}, {"preset_id", "sky-noon-1"},
-    })), "Typed scene preset configuration was rejected.");
-    require(std::holds_alternative<Json>(registry.invoke("vibris_configure", {
-        {"kind", "preset"}, {"preset_id", "sky-noon-1"}, {"default_warmup_frames", 64},
-    })), "Typed scene preset configuration rejected an explicit warmup.");
-    require(std::holds_alternative<Json>(registry.invoke("vibris_configure", {
-        {"save_id", "world"}, {"dimension_id", "minecraft:overworld"},
-        {"time_preset_id", "sky-noon-1"}, {"camera_preset_id", "sky-noon-1"},
-        {"fov", 70.0}, {"default_warmup_frames", 32},
-    })), "Legacy complete scene configuration was not retained.");
+    require(std::holds_alternative<Json>(registry.invoke("vibris_run_recipe", {
+        {"recipe", "load_and_screenshot"},
+    })), "A recipe with request-scoped preset_id was rejected.");
     require(std::holds_alternative<Json>(registry.invoke("vibris_list_presets", {
         {"filter", ""}, {"filter_tags", Json::array({"sky", "regression"})},
     })), "Scene preset discovery rejected valid text and tag filters.");
 
-    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_configure", {
-        {"kind", "preset"},
-    })), "Typed scene preset configuration accepted a missing preset_id.");
-    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_configure", {
-        {"kind", "preset"}, {"preset_id", "sky-noon-1"}, {"config", Json::object()},
-    })), "Typed scene preset configuration accepted a shader quality config.");
-    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_configure", {
-        {"preset_id", "sky-noon-1"},
-    })), "Untyped preset_id configuration bypassed the selector schema.");
     require(std::holds_alternative<InvocationError>(registry.invoke("vibris_list_presets", {
         {"filter_tags", Json::array({1})},
     })), "Preset tag filtering accepted a non-string tag.");
-    require(dispatches == 4, "Invalid preset arguments reached dispatch.");
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_configure", Json::object())),
+        "Removed configure tool remained callable.");
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_get_config", Json::object())),
+        "Removed get_config tool remained callable.");
+    require(dispatches == 2, "Invalid preset arguments reached dispatch.");
 }
 
 void profile_recipe_requires_bounded_future_frames() {
     std::size_t dispatches = 0;
-    ToolRegistry registry([&](std::string_view name, const Json& arguments) {
+    TestRegistry registry([&](std::string_view name, const Json& arguments) {
         ++dispatches;
         require(name == "vibris_run_recipe", "Profile recipe dispatched the wrong tool.");
         require(arguments.at("frames") == 64, "Profile schema changed the frame count.");
@@ -283,7 +303,7 @@ void profile_recipe_requires_bounded_future_frames() {
 
 void profile_result_detail_schema() {
     std::size_t dispatches = 0;
-    ToolRegistry registry([&](std::string_view name, const Json&) {
+    TestRegistry registry([&](std::string_view name, const Json&) {
         ++dispatches;
         require(name == "vibris_run_recipe", "Profile detail dispatched the wrong tool.");
         return Json{{"accepted", true}};
@@ -378,7 +398,7 @@ void profile_result_detail_schema() {
 
 void paired_benchmark_recipe_schema() {
     std::size_t dispatches = 0;
-    ToolRegistry registry([&](std::string_view name, const Json& request) {
+    TestRegistry registry([&](std::string_view name, const Json& request) {
         ++dispatches;
         require(name == "vibris_run_recipe" && request.at("recipe") == "benchmark_ab",
             "Paired benchmark dispatched the wrong tool or recipe.");
@@ -433,7 +453,7 @@ void paired_benchmark_recipe_schema() {
 
 void matrix_schema_requires_named_sources_configs_and_axes() {
     std::size_t dispatches = 0;
-    ToolRegistry registry([&](std::string_view name, const Json&) {
+    TestRegistry registry([&](std::string_view name, const Json&) {
         ++dispatches;
         require(name == "vibris_run_matrix", "Matrix schema dispatched the wrong tool.");
         return Json{{"accepted", true}};
@@ -458,9 +478,9 @@ void matrix_schema_requires_named_sources_configs_and_axes() {
 }
 
 void registry_declares_accurate_tool_annotations() {
-    ToolRegistry registry;
+    TestRegistry registry;
     const std::set<std::string> read_only{
-        "vibris_get_config", "vibris_list_presets", "vibris_get_status"};
+        "vibris_list_presets", "vibris_get_status"};
     for (const auto& definition : registry.definitions()) {
         const auto& annotations = definition.at("annotations");
         const auto name = definition.at("name").get<std::string>();
@@ -477,7 +497,7 @@ int main() {
         schema_rejects_before_dispatch();
         registry_has_exactly_the_supported_tools();
         registry_exposes_canonical_load_workflows();
-        empty_tool_schemas_declare_object_properties();
+        worktree_scoped_tools_require_explicit_context();
         preset_tools_use_typed_schema();
         atomic_action_schemas_reject_invalid_arguments();
         profile_recipe_requires_bounded_future_frames();

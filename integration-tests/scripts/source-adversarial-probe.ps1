@@ -143,7 +143,6 @@ try
         -PendingRoot $advertisedPending -Owned $owned -TimeoutSeconds $TimeoutSeconds)
     $mcp = Start-ProbeMcp -Exe $Exe -Workspace $worktree -Port $port -Owned $owned
     Initialize-ProbeMcp -Process $mcp.Process -TimeoutSeconds $TimeoutSeconds
-    Set-ProbeConfig -Process $mcp.Process -TimeoutSeconds $TimeoutSeconds
     Assert-ProbeServerPendingRoot -Process $mcp.Process -PendingRoot $advertisedPending `
         -TimeoutSeconds $TimeoutSeconds
 

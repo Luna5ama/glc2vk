@@ -213,9 +213,13 @@ try
     $messages = @(Get-Content -LiteralPath $Requests | Where-Object {
         -not [string]::IsNullOrWhiteSpace($_)
     } | ForEach-Object { $_ | ConvertFrom-Json })
-    if ($messages.Count -ne 6)
+    if ($messages.Count -ne 5)
     {
-        throw "Expected six request fixture messages, found $($messages.Count)."
+        throw "Expected five request fixture messages, found $($messages.Count)."
+    }
+    foreach ($message in @($messages | Where-Object { $_.method -ceq "tools/call" }))
+    {
+        $message.params.arguments | Add-Member -NotePropertyName "worktree_root" -NotePropertyValue $workspace -Force
     }
     $initializeRequest = $messages[0]
     if ($initializeRequest.method -cne "initialize" -or
@@ -274,9 +278,7 @@ try
     $toolsResponse = Get-Response -Responses $first.Responses -Id 2
     $listed = @($toolsResponse.result.tools | ForEach-Object { $_.name })
     $expectedTools = @(
-        "vibris_get_config",
         "vibris_list_presets",
-        "vibris_configure",
         "vibris_get_status",
         "vibris_run_recipe",
         "vibris_run_actions",
@@ -284,49 +286,47 @@ try
     )
     if ([string]::Join("`n", $listed) -cne [string]::Join("`n", $expectedTools))
     {
-        throw "tools/list did not expose exactly the expected 7-tool surface."
+        throw "tools/list did not expose exactly the expected 5-tool surface."
     }
 
-    $configured = Get-ToolPayload (Get-Response -Responses $first.Responses -Id 3)
-    $configuredIds = @(Get-NamedValue -Value $configured -Name "workspace_id")
-    if ($configuredIds.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string] $configuredIds[0]))
+    $status = Get-ToolPayload (Get-Response -Responses $first.Responses -Id 3)
+    $statusIds = @(Get-NamedValue -Value $status -Name "workspace_id")
+    if ($statusIds.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string] $statusIds[0]))
     {
-        throw "vibris_configure did not return one workspace_id."
+        throw "vibris_get_status did not return one workspace_id."
     }
-    $workspaceId = [string] $configuredIds[0]
+    $workspaceId = [string] $statusIds[0]
     $parsedWorkspaceId = [guid]::Empty
     if (-not [guid]::TryParse($workspaceId, [ref] $parsedWorkspaceId))
     {
-        throw "vibris_configure workspace_id is not a UUID: $workspaceId"
+        throw "vibris_get_status workspace_id is not a UUID: $workspaceId"
     }
-    $config = Get-ToolPayload (Get-Response -Responses $first.Responses -Id 4)
-    if (@(Get-NamedValue -Value $config -Name "workspace_id") -cnotcontains $workspaceId)
-    {
-        throw "vibris_get_config did not return the configured workspace_id."
-    }
-    $status = Get-ToolPayload (Get-Response -Responses $first.Responses -Id 5)
     if (@(Get-NamedValue -Value $status -Name "current_save_id") -cnotcontains "test-save" -or
         @(Get-NamedValue -Value $status -Name "current_dimension_id") -cnotcontains "minecraft:overworld" -or
         @(Get-NamedValue -Value $status -Name "runtime_ready") -notcontains $true)
     {
         throw "vibris_get_status did not expose the fake gRPC runtime markers."
     }
-    $presets = Get-ToolPayload (Get-Response -Responses $first.Responses -Id 6)
+    $presets = Get-ToolPayload (Get-Response -Responses $first.Responses -Id 4)
     if (@(Get-NamedValue -Value $presets -Name "preset_id") -cnotcontains "default")
     {
         throw "vibris_list_presets did not expose the fake gRPC preset."
     }
+    $actions = Get-ToolPayload (Get-Response -Responses $first.Responses -Id 5)
+    if (@(Get-NamedValue -Value $actions -Name "workspace_id") -cnotcontains $workspaceId)
+    {
+        throw "vibris_run_actions did not retain the request-scoped workspace identity."
+    }
 
-    $restartRequests = @($messages | Where-Object { $_.id -in @(1, 4) })
+    $restartRequests = @($messages | Where-Object { $_.id -in @(1, 3) })
     $restartMessages = @($restartRequests[0], $initializedNotification, $restartRequests[1])
     $second = Invoke-Mcp -Messages $restartMessages
-    $restartedConfig = Get-ToolPayload (Get-Response -Responses $second.Responses -Id 4)
-    if (@(Get-NamedValue -Value $restartedConfig -Name "workspace_id") -cnotcontains $workspaceId -or
-        $restartedConfig.configured -ne $false -or $null -ne $restartedConfig.config)
+    $restartedStatus = Get-ToolPayload (Get-Response -Responses $second.Responses -Id 3)
+    if (@(Get-NamedValue -Value $restartedStatus -Name "workspace_id") -cnotcontains $workspaceId)
     {
-        throw "Native stdio MCP restart did not preserve identity with an unconfigured process-local scene."
+        throw "Native stdio MCP restart did not preserve the durable workspace identity."
     }
-    Write-Output "PASS tools=7 workspace_id=$workspaceId grpc_status=test-save restart_unconfigured=true"
+    Write-Output "PASS tools=5 workspace_id=$workspaceId grpc_status=test-save request_scoped=true"
 }
 finally
 {

@@ -383,7 +383,7 @@ function Get-SameToolPayload
     return Get-G007ToolPayload -Response $Response
 }
 
-function Assert-SameUnconfigured
+function Assert-SameBinding
 {
     param(
         [Parameter(Mandatory)] [object] $Payload,
@@ -391,15 +391,11 @@ function Assert-SameUnconfigured
         [string] $WorkspaceId
     )
 
-    if ($Payload.configured -ne $false -or $null -ne $Payload.config)
-    {
-        throw "A new MCP process inherited a process-local scene."
-    }
     $actualRoot = [System.IO.Path]::GetFullPath([string] $Payload.worktree_root)
     if (-not [string]::Equals($actualRoot, $WorkspaceRoot,
             [System.StringComparison]::OrdinalIgnoreCase))
     {
-        throw "MCP cwd discovery bound '$actualRoot', expected '$WorkspaceRoot'."
+        throw "MCP request bound '$actualRoot', expected '$WorkspaceRoot'."
     }
     $parsed = [guid]::Empty
     if (-not [guid]::TryParse([string] $Payload.workspace_id, [ref] $parsed))
@@ -414,32 +410,6 @@ function Assert-SameUnconfigured
     return [string] $Payload.workspace_id
 }
 
-function Assert-SameConfigured
-{
-    param(
-        [Parameter(Mandatory)] [object] $Payload,
-        [Parameter(Mandatory)] [object] $Expected,
-        [Parameter(Mandatory)] [string] $WorkspaceId
-    )
-
-    $config = if ($null -ne $Payload.PSObject.Properties["config"]) { $Payload.config } else { $Payload }
-    if ($Payload.PSObject.Properties["configured"] -and $Payload.configured -ne $true)
-    {
-        throw "Configured MCP reported configured=false."
-    }
-    if ([string] $config.workspace_id -cne $WorkspaceId -or
-        [string] $config.save_id -cne [string] $Expected.save_id -or
-        [string] $config.dimension_id -cne [string] $Expected.dimension_id -or
-        [string] $config.time_preset_id -cne [string] $Expected.time_preset_id -or
-        [string] $config.camera_preset_id -cne [string] $Expected.camera_preset_id -or
-        [double] $config.fov -ne [double] $Expected.fov -or
-        [int] $config.default_warmup_frames -ne [int] $Expected.default_warmup_frames)
-    {
-        throw "MCP process-local configuration mismatched: " +
-            ($Payload | ConvertTo-Json -Compress -Depth 20)
-    }
-}
-
 function Assert-SameScene
 {
     param(
@@ -447,15 +417,15 @@ function Assert-SameScene
         [Parameter(Mandatory)] [object] $Client
     )
 
-    $configured = $Client.configure
+    $scene = $Client.scene
     $expected = $Client.expected
-    if ([string] $Actual.save_id -cne [string] $configured.save_id -or
-        [string] $Actual.dimension_id -cne [string] $configured.dimension_id -or
-        [string] $Actual.time_preset_id -cne [string] $configured.time_preset_id -or
+    if ([string] $Actual.save_id -cne [string] $scene.save_id -or
+        [string] $Actual.dimension_id -cne [string] $scene.dimension_id -or
+        [string] $Actual.time_preset_id -cne [string] $scene.time_preset_id -or
         [string] $Actual.weather_preset_id -cne [string] $expected.weather_preset_id -or
-        [string] $Actual.camera_preset_id -cne [string] $configured.camera_preset_id -or
+        [string] $Actual.camera_preset_id -cne [string] $scene.camera_preset_id -or
         [string] $Actual.settings_preset_id -cne [string] $expected.settings_preset_id -or
-        [double] $Actual.fov -ne [double] $configured.fov -or
+        [double] $Actual.fov -ne [double] $scene.fov -or
         [long] $Actual.day_time -ne [long] $expected.day_time -or
         [double] $Actual.rain_level -ne [double] $expected.rain_level -or
         [double] $Actual.thunder_level -ne [double] $expected.thunder_level)
@@ -653,40 +623,29 @@ try
     $first = Start-SameMcp -Exe $delivery.Exe -WorkspaceRoot $workspace -Label "A"
     [void] (Initialize-SameMcp -Entry $first -Id 1 -Label "A")
     $firstInitial = Get-SameToolPayload (Invoke-SameMessage -Entry $first `
-        -Message (New-SameTool -Id 2 -Name "vibris_get_config" -Arguments @{}))
-    $workspaceId = Assert-SameUnconfigured -Payload $firstInitial -WorkspaceRoot $workspace
-    $firstConfigured = Get-SameToolPayload (Invoke-SameMessage -Entry $first `
-        -Message (New-SameTool -Id 3 -Name "vibris_configure" -Arguments $clientA.configure))
-    Assert-SameConfigured -Payload $firstConfigured -Expected $clientA.configure -WorkspaceId $workspaceId
-    $firstConfig = Get-SameToolPayload (Invoke-SameMessage -Entry $first `
-        -Message (New-SameTool -Id 4 -Name "vibris_get_config" -Arguments @{}))
-    Assert-SameConfigured -Payload $firstConfig -Expected $clientA.configure -WorkspaceId $workspaceId
+        -Message (New-SameTool -Id 2 -Name "vibris_get_status" `
+            -Arguments @{ worktree_root = $workspace }))
+    $workspaceId = Assert-SameBinding -Payload $firstInitial -WorkspaceRoot $workspace
 
     $second = Start-SameMcp -Exe $delivery.Exe -WorkspaceRoot $workspace -Label "B"
     [void] (Initialize-SameMcp -Entry $second -Id 11 -Label "B")
     $secondInitial = Get-SameToolPayload (Invoke-SameMessage -Entry $second `
-        -Message (New-SameTool -Id 12 -Name "vibris_get_config" -Arguments @{}))
-    $secondId = Assert-SameUnconfigured -Payload $secondInitial -WorkspaceRoot $workspace
+        -Message (New-SameTool -Id 12 -Name "vibris_get_status" `
+            -Arguments @{ worktree_root = $workspace }))
+    $secondId = Assert-SameBinding -Payload $secondInitial -WorkspaceRoot $workspace
     if ($secondId -cne $workspaceId) { throw "Same worktree MCPs received different workspace IDs." }
-    $secondConfigured = Get-SameToolPayload (Invoke-SameMessage -Entry $second `
-        -Message (New-SameTool -Id 13 -Name "vibris_configure" -Arguments $clientB.configure))
-    Assert-SameConfigured -Payload $secondConfigured -Expected $clientB.configure -WorkspaceId $workspaceId
-    $secondConfig = Get-SameToolPayload (Invoke-SameMessage -Entry $second `
-        -Message (New-SameTool -Id 14 -Name "vibris_get_config" -Arguments @{}))
-    Assert-SameConfigured -Payload $secondConfig -Expected $clientB.configure -WorkspaceId $workspaceId
-    if ([string] $firstConfig.config.dimension_id -ceq [string] $secondConfig.config.dimension_id -or
-        [double] $firstConfig.config.fov -eq [double] $secondConfig.config.fov)
-    {
-        throw "Distinct MCP processes did not retain distinct process-local scenes."
-    }
 
     $firstJob = New-SameTool -Id 5 -Name "vibris_run_recipe" -Arguments ([ordered] @{
+        worktree_root = $workspace
+        preset_id = [string] $clientA.scene.camera_preset_id
         recipe = "load_and_screenshot"
         source = [ordered] @{ kind = "workspace" }
         warmup_frames = 32
         screenshot_format = "png"
     })
     $secondJob = New-SameTool -Id 15 -Name "vibris_run_recipe" -Arguments ([ordered] @{
+        worktree_root = $workspace
+        preset_id = [string] $clientB.scene.camera_preset_id
         recipe = "load_and_screenshot"
         source = [ordered] @{ kind = "workspace" }
         warmup_frames = 2
@@ -788,9 +747,10 @@ try
     Stop-SameMcp -Entry $second
     $restart = Start-SameMcp -Exe $delivery.Exe -WorkspaceRoot $workspace -Label "restart"
     [void] (Initialize-SameMcp -Entry $restart -Id 21 -Label "restart")
-    $restartConfig = Get-SameToolPayload (Invoke-SameMessage -Entry $restart `
-        -Message (New-SameTool -Id 22 -Name "vibris_get_config" -Arguments @{}))
-    $restartId = Assert-SameUnconfigured -Payload $restartConfig -WorkspaceRoot $workspace `
+    $restartStatus = Get-SameToolPayload (Invoke-SameMessage -Entry $restart `
+        -Message (New-SameTool -Id 22 -Name "vibris_get_status" `
+            -Arguments @{ worktree_root = $workspace }))
+    $restartId = Assert-SameBinding -Payload $restartStatus -WorkspaceRoot $workspace `
         -WorkspaceId $workspaceId
     Stop-SameMcp -Entry $restart
 
@@ -804,7 +764,7 @@ try
         workspace_id = $workspaceId
         scene_crosstalk = $false
         max_concurrent_jobs = $maxConcurrent
-        restart_configured = $false
+        request_scoped = $true
         restart_workspace_id = $restartId
         first_mcp_forced_after_accept = $true
         second_completed_after_first_exit = $true
@@ -829,8 +789,8 @@ try
     $evidenceRoot = Save-SameEvidence -Scope $scope -Result $resultEvidence
     $evidenceSaved = $true
     $summary = "PASS same_workspace_id=true scene_crosstalk=false max_concurrent_jobs=1 " +
-        "restart_configured=false first_closed_after_accept=true second_completed=true " +
-        "unique_sources=2 unique_request_artifacts=2 minecraft=1 cwd_discovery=true"
+        "request_scoped=true first_closed_after_accept=true second_completed=true " +
+        "unique_sources=2 unique_request_artifacts=2 minecraft=1"
 }
 catch
 {

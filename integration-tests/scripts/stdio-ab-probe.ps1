@@ -25,28 +25,6 @@ function New-InitializeMessage
     }
 }
 
-function New-ConfigureMessage
-{
-    param([Parameter(Mandatory)] [int] $Id)
-
-    return [ordered] @{
-        jsonrpc = "2.0"
-        id = $Id
-        method = "tools/call"
-        params = [ordered] @{
-            name = "vibris_configure"
-            arguments = [ordered] @{
-                save_id = "vibris-automation-world"
-                dimension_id = "minecraft:overworld"
-                time_preset_id = "sunset"
-                camera_preset_id = "rooftop"
-                fov = 70.0
-                default_warmup_frames = 32
-            }
-        }
-    }
-}
-
 function Get-SourceEvents
 {
     param([Parameter(Mandatory)] [object] $Scope)
@@ -118,14 +96,6 @@ try
     $competitorScope = [pscustomobject] @{ WorkspaceRoot = $competitor }
     [void] (Initialize-G007Workspace -Scope $competitorScope)
     [void] (Start-G007Runtime -Scope $scope -Scenario "g007-c002" -TimeoutSeconds $TimeoutSeconds)
-
-    $mainConfig = @((New-InitializeMessage -Id 1 -Name "vibris-ab-config"), (New-ConfigureMessage -Id 2))
-    $otherConfig = @((New-InitializeMessage -Id 11 -Name "vibris-competitor-config"),
-        (New-ConfigureMessage -Id 12))
-    [void] (Invoke-G007Mcp -Exe $exePath -WorkspaceRoot $scope.WorkspaceRoot `
-        -Messages $mainConfig -TimeoutSeconds $TimeoutSeconds)
-    [void] (Invoke-G007Mcp -Exe $exePath -WorkspaceRoot $competitor `
-        -Messages $otherConfig -TimeoutSeconds $TimeoutSeconds)
 
     $abEntry = Start-G007Mcp -Exe $exePath -WorkspaceRoot $scope.WorkspaceRoot `
         -Messages @((New-InitializeMessage -Id 1 -Name "vibris-ab"), $requestValue)

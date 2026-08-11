@@ -1,4 +1,3 @@
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"vibris-g007-recipe-probe","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"vibris_configure","arguments":{"save_id":"vibris-automation-world","dimension_id":"minecraft:overworld","time_preset_id":"sunset","camera_preset_id":"rooftop","fov":70.0,"default_warmup_frames":2}}}
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"vibris_run_recipe","arguments":{"recipe":"load_and_screenshot","source":{"kind":"workspace"},"warmup_frames":2,"screenshot_format":"png"}}}
 {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"vibris_run_recipe","arguments":{"recipe":"capture_debug_bundle","source":{"kind":"workspace"},"warmup_frames":2,"screenshot":true,"textures":["colortex0.main","depthtex0"],"buffers":["iris_ssbo_6"]}}}

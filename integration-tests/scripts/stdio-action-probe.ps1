@@ -36,24 +36,24 @@ try
 {
     $exePath = Resolve-IrisArtifact -Path $Exe -Label "Release native MCP"
     $messages = Read-G007Messages -Path $Requests
-    if ($messages.Count -ne 10) { throw "G007-C003 fixture must contain ten frozen messages." }
+    if ($messages.Count -ne 9) { throw "G007-C003 fixture must contain nine frozen messages." }
     $scope = New-G007ProbeScope -Criterion "c003" -WorkspaceRoot $WorkspaceRoot
     [void] (Initialize-G007Workspace -Scope $scope)
     [void] (Start-G007Runtime -Scope $scope -Scenario "g007-c003" -TimeoutSeconds $TimeoutSeconds)
 
-    $allowedMessages = @($messages | Where-Object { $_.id -in @(1, 2, 3, 4, 5) })
+    $allowedMessages = @($messages | Where-Object { $_.id -in @(1, 2, 4, 5) })
     $allowedResponses = Invoke-G007Mcp -Exe $exePath -WorkspaceRoot $scope.WorkspaceRoot `
         -Messages $allowedMessages -TimeoutSeconds $TimeoutSeconds
     $tools = @((Get-G007Response -Responses $allowedResponses -Id 2).result.tools |
         ForEach-Object { $_.name })
     $expectedTools = @(
-        "vibris_get_config", "vibris_list_presets", "vibris_configure",
-        "vibris_get_status", "vibris_run_recipe", "vibris_run_actions", "vibris_run_matrix"
+        "vibris_list_presets", "vibris_get_status", "vibris_run_recipe",
+        "vibris_run_actions", "vibris_run_matrix"
     )
     if ([string]::Join("`n", $tools) -cne [string]::Join("`n", $expectedTools) -or
         @($tools | Where-Object { $_ -match '(?i)atomic|submit|poll|wait' }).Count -ne 0)
     {
-        throw "tools/list did not remain the expected 7-tool surface."
+        throw "tools/list did not remain the expected 5-tool surface."
     }
     $empty = Get-G007ToolPayload (Get-G007Response -Responses $allowedResponses -Id 4)
     $allowed = Get-G007ToolPayload (Get-G007Response -Responses $allowedResponses -Id 5)
@@ -97,7 +97,7 @@ try
     {
         throw "Frozen run_shell adversarial command changed."
     }
-    $summary = "PASS criterion=G007-C003 tools=7 empty_actions=true allowed_job=true " +
+    $summary = "PASS criterion=G007-C003 tools=5 empty_actions=true allowed_job=true " +
         "forbidden_before_prepare=5 invalid_metrics=true duplicate_selector=true traversal_rejected=true " +
         "absolute_path_rejected=true atomic_tools=false"
 }

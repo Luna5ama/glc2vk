@@ -1,6 +1,6 @@
 #pragma once
 
-#include "session_config.hpp"
+#include "job_context.hpp"
 #include "grpc_client.hpp"
 #include "source_handler.hpp"
 #include "tool_registry.hpp"
@@ -31,7 +31,7 @@ struct SynchronousJobControl final {
 
 class SynchronousJobRunner final {
 public:
-    SynchronousJobRunner(GrpcClient& client, SourceHandler& sources, const SessionConfig& config,
+    SynchronousJobRunner(GrpcClient& client, SourceHandler& sources, const JobContext& config,
         std::chrono::milliseconds maximum_wait = std::chrono::milliseconds::zero());
 
     [[nodiscard]] ToolOutcome run(
@@ -56,7 +56,7 @@ private:
 
     GrpcClient& client_;
     SourceHandler& sources_;
-    const SessionConfig& config_;
+    const JobContext& config_;
     std::chrono::milliseconds maximum_wait_;
 };
 

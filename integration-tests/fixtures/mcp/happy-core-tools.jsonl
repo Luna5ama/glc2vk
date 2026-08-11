@@ -1,6 +1,5 @@
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"vibris-integration-test","version":"1.0"}}}
 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"vibris_configure","arguments":{"save_id":"test-save","dimension_id":"minecraft:overworld","time_preset_id":"noon","camera_preset_id":"origin","fov":70.0,"default_warmup_frames":2}}}
-{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"vibris_get_config","arguments":{}}}
-{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"vibris_get_status","arguments":{}}}
-{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"vibris_list_presets","arguments":{}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"vibris_get_status","arguments":{}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"vibris_list_presets","arguments":{}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"vibris_run_actions","arguments":{"preset_id":"default","actions":[{"type":"inspect_shader"}]}}}

@@ -32,6 +32,16 @@ Json enum_array(std::initializer_list<const char*> values, std::size_t maximum) 
     return Json{{"type", "array"}, {"items", enum_string(values)}, {"maxItems", maximum}, {"uniqueItems", true}};
 }
 Json one_of(std::initializer_list<Json> schemas) { return Json{{"type", "object"}, {"oneOf", schemas}}; }
+Json scoped(Json schema, bool scene_required) {
+    schema["properties"]["worktree_root"] = {{"type", "string"}, {"minLength", 1}};
+    if (!schema.contains("required")) schema["required"] = Json::array();
+    schema["required"].push_back("worktree_root");
+    if (scene_required) {
+        schema["properties"]["preset_id"] = {{"type", "string"}, {"minLength", 1}};
+        schema["required"].push_back("preset_id");
+    }
+    return schema;
+}
 Json source_schema() {
     return one_of({
         closed_object({{"kind", enum_string({"workspace"})}}, {"kind"}),
@@ -119,7 +129,7 @@ Json recipe_schema() {
     const auto execution = enum_string({"sync", "async"});
     const Json config{{"type", "object"}};
     return one_of({
-        closed_object({{"recipe", enum_string({"profile"})},
+        scoped(closed_object({{"recipe", enum_string({"profile"})},
                        {"source", source_schema()},
                        {"config", config},
                        {"warmup_frames", frames},
@@ -130,8 +140,8 @@ Json recipe_schema() {
                        {"converted_units", converted_units},
                        {"max_retries", max_retries},
                        {"result_csv", {{"type", "boolean"}}}},
-                      {"recipe", "frames"}),
-        closed_object({{"recipe", enum_string({"profile_matrix"})},
+                       {"recipe", "frames"}), true),
+        scoped(closed_object({{"recipe", enum_string({"profile_matrix"})},
                        {"sources", named_sources_schema()},
                        {"configs", named_configs_schema()},
                        {"matrix", matrix_axes_schema()},
@@ -144,17 +154,17 @@ Json recipe_schema() {
                        {"max_retries", max_retries},
                        {"execution", execution},
                        {"result_csv", {{"type", "boolean"}}}},
-                      {"recipe", "sources", "configs", "matrix", "frames"}),
-        closed_object({{"recipe", enum_string({"profile_matrix"})},
+                       {"recipe", "sources", "configs", "matrix", "frames"}), true),
+        scoped(closed_object({{"recipe", enum_string({"profile_matrix"})},
                        {"operation", enum_string({"status", "cancel"})},
                        {"job_id", {{"type", "string"}, {"minLength", 1}}}},
-                      {"recipe", "operation", "job_id"}),
-        closed_object({{"recipe", enum_string({"profile_matrix"})},
+                       {"recipe", "operation", "job_id"}), false),
+        scoped(closed_object({{"recipe", enum_string({"profile_matrix"})},
                        {"operation", enum_string({"resume"})},
                        {"job_id", {{"type", "string"}, {"minLength", 1}}},
                        {"execution", execution}},
-                      {"recipe", "operation", "job_id"}),
-        closed_object({{"recipe", enum_string({"benchmark_ab"})},
+                       {"recipe", "operation", "job_id"}), false),
+        scoped(closed_object({{"recipe", enum_string({"benchmark_ab"})},
                        {"baseline", source_schema()},
                        {"candidate", source_schema()},
                        {"config", config},
@@ -169,29 +179,29 @@ Json recipe_schema() {
                        {"max_retries", max_retries},
                        {"result_detail", result_detail},
                        {"visual", benchmark_visual_schema()}},
-                      {"recipe", "baseline", "candidate", "frames"}),
-        closed_object({{"recipe", enum_string({"load_and_screenshot"})},
+                       {"recipe", "baseline", "candidate", "frames"}), true),
+        scoped(closed_object({{"recipe", enum_string({"load_and_screenshot"})},
                        {"source", source_schema()},
                        {"config", config},
                        {"warmup_frames", frames},
                        {"screenshot_format", enum_string({"png"})}},
-                      {"recipe"}),
-        closed_object({{"recipe", enum_string({"capture_debug_bundle"})},
+                       {"recipe"}), true),
+        scoped(closed_object({{"recipe", enum_string({"capture_debug_bundle"})},
                        {"source", source_schema()},
                        {"config", config},
                        {"warmup_frames", frames},
                        {"screenshot", {{"type", "boolean"}}},
                        {"textures", string_array(64)},
                        {"buffers", string_array(64)}},
-                      {"recipe"}),
-        closed_object({{"recipe", enum_string({"ab_compare"})},
+                       {"recipe"}), true),
+        scoped(closed_object({{"recipe", enum_string({"ab_compare"})},
                        {"a", source_variant_schema()},
                        {"b", source_variant_schema()},
                        {"config", config},
                        {"warmup_frames", frames},
                        {"captures", {{"type", "array"}, {"items", capture_schema()}, {"maxItems", 64}}},
                        {"visual_thresholds", visual_thresholds_schema()}},
-                      {"recipe", "a", "b", "captures"}),
+                       {"recipe", "a", "b", "captures"}), true),
     });
 }
 
@@ -208,7 +218,7 @@ Json action_schema() {
                                      {"type", "source", "config"});
     load_shader["description"] =
         "Closes any open screen, hides the HUD, loads the selected source and config, reloads the shader pipeline, "
-        "applies the configured scene, resets temporal counters, and returns the resulting shader state, errors, "
+        "applies the request-scoped scene, resets temporal counters, and returns the resulting shader state, errors, "
         "and structured reload diagnostics.";
     return one_of({
         closed_object({{"type", enum_string({"wait_frames"})},
@@ -253,38 +263,18 @@ Json definition(const char* name, const char* description, Json input_schema, bo
 
 Json build_definitions() {
     const auto empty = closed_object(Json::object());
-    const auto configure = one_of({
-        closed_object({{"kind", enum_string({"preset"})},
-                       {"preset_id", {{"type", "string"}, {"minLength", 1}}},
-                       {"default_warmup_frames",
-                        bounded_integer(0, std::numeric_limits<std::uint32_t>::max())}},
-                      {"kind", "preset_id"}),
-        closed_object(
-            {{"save_id", {{"type", "string"}, {"minLength", 1}}},
-             {"dimension_id", {{"type", "string"}, {"minLength", 1}}},
-             {"time_preset_id", {{"type", "string"}, {"minLength", 1}}},
-             {"camera_preset_id", {{"type", "string"}, {"minLength", 1}}},
-             {"fov", {{"type", "number"}, {"minimum", 1}, {"maximum", 180}}},
-             {"default_warmup_frames", bounded_integer(0, std::numeric_limits<std::uint32_t>::max())}},
-            {"save_id", "dimension_id", "time_preset_id", "camera_preset_id", "fov",
-             "default_warmup_frames"}),
-    });
     Json definitions = Json::array({
-        definition("vibris_get_config", "Read this MCP process's scene configuration and durable worktree ID.",
-                   empty, true),
         definition("vibris_list_presets",
-                   "List Minecraft scene presets, not shader quality profiles. Optional text and tag filters are "
-                   "combined; filter_tags requires every requested tag.",
-                   closed_object({{"filter", {{"type", "string"}}},
-                                  {"filter_tags", string_array(32)}}), true),
-        definition("vibris_configure",
-                   "Validate and set this MCP process's scene configuration until it exits. Prefer the typed "
-                   "{kind: preset, preset_id: ...} form; shader quality remains a separate recipe config.",
-                   configure, false),
-        definition("vibris_get_status", "Read MCP, server, runtime, queue, resource, and artifact status.", empty,
-                   true),
+                   "List Minecraft scene presets for the explicit Git worktree. Scene presets are distinct from "
+                   "shader quality configs; optional text and tag filters are combined.",
+                   scoped(closed_object({{"filter", {{"type", "string"}}},
+                                         {"filter_tags", string_array(32)}}), false), true),
+        definition("vibris_get_status",
+                   "Read server/runtime status plus async workflow state for the explicit Git worktree.",
+                   scoped(empty, false), true),
         definition("vibris_run_recipe",
-                   "Run a standard shader workflow and return its terminal result. load_and_screenshot loads one "
+                   "Run a standard shader workflow for the explicit Git worktree and scene preset. "
+                   "load_and_screenshot loads one "
                    "shader source and config, waits for the requested warmup frames, and saves a screenshot. Profile "
                    "recipes return normalized cases with summary, metrics, or full result detail. Profile matrices "
                    "support sync/async execution plus checkpoint status, resume, and cancellation operations. "
@@ -293,19 +283,20 @@ Json build_definitions() {
                    "thresholds add a deterministic screenshot gate and a combined performance/visual verdict.",
                    recipe_schema(), false),
         definition("vibris_run_actions",
-                   "Run one ordered shader action sequence with explicitly named sources and configs.",
-                   closed_object({{"sources", named_sources_schema()},
-                                  {"configs", named_configs_schema()},
-                                  {"actions", {{"type", "array"}, {"items", action_schema()}, {"maxItems", 64}}}},
-                                 {"actions"}), false),
+                   "Run one ordered shader action sequence for the explicit Git worktree and scene preset.",
+                   scoped(closed_object({{"sources", named_sources_schema()},
+                                         {"configs", named_configs_schema()},
+                                         {"actions", {{"type", "array"}, {"items", action_schema()}, {"maxItems", 64}}}},
+                                        {"actions"}), true), false),
         definition("vibris_run_matrix",
-                   "Run the action template for every selected source and config combination. Each combination "
+                   "Run the action template for every selected source/config combination in the explicit Git "
+                   "worktree and scene preset. Each combination "
                    "automatically begins with load_shader; do not include load_shader in the action template.",
-                   closed_object({{"sources", named_sources_schema()},
-                                  {"configs", named_configs_schema()},
-                                  {"matrix", matrix_axes_schema()},
-                                  {"actions", {{"type", "array"}, {"items", action_schema()}, {"maxItems", 64}}}},
-                                 {"sources", "configs", "matrix", "actions"}), false),
+                   scoped(closed_object({{"sources", named_sources_schema()},
+                                         {"configs", named_configs_schema()},
+                                         {"matrix", matrix_axes_schema()},
+                                         {"actions", {{"type", "array"}, {"items", action_schema()}, {"maxItems", 64}}}},
+                                        {"sources", "configs", "matrix", "actions"}), true), false),
     });
     return definitions;
 }

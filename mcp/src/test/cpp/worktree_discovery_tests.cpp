@@ -118,25 +118,6 @@ void create_initial_commit(const fs::path& repository) {
         L"-C", repository.wstring(), L"commit", L"--quiet", L"-m", L"initial"});
 }
 
-class CurrentDirectoryGuard final {
-public:
-    CurrentDirectoryGuard()
-        : original_(fs::current_path()) {
-    }
-
-    ~CurrentDirectoryGuard() {
-        std::error_code ignored;
-        fs::current_path(original_, ignored);
-    }
-
-    void set(const fs::path& path) const {
-        fs::current_path(path);
-    }
-
-private:
-    fs::path original_;
-};
-
 void require(const bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
 }
@@ -216,19 +197,19 @@ bool has_git_ancestor(fs::path path) {
     }
 }
 
-void nested_cwd_discovers_dirty_worktree() {
+void explicit_root_accepts_dirty_worktree() {
     TempDirectory worktree;
     initialize_repository(worktree.path());
     const auto nested = worktree.path() / "shaders" / "lib";
     fs::create_directories(nested);
     std::ofstream(worktree.path() / "untracked-dirty-file.glsl") << "// dirty\n";
 
-    CurrentDirectoryGuard cwd;
-    cwd.set(nested);
-    const auto binding = resolve_workspace();
+    const auto binding = resolve_workspace(worktree.path());
 
-    require_path_equal(binding.root, worktree.path(), "NestedCwdDirtyWorktree");
-    require_identity_paths(binding, "NestedCwdDirtyWorktree");
+    require_path_equal(binding.root, worktree.path(), "ExplicitDirtyWorktree");
+    require_identity_paths(binding, "ExplicitDirtyWorktree");
+    require_invalid_worktree(
+        [&] { static_cast<void>(resolve_workspace(nested)); }, "NestedPathIsNotRoot");
 }
 
 void linked_worktree_git_file_is_accepted() {
@@ -244,9 +225,7 @@ void linked_worktree_git_file_is_accepted() {
     const auto nested = linked_worktree / "shaders";
     fs::create_directory(nested);
 
-    CurrentDirectoryGuard cwd;
-    cwd.set(nested);
-    const auto binding = resolve_workspace();
+    const auto binding = resolve_workspace(linked_worktree);
 
     require_path_equal(binding.root, linked_worktree, "LinkedWorktreeGitFile");
     require_identity_paths(binding, "LinkedWorktreeGitFile");
@@ -262,11 +241,8 @@ void independent_repositories_remain_distinct() {
     fs::create_directory(first_nested);
     fs::create_directory(second_nested);
 
-    CurrentDirectoryGuard cwd;
-    cwd.set(first_nested);
-    const auto first_binding = resolve_workspace();
-    cwd.set(second_nested);
-    const auto second_binding = resolve_workspace();
+    const auto first_binding = resolve_workspace(first.path());
+    const auto second_binding = resolve_workspace(second.path());
 
     require_path_equal(first_binding.root, first.path(), "IndependentRepositoryFirst");
     require_path_equal(second_binding.root, second.path(), "IndependentRepositorySecond");
@@ -276,16 +252,12 @@ void independent_repositories_remain_distinct() {
         "IndependentRepositories: distinct repositories collapsed to one root.");
 }
 
-bool accepts_implicit(const fs::path& root) {
-    const auto nested = root / "nested";
-    fs::create_directory(nested);
-    CurrentDirectoryGuard cwd;
-    cwd.set(nested);
+bool accepts_explicit(const fs::path& root) {
     try {
-        static_cast<void>(resolve_workspace());
+        static_cast<void>(resolve_workspace(root));
         return true;
     } catch (const StateError& error) {
-        require(error.code() == kInvalidWorktreeCode, "FakeMarkerImplicit: wrong structured error code.");
+        require(error.code() == kInvalidWorktreeCode, "FakeMarkerExplicit: wrong structured error code.");
         return false;
     }
 }
@@ -299,35 +271,31 @@ void fake_git_markers_are_rejected() {
     TempDirectory fake_gitdir_file;
     std::ofstream(fake_gitdir_file.path() / ".git") << "gitdir: ../missing-git-dir\n";
 
-    const auto directory_implicit = accepts_implicit(fake_directory.path());
-    const auto file_implicit = accepts_implicit(fake_gitdir_file.path());
+    const auto directory_explicit = accepts_explicit(fake_directory.path());
+    const auto file_explicit = accepts_explicit(fake_gitdir_file.path());
 
-    require(!directory_implicit && !file_implicit,
-        "FakeGitMarkers: fake_directory_implicit=" + std::to_string(directory_implicit) +
-        " fake_gitdir_file_implicit=" + std::to_string(file_implicit) + ".");
+    require(!directory_explicit && !file_explicit,
+        "FakeGitMarkers: fake_directory_explicit=" + std::to_string(directory_explicit) +
+        " fake_gitdir_file_explicit=" + std::to_string(file_explicit) + ".");
 }
 
 void malformed_and_nonworktree_gitdir_targets_are_rejected() {
     TempDirectory malformed;
     std::ofstream(malformed.path() / ".git") << "not a gitdir\n";
-    CurrentDirectoryGuard cwd;
-    cwd.set(malformed.path());
     require_invalid_worktree(
-        [&] { static_cast<void>(resolve_workspace()); }, "MalformedGitdirFile");
+        [&] { static_cast<void>(resolve_workspace(malformed.path())); }, "MalformedGitdirFile");
 
     TempDirectory nonworktree;
     const auto ordinary_target = nonworktree.path() / "ordinary-target";
     fs::create_directory(ordinary_target);
     std::ofstream(nonworktree.path() / ".git") << "gitdir: " << ordinary_target.string() << '\n';
-    cwd.set(nonworktree.path());
     require_invalid_worktree(
-        [&] { static_cast<void>(resolve_workspace()); }, "NonworktreeGitdirTarget");
+        [&] { static_cast<void>(resolve_workspace(nonworktree.path())); }, "NonworktreeGitdirTarget");
 
     TempDirectory bare_repository;
     run_git({L"init", L"--bare", L"--quiet", (bare_repository.path() / ".git").wstring()});
-    cwd.set(bare_repository.path());
     require_invalid_worktree(
-        [&] { static_cast<void>(resolve_workspace()); }, "BareRepositoryMarker");
+        [&] { static_cast<void>(resolve_workspace(bare_repository.path())); }, "BareRepositoryMarker");
 }
 
 void path_spoofed_git_is_ignored() {
@@ -346,24 +314,23 @@ void path_spoofed_git_is_ignored() {
     EnvironmentVariableGuard path_guard(L"PATH", fake_bin.wstring() + L";" + *original_path);
     EnvironmentVariableGuard pid_file_guard(kDelayedGitPidFileVariable, pid_file.wstring());
 
-    CurrentDirectoryGuard cwd;
-    cwd.set(repository);
     const auto started = std::chrono::steady_clock::now();
-    const auto binding = resolve_workspace();
+    const auto binding = resolve_workspace(repository);
     const auto elapsed = std::chrono::steady_clock::now() - started;
     require_path_equal(binding.root, repository, "PathSpoofedGitIgnored");
     require(elapsed < std::chrono::milliseconds(2500) && !fs::exists(pid_file),
         "PathSpoofedGitIgnored: decoy executable ran or trusted Git was unexpectedly slow.");
 }
 
-void cwd_outside_any_worktree_is_rejected() {
+void invalid_explicit_roots_are_rejected() {
     TempDirectory outside;
     require(!has_git_ancestor(outside.path()),
         "OutsideWorktreeFixture: temporary directory unexpectedly has a Git ancestor.");
 
-    CurrentDirectoryGuard cwd;
-    cwd.set(outside.path());
-    require_invalid_worktree([] { static_cast<void>(resolve_workspace()); }, "CwdOutsideWorktree");
+    require_invalid_worktree(
+        [&] { static_cast<void>(resolve_workspace(outside.path())); }, "ExplicitOutsideWorktree");
+    require_invalid_worktree(
+        [] { static_cast<void>(resolve_workspace(fs::path("relative-worktree"))); }, "RelativeWorktree");
 }
 
 } // namespace
@@ -371,17 +338,18 @@ void cwd_outside_any_worktree_is_rejected() {
 int main() {
     if (const auto fixture_exit = run_delayed_git_fixture()) return *fixture_exit;
 
-    static_assert(std::is_same_v<decltype(&resolve_workspace), WorkspaceBinding (*)()>,
-        "Workspace routing must be derived from the MCP process working directory.");
+    static_assert(std::is_same_v<decltype(&resolve_workspace),
+                      WorkspaceBinding (*)(const fs::path&)>,
+        "Workspace routing must be derived from the explicit request root.");
 
     try {
-        nested_cwd_discovers_dirty_worktree();
+        explicit_root_accepts_dirty_worktree();
         linked_worktree_git_file_is_accepted();
         independent_repositories_remain_distinct();
         fake_git_markers_are_rejected();
         malformed_and_nonworktree_gitdir_targets_are_rejected();
         path_spoofed_git_is_ignored();
-        cwd_outside_any_worktree_is_rejected();
+        invalid_explicit_roots_are_rejected();
         std::cout << "PASS WorktreeDiscovery\n";
         return 0;
     } catch (const std::exception& error) {

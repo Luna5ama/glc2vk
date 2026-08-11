@@ -84,7 +84,7 @@ void report_progress(const SynchronousJobProgressSink& sink, std::string request
     if (sink) sink({std::move(request_id), std::move(stage), accepted});
 }
 
-std::optional<Json> recovered_profile_job(const proto::ServerHello& server, const SessionConfig& config,
+std::optional<Json> recovered_profile_job(const proto::ServerHello& server, const JobContext& config,
     std::string_view request_id) {
     namespace fs = std::filesystem;
     if (server.artifact_root().empty() || config.workspace_id.empty() || !detail::is_uuid(request_id)) {
@@ -435,7 +435,7 @@ void append_full_job_metadata(const Json& job, Json& result) {
     }
 }
 
-Json profile_result(Json job, const Json& arguments, const SessionConfig& config, bool matrix) {
+Json profile_result(Json job, const Json& arguments, const JobContext& config, bool matrix) {
     const auto detail = arguments.value("result_detail", std::string("metrics"));
     const auto warmup = arguments.value("warmup_frames", config.default_warmup_frames);
     const bool explicit_identity = arguments.contains("__vibris_workflow_id");
@@ -846,7 +846,7 @@ Json retry_profile(
 }
 
 SynchronousJobRunner::SynchronousJobRunner(
-    GrpcClient& client, SourceHandler& sources, const SessionConfig& config,
+    GrpcClient& client, SourceHandler& sources, const JobContext& config,
     const std::chrono::milliseconds maximum_wait)
     : client_(client), sources_(sources), config_(config), maximum_wait_(maximum_wait) {
     if (maximum_wait_.count() < 0) throw std::invalid_argument("maximum wait must not be negative");

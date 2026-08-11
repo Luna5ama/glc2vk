@@ -170,7 +170,7 @@ void order_strategies_are_balanced_and_reproducible() {
         require(request.at("__vibris_workflow_id") == std::string(workflow_id),
             "A nested profile omitted the isolation workflow identity.");
         require(request.at("__vibris_preset") == arguments().at("__vibris_preset"),
-            "A nested profile omitted the configured scene-preset provenance.");
+            "A nested profile omitted the request-scoped scene-preset provenance.");
         if (request.at("__vibris_benchmark_phase") == "control") {
             require(request.at("source") == arguments().at("baseline") &&
                     request.at("__vibris_source_id") == "baseline",

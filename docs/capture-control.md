@@ -2,12 +2,12 @@
 
 Vibris exposes one native MCP executable for shader testing. `vibris-mcp.exe` speaks newline-delimited MCP JSON-RPC
 on stdin/stdout and connects to the Vibris server embedded in Iris over loopback gRPC. Iris owns Minecraft, shader
-reloads, render-thread work, and capture resources; the MCP owns worktree configuration, immutable source preparation,
+reloads, render-thread work, and capture resources; the MCP owns explicit request routing, immutable source preparation,
 recipe expansion, and synchronous tool results.
 
 ```text
 Codex or another MCP client
-        | stdio MCP; process cwd is inside the shader worktree
+        | stdio MCP; each call carries worktree_root and, for jobs, preset_id
         v
 vibris-mcp.exe --server-address 127.0.0.1:50051
         | protobuf over loopback gRPC
@@ -18,9 +18,9 @@ patched Iris JAR -> Vibris core -> render-thread host adapter
 vibris/pending/<source UUID>      vibris/artifacts/<workspace UUID>/<request UUID>
 ```
 
-Each Codex task may run its own MCP process, including several processes discovered from the same Git worktree. All MCP
-processes submit to one shared Iris process. Iris schedules work round-robin by durable workspace ID, but each job is
-non-interruptible and only one job touches Minecraft at a time.
+One MCP process may route requests for several ordinary or linked worktrees, and several MCP processes may also target
+the same worktree. All submit to one shared Iris process. Iris schedules work round-robin by durable workspace ID, but
+each job is non-interruptible and only one job touches Minecraft at a time.
 
 ## Build
 
@@ -120,23 +120,21 @@ args = [
 ```
 
 Codex loads a trusted project's `.codex/config.toml` as project-scoped configuration. Do not set the MCP `cwd` field:
-the process inherits the Codex task cwd, and Vibris searches upward from that nested directory to the containing Git
-worktree. A linked worktree checks out the same tracked project configuration and discovers its own worktree root from
-that task cwd. This keeps one config portable across ordinary and linked worktrees without embedding shader-repository
-paths.
+workspace selection is request-scoped, not process-scoped. The same MCP registration can serve ordinary and linked
+worktrees concurrently because every tool call supplies its exact absolute `worktree_root`.
 
 Putting the same table in global `~/.codex/config.toml` is supported, but it makes Vibris appear in Codex tasks for
 unrelated Git repositories too. Prefer the tracked project file when only shader repositories should expose the server.
 
-For CI or a manual shell launch, start the MCP with its current directory inside the worktree:
+For CI or a manual shell launch, start the MCP normally:
 
 ```powershell
-Set-Location I:\code\shaderpack-worktree
 I:\code\vibris\build\delivery\vibris-mcp.exe --server-address 127.0.0.1:50051
 ```
 
-The MCP always searches upward from its current directory; there is no workspace-root override. The server address must
-be the loopback endpoint published by the running Iris instance; `127.0.0.1:50051` is the default.
+The MCP process working directory does not select a workspace. Every tool call carries an absolute `worktree_root`, and
+the MCP verifies that it is exactly a Git worktree root. The server address must be the loopback endpoint published by
+the running Iris instance; `127.0.0.1:50051` is the default.
 
 On Windows, packaged-client integration probes attach a window guard to the owned Iris runtime. It minimizes that
 runtime's visible windows without activating them and fails the probe if Iris reaches the foreground, so automated
@@ -145,7 +143,7 @@ packaged-client runs do not steal focus from the desktop.
 Closing MCP stdin performs an orderly shutdown: pending calls are resolved, the gRPC completion queue closes, its worker
 thread joins, and prepared sources still owned by the MCP are removed.
 
-## Worktree configuration
+## Request-scoped worktrees and scenes
 
 On first use, the MCP atomically creates `.vibris/workspace.json` with the durable identity shared by concurrent
 MCP processes for that one worktree:
@@ -166,18 +164,18 @@ belongs in the shader repository's `.gitignore`:
 
 Do not ignore `.codex/config.toml`; it is the tracked project configuration that linked worktrees inherit.
 
-Scene configuration is process-local. Every new MCP process starts with `configured=false` and `config=null`, even when
-the durable workspace ID already exists, so every Codex task must call `vibris_configure` before submitting jobs.
-Concurrent processes discovered from the same worktree share the durable ID but can keep different scenes and prepared
-sources without cross-talk. Closing one process does not invalidate another process's queued or active work.
+There is no ambient MCP scene configuration. `vibris_configure` and `vibris_get_config` do not exist. Every request
+specifies its worktree, and each job-start request also specifies `preset_id`. The MCP resolves and validates that preset
+against live Iris immediately before submitting the job, so alternating calls for different worktrees or scenes cannot
+inherit one another's context. A single MCP process keeps independent runtime clients per durable workspace ID.
 
-Each successful `vibris_configure` is validated against live Iris presets. Iris also records the last validated context
-in its game directory through `ConfiguredContextStore`; that single global value is only the next Iris-startup default,
-not persisted MCP task configuration. Runtime jobs still carry the calling process's scene.
+The only worktree-local durable state is identity plus explicit workflow data such as profile-matrix checkpoints and
+source snapshots. These records make accepted jobs resumable; they are not defaults for later requests. Closing one MCP
+process does not invalidate another process's queued or active work.
 
-Iris reads its preset catalog from `<gameDir>/config/vibris/presets.json`. Use `vibris_list_presets` before configuring
-when a preset identifier is not known. Each schema-v2 entry is a complete scene instead of a cross-product of separate
-world, time, and camera catalogs:
+Iris reads its preset catalog from `<gameDir>/config/vibris/presets.json`. Call `vibris_list_presets` with the target
+`worktree_root` when a preset identifier is not known. Each schema-v2 entry is a complete scene instead of a
+cross-product of separate world, time, and camera catalogs:
 
 ```json
 {
@@ -205,24 +203,22 @@ world, time, and camera catalogs:
 presets contain the complete resolved scene, sorted tags, catalog version, and a stable `preset_sha256` over the
 preset identity and effective context.
 
-Prefer the typed configure form. `default_warmup_frames` is optional and defaults to 32:
+The common request scope is:
 
 ```json
 {
-  "kind": "preset",
-  "preset_id": "sky-noon-1",
-  "default_warmup_frames": 64
+  "worktree_root": "I:\\code\\shaderpack-worktree",
+  "preset_id": "sky-noon-1"
 }
 ```
 
-The result, and subsequent `vibris_get_config`, retain the flat compatibility fields and add `selector`,
-`resolved_scene_context`, and `scene_preset`. The resolved context includes save, dimension, time, weather, camera,
-FOV, resolution, and settings preset; `scene_preset` includes ID, display name, version, tags, and `preset_sha256`.
-The legacy complete request using save, dimension, time, camera, FOV, and warmup remains accepted and resolves to the
-same receipt.
+`worktree_root` is required by all five tools. `preset_id` is additionally required when starting a recipe, action
+sequence, or matrix. Profile-matrix status, resume, and cancel operations use their checkpointed scene and therefore
+require `worktree_root` and `job_id`, but no new preset. Job receipts retain the complete resolved scene and preset
+identity, including catalog version, tags, and `preset_sha256`.
 
 Scene presets are not shader quality profiles. Shader settings remain in the independent `config`/`configs` fields of
-recipes and matrices; `preset_id` is accepted only by the typed `vibris_configure` selector.
+recipes and matrices.
 
 ## MCP tools
 
@@ -231,13 +227,11 @@ content item and matching structured content.
 
 | Tool | Arguments | Result |
 |------|-----------|--------|
-| `vibris_get_config` | empty object | configured flag, worktree root, workspace ID, process-local scene config |
-| `vibris_list_presets` | optional text `filter` and `filter_tags` array | matching live scene presets with context, tags, version, and hash |
-| `vibris_configure` | typed `{kind:"preset", preset_id}` or legacy complete scene | validated process-local scene config and resolved receipt |
-| `vibris_get_status` | empty object | server/runtime state, queue, resources, pending/artifact roots and quota |
-| `vibris_run_recipe` | one recipe form below | synchronous terminal job result and artifact metadata |
-| `vibris_run_actions` | named sources/configs plus up to 64 actions | synchronous terminal job result and artifact metadata |
-| `vibris_run_matrix` | named sources/configs, selected axes, and an action template | per-case results with recorded failures |
+| `vibris_list_presets` | `worktree_root`, optional text `filter` and `filter_tags` array | matching live scene presets with context, tags, version, and hash |
+| `vibris_get_status` | `worktree_root` | server/runtime state, queue, resources, pending/artifact roots and quota |
+| `vibris_run_recipe` | `worktree_root`, `preset_id` for starts, and one recipe form below | synchronous terminal job result or checkpointed workflow state |
+| `vibris_run_actions` | `worktree_root`, `preset_id`, named sources/configs plus up to 64 actions | synchronous terminal job result and artifact metadata |
+| `vibris_run_matrix` | `worktree_root`, `preset_id`, named sources/configs, selected axes, and an action template | per-case results with recorded failures |
 
 All low-level capture and shader-debug operations are variants in the `actions` array of `vibris_run_actions`; none is
 advertised as a separate MCP tool. One invocation becomes one `SubmitJob`, and result-bearing actions are returned in
@@ -247,7 +241,7 @@ Preset filters are case-insensitive. Text filtering retains substring behavior, 
 both filters are combined when supplied together. An omitted or empty filter lists the full catalog:
 
 ```json
-{"filter":"sky-","filter_tags":["sky"]}
+{"worktree_root":"I:\\code\\shaderpack-worktree","filter":"sky-","filter_tags":["sky"]}
 ```
 
 | Action types | Purpose |
@@ -277,8 +271,8 @@ are text artifacts. All files form one `patched_shaders` artifact group and shar
 cancellation, and rollback boundary. A write failure or a source file changing during the copy fails the entire job.
 
 The `profile` recipe is the high-level performance workflow. It snapshots the selected workspace or commit, activates
-and reloads that source with the optional shader config, resets temporal state, waits `warmup_frames` (or the configured
-default), and then measures exactly the next required `frames`. It returns the same aggregate and exact-program views as
+and reloads that source with the optional shader config, resets temporal state, waits `warmup_frames` (default 32), and
+then measures exactly the next required `frames`. It returns the same aggregate and exact-program views as
 the `get_gpu_metrics` action. The `profile_matrix` recipe profiles a selected source/config Cartesian product under the
 same scene preset. Both recipes return the same top-level contract and a `cases` array; a single `profile` is
 represented by one `source--config` case.
@@ -398,7 +392,7 @@ confidence interval includes zero is inconclusive. `result_detail: "full"` addit
 nested profile receipt; compact executions, round samples, comparison rows, and result artifacts are always retained.
 
 Add `visual` to the request to run one deterministic screenshot comparison after the performance rounds. Both sides
-are loaded through the same configured scene transaction: Iris disables day/time and weather advancement, restores
+are loaded through the same request-scoped scene transaction: Iris disables day/time and weather advancement, restores
 the exact save, dimension, time, weather, camera, FOV, and resolution, hides the HUD, resets shader temporal counters,
 and renders the same warmup-frame count before each capture. The response returns `performance_verdict`,
 `visual_verdict`, the combined `verdict`, and a `visual` receipt together. A visual threshold violation changes the
@@ -432,9 +426,9 @@ the same checkpoint. The default `execution: "sync"` preserves the blocking call
 `execution: "async"` to return immediately, then use the same recipe with one of these control forms:
 
 ```json
-{"recipe":"profile_matrix","operation":"status","job_id":"<job-id>"}
-{"recipe":"profile_matrix","operation":"resume","job_id":"<job-id>","execution":"async"}
-{"recipe":"profile_matrix","operation":"cancel","job_id":"<job-id>"}
+{"worktree_root":"I:\\code\\shaderpack-worktree","recipe":"profile_matrix","operation":"status","job_id":"<job-id>"}
+{"worktree_root":"I:\\code\\shaderpack-worktree","recipe":"profile_matrix","operation":"resume","job_id":"<job-id>","execution":"async"}
+{"worktree_root":"I:\\code\\shaderpack-worktree","recipe":"profile_matrix","operation":"cancel","job_id":"<job-id>"}
 ```
 
 Status is a partial-result read: completed cases retain their final receipts, while remaining entries have
@@ -457,7 +451,7 @@ then be resumed without discarding earlier cases. One MCP process runs at most o
 checkpoint is capped at 64 MiB.
 
 For the 19-preset release acceptance, keep scene presets separate from shader configs. Enumerate the typed preset
-catalog, configure one preset with `{"kind":"preset","preset_id":"..."}`, and run a two-source matrix containing
+catalog, pass one `preset_id` directly to each two-source matrix request containing
 the baseline commit and candidate workspace with one preserved shader config. Repeat for all 19 presets and aggregate
 the 19 two-case results into exactly 38 receipts. Reject the acceptance if any result reports fewer than two requested
 cases, a passed case has empty metrics, a timing omits its real `program` or `source`, `gpu_timing_unit` is not `ns`,
@@ -494,6 +488,8 @@ Example request:
 
 ```json
 {
+  "worktree_root": "I:\\code\\shaderpack-worktree",
+  "preset_id": "sky-noon-1",
   "recipe": "profile",
   "source": {"kind": "workspace"},
   "config": {"SETTING_GI_SPATIAL_REUSE_COUNT": 14},
@@ -515,7 +511,7 @@ resolved inside the game directory; paths escaping it are rejected.
 
 Single-source recipes accept an optional top-level `config`. Action and matrix requests declare reusable named configs;
 `load_shader` references one config by ID. It closes any open screen, hides the HUD, loads the selected source and
-config, reloads the shader pipeline, applies the configured scene, and resets temporal counters. Boolean, number, and
+config, reloads the shader pipeline, applies the request-scoped scene, and resets temporal counters. Boolean, number, and
 printable ASCII string values are converted to Iris `KEY=VALUE` properties before the shader load:
 
 ```json
@@ -587,6 +583,8 @@ only; no recipe enum or recipe decoder exists in the mod.
 
 ```json
 {
+  "worktree_root": "I:\\code\\shaderpack-worktree",
+  "preset_id": "sky-noon-1",
   "recipe": "profile",
   "source": {"kind": "workspace"},
   "config": {"SETTING_PARALLAX_MODE": 4},
@@ -607,6 +605,8 @@ identity and later combinations continue.
 
 ```json
 {
+  "worktree_root": "I:\\code\\shaderpack-worktree",
+  "preset_id": "sky-noon-1",
   "recipe": "profile_matrix",
   "sources": [{"id":"base","kind":"commit","revision":"HEAD~1"},
               {"id":"candidate","kind":"workspace"}],
@@ -622,6 +622,8 @@ identity and later combinations continue.
 
 ```json
 {
+  "worktree_root": "I:\\code\\shaderpack-worktree",
+  "preset_id": "sky-noon-1",
   "recipe": "benchmark_ab",
   "baseline": {"kind": "commit", "revision": "HEAD~1"},
   "candidate": {"kind": "workspace"},
@@ -656,6 +658,8 @@ guard receipts, measured noise, and the final compact comparison table in nanose
 
 ```json
 {
+  "worktree_root": "I:\\code\\shaderpack-worktree",
+  "preset_id": "sky-noon-1",
   "recipe": "load_and_screenshot",
   "source": {"kind": "workspace"},
   "warmup_frames": 32,
@@ -669,6 +673,8 @@ Loads the source and config, waits the requested frames, and saves one screensho
 
 ```json
 {
+  "worktree_root": "I:\\code\\shaderpack-worktree",
+  "preset_id": "sky-noon-1",
   "recipe": "capture_debug_bundle",
   "source": {"kind": "workspace"},
   "warmup_frames": 32,
@@ -685,6 +691,8 @@ resource catalog returned by `vibris_get_status`.
 
 ```json
 {
+  "worktree_root": "I:\\code\\shaderpack-worktree",
+  "preset_id": "sky-noon-1",
   "recipe": "ab_compare",
   "a": {"label": "baseline", "source": {"kind": "commit", "revision": "HEAD"}},
   "b": {"label": "candidate", "source": {"kind": "workspace"}},
@@ -701,7 +709,7 @@ resource catalog returned by `vibris_get_status`.
 }
 ```
 
-Runs both variants under the same configured scene and capture specification. Capture targets are screenshot PNG,
+Runs both variants under the same request-scoped scene and capture specification. Capture targets are screenshot PNG,
 texture BIN/PNG, and buffer BIN. The result includes comparison metrics, threshold verdict and violations, a JSON
 metrics artifact, difference heatmap artifacts, and the two sets of artifact groups. Without `visual_thresholds` it
 reports metrics with `verdict: "not_evaluated"`; with thresholds, any violation makes the recipe unsuccessful.
@@ -714,6 +722,8 @@ a JSON sidecar; 3D PNG dumps produce one Z-ordered layer file per slice. No dump
 
 ```json
 {
+  "worktree_root": "I:\\code\\shaderpack-worktree",
+  "preset_id": "sky-noon-1",
   "sources": [{"id":"candidate","kind":"workspace"}],
   "configs": [{"id":"parallax","values":{"SETTING_PARALLAX_MODE":0}}],
   "actions": [
@@ -736,7 +746,7 @@ identity, the post-load `pack_loaded` and `shaderpack` state, current shader `er
 and a compile-log path on failure. A failed explicit load is returned as a failed action result and skips later actions
 in that source/config case. Use `inspect_shader` only when inspecting the current runtime without loading a source.
 Sequences without `load_shader` operate on the current runtime.
-A/B recipes may also add an internal capture-comparison action. The configured scene is applied when a shader is
+A/B recipes may also add an internal capture-comparison action. The request-scoped scene is applied when a shader is
 loaded. Actions never expose shell execution, arbitrary source paths, or external process
 hooks. Managed artifact names are safe flat file-name segments, and optional compute-capture paths must stay within the
 game directory.
@@ -779,8 +789,8 @@ and the artifact quota. A noisy repository can therefore consume shared admissio
 | Code or symptom | Meaning and action |
 |-----------------|--------------------|
 | `INVALID_WORKTREE` | Pass an existing Git worktree, not a repository subdirectory or ordinary folder. |
-| `NOT_CONFIGURED` | Call `vibris_configure` successfully before running a job. |
-| `INVALID_PRESET` | Refresh `vibris_list_presets`; one configured scene identifier is not accepted by Iris. |
+| `NOT_CONFIGURED` | A `load_shader` action referenced a named shader config absent from the same request. |
+| `INVALID_PRESET` | Refresh `vibris_list_presets` for the same worktree; the request's `preset_id` is not accepted by Iris. |
 | `SERVER_OFFLINE` / `SERVER_NOT_READY` | Start packaged Iris, load the test world, and verify the loopback address. |
 | `SHADERS_DIRECTORY_MISSING` | Add a top-level `shaders` directory to the worktree or selected commit. |
 | `SOURCE_CHANGED_DURING_SNAPSHOT` | Pause source edits and retry; both bounded snapshot attempts changed. |
@@ -811,7 +821,7 @@ From `I:\code\vibris`:
 # Fast source/package boundary check
 .\integration-tests\scripts\source-package-audit.ps1
 
-# Native cwd discovery: concurrent same-root processes plus an independent repository
+# One native MCP routing explicit requests across two worktrees
 .\integration-tests\scripts\worktree-concurrency-probe.ps1 `
   -Exe .\mcp\out\build\Release\vibris-mcp.exe `
   -WorkspaceRoot .\.omo\tmp\ulw-v1-g002-c002\worktree `

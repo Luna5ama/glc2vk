@@ -213,7 +213,8 @@ if(BUILD_TESTING)
     endif()
 
     add_custom_target(mcp-tests
-        DEPENDS vibris-state-tests vibris-worktree-discovery-tests vibris-workspace-source-tests
+        DEPENDS vibris-protocol-smoke vibris-descriptor-dump
+                vibris-state-tests vibris-worktree-discovery-tests vibris-workspace-source-tests
                 vibris-commit-source-tests vibris-git-repository-security-tests
                 vibris-stdio-fixture-test vibris-grpc-tests vibris-grpc-request-ownership-tests
                 vibris-grpc-source-ownership-tests vibris-grpc-accepted-resume-tests)
@@ -249,9 +250,9 @@ if(BUILD_TESTING)
             WorkspaceIdentityMapsAccessErrors
             WorkspaceIdentityRejectsActiveWriter
             SameWorktreeBackendsCoexist
-            ProcessLocalSceneConfiguration
-            TypedPresetDiscoveryAndConfiguration
-            ToolMetadataIsProcessLocal
+            RequestScopedWorktreeRouting
+            TypedPresetDiscoveryAndRequestScene
+            ToolMetadataIsRequestScoped
             ResourceListsAreEmpty)
         add_test(NAME ${scenario} COMMAND vibris-state-tests ${scenario})
     endforeach()
@@ -364,7 +365,7 @@ if(BUILD_TESTING)
     endfunction()
 
     add_stdio_mcp_probe(StdioMcpToolHappyPath)
-    add_stdio_mcp_probe(RestartIsUnconfigured)
+    add_stdio_mcp_probe(RestartRetainsWorkspaceIdentity)
     add_stdio_mcp_probe(FakeServerStatus)
     add_stdio_mcp_probe(StdioLifecycle)
 

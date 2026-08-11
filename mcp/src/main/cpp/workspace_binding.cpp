@@ -248,19 +248,13 @@ bool is_git_worktree_root(const fs::path& root) {
 
 } // namespace
 
-WorkspaceBinding resolve_workspace() {
-    std::error_code error;
-    const auto current_path = fs::current_path(error);
-    if (error) {
-        throw StateError(kInvalidWorktreeCode, "Current directory is unavailable.");
+WorkspaceBinding resolve_workspace(const fs::path& requested_root) {
+    if (requested_root.empty() || !requested_root.is_absolute()) {
+        throw StateError(kInvalidWorktreeCode, "Worktree root must be an absolute path.");
     }
-    auto root = canonical_directory(current_path);
-    while (!is_git_worktree_root(root)) {
-        const auto parent = root.parent_path();
-        if (parent == root) {
-            throw StateError(kInvalidWorktreeCode, "No Git worktree contains the current directory.");
-        }
-        root = parent;
+    const auto root = canonical_directory(requested_root);
+    if (!is_git_worktree_root(root)) {
+        throw StateError(kInvalidWorktreeCode, "Worktree root must name a Git worktree root.");
     }
     return {
         root,

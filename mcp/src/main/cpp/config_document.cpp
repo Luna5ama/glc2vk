@@ -62,7 +62,7 @@ bool is_uuid(std::string_view value) {
     return true;
 }
 
-void validate_config(const SessionConfig& config, bool workspace_required) {
+void validate_config(const JobContext& config, bool workspace_required) {
     if (config.schema_version != 1 || config.shader_directory != "shaders" || !std::isfinite(config.fov) ||
         config.fov <= 0.0 || config.fov > 180.0 || (workspace_required && config.workspace_id.empty()) ||
         (!config.workspace_id.empty() && !is_uuid(config.workspace_id))) {
@@ -74,7 +74,7 @@ void validate_config(const SessionConfig& config, bool workspace_required) {
     validate_string(config.camera_preset_id);
 }
 
-SessionConfig parse_config(std::string_view text, ConfigDocumentKind kind) {
+JobContext parse_config(std::string_view text, ConfigDocumentKind kind) {
     if (text.size() > kMaxConfigJsonBytes) {
         throw StateError(kRequestTooLargeCode, "Config JSON exceeds the 64 KiB limit.");
     }
@@ -95,7 +95,7 @@ SessionConfig parse_config(std::string_view text, ConfigDocumentKind kind) {
             }
         }
 
-        SessionConfig config;
+        JobContext config;
         const auto managed_required = kind == ConfigDocumentKind::persisted;
         if (document.contains("schema_version")) {
             config.schema_version = required_unsigned(document, "schema_version");
@@ -131,7 +131,7 @@ SessionConfig parse_config(std::string_view text, ConfigDocumentKind kind) {
     }
 }
 
-std::string serialize_config(const SessionConfig& config) {
+std::string serialize_config(const JobContext& config) {
     try {
         const Json document {
             {"schema_version", config.schema_version},

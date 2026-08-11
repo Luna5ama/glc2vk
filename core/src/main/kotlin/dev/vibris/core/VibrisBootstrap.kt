@@ -171,7 +171,6 @@ class VibrisBootstrap private constructor(
                 actualFactory,
                 createRoots = false,
                 notReady = true,
-                configuredContext = ConfiguredContextStore(game.resolve("config/vibris/configured-context.pb")),
             )
         }
 
@@ -191,7 +190,6 @@ class VibrisBootstrap private constructor(
                 actualFactory,
                 createRoots = true,
                 notReady = false,
-                configuredContext = null,
             )
         }
 
@@ -201,7 +199,6 @@ class VibrisBootstrap private constructor(
             listenerFactory: ListenerFactory,
             createRoots: Boolean,
             notReady: Boolean,
-            configuredContext: ConfiguredContextStore?,
         ): VibrisBootstrap {
             val paths = configuration.paths
             val pendingSources = PendingSourceRoot(paths.pendingShadersRoot)
@@ -215,9 +212,8 @@ class VibrisBootstrap private constructor(
                 }
                 link.prepare()
                 pendingSources.prepare()
-                service = VibrisControlService(configuration, runtime, link, configuredContext)
+                service = VibrisControlService(configuration, runtime, link)
                 val listener = listenerFactory.start(configuration.address, service)
-                service.autoEnterConfiguredContext()
                 return VibrisBootstrap(service, pendingSources, listener, true, paths.pendingShadersRoot)
             } catch (exception: Exception) {
                 if (notReady && service == null) {
