@@ -85,8 +85,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T04 | P0 | Vibris | Generalize durable resumable jobs | DONE | `T04 add durable resumable workflow jobs` |
 | T05 | P0 | Vibris | Add transactional restoration and recovery | DONE | `T05 make runtime mutations transactional` |
 | T06 | P0 | Vibris | Define effective shader settings contract | DONE | `T06 expose resolved shader settings contract` |
-| T07 | P0 | Iris | Implement effective settings in Iris host | READY | `T07 report effective shader settings from Iris` |
-| T08 | P1 | Vibris | Return one ordered receipt per action | PENDING | `T08 return complete ordered action receipts` |
+| T07 | P0 | Iris | Implement effective settings in Iris host | DONE | `T07 report effective shader settings from Iris` |
+| T08 | P1 | Vibris | Return one ordered receipt per action | READY | `T08 return complete ordered action receipts` |
 | T09 | P0 | Vibris | Define compile catalog runtime contract | PENDING | `T09 define compile validation catalog contract` |
 | T10 | P0 | Iris | Emit complete Iris compile catalog | PENDING | `T10 emit Iris program compile catalog` |
 | T11 | P0 | Vibris | Add compile_validate recipe | PENDING | `T11 add compile validation recipe` |
@@ -569,7 +569,7 @@ Evidence:
 
 ### T07 — Implement effective settings in Iris host
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T06
 
@@ -615,11 +615,25 @@ Blockers:
 
 Evidence:
 
-- Pending external implementation and owner-repository receipt.
+- Iris external implementation commit: `7096295b3875a13b6f00607b6f30d0649bd4f68f` with subject
+  `T07 report effective shader settings from Iris`; the commit is the current `1.21.11-shaderdev` HEAD and an
+  ancestor of that branch.
+- Preserve reloads snapshot every resolved option from the active `vibris` pack before loading. Successful reloads
+  capture the complete actual post-install option/default state only after the replacement pipeline is installed,
+  with deterministic origin precedence `request_override`, `preserved_current`, `preset`, then `default`.
+- `2026-08-11`: `.\gradlew.bat :fabric:vibrisBridgeTest --offline --console=plain` passed 10/10 tests with zero
+  failures, errors, or skips; `IrisVibrisEffectiveSettingsTest` passed 1/1 and proves complete ordered values,
+  changed-from-default flags, deterministic override/preset/preserve origins, equal state hashes across origin-only
+  changes, and identical resolved-state comparison.
+- `2026-08-11`: `.\gradlew.bat :common:compileJava :fabric:build --offline --console=plain` passed with 41
+  actionable tasks against the strict-v2 Vibris composite dependency.
+- Iris protected `IrisVibrisLifecycle.java` remained outside the external commit and at its pre-existing `18/4`
+  numstat; `.codex\`, `.vibris\`, and `common\logs\` remained untracked and unstaged. No deployment or process
+  restart occurred.
 
 ### T08 — Return one ordered receipt per action
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T07
 
@@ -1352,3 +1366,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T02A - migrated maintained Core directly to strict v2 jobs, status, actions, artifacts, and tests; removed v1-only benchmark isolation; protocol/Core tests passed with 83 Core tests and zero v1 references - Commit title: T02A migrate Core directly to strict v2`
 - `2026-08-11 - T03 - exposed authoritative runtime lease, fair cross-workspace queue, truthful readiness/error/transitions, safe cancellation, and event-driven status waits; Core 86/86 and native filtered CTest 7/7 passed - Commit title: T03 expose runtime lease and status transitions`
 - `2026-08-11 - T06 - required complete runtime-resolved shader settings, deterministic origins/default diff/hash, and propagated them through mutation/restoration provenance; API 6/6 and Core 95/95 passed - Commit title: T06 expose resolved shader settings contract`
+- `2026-08-11 - T07 - Iris snapshots active settings before preserve reloads and returns complete post-install values/defaults/origins/hash; bridge tests 10/10 and Iris offline build passed; external commit 7096295b3875a13b6f00607b6f30d0649bd4f68f - Commit title: T07 report effective shader settings from Iris`
