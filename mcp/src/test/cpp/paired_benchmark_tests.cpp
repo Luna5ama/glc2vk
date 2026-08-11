@@ -40,40 +40,55 @@ Json arguments(std::string order = "abba", std::size_t rounds = 2) {
             {"max_retries", 1}};
 }
 
+Json strict_provenance(std::string source_id, std::string config_hash, std::string scene_hash) {
+    return {{"workspace_id", "workspace"}, {"worktree_root", "I:/code/worktree"}, {"branch", "main"},
+        {"requested_revision", "HEAD"}, {"resolved_revision", "0123456789abcdef"},
+        {"start_head", "0123456789abcdef"}, {"completion_head", "0123456789abcdef"},
+        {"head_changed", false}, {"stale", false}, {"shader_tree_id", "shader-tree"},
+        {"dirty_shader_delta_sha256", "dirty-sha"},
+        {"source_snapshot_sha256", source_id + "-source-hash"}, {"active_source_uuid", std::move(source_id)},
+        {"config_sha256", std::move(config_hash)}, {"preset_id", "spawn"},
+        {"preset_sha256", "preset-sha"}, {"scene_sha256", std::move(scene_hash)},
+        {"effective_settings", {{"settings_sha256", "config-hash"}}},
+        {"shader_loaded_at_unix_ms", 1000}, {"pass_mapping_sha256", "mapping-sha"},
+        {"environment", {{"minecraft_version", "1.21.11"}, {"iris_version", "iris-test"},
+            {"vibris_version", "vibris-test"}, {"java_version", "21"},
+            {"operating_system", "Windows"}, {"gpu_vendor", "GPU vendor"},
+            {"gpu_renderer", "GPU renderer"}, {"opengl_version", "4.6"},
+            {"driver_version", "driver"}}}};
+}
+
 Json profile_result(const Json& request, double value, std::string config_hash = "config-hash",
-    std::string scene_hash = "scene-hash", std::string program_source = "GenerateSkyViewLUT.comp.glsl",
+    std::string scene_hash = "scene-hash", std::string program_id = "begin3_a",
     std::optional<std::size_t> frames = std::nullopt) {
     const auto source_id = request.at("__vibris_source_id").get<std::string>();
     const auto case_id = request.at("__vibris_case_id").get<std::string>();
-    const Json metrics{
-        {"gpuTimings", {{"composite_total", {{"avg", value}}}}},
-        {"gpuProgramTimings", Json::array({
-            {{"metric", "begin3_a_compute"}, {"kind", "program"}, {"program", "begin3_a"},
-             {"stage", "compute"}, {"source", std::move(program_source)},
-             {"defines", {{"SKY_VIEW_SAMPLES", "32"}}}, {"dispatch", "direct:120x68x1"},
-             {"framework_pass", "begin3"}, {"compatibility_metric", "begin3_compute"},
-             {"statistics", {{"avg", value / 2.0}}}},
-        })},
-    };
-    const Json provenance{
-        {"complete", true},
-        {"source", {{"identity_sha256", source_id + "-source-hash"}}},
-        {"shader", {{"config_sha256", std::move(config_hash)}}},
-        {"scene", {{"context_sha256", std::move(scene_hash)}}},
-    };
+    const auto sampled_frames = frames.value_or(request.at("frames").get<std::size_t>());
+    const Json metrics{{"timing_unit", "ns"}, {"sampled_frames", sampled_frames},
+        {"metrics", Json::array({
+            {{"metric_id", "composite_total"}, {"program_id", ""}, {"pass_id", ""},
+                {"average_ns", value}, {"p50_ns", value}, {"p95_ns", value},
+                {"samples_ns", Json::array({value})}},
+            {{"metric_id", "begin3_a_compute"}, {"program_id", std::move(program_id)},
+                {"pass_id", "begin3"}, {"average_ns", value / 2.0}, {"p50_ns", value / 2.0},
+                {"p95_ns", value / 2.0}, {"samples_ns", Json::array({value / 2.0})}},
+        })}};
+    const auto provenance = strict_provenance(source_id, std::move(config_hash), std::move(scene_hash));
     Json profile_case{{"case_id", case_id},
                       {"source_id", source_id},
                       {"config_id", "config"},
                       {"status", "passed"},
                       {"error", nullptr},
-                      {"frames", frames.value_or(request.at("frames").get<std::size_t>())},
+                      {"frames", sampled_frames},
                       {"warmup_frames", request.at("warmup_frames")},
                       {"metrics", metrics},
-                      {"provenance", provenance},
-                      {"barriers", Json::array({{{"stage", "state_restored"}}})},
                       {"attempt_count", 1}};
     return {{"success", true}, {"status", "completed"},
-            {"cases", Json::array({std::move(profile_case)})}, {"artifacts", Json::array()}};
+            {"cases", Json::array({std::move(profile_case)})}, {"artifacts", Json::array()},
+            {"action_receipts", Json::array()}, {"prelude_receipts", Json::array()},
+            {"provenance", provenance},
+            {"restoration", {{"status", "RECEIPT_STATUS_OK"}}},
+            {"result_manifest_id", "profile-manifest"}};
 }
 
 double stable_value(const Json& request) {
@@ -88,12 +103,11 @@ Json visual_result(bool passed, std::string candidate_config_hash = "visual-conf
     const auto load = [](std::size_t index, std::string source, std::string config_hash,
                           std::string scene_hash) {
         const auto source_hash = source + "-hash";
-        return Json{{"action_index", index}, {"kind", "load_shader"},
-                    {"result", {{"success", true}, {"source", std::move(source)},
-                        {"provenance", {{"complete", false},
-                            {"source", {{"identity_sha256", source_hash}}},
-                            {"shader", {{"config_sha256", std::move(config_hash)}}},
-                            {"scene", {{"context_sha256", std::move(scene_hash)}}}}}}}};
+        return Json{{"action_index", index}, {"kind", "ACTION_KIND_LOAD_SHADER"},
+            {"status", "RECEIPT_STATUS_OK"}, {"runtime_mutation", {{"source_uuid", std::move(source)},
+                {"source_sha256", source_hash},
+                {"effective_settings", {{"settings_sha256", std::move(config_hash)}}},
+                {"scene_sha256", std::move(scene_hash)}, {"completed_at_unix_ms", 1000}}}};
     };
     Json result{{"success", true}, {"kind", "ab_compare"},
                 {"comparison", {{"baseline_label", "baseline"},
@@ -105,19 +119,20 @@ Json visual_result(bool passed, std::string candidate_config_hash = "visual-conf
                     {"verdict", passed ? "passed" : "failed"},
                     {"violations", passed ? Json::array() :
                         Json::array({"THRESHOLD_PIXEL_RATIO_EXCEEDED", "SSIM_BELOW_MINIMUM"})}}},
-                {"artifacts", Json::array({{{"kind", "ab_metrics"}, {"format", "json"},
-                    {"file_name", "diff.json"}}})},
-                {"artifact_groups", Json::array()},
-                {"action_results", Json::array({
+                {"artifacts", Json::array({{{"kind", "ARTIFACT_KIND_BENCHMARK_METRICS"},
+                    {"format", "ARTIFACT_FORMAT_JSON"}, {"relative_path", "visual/diff.json"}}})},
+                {"prelude_receipts", Json::array({
                     load(0, "baseline", "visual-config-hash", "visual-scene-hash"),
                     load(3, "candidate", std::move(candidate_config_hash),
                         std::move(candidate_scene_hash)),
                 })},
-                {"frame_ids", Json::array({41, 42})}};
+                {"action_receipts", Json::array()}, {"frame_ids", Json::array({41, 42})},
+                {"provenance", strict_provenance("candidate", "visual-config-hash", "visual-scene-hash")},
+                {"restoration", {{"status", "RECEIPT_STATUS_OK"}}},
+                {"result_manifest_id", "visual-manifest"}};
     if (include_heatmap) {
-        result["artifact_groups"].push_back({{"name", "diff-heatmap"},
-            {"artifacts", Json::array({{{"kind", "heatmap"}, {"format", "png"},
-                {"file_name", "diff-heatmap.png"}}})}});
+        result["artifacts"].push_back({{"kind", "ARTIFACT_KIND_HEATMAP"},
+            {"format", "ARTIFACT_FORMAT_PNG"}, {"relative_path", "visual/diff-heatmap.png"}});
     }
     return result;
 }
@@ -269,7 +284,7 @@ void mismatched_frames_config_scene_and_program_identity_fail_closed() {
         request_arguments, workflow_id, 19, [&calls](const Json& request) -> ToolOutcome {
             ++calls;
             auto profile = profile_result(request, stable_value(request));
-            profile["cases"][0]["barriers"] = Json::array();
+            profile["restoration"]["status"] = "RECEIPT_STATUS_FAILED";
             return profile;
         });
     const auto& restore_result = std::get<Json>(restore_outcome);

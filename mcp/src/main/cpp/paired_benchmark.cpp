@@ -1,4 +1,5 @@
 #include "paired_benchmark.hpp"
+#include "synchronous_job_runner.hpp"
 
 #include <algorithm>
 #include <array>
@@ -168,9 +169,10 @@ Json visual_receipt(ToolOutcome outcome) {
                 {"comparison", comparison != result.end() && comparison->is_object()
                     ? Json(*comparison) : Json(nullptr)},
                 {"artifacts", result.value("artifacts", Json::array())},
-                {"artifact_groups", result.value("artifact_groups", Json::array())},
-                {"action_results", result.value("action_results", Json::array())},
-                {"benchmark_barriers", result.value("benchmark_barriers", Json::array())},
+                {"action_receipts", result.value("action_receipts", Json::array())},
+                {"prelude_receipts", result.value("prelude_receipts", Json::array())},
+                {"provenance", result.value("provenance", Json(nullptr))},
+                {"restoration", result.value("restoration", Json(nullptr))},
                 {"frame_ids", result.value("frame_ids", Json::array())},
                 {"guards", std::move(guards)}};
     }
@@ -180,9 +182,10 @@ Json visual_receipt(ToolOutcome outcome) {
                  {"verdict", comparison->at("verdict")},
                  {"error", nullptr}, {"comparison", *comparison},
                  {"artifacts", result.value("artifacts", Json::array())},
-                 {"artifact_groups", result.value("artifact_groups", Json::array())},
-                 {"action_results", result.value("action_results", Json::array())},
-                 {"benchmark_barriers", result.value("benchmark_barriers", Json::array())},
+                 {"action_receipts", result.value("action_receipts", Json::array())},
+                 {"prelude_receipts", result.value("prelude_receipts", Json::array())},
+                 {"provenance", result.value("provenance", Json(nullptr))},
+                 {"restoration", result.value("restoration", Json(nullptr))},
                  {"frame_ids", result.value("frame_ids", Json::array())},
                  {"guards", std::move(guards)}};
     return receipt;
@@ -225,51 +228,34 @@ std::string text_at(const Json& value, std::initializer_list<const char*> path) 
     return current->is_string() ? current->get<std::string>() : std::string{};
 }
 
-Json program_identity(const Json& timing) {
-    Json result{{"timing_kind", "program"}};
-    constexpr std::array fields{
-        "metric", "program", "stage", "source", "defines", "dispatch", "framework_pass", "compatibility_metric",
-    };
-    for (const auto* field : fields) {
-        const auto found = timing.find(field);
-        result[field] = found == timing.end() ? Json(nullptr) : *found;
-    }
-    return result;
-}
-
 std::map<std::string, MetricValue> metric_values(const Json& profile_case, std::string_view statistic) {
     std::map<std::string, MetricValue> result;
     const auto metrics = profile_case.find("metrics");
     if (metrics == profile_case.end() || !metrics->is_object()) return result;
-    const auto timings = metrics->value("gpuTimings", Json::object());
-    for (const auto& [name, statistics] : timings.items()) {
-        if (!statistics.is_object()) continue;
-        const auto value = statistics.find(statistic);
-        if (value == statistics.end() || !value->is_number()) continue;
-        Json identity{{"timing_kind", "aggregate"}, {"metric", name}};
-        const auto key = identity.dump();
-        result.emplace(key, MetricValue{std::move(identity), value->get<double>()});
-    }
-    const auto programs = metrics->value("gpuProgramTimings", Json::array());
-    for (const auto& timing : programs) {
+    const auto values = metrics->value("metrics", Json::array());
+    const auto field = statistic == "p50" ? "p50_ns" : statistic == "p95" ? "p95_ns" : "average_ns";
+    for (const auto& timing : values) {
         if (!timing.is_object()) continue;
-        const auto statistics = timing.find("statistics");
-        if (statistics == timing.end() || !statistics->is_object()) continue;
-        const auto value = statistics->find(statistic);
-        if (value == statistics->end() || !value->is_number()) continue;
-        auto identity = program_identity(timing);
+        const auto value = timing.find(field);
+        if (value == timing.end() || !value->is_number()) continue;
+        const auto program = timing.value("program_id", std::string{});
+        const auto pass = timing.value("pass_id", std::string{});
+        Json identity{{"timing_kind", program.empty() && pass.empty() ? "aggregate" : "program"},
+            {"metric", timing.value("metric_id", std::string{})}};
+        if (!program.empty() || !pass.empty()) {
+            identity["program"] = program;
+            identity["framework_pass"] = pass;
+        }
         const auto key = identity.dump();
         result.emplace(key, MetricValue{std::move(identity), value->get<double>()});
     }
     return result;
 }
 
-bool restored(const Json& profile_case) {
-    const auto barriers = profile_case.value("barriers", Json::array());
-    for (const auto& barrier : barriers) {
-        if (barrier.is_object() && barrier.value("stage", std::string{}) == "state_restored") return true;
-    }
-    return false;
+bool restored(const Json& profile) {
+    const auto receipt = profile.find("restoration");
+    return receipt != profile.end() && receipt->is_object() &&
+        receipt->value("status", std::string{}) == "RECEIPT_STATUS_OK";
 }
 
 void mismatch(GuardState& guards, std::string code, const PlannedMeasurement& measurement,
@@ -300,56 +286,60 @@ void validate_guards(const std::vector<Measurement>& measurements, const Json& a
             mismatch(guards, "SOURCE_ROLE_MISMATCH", measurement.plan, "source_id",
                 measurement.plan.physical_source, profile_case.value("source_id", Json(nullptr)));
         }
-        if (!restored(profile_case)) {
+        if (!restored(measurement.profile)) {
             guards.runtime_state_restored = false;
             mismatch(guards, "RUNTIME_STATE_RESTORE_MISSING", measurement.plan,
-                "barriers.state_restored", true, false);
+                "restoration.status", "RECEIPT_STATUS_OK", nullptr);
         }
         if (profile_case.value("status", std::string{}) != "passed") {
             mismatch(guards, "MEASUREMENT_INCOMPLETE", measurement.plan, "status", "passed",
                 profile_case.value("status", std::string("missing")));
             continue;
         }
-        const auto provenance = profile_case.find("provenance");
-        if (provenance == profile_case.end() || !provenance->is_object() ||
-            !provenance->value("complete", false)) {
+        const auto provenance = measurement.profile.find("provenance");
+        if (provenance == measurement.profile.end() ||
+            !detail::complete_result_provenance(*provenance)) {
             mismatch(guards, "PROVENANCE_GUARD_MISSING", measurement.plan,
-                "provenance.complete", true, false);
+                "provenance", "complete strict-v2 ResultProvenance", provenance == measurement.profile.end()
+                    ? Json(nullptr) : Json(*provenance));
         }
         if (profile_case.value("frames", std::uint64_t{}) != expected_frames.get<std::uint64_t>()) {
             mismatch(guards, "FRAME_COUNT_MISMATCH", measurement.plan, "frames", expected_frames,
                 profile_case.value("frames", Json(nullptr)));
         }
-        const auto config_hash = text_at(profile_case, {"provenance", "shader", "config_sha256"});
-        const auto scene_hash = text_at(profile_case, {"provenance", "scene", "context_sha256"});
-        const auto source_hash = text_at(profile_case, {"provenance", "source", "identity_sha256"});
+        const auto config_hash = provenance != measurement.profile.end()
+            ? provenance->value("config_sha256", std::string{}) : std::string{};
+        const auto scene_hash = provenance != measurement.profile.end()
+            ? provenance->value("scene_sha256", std::string{}) : std::string{};
+        const auto source_hash = provenance != measurement.profile.end()
+            ? provenance->value("source_snapshot_sha256", std::string{}) : std::string{};
         if (config_hash.empty()) {
             mismatch(guards, "PROVENANCE_GUARD_MISSING", measurement.plan,
-                "provenance.shader.config_sha256", "non-empty", nullptr);
+                "provenance.config_sha256", "non-empty", nullptr);
         } else if (guards.config_hash.empty()) {
             guards.config_hash = config_hash;
         } else if (config_hash != guards.config_hash) {
             mismatch(guards, "CONFIG_HASH_MISMATCH", measurement.plan,
-                "provenance.shader.config_sha256", guards.config_hash, config_hash);
+                "provenance.config_sha256", guards.config_hash, config_hash);
         }
         if (scene_hash.empty()) {
             mismatch(guards, "PROVENANCE_GUARD_MISSING", measurement.plan,
-                "provenance.scene.context_sha256", "non-empty", nullptr);
+                "provenance.scene_sha256", "non-empty", nullptr);
         } else if (guards.scene_hash.empty()) {
             guards.scene_hash = scene_hash;
         } else if (scene_hash != guards.scene_hash) {
             mismatch(guards, "SCENE_HASH_MISMATCH", measurement.plan,
-                "provenance.scene.context_sha256", guards.scene_hash, scene_hash);
+                "provenance.scene_sha256", guards.scene_hash, scene_hash);
         }
         const auto physical = measurement.plan.physical_source;
         if (source_hash.empty()) {
             mismatch(guards, "PROVENANCE_GUARD_MISSING", measurement.plan,
-                "provenance.source.identity_sha256", "non-empty", nullptr);
+                "provenance.source_snapshot_sha256", "non-empty", nullptr);
         } else if (!guards.source_hashes.contains(physical)) {
             guards.source_hashes.emplace(physical, source_hash);
         } else if (source_hash != guards.source_hashes.at(physical)) {
             mismatch(guards, "SOURCE_IDENTITY_MISMATCH", measurement.plan,
-                "provenance.source.identity_sha256", guards.source_hashes.at(physical), source_hash);
+                "provenance.source_snapshot_sha256", guards.source_hashes.at(physical), source_hash);
         }
 
         const auto aggregate = identities(measurement, "aggregate");
@@ -362,11 +352,11 @@ void validate_guards(const std::vector<Measurement>& measurements, const Json& a
         } else {
             if (aggregate != guards.aggregate_identities) {
                 mismatch(guards, "METRIC_IDENTITY_MISMATCH", measurement.plan,
-                    "gpuTimings", Json(guards.aggregate_identities), Json(aggregate));
+                    "metrics.aggregate", Json(guards.aggregate_identities), Json(aggregate));
             }
             if (programs != guards.program_identities) {
                 mismatch(guards, "PROGRAM_IDENTITY_MISMATCH", measurement.plan,
-                    "gpuProgramTimings", Json(guards.program_identities), Json(programs));
+                    "metrics.program", Json(guards.program_identities), Json(programs));
             }
         }
     }
@@ -634,9 +624,10 @@ Json visual_comparison_guards(const Json& result, bool require_heatmap) {
     const auto artifacts = result.find("artifacts");
     if (artifacts != result.end() && artifacts->is_array()) {
         metrics_artifact = std::ranges::any_of(*artifacts, [](const Json& artifact) {
-            return artifact.is_object() && artifact.value("kind", std::string{}) == "ab_metrics" &&
-                artifact.value("format", std::string{}) == "json" &&
-                artifact.value("file_name", std::string{}) == "diff.json";
+            return artifact.is_object() &&
+                artifact.value("kind", std::string{}) == "ARTIFACT_KIND_BENCHMARK_METRICS" &&
+                artifact.value("format", std::string{}) == "ARTIFACT_FORMAT_JSON" &&
+                artifact.value("relative_path", std::string{}).ends_with("diff.json");
         });
     }
     if (!metrics_artifact) {
@@ -644,34 +635,26 @@ Json visual_comparison_guards(const Json& result, bool require_heatmap) {
             "The visual comparison did not return its diff.json metrics artifact.");
     }
 
-    bool heatmap_artifact = false;
-    const auto groups = result.find("artifact_groups");
-    if (groups != result.end() && groups->is_array()) {
-        for (const auto& group : *groups) {
-            if (!group.is_object() || group.value("name", std::string{}) != "diff-heatmap") continue;
-            const auto group_artifacts = group.find("artifacts");
-            if (group_artifacts == group.end() || !group_artifacts->is_array()) continue;
-            heatmap_artifact = std::ranges::any_of(*group_artifacts, [](const Json& artifact) {
-                if (!artifact.is_object() || artifact.value("kind", std::string{}) != "heatmap" ||
-                    artifact.value("format", std::string{}) != "png") return false;
-                const auto file_name = artifact.value("file_name", std::string{});
-                return file_name == "diff-heatmap.png" ||
-                    (file_name.starts_with("diff-heatmap.") && file_name.ends_with(".png"));
-            });
-            if (heatmap_artifact) break;
-        }
-    }
+    const bool heatmap_artifact = artifacts != result.end() && artifacts->is_array() &&
+        std::ranges::any_of(*artifacts, [](const Json& artifact) {
+            return artifact.is_object() && artifact.value("kind", std::string{}) == "ARTIFACT_KIND_HEATMAP" &&
+                artifact.value("format", std::string{}) == "ARTIFACT_FORMAT_PNG" &&
+                artifact.value("relative_path", std::string{}).ends_with(".png");
+        });
     if (require_heatmap && !heatmap_artifact) {
         add_mismatch("DIFF_HEATMAP_ARTIFACT_MISSING",
             "The visual comparison did not return its PNG difference heatmap artifact.");
     }
 
     std::vector<const Json*> loads;
-    const auto action_results = result.find("action_results");
-    if (action_results != result.end() && action_results->is_array()) {
-        for (const auto& action : *action_results) {
-            if (action.is_object() && action.value("kind", std::string{}) == "load_shader") {
-                loads.push_back(&action);
+    for (const auto* field : {"prelude_receipts", "action_receipts"}) {
+        const auto receipts = result.find(field);
+        if (receipts != result.end() && receipts->is_array()) {
+            for (const auto& receipt : *receipts) {
+                if (receipt.is_object() &&
+                    receipt.value("kind", std::string{}) == "ACTION_KIND_LOAD_SHADER") {
+                    loads.push_back(&receipt);
+                }
             }
         }
     }
@@ -689,18 +672,18 @@ Json visual_comparison_guards(const Json& result, bool require_heatmap) {
     std::array<std::string, 2> source_values;
     if (loads.size() == 2) {
         for (std::size_t index = 0; index < loads.size(); ++index) {
-            const auto result_payload = loads[index]->find("result");
-            const bool load_success = result_payload != loads[index]->end() && result_payload->is_object() &&
-                result_payload->contains("success") && result_payload->at("success").is_boolean() &&
-                result_payload->at("success").get<bool>();
+            const auto mutation = loads[index]->find("runtime_mutation");
+            const bool load_success = loads[index]->value("status", std::string{}) == "RECEIPT_STATUS_OK" &&
+                mutation != loads[index]->end() && mutation->is_object();
             if (!load_success) {
                 load_receipts = false;
                 add_mismatch("SHADER_LOAD_RECEIPT_FAILED",
                     "A baseline or candidate shader load receipt was unsuccessful.");
             }
-            config_values[index] = text_at(*loads[index], {"result", "provenance", "shader", "config_sha256"});
-            scene_values[index] = text_at(*loads[index], {"result", "provenance", "scene", "context_sha256"});
-            source_values[index] = text_at(*loads[index], {"result", "provenance", "source", "identity_sha256"});
+            config_values[index] = text_at(*loads[index],
+                {"runtime_mutation", "effective_settings", "settings_sha256"});
+            scene_values[index] = text_at(*loads[index], {"runtime_mutation", "scene_sha256"});
+            source_values[index] = text_at(*loads[index], {"runtime_mutation", "source_sha256"});
             config_hashes.push_back(config_values[index].empty() ? Json(nullptr) : Json(config_values[index]));
             scene_hashes.push_back(scene_values[index].empty() ? Json(nullptr) : Json(scene_values[index]));
             source_hashes.push_back(source_values[index].empty() ? Json(nullptr) : Json(source_values[index]));
@@ -780,7 +763,7 @@ ToolOutcome run_paired_benchmark(const Json& arguments, std::string_view workflo
         measurement.metrics = metric_values(
             measurement.profile_case, arguments.value("statistic", std::string("avg")));
         measurements.push_back(std::move(measurement));
-        if (!restored(measurements.back().profile_case)) {
+        if (!restored(measurements.back().profile)) {
             halted_without_restore = true;
             break;
         }

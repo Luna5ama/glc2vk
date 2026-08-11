@@ -1,426 +1,234 @@
 #pragma once
 
-#include "vibris_control.grpc.pb.h"
+#include "vibris_control.pb.h"
 
-#include <grpcpp/grpcpp.h>
-
-#include <array>
-#include <atomic>
-#include <cstddef>
 #include <cstdint>
-#include <filesystem>
-#include <memory>
-#include <mutex>
-#include <optional>
-#include <stdexcept>
 #include <string>
-#include <utility>
-#include <vector>
+#include <string_view>
 
 namespace vibris::mcp::test {
 
-namespace fs = std::filesystem;
-namespace proto = ::vibris::control::v1;
+namespace proto = ::vibris::control::v2;
 
-class TerminalJobService final : public proto::VibrisControl::Service {
-public:
-    TerminalJobService(proto::ServerHello hello, fs::path artifact_root, bool expected_actions)
-        : hello_(std::move(hello)), artifact_root_(std::move(artifact_root)), expected_actions_(expected_actions) {}
+inline void fill_provenance(proto::ResultProvenance* provenance, const std::string_view source_uuid,
+    const std::string_view source_sha256 = "source-sha", const std::string_view config_sha256 = "config-sha",
+    const std::string_view scene_sha256 = "scene-sha") {
+    provenance->set_workspace_id("workspace");
+    provenance->set_worktree_root("I:/code/worktree");
+    provenance->set_branch("main");
+    provenance->set_requested_revision("HEAD");
+    provenance->set_resolved_revision("0123456789abcdef");
+    provenance->set_start_head("0123456789abcdef");
+    provenance->set_completion_head("0123456789abcdef");
+    provenance->set_head_changed(false);
+    provenance->set_stale(false);
+    provenance->set_shader_tree_id("shader-tree");
+    provenance->set_dirty_shader_delta_sha256("dirty-sha");
+    provenance->set_source_snapshot_sha256(source_sha256);
+    provenance->set_active_source_uuid(source_uuid);
+    provenance->set_config_sha256(config_sha256);
+    provenance->set_preset_id("preset");
+    provenance->set_preset_sha256("preset-sha");
+    provenance->set_scene_sha256(scene_sha256);
+    provenance->mutable_effective_settings()->set_settings_sha256(config_sha256);
+    provenance->set_shader_loaded_at_unix_ms(1000);
+    provenance->set_pass_mapping_sha256("mapping-sha");
+    auto* environment = provenance->mutable_environment();
+    environment->set_minecraft_version("1.21.11");
+    environment->set_iris_version("iris-test");
+    environment->set_vibris_version("vibris-test");
+    environment->set_java_version("21");
+    environment->set_operating_system("Windows");
+    environment->set_gpu_vendor("GPU vendor");
+    environment->set_gpu_renderer("GPU renderer");
+    environment->set_opengl_version("4.6");
+    environment->set_driver_version("driver");
+}
 
-    [[nodiscard]] bool valid_submit() const noexcept { return valid_submit_.load(); }
-    [[nodiscard]] std::size_t submit_jobs() const noexcept { return submit_jobs_.load(); }
-    [[nodiscard]] std::size_t terminal_writes() const noexcept { return terminal_writes_.load(); }
+inline void fill_restoration(proto::RestorationReceipt* restoration) {
+    restoration->set_status(proto::RECEIPT_STATUS_OK);
+    restoration->set_expected_source_uuid("original");
+    restoration->set_actual_source_uuid("original");
+    restoration->set_expected_source_sha256("original-sha");
+    restoration->set_actual_source_sha256("original-sha");
+    restoration->set_expected_settings_sha256("original-settings");
+    restoration->set_actual_settings_sha256("original-settings");
+    restoration->set_expected_scene_sha256("original-scene");
+    restoration->set_actual_scene_sha256("original-scene");
+    restoration->set_temporal_state_reset(true);
+    restoration->set_verified_at_unix_ms(2000);
+}
 
-private:
-    grpc::Status Control(grpc::ServerContext*,
-        grpc::ServerReaderWriter<proto::ServerMessage, proto::ClientMessage>* stream) override {
-        bool greeted = false;
-        proto::ClientMessage request;
-        while (stream->Read(&request)) {
-            if (!greeted) {
-                if (!request.has_client_hello()) return {grpc::StatusCode::INVALID_ARGUMENT, "CLIENT_HELLO_REQUIRED"};
-                greeted = true;
-                proto::ServerMessage response;
-                response.mutable_protocol_version()->set_major(1);
-                response.set_message_id(request.message_id());
-                response.set_workspace_id(request.workspace_id());
-                response.mutable_server_hello()->CopyFrom(hello_);
-                if (!stream->Write(response)) return {grpc::StatusCode::UNAVAILABLE, "hello write failed"};
-                continue;
-            }
-            if (!request.has_submit_job()) return {grpc::StatusCode::INVALID_ARGUMENT, "SUBMIT_JOB_REQUIRED"};
-            ++submit_jobs_;
-            const auto& job = request.submit_job();
-            const auto source_path = job.sources_size() == 1
-                ? fs::path(hello_.pending_shaders_root()) / job.sources(0).uuid()
-                : fs::path{};
-            const bool execution_matches = job.has_actions() &&
-                job.actions().actions_size() == 2 &&
-                job.actions().actions(0).has_load_shader() &&
-                (expected_actions_ ? job.actions().actions(1).has_inspect_shader()
-                                   : job.actions().actions(1).has_take_screenshot());
-            valid_submit_.store(!source_path.empty() && execution_matches &&
-                job.context().weather_preset_id() == "clear" &&
-                job.context().settings_preset_id() == "quality" && job.context().resolution().width() == 1920 &&
-                job.context().resolution().height() == 1080 && job.context().fov() == 72.5 &&
-                fs::is_directory(source_path));
+inline void fill_result_common(proto::JobResult* result, const std::string_view source_uuid = "candidate") {
+    auto* timings = result->mutable_timings();
+    timings->set_accepted_at_unix_ms(100);
+    timings->set_started_at_unix_ms(200);
+    timings->set_completed_at_unix_ms(300);
+    timings->set_queue_ms(100);
+    timings->set_execution_ms(100);
+    timings->set_total_ms(200);
+    fill_provenance(result->mutable_provenance(), source_uuid);
+    fill_restoration(result->mutable_restoration());
+    result->set_result_manifest_id("manifest-id");
+}
 
-            proto::ServerMessage accepted;
-            accepted.set_request_id(request.request_id());
-            accepted.mutable_job_accepted()->set_request_id(request.request_id());
-            if (!stream->Write(accepted)) return {grpc::StatusCode::UNAVAILABLE, "accepted write failed"};
-            proto::ServerMessage progress;
-            progress.set_request_id(request.request_id());
-            progress.mutable_job_progress()->set_request_id(request.request_id());
-            progress.mutable_job_progress()->set_stage(proto::JOB_STAGE_WARMING_UP);
-            if (!stream->Write(progress)) return {grpc::StatusCode::UNAVAILABLE, "progress write failed"};
+inline proto::ActionReceipt* add_load_receipt(proto::JobResult* result, const std::uint32_t action_index,
+    const std::string_view source_uuid, const std::string_view source_sha256) {
+    auto* receipt = result->add_prelude_receipts();
+    receipt->set_action_index(action_index);
+    receipt->set_kind(proto::ACTION_KIND_LOAD_SHADER);
+    receipt->set_status(proto::RECEIPT_STATUS_OK);
+    auto* mutation = receipt->mutable_runtime_mutation();
+    mutation->set_source_uuid(source_uuid);
+    mutation->set_source_sha256(source_sha256);
+    mutation->mutable_effective_settings()->set_settings_sha256("config-sha");
+    mutation->set_scene_sha256("scene-sha");
+    mutation->set_completed_at_unix_ms(900 + action_index);
+    return receipt;
+}
 
-            fs::remove_all(source_path);
-            proto::ServerMessage completed;
-            completed.set_request_id(request.request_id());
-            auto* result = completed.mutable_job_completed()->mutable_result();
-            result->set_kind(proto::JOB_RESULT_KIND_ACTION_SEQUENCE);
-            result->set_manifest_path((artifact_root_ / "manifest.json").string());
-            result->add_frame_ids(901);
-            result->mutable_timings()->set_total_ms(17);
-            if (expected_actions_) {
-                auto* action_result = result->add_action_results();
-                action_result->set_action_index(1);
-                action_result->set_kind(proto::JOB_ACTION_KIND_INSPECT_SHADER);
-                action_result->set_json(R"({"loaded":true})");
-            }
-            auto* artifact = result->add_artifacts();
-            artifact->set_artifact_id("runtime-artifact");
-            artifact->set_file_name("capture.png");
-            artifact->set_kind(proto::ARTIFACT_KIND_SCREENSHOT);
-            artifact->set_format(proto::ARTIFACT_FORMAT_PNG);
-            artifact->set_path((artifact_root_ / "capture.png").string());
-            if (!stream->Write(completed)) return {grpc::StatusCode::UNAVAILABLE, "terminal write failed"};
-            ++terminal_writes_;
-            return grpc::Status::OK;
-        }
-        return grpc::Status::OK;
-    }
+inline proto::ActionReceipt* add_metrics_receipt(proto::JobResult* result, const std::uint32_t action_index,
+    const std::uint64_t average_ns = 1000) {
+    auto* receipt = result->add_action_receipts();
+    receipt->set_action_index(action_index);
+    receipt->set_kind(proto::ACTION_KIND_GET_GPU_METRICS);
+    receipt->set_status(proto::RECEIPT_STATUS_OK);
+    auto* metrics = receipt->mutable_gpu_metrics();
+    metrics->set_timing_unit("ns");
+    metrics->set_sampled_frames(3);
+    auto* metric = metrics->add_metrics();
+    metric->set_metric_id("composite_total");
+    metric->set_program_id("composite");
+    metric->set_pass_id("composite");
+    metric->set_average_ns(average_ns);
+    metric->set_p50_ns(average_ns - 100);
+    metric->set_p95_ns(average_ns + 100);
+    metric->add_samples_ns(average_ns - 100);
+    metric->add_samples_ns(average_ns);
+    metric->add_samples_ns(average_ns + 100);
+    return receipt;
+}
 
-    proto::ServerHello hello_;
-    fs::path artifact_root_;
-    bool expected_actions_;
-    std::atomic<bool> valid_submit_ = false;
-    std::atomic<std::size_t> submit_jobs_ = 0;
-    std::atomic<std::size_t> terminal_writes_ = 0;
-};
+inline proto::ServerMessage completed_profile_message() {
+    proto::ServerMessage message;
+    message.set_request_id("request-profile");
+    auto* completed = message.mutable_job_completed();
+    completed->set_job_id("job-profile");
+    completed->set_request_id("request-profile");
+    auto* result = completed->mutable_result();
+    fill_result_common(result);
+    add_load_receipt(result, 0, "candidate", "source-sha");
+    add_metrics_receipt(result, 1);
+    return message;
+}
 
-class TerminalJobServer final {
-public:
-    TerminalJobServer(const fs::path& pending_root, const fs::path& artifact_root, bool expected_actions)
-        : hello_(hello(pending_root, artifact_root)), service_(hello_, artifact_root, expected_actions) {
-        grpc::ServerBuilder builder;
-        builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials(), &port_);
-        builder.RegisterService(&service_);
-        server_ = builder.BuildAndStart();
-        if (!server_ || port_ == 0) throw std::runtime_error("failed to bind terminal job fixture server");
-    }
+inline proto::ServerMessage completed_inspection_message() {
+    proto::ServerMessage message;
+    message.set_request_id("request-inspection");
+    auto* completed = message.mutable_job_completed();
+    completed->set_job_id("job-inspection");
+    completed->set_request_id("request-inspection");
+    auto* result = completed->mutable_result();
+    fill_result_common(result);
+    add_load_receipt(result, 0, "candidate", "source-sha");
+    auto* receipt = result->add_action_receipts();
+    receipt->set_action_index(1);
+    receipt->set_kind(proto::ACTION_KIND_INSPECT_SHADER);
+    receipt->set_status(proto::RECEIPT_STATUS_OK);
+    auto* catalog = receipt->mutable_shader_inspection()->mutable_catalog();
+    catalog->set_mapping_sha256("mapping-sha");
+    catalog->set_shader_generation(7);
+    auto* program = catalog->add_programs();
+    program->set_program_id("composite");
+    program->set_pass_id("composite");
+    program->set_compile_state(proto::COMPILE_STATE_SUCCEEDED);
+    program->set_link_state(proto::COMPILE_STATE_SUCCEEDED);
+    return message;
+}
 
-    TerminalJobServer(const TerminalJobServer&) = delete;
-    TerminalJobServer& operator=(const TerminalJobServer&) = delete;
-    ~TerminalJobServer() { shutdown(); }
+inline void add_matrix_case(proto::MatrixResult* matrix, const std::string_view case_id,
+    const std::string_view source_uuid, const std::uint64_t average_ns) {
+    auto* value = matrix->add_cases();
+    value->set_case_id(case_id);
+    value->set_status(proto::RECEIPT_STATUS_OK);
+    fill_provenance(value->mutable_provenance(), source_uuid);
+    auto* receipt = value->add_action_receipts();
+    receipt->set_action_index(0);
+    receipt->set_kind(proto::ACTION_KIND_GET_GPU_METRICS);
+    receipt->set_status(proto::RECEIPT_STATUS_OK);
+    auto* metrics = receipt->mutable_gpu_metrics();
+    metrics->set_timing_unit("ns");
+    metrics->set_sampled_frames(2);
+    auto* metric = metrics->add_metrics();
+    metric->set_metric_id("composite_total");
+    metric->set_program_id("composite");
+    metric->set_pass_id("composite");
+    metric->set_average_ns(average_ns);
+    metric->set_p50_ns(average_ns);
+    metric->set_p95_ns(average_ns + 100);
+    metric->add_samples_ns(average_ns);
+    metric->add_samples_ns(average_ns + 100);
+}
 
-    [[nodiscard]] int port() const noexcept { return port_; }
-    [[nodiscard]] const proto::ServerHello& server_hello() const noexcept { return hello_; }
-    [[nodiscard]] bool valid_submit() const noexcept { return service_.valid_submit(); }
-    [[nodiscard]] std::size_t submit_jobs() const noexcept { return service_.submit_jobs(); }
-    [[nodiscard]] std::size_t terminal_writes() const noexcept { return service_.terminal_writes(); }
+inline proto::ServerMessage completed_matrix_message() {
+    proto::ServerMessage message;
+    message.set_request_id("request-matrix");
+    auto* completed = message.mutable_job_completed();
+    completed->set_job_id("job-matrix");
+    completed->set_request_id("request-matrix");
+    auto* result = completed->mutable_result();
+    fill_result_common(result);
+    auto* matrix = result->mutable_matrix();
+    add_matrix_case(matrix, "baseline--default", "baseline", 1200);
+    add_matrix_case(matrix, "candidate--default", "candidate", 1000);
+    matrix->set_requested_cases(2);
+    matrix->set_completed_cases(2);
+    matrix->set_failed_cases(0);
+    return message;
+}
 
-    void shutdown() {
-        if (!server_) return;
-        server_->Shutdown();
-        server_->Wait();
-        server_.reset();
-    }
+inline proto::ActionReceipt* add_capture_receipt(proto::JobResult* result, const std::uint32_t action_index,
+    const std::uint64_t frame_id) {
+    auto* receipt = result->add_action_receipts();
+    receipt->set_action_index(action_index);
+    receipt->set_kind(proto::ACTION_KIND_TAKE_SCREENSHOT);
+    receipt->set_status(proto::RECEIPT_STATUS_OK);
+    receipt->mutable_capture()->set_frame_id(frame_id);
+    return receipt;
+}
 
-private:
-    static proto::ServerHello hello(const fs::path& pending_root, const fs::path& artifact_root) {
-        proto::ServerHello result;
-        result.mutable_protocol_version()->set_major(1);
-        result.set_ready(true);
-        result.set_pending_shaders_root(fs::absolute(pending_root).string());
-        result.set_artifact_root(fs::absolute(artifact_root).string());
-        result.mutable_limits()->set_max_source_bytes(1024 * 1024);
-        result.mutable_limits()->set_max_source_files(128);
-        return result;
-    }
+inline proto::ServerMessage completed_visual_message() {
+    proto::ServerMessage message;
+    message.set_request_id("request-visual");
+    auto* completed = message.mutable_job_completed();
+    completed->set_job_id("job-visual");
+    completed->set_request_id("request-visual");
+    auto* result = completed->mutable_result();
+    fill_result_common(result);
+    add_load_receipt(result, 0, "baseline", "baseline-sha");
+    add_load_receipt(result, 1, "candidate", "candidate-sha");
+    add_capture_receipt(result, 2, 41);
+    add_capture_receipt(result, 3, 42);
+    auto* comparison = result->add_action_receipts();
+    comparison->set_action_index(4);
+    comparison->set_kind(proto::ACTION_KIND_COMPARE_CAPTURES);
+    comparison->set_status(proto::RECEIPT_STATUS_OK);
+    comparison->mutable_comparison()->set_passed(true);
+    comparison->mutable_comparison()->mutable_metrics()->set_mean_absolute_error(0.0);
+    comparison->mutable_comparison()->mutable_metrics()->set_sample_count(100);
+    comparison->mutable_comparison()->mutable_metrics()->set_pixel_count(100);
 
-    int port_ = 0;
-    proto::ServerHello hello_;
-    TerminalJobService service_;
-    std::unique_ptr<grpc::Server> server_;
-};
-
-class MetricsJobService final : public proto::VibrisControl::Service {
-public:
-    using Payloads = std::vector<std::optional<std::string>>;
-    using Plans = std::vector<Payloads>;
-
-    MetricsJobService(
-        proto::ServerHello hello, Plans plans, std::vector<std::optional<proto::ErrorCode>> job_failures = {})
-        : hello_(std::move(hello)), plans_(std::move(plans)), job_failures_(std::move(job_failures)) {}
-
-    [[nodiscard]] bool valid_submit() const noexcept { return valid_submit_.load(); }
-    [[nodiscard]] std::size_t terminal_writes() const noexcept { return terminal_writes_.load(); }
-    [[nodiscard]] std::size_t resume_requests() const noexcept { return resume_requests_.load(); }
-    [[nodiscard]] std::size_t submit_jobs() const noexcept { return submit_jobs_.load(); }
-    [[nodiscard]] std::vector<std::vector<std::string>> submitted_case_ids() const {
-        std::scoped_lock lock(mutex_);
-        return submitted_case_ids_;
-    }
-    [[nodiscard]] std::vector<std::uint32_t> submitted_attempts() const {
-        std::scoped_lock lock(mutex_);
-        return submitted_attempts_;
-    }
-    [[nodiscard]] std::vector<std::size_t> submitted_previous_attempt_counts() const {
-        std::scoped_lock lock(mutex_);
-        return submitted_previous_attempt_counts_;
-    }
-    [[nodiscard]] std::vector<bool> submitted_benchmark_cases() const {
-        std::scoped_lock lock(mutex_);
-        return submitted_benchmark_cases_;
-    }
-
-private:
-    grpc::Status Control(grpc::ServerContext*,
-        grpc::ServerReaderWriter<proto::ServerMessage, proto::ClientMessage>* stream) override {
-        bool greeted = false;
-        proto::ClientMessage request;
-        while (stream->Read(&request)) {
-            if (!greeted) {
-                if (!request.has_client_hello()) return {grpc::StatusCode::INVALID_ARGUMENT, "CLIENT_HELLO_REQUIRED"};
-                greeted = true;
-                proto::ServerMessage response;
-                response.mutable_protocol_version()->set_major(1);
-                response.set_message_id(request.message_id());
-                response.set_workspace_id(request.workspace_id());
-                response.mutable_server_hello()->CopyFrom(hello_);
-                if (!stream->Write(response)) return {grpc::StatusCode::UNAVAILABLE, "hello write failed"};
-                continue;
-            }
-            if (request.has_resume_request()) {
-                ++resume_requests_;
-                proto::ServerMessage state;
-                state.set_request_id(request.request_id());
-                state.mutable_resume_state();
-                if (!stream->Write(state)) return {grpc::StatusCode::UNAVAILABLE, "resume state write failed"};
-                continue;
-            }
-            if (!request.has_submit_job()) return {grpc::StatusCode::INVALID_ARGUMENT, "SUBMIT_JOB_REQUIRED"};
-            const auto& job = request.submit_job();
-            const auto job_index = submit_jobs_.fetch_add(1);
-            if (job_index >= plans_.size()) {
-                valid_submit_.store(false);
-                return {grpc::StatusCode::INVALID_ARGUMENT, "UNEXPECTED_SUBMIT_JOB"};
-            }
-            const auto& metric_payloads = plans_[job_index];
-            std::size_t metric_actions = 0;
-            std::vector<std::string> case_ids;
-            for (const auto& action : job.actions().actions()) {
-                if (action.has_get_gpu_metrics()) ++metric_actions;
-                if (action.has_load_shader()) case_ids.push_back(action.load_shader().case_id());
-            }
-            {
-                std::scoped_lock lock(mutex_);
-                submitted_case_ids_.push_back(std::move(case_ids));
-                submitted_attempts_.push_back(job.result_artifacts().attempt());
-                submitted_previous_attempt_counts_.push_back(job.result_artifacts().previous_attempts_size());
-                submitted_benchmark_cases_.push_back(job.has_benchmark_case());
-            }
-            const bool valid = metric_actions == metric_payloads.size() && job.has_result_artifacts() &&
-                job.result_artifacts().json() && job.result_artifacts().attempt() > 0 &&
-                (job.result_artifacts().kind() == "profile" || job.result_artifacts().kind() == "profile_matrix" ||
-                    job.result_artifacts().kind() == "benchmark_ab");
-            valid_submit_.store(valid_submit_.load() && valid);
-
-            proto::ServerMessage accepted;
-            accepted.set_request_id(request.request_id());
-            accepted.mutable_job_accepted()->set_request_id(request.request_id());
-            if (!stream->Write(accepted)) return {grpc::StatusCode::UNAVAILABLE, "accepted write failed"};
-
-            for (const auto& source : job.sources()) {
-                fs::remove_all(fs::path(hello_.pending_shaders_root()) / source.uuid());
-            }
-
-            if (job_index < job_failures_.size() && job_failures_[job_index].has_value()) {
-                proto::ServerMessage failed;
-                failed.set_request_id(request.request_id());
-                auto* terminal = failed.mutable_job_failed();
-                terminal->set_request_id(request.request_id());
-                terminal->mutable_error()->set_code(*job_failures_[job_index]);
-                terminal->mutable_error()->set_message("retryable fixture failure");
-                terminal->mutable_error()->set_retryable(true);
-                if (!stream->Write(failed)) return {grpc::StatusCode::UNAVAILABLE, "terminal write failed"};
-                ++terminal_writes_;
-                continue;
-            }
-
-            proto::ServerMessage completed;
-            completed.set_request_id(request.request_id());
-            completed.mutable_job_completed()->set_request_id(request.request_id());
-            auto* result = completed.mutable_job_completed()->mutable_result();
-            result->set_kind(proto::JOB_RESULT_KIND_ACTION_SEQUENCE);
-            const auto artifact_directory = fs::absolute(fs::path(hello_.artifact_root()) /
-                job.workspace_id() / job.request_id());
-            result->set_manifest_path((artifact_directory / "manifest.json").string());
-            auto* json_artifact = result->add_artifacts();
-            json_artifact->set_artifact_id("profile-json");
-            json_artifact->set_file_name("profile-result.json");
-            json_artifact->set_kind(proto::ARTIFACT_KIND_PROFILE_RESULT);
-            json_artifact->set_format(proto::ARTIFACT_FORMAT_JSON);
-            json_artifact->set_media_type("application/json");
-            json_artifact->set_path((artifact_directory / "profile-result.json").string());
-            if (job.result_artifacts().csv()) {
-                auto* csv_artifact = result->add_artifacts();
-                csv_artifact->set_artifact_id("profile-csv");
-                csv_artifact->set_file_name("profile-result.csv");
-                csv_artifact->set_kind(proto::ARTIFACT_KIND_PROFILE_RESULT);
-                csv_artifact->set_format(proto::ARTIFACT_FORMAT_CSV);
-                csv_artifact->set_media_type("text/csv; charset=utf-8");
-                csv_artifact->set_path((artifact_directory / "profile-result.csv").string());
-            }
-            std::size_t payload_index = 0;
-            std::string current_case_id;
-            for (int action_index = 0; action_index < job.actions().actions_size(); ++action_index) {
-                const auto& action = job.actions().actions(action_index);
-                if (action.has_load_shader()) {
-                    const auto& load = action.load_shader();
-                    current_case_id = load.case_id();
-                    auto* action_result = result->add_action_results();
-                    action_result->set_action_index(action_index);
-                    action_result->set_kind(proto::JOB_ACTION_KIND_LOAD_SHADER);
-                    action_result->set_case_id(current_case_id);
-                    action_result->set_json(Json{{"success", true},
-                                                {"case_id", load.case_id()},
-                                                {"source", load.source_id()},
-                                                {"config", load.config_id()},
-                                                {"provenance", {
-                                                    {"complete", true},
-                                                    {"case_hash", "fixture-case-hash"},
-                                                    {"source", {{"identity_sha256",
-                                                        load.source_id() + "-source-hash"}}},
-                                                    {"shader", {{"config_sha256", "fixture-config-hash"}}},
-                                                    {"scene", {{"context_sha256", "fixture-scene-hash"}}},
-                                                }}}.dump());
-                    continue;
-                }
-                if (!action.has_get_gpu_metrics()) continue;
-                const auto& payload = metric_payloads.at(payload_index++);
-                if (!payload.has_value()) continue;
-                auto* action_result = result->add_action_results();
-                action_result->set_action_index(action_index);
-                action_result->set_kind(proto::JOB_ACTION_KIND_GET_GPU_METRICS);
-                action_result->set_case_id(current_case_id);
-                action_result->set_json(*payload);
-            }
-            if (job.has_benchmark_case()) {
-                constexpr std::array stages{
-                    proto::BENCHMARK_BARRIER_STAGE_SOURCE_PUBLISHED,
-                    proto::BENCHMARK_BARRIER_STAGE_CONFIG_APPLIED,
-                    proto::BENCHMARK_BARRIER_STAGE_SHADER_RELOADED,
-                    proto::BENCHMARK_BARRIER_STAGE_SHADER_GENERATION_CONFIRMED,
-                    proto::BENCHMARK_BARRIER_STAGE_WARMUP_STARTED,
-                    proto::BENCHMARK_BARRIER_STAGE_WARMUP_COMPLETED,
-                    proto::BENCHMARK_BARRIER_STAGE_SAMPLE_STARTED,
-                    proto::BENCHMARK_BARRIER_STAGE_SAMPLE_COMPLETED,
-                    proto::BENCHMARK_BARRIER_STAGE_STATE_RESTORED,
-                };
-                for (std::size_t index = 0; index < stages.size(); ++index) {
-                    auto* receipt = result->add_benchmark_barriers();
-                    receipt->set_case_id(job.benchmark_case().case_id());
-                    receipt->set_stage(stages[index]);
-                    receipt->set_ordinal(static_cast<std::uint32_t>(index + 1));
-                }
-            }
-            if (!stream->Write(completed)) return {grpc::StatusCode::UNAVAILABLE, "terminal write failed"};
-            ++terminal_writes_;
-        }
-        return grpc::Status::OK;
-    }
-
-    proto::ServerHello hello_;
-    Plans plans_;
-    std::vector<std::optional<proto::ErrorCode>> job_failures_;
-    mutable std::mutex mutex_;
-    std::vector<std::vector<std::string>> submitted_case_ids_;
-    std::vector<std::uint32_t> submitted_attempts_;
-    std::vector<std::size_t> submitted_previous_attempt_counts_;
-    std::vector<bool> submitted_benchmark_cases_;
-    std::atomic_bool valid_submit_ = true;
-    std::atomic<std::size_t> submit_jobs_ = 0;
-    std::atomic<std::size_t> terminal_writes_ = 0;
-    std::atomic<std::size_t> resume_requests_ = 0;
-};
-
-class MetricsJobServer final {
-public:
-    MetricsJobServer(const fs::path& pending_root, std::vector<std::optional<std::string>> metric_payloads)
-        : MetricsJobServer(pending_root, MetricsJobService::Plans{std::move(metric_payloads)}) {}
-
-    MetricsJobServer(const fs::path& pending_root, MetricsJobService::Plans plans)
-        : MetricsJobServer(pending_root, std::move(plans), {}) {}
-
-    MetricsJobServer(const fs::path& pending_root, MetricsJobService::Plans plans,
-        std::vector<std::optional<proto::ErrorCode>> job_failures)
-        : hello_(hello(pending_root)), service_(hello_, std::move(plans), std::move(job_failures)) {
-        grpc::ServerBuilder builder;
-        builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials(), &port_);
-        builder.RegisterService(&service_);
-        server_ = builder.BuildAndStart();
-        if (!server_ || port_ == 0) throw std::runtime_error("failed to bind metrics fixture server");
-    }
-
-    MetricsJobServer(const MetricsJobServer&) = delete;
-    MetricsJobServer& operator=(const MetricsJobServer&) = delete;
-    ~MetricsJobServer() { shutdown(); }
-
-    [[nodiscard]] int port() const noexcept { return port_; }
-    [[nodiscard]] const proto::ServerHello& server_hello() const noexcept { return hello_; }
-    [[nodiscard]] bool valid_submit() const noexcept { return service_.valid_submit(); }
-    [[nodiscard]] std::size_t terminal_writes() const noexcept { return service_.terminal_writes(); }
-    [[nodiscard]] std::size_t resume_requests() const noexcept { return service_.resume_requests(); }
-    [[nodiscard]] std::size_t submit_jobs() const noexcept { return service_.submit_jobs(); }
-    [[nodiscard]] std::vector<std::vector<std::string>> submitted_case_ids() const {
-        return service_.submitted_case_ids();
-    }
-    [[nodiscard]] std::vector<std::uint32_t> submitted_attempts() const {
-        return service_.submitted_attempts();
-    }
-    [[nodiscard]] std::vector<std::size_t> submitted_previous_attempt_counts() const {
-        return service_.submitted_previous_attempt_counts();
-    }
-    [[nodiscard]] std::vector<bool> submitted_benchmark_cases() const {
-        return service_.submitted_benchmark_cases();
-    }
-
-    void shutdown() {
-        if (!server_) return;
-        server_->Shutdown();
-        server_->Wait();
-        server_.reset();
-    }
-
-private:
-    static proto::ServerHello hello(const fs::path& pending_root) {
-        proto::ServerHello result;
-        result.mutable_protocol_version()->set_major(1);
-        result.set_ready(true);
-        result.set_pending_shaders_root(fs::absolute(pending_root).string());
-        result.set_artifact_root(fs::absolute(pending_root.parent_path() / "artifacts").string());
-        result.mutable_limits()->set_max_source_bytes(1024 * 1024);
-        result.mutable_limits()->set_max_source_files(128);
-        return result;
-    }
-
-    int port_ = 0;
-    proto::ServerHello hello_;
-    MetricsJobService service_;
-    std::unique_ptr<grpc::Server> server_;
-};
+    auto* metrics = result->add_artifacts();
+    metrics->set_artifact_id("diff-json");
+    metrics->set_relative_path("visual/diff.json");
+    metrics->set_kind(proto::ARTIFACT_KIND_BENCHMARK_METRICS);
+    metrics->set_format(proto::ARTIFACT_FORMAT_JSON);
+    auto* heatmap = result->add_artifacts();
+    heatmap->set_artifact_id("diff-heatmap");
+    heatmap->set_relative_path("visual/diff.png");
+    heatmap->set_kind(proto::ARTIFACT_KIND_HEATMAP);
+    heatmap->set_format(proto::ARTIFACT_FORMAT_PNG);
+    return message;
+}
 
 }

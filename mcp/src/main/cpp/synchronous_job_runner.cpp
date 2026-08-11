@@ -86,144 +86,92 @@ void report_progress(const SynchronousJobProgressSink& sink, std::string request
     if (sink) sink({std::move(request_id), std::move(stage), accepted});
 }
 
-bool failed_action(const Json& action) {
-    const auto& result = action.at("result");
-    return result.is_object() && result.contains("success") && result.at("success").is_boolean() &&
-        !result.at("success").get<bool>();
-}
-
-bool has_gpu_samples(const Json& result) {
-    if (!result.is_object()) return false;
-    const auto timings = result.find("gpuTimings");
-    if (timings != result.end() && timings->is_object() && !timings->empty()) return true;
-    const auto programs = result.find("gpuProgramTimings");
-    return programs != result.end() && programs->is_array() &&
-        std::any_of(programs->begin(), programs->end(), [](const Json& program) {
-            if (!program.is_object()) return false;
-            const auto statistics = program.find("statistics");
-            return statistics != program.end() && statistics->is_object() && !statistics->empty();
-        });
-}
-
-bool wildcard_match(std::string_view pattern, std::string_view value) {
-    std::size_t pattern_index = 0;
-    std::size_t value_index = 0;
-    std::size_t star = std::string_view::npos;
-    std::size_t retry = 0;
-    while (value_index < value.size()) {
-        if (pattern_index < pattern.size() && pattern[pattern_index] == value[value_index]) {
-            ++pattern_index;
-            ++value_index;
-        } else if (pattern_index < pattern.size() && pattern[pattern_index] == '*') {
-            star = pattern_index++;
-            retry = value_index;
-        } else if (star != std::string_view::npos) {
-            pattern_index = star + 1;
-            value_index = ++retry;
-        } else {
-            return false;
-        }
+const Json& strict_job_result(const Json& terminal) {
+    if (!terminal.is_object() || !terminal.value("success", false)) {
+        throw std::invalid_argument("strict v2 normalization requires a successful terminal envelope");
     }
-    while (pattern_index < pattern.size() && pattern[pattern_index] == '*') ++pattern_index;
-    return pattern_index == pattern.size();
-}
-
-bool selected_metric(const Json& arguments, std::string_view name) {
-    const auto filter = arguments.find("metric_filter");
-    if (filter == arguments.end()) return true;
-    for (const auto& pattern : *filter) {
-        if (wildcard_match(pattern.get_ref<const std::string&>(), name)) return true;
+    const auto found = terminal.find("result");
+    if (found == terminal.end() || !found->is_object()) {
+        throw std::invalid_argument("strict v2 terminal envelope is missing JobResult");
     }
-    return false;
-}
-
-bool selected_program_timing(const Json& arguments, const Json& timing) {
-    const auto filter = arguments.find("metric_filter");
-    if (filter == arguments.end()) return true;
-    constexpr std::array fields{
-        "metric", "program", "stage", "source", "dispatch", "framework_pass", "compatibility_metric",
+    constexpr std::array removed_fields{
+        "kind", "action_results", "manifest_path", "frame_ids", "benchmark_barriers",
     };
-    for (const auto& pattern_value : *filter) {
-        const auto& pattern = pattern_value.get_ref<const std::string&>();
-        for (const auto* field : fields) {
-            const auto found = timing.find(field);
-            if (found != timing.end() && found->is_string() &&
-                wildcard_match(pattern, found->get_ref<const std::string&>())) {
-                return true;
-            }
-        }
-        const auto defines = timing.find("defines");
-        if (defines == timing.end() || !defines->is_object()) continue;
-        for (const auto& [name, value] : defines->items()) {
-            if (wildcard_match(pattern, name) ||
-                (value.is_string() &&
-                    (wildcard_match(pattern, value.get_ref<const std::string&>()) ||
-                        wildcard_match(pattern, name + "=" + value.get_ref<const std::string&>())))) {
-                return true;
-            }
+    for (const auto* field : removed_fields) {
+        if (found->contains(field)) {
+            throw std::invalid_argument(std::string("removed JobResult field is not accepted: ") + field);
         }
     }
-    return false;
+    return *found;
 }
 
-bool selected_statistic(const Json& arguments, std::string_view name) {
-    const auto filter = arguments.find("statistics");
-    if (filter == arguments.end()) return true;
-    return std::ranges::any_of(*filter, [name](const Json& statistic) {
-        return statistic.get_ref<const std::string&>() == name;
-    });
+const Json& strict_array(const Json& object, std::string_view field) {
+    const auto found = object.find(field);
+    if (found == object.end() || !found->is_array()) {
+        throw std::invalid_argument("strict v2 result field is not an array: " + std::string(field));
+    }
+    return *found;
 }
 
-Json filtered_statistics(const Json& statistics, const Json& arguments) {
-    Json result = Json::object();
-    for (const auto& [statistic, value] : statistics.items()) {
-        if (!selected_statistic(arguments, statistic)) continue;
-        result[statistic] = value;
-        if (!value.is_number()) continue;
-        const auto nanoseconds = value.get<double>();
-        for (const auto& unit : arguments.value("converted_units", Json::array())) {
-            const auto& name = unit.get_ref<const std::string&>();
-            if (name == "us") result[statistic + "_us"] = nanoseconds / 1'000.0;
-            if (name == "ms") result[statistic + "_ms"] = nanoseconds / 1'000'000.0;
-        }
-    }
-    return result;
+bool receipt_ok(const Json& receipt) {
+    return receipt.is_object() && receipt.value("status", std::string{}) == "RECEIPT_STATUS_OK";
 }
 
-Json filtered_metrics(const Json& metrics, const Json& arguments) {
-    Json result = metrics;
-    Json filtered_timings = Json::object();
-    const auto timing_values = metrics.value("gpuTimings", Json::object());
-    for (const auto& [metric_name, statistics] : timing_values.items()) {
-        if (!selected_metric(arguments, metric_name)) continue;
-        filtered_timings[metric_name] = statistics.is_object()
-            ? filtered_statistics(statistics, arguments)
-            : statistics;
-    }
-    result["gpuTimings"] = std::move(filtered_timings);
+Json receipt_error(const Json& receipt) {
+    const auto found = receipt.find("error");
+    if (found != receipt.end() && found->is_object()) return *found;
+    return {{"code", "ERROR_CODE_INTERNAL"}, {"message", "A typed action receipt failed without an error."},
+            {"retryable", false}, {"details", Json::object()}};
+}
 
-    Json filtered_scopes = Json::array();
-    const auto scope_values = metrics.value("gpuTimingScopes", Json::array());
-    for (const auto& scope : scope_values) {
-        if (scope.is_object() && selected_metric(arguments, scope.value("metric", std::string{}))) {
-            filtered_scopes.push_back(scope);
-        }
+std::vector<const Json*> ordered_receipts(const Json& result) {
+    std::vector<const Json*> receipts;
+    for (const auto* field : {"prelude_receipts", "action_receipts"}) {
+        for (const auto& receipt : strict_array(result, field)) receipts.push_back(&receipt);
     }
-    result["gpuTimingScopes"] = std::move(filtered_scopes);
+    return receipts;
+}
 
-    Json filtered_programs = Json::array();
-    const auto program_values = metrics.value("gpuProgramTimings", Json::array());
-    for (const auto& timing : program_values) {
-        if (!timing.is_object() || !selected_program_timing(arguments, timing)) continue;
-        auto filtered = timing;
-        if (const auto statistics = timing.find("statistics");
-            statistics != timing.end() && statistics->is_object()) {
-            filtered["statistics"] = filtered_statistics(*statistics, arguments);
-        }
-        filtered_programs.push_back(std::move(filtered));
+std::uint64_t wire_uint64(const Json& value) {
+    if (value.is_number_unsigned()) return value.get<std::uint64_t>();
+    if (value.is_number_integer()) {
+        const auto signed_value = value.get<std::int64_t>();
+        if (signed_value < 0) throw std::invalid_argument("negative uint64 protobuf JSON value");
+        return static_cast<std::uint64_t>(signed_value);
     }
-    result["gpuProgramTimings"] = std::move(filtered_programs);
-    return result;
+    if (value.is_string()) return std::stoull(value.get<std::string>());
+    throw std::invalid_argument("invalid uint64 protobuf JSON value");
+}
+
+Json normalized_gpu_metrics(const Json& receipt) {
+    if (!receipt.is_object()) throw std::invalid_argument("gpu_metrics receipt is not an object");
+    Json metrics = Json::array();
+    for (const auto& value : strict_array(receipt, "metrics")) {
+        if (!value.is_object()) throw std::invalid_argument("GpuTimingMetric is not an object");
+        Json samples = Json::array();
+        for (const auto& sample : strict_array(value, "samples_ns")) samples.push_back(wire_uint64(sample));
+        metrics.push_back({{"metric_id", value.value("metric_id", std::string{})},
+            {"program_id", value.value("program_id", std::string{})},
+            {"pass_id", value.value("pass_id", std::string{})},
+            {"average_ns", wire_uint64(value.at("average_ns"))},
+            {"p50_ns", wire_uint64(value.at("p50_ns"))},
+            {"p95_ns", wire_uint64(value.at("p95_ns"))},
+            {"samples_ns", std::move(samples)}});
+    }
+    return {{"timing_unit", receipt.value("timing_unit", std::string{})},
+            {"sampled_frames", receipt.value("sampled_frames", std::uint32_t{})},
+            {"metrics", std::move(metrics)}};
+}
+
+bool has_gpu_samples(const Json& metrics) {
+    return metrics.is_object() && metrics.value("sampled_frames", std::uint32_t{}) > 0 &&
+        metrics.contains("metrics") && metrics.at("metrics").is_array() && !metrics.at("metrics").empty();
+}
+
+bool restored(const Json& result) {
+    const auto receipt = result.find("restoration");
+    return receipt != result.end() && receipt->is_object() &&
+        receipt->value("status", std::string{}) == "RECEIPT_STATUS_OK";
 }
 
 Json no_gpu_samples_error(std::string_view case_id, std::string_view reason) {
@@ -242,10 +190,10 @@ Json incomplete_provenance_error(std::string_view case_id) {
             {"details", {{"case_id", case_id}}}};
 }
 
-Json incomplete_barriers_error(std::string_view case_id) {
+Json incomplete_restoration_error(std::string_view case_id) {
     return {{"success", false},
-            {"error_code", "BENCHMARK_BARRIER_FAILED"},
-            {"message", "The benchmark case did not prove isolation and final state restoration."},
+            {"error_code", "RESTORATION_RECEIPT_FAILED"},
+            {"message", "The benchmark case did not return a successful restoration receipt."},
             {"retryable", false},
             {"details", {{"case_id", case_id}}}};
 }
@@ -258,74 +206,31 @@ struct ProfileCounts final {
     std::size_t with_metrics = 0;
 };
 
-Json case_artifacts(const Json& job, std::string_view case_id, bool matrix) {
-    if (!matrix) return job.at("artifacts");
-    Json result = Json::array();
-    for (const auto& artifact : job.at("artifacts")) {
-        if (artifact.at("file_name").get_ref<const std::string&>().starts_with(
-                std::string(case_id) + "--")) {
-            result.push_back(artifact);
-        }
-    }
-    return result;
-}
-
-Json profile_artifacts(const Json& job) {
-    Json result = Json::array();
-    for (const auto& artifact : job.at("artifacts")) {
-        if (artifact.at("kind") == "profile_result") result.push_back(artifact);
-    }
-    return result;
-}
-
-void append_profile_case(const Json& job, Json& cases, ProfileCounts& counts, const Json& arguments,
-    std::size_t warmup_frames, std::string case_id, std::string source_id, std::string config_id,
-    std::size_t first_action, std::size_t last_action, bool matrix, bool explicit_identity,
-    std::string_view detail) {
-    const bool full = detail == "full";
+Json profile_case(const Json& receipts, const Json& provenance, const Json& restoration,
+    ProfileCounts& counts, const Json& arguments, std::size_t warmup_frames,
+    std::string case_id, std::string source_id, std::string config_id, std::string_view detail,
+    bool retain_receipts) {
     const bool include_metrics = detail != "summary";
-    Json action_results = Json::array();
     Json metrics = nullptr;
     Json error = nullptr;
-    Json provenance = nullptr;
     bool metrics_seen = false;
-    for (const auto& action : job.at("action_results")) {
-        const auto index = action.at("action_index").get<std::size_t>();
-        const auto action_case = action.value("case_id", std::string{});
-        if (explicit_identity ? action_case != case_id :
-            (!action_case.empty() ? action_case != case_id : index < first_action || index >= last_action)) {
-            continue;
-        }
-        if (failed_action(action) && error.is_null()) error = action.at("result");
-        if (action.at("kind") == "load_shader" && action.at("result").is_object()) {
-            const auto found = action.at("result").find("provenance");
-            if (found != action.at("result").end()) provenance = *found;
-        }
-        if (action.at("kind") == "get_gpu_metrics") {
+    for (const auto& receipt : receipts) {
+        if (!receipt_ok(receipt) && error.is_null()) error = receipt_error(receipt);
+        if (receipt.value("kind", std::string{}) == "ACTION_KIND_GET_GPU_METRICS") {
             metrics_seen = true;
-            if (has_gpu_samples(action.at("result"))) metrics = action.at("result");
-            continue;
+            const auto found = receipt.find("gpu_metrics");
+            if (found != receipt.end()) metrics = normalized_gpu_metrics(*found);
         }
-        if (!full) continue;
-        auto mapped = action;
-        mapped["action_index"] = index - first_action;
-        action_results.push_back(std::move(mapped));
-    }
-
-    Json barriers = Json::array();
-    bool restored = !explicit_identity;
-    for (const auto& receipt : job.value("benchmark_barriers", Json::array())) {
-        if (receipt.value("case_id", std::string{}) != case_id) continue;
-        if (receipt.value("stage", std::string{}) == "state_restored") restored = true;
-        barriers.push_back(receipt);
     }
 
     ++counts.requested;
-    const bool has_metrics = !metrics.is_null();
-    const bool has_provenance = provenance.is_object() && provenance.value("complete", false);
+    const bool has_metrics = has_gpu_samples(metrics);
+    const bool has_provenance = detail::complete_result_provenance(provenance);
+    const bool has_restoration = restoration.is_object() &&
+        restoration.value("status", std::string{}) == "RECEIPT_STATUS_OK";
     if (has_metrics) ++counts.with_metrics;
     const bool failed = !error.is_null();
-    const bool incomplete = !failed && (!has_metrics || !has_provenance || !restored);
+    const bool incomplete = !failed && (!has_metrics || !has_provenance || !has_restoration);
     const char* status = "passed";
     if (failed) {
         ++counts.failed;
@@ -335,12 +240,11 @@ void append_profile_case(const Json& job, Json& cases, ProfileCounts& counts, co
         status = "incomplete";
         error = !has_metrics ? no_gpu_samples_error(
             case_id, metrics_seen ? "empty_gpu_timings" : "missing_gpu_metrics_action") :
-            (!has_provenance ? incomplete_provenance_error(case_id) : incomplete_barriers_error(case_id));
+            (!has_provenance ? incomplete_provenance_error(case_id) : incomplete_restoration_error(case_id));
     } else {
         ++counts.passed;
     }
 
-    Json visible_metrics = include_metrics && has_metrics ? filtered_metrics(metrics, arguments) : Json(nullptr);
     Json item{{"case_id", std::move(case_id)},
               {"source_id", std::move(source_id)},
               {"config_id", std::move(config_id)},
@@ -348,127 +252,17 @@ void append_profile_case(const Json& job, Json& cases, ProfileCounts& counts, co
               {"error", std::move(error)},
               {"frames", arguments.at("frames")},
               {"warmup_frames", warmup_frames},
-              {"metrics", std::move(visible_metrics)},
-              {"provenance", std::move(provenance)},
-              {"barriers", std::move(barriers)}};
-    if (full) {
-        item["action_results"] = std::move(action_results);
-        item["artifacts"] = case_artifacts(job, item.at("case_id").get<std::string>(), matrix);
-    }
-    cases.push_back(std::move(item));
+              {"metrics", include_metrics && has_metrics ? std::move(metrics) : Json(nullptr)}};
+    if (retain_receipts) item["action_receipts"] = receipts;
+    return item;
 }
 
-void append_full_job_metadata(const Json& job, Json& result) {
-    constexpr std::array fields{
-        "diagnostics", "comparison", "timings", "frame_ids", "artifacts",
-        "artifact_groups", "benchmark_barriers", "manifest_path", "recovered_from_artifact", "recovered_attempt",
-        "recovered_previous_attempts",
-    };
-    for (const auto* field : fields) {
-        const auto value = job.find(field);
-        if (value != job.end()) result[field] = *value;
-    }
+Json profile_result(const Json& terminal, const Json& arguments, const JobContext& config, bool matrix) {
+    return detail::normalize_profile_result(terminal, arguments, config.default_warmup_frames, matrix);
 }
 
-Json profile_result(Json job, const Json& arguments, const JobContext& config, bool matrix) {
-    const auto detail = arguments.value("result_detail", std::string("metrics"));
-    const auto warmup = arguments.value("warmup_frames", config.default_warmup_frames);
-    const bool explicit_identity = arguments.contains("__vibris_workflow_id");
-    Json cases = Json::array();
-    ProfileCounts counts;
-    if (matrix) {
-        const std::size_t case_size = (warmup == 0 ? 1 : 2) + 1;
-        std::size_t case_index = 0;
-        for (const auto& source : arguments.at("matrix").at("sources")) {
-            for (const auto& shader_config : arguments.at("matrix").at("configs")) {
-                const auto source_id = source.get<std::string>();
-                const auto config_id = shader_config.get<std::string>();
-                const auto first = case_index * case_size;
-                append_profile_case(job, cases, counts, arguments, warmup,
-                    source_id + "--" + config_id, source_id, config_id, first, first + case_size,
-                    true, explicit_identity, detail);
-                ++case_index;
-            }
-        }
-    } else {
-        append_profile_case(job, cases, counts, arguments, warmup,
-            arguments.value("__vibris_case_id", std::string("source--config")),
-            arguments.value("__vibris_source_id", std::string("source")),
-            arguments.value("__vibris_config_id", std::string("config")),
-            0, std::numeric_limits<std::size_t>::max(), false, explicit_identity, detail);
-    }
-
-    Json result{
-        {"success", counts.failed == 0 && counts.incomplete == 0},
-        {"kind", matrix ? "profile_matrix" : "profile"},
-        {"status", counts.incomplete != 0 ? "incomplete" :
-            (counts.failed == 0 ? "completed" : "completed_with_failures")},
-        {"result_detail", detail},
-        {"gpu_timing_unit", "ns"},
-        {"metric_filter", arguments.value("metric_filter", Json(nullptr))},
-        {"statistics", arguments.value("statistics", Json(nullptr))},
-        {"converted_units", arguments.value("converted_units", Json::array())},
-        {"requested_cases", counts.requested},
-        {"completed_cases", counts.passed + counts.failed},
-        {"cases_with_metrics", counts.with_metrics},
-        {"missing_cases", counts.requested - counts.with_metrics},
-        {"failed_cases", counts.failed},
-        {"retried_cases", 0},
-        {"passed", counts.passed},
-        {"failed", counts.failed},
-        {"incomplete", counts.incomplete},
-        {"cases", std::move(cases)},
-        {"artifacts", profile_artifacts(job)},
-    };
-    for (const auto* field : {"recovered_from_artifact", "recovered_attempt", "recovered_previous_attempts"}) {
-        if (const auto value = job.find(field); value != job.end()) result[field] = *value;
-    }
-    if (detail == "full") append_full_job_metadata(job, result);
-    return result;
-}
-
-Json matrix_result(Json job, const Json& arguments) {
-    const std::size_t case_size = arguments.at("actions").size() + 1;
-    Json cases = Json::array();
-    std::size_t case_index = 0;
-    std::size_t failures = 0;
-    for (const auto& source : arguments.at("matrix").at("sources")) {
-        for (const auto& shader_config : arguments.at("matrix").at("configs")) {
-            const auto source_id = source.get<std::string>();
-            const auto config_id = shader_config.get<std::string>();
-            const auto case_id = source_id + "--" + config_id;
-            const auto first = case_index * case_size;
-            const auto last = first + case_size;
-            Json results = Json::array();
-            Json error = nullptr;
-            for (const auto& action : job.at("action_results")) {
-                const auto index = action.at("action_index").get<std::size_t>();
-                const auto action_case = action.value("case_id", std::string{});
-                if (!action_case.empty() ? action_case != case_id : index < first || index >= last) continue;
-                auto mapped = action;
-                mapped["action_index"] = index - first;
-                if (failed_action(action) && error.is_null()) error = action.at("result");
-                results.push_back(std::move(mapped));
-            }
-            Json artifacts = case_artifacts(job, case_id, true);
-            const bool failed = !error.is_null();
-            if (failed) ++failures;
-            cases.push_back({{"id", case_id},
-                             {"source", source_id},
-                             {"config", config_id},
-                             {"status", failed ? "failed" : "passed"},
-                             {"error", std::move(error)},
-                             {"action_results", std::move(results)},
-                             {"artifacts", std::move(artifacts)}});
-            ++case_index;
-        }
-    }
-    job["kind"] = "matrix";
-    job["status"] = failures == 0 ? "completed" : "completed_with_failures";
-    job["passed"] = case_index - failures;
-    job["failed"] = failures;
-    job["cases"] = std::move(cases);
-    return job;
+Json matrix_result(const Json& terminal, const Json& arguments) {
+    return detail::normalize_matrix_result(terminal, arguments);
 }
 
 bool compile_program_succeeded(const Json& program) {
@@ -833,6 +627,211 @@ Json retry_profile(
 
 }
 
+namespace detail {
+
+bool complete_result_provenance(const Json& provenance) {
+    if (!provenance.is_object() || provenance.value("stale", true)) return false;
+    constexpr std::array text_fields{
+        "workspace_id", "worktree_root", "branch", "requested_revision", "resolved_revision", "start_head",
+        "completion_head", "shader_tree_id", "source_snapshot_sha256", "active_source_uuid", "config_sha256",
+        "preset_id", "preset_sha256", "scene_sha256", "pass_mapping_sha256",
+    };
+    for (const auto* field : text_fields) {
+        const auto found = provenance.find(field);
+        if (found == provenance.end() || !found->is_string() || found->get_ref<const std::string&>().empty()) {
+            return false;
+        }
+    }
+    const auto loaded = provenance.find("shader_loaded_at_unix_ms");
+    if (loaded == provenance.end() || wire_uint64(*loaded) == 0) return false;
+    const auto environment = provenance.find("environment");
+    if (environment == provenance.end() || !environment->is_object()) return false;
+    constexpr std::array environment_fields{
+        "minecraft_version", "iris_version", "vibris_version", "java_version", "operating_system", "gpu_vendor",
+        "gpu_renderer", "opengl_version", "driver_version",
+    };
+    for (const auto* field : environment_fields) {
+        const auto found = environment->find(field);
+        if (found == environment->end() || !found->is_string() || found->get_ref<const std::string&>().empty()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+Json normalize_profile_result(const Json& terminal, const Json& arguments,
+    const std::size_t default_warmup_frames, const bool matrix) {
+    const auto& wire = strict_job_result(terminal);
+    const auto detail = arguments.value("result_detail", std::string("metrics"));
+    const auto warmup = arguments.value("warmup_frames", default_warmup_frames);
+    const auto restoration = wire.value("restoration", Json(nullptr));
+    ProfileCounts counts;
+    Json cases = Json::array();
+
+    if (matrix) {
+        const auto matrix_value = wire.find("matrix");
+        if (matrix_value == wire.end() || !matrix_value->is_object()) {
+            throw std::invalid_argument("strict v2 profile matrix result is missing MatrixResult");
+        }
+        for (const auto& value : strict_array(*matrix_value, "cases")) {
+            if (!value.is_object()) throw std::invalid_argument("MatrixCaseResult is not an object");
+            const auto case_id = value.value("case_id", std::string{});
+            const auto separator = case_id.find("--");
+            if (case_id.empty() || separator == std::string::npos) {
+                throw std::invalid_argument("strict v2 matrix case has an invalid case_id");
+            }
+            auto item = profile_case(strict_array(value, "action_receipts"),
+                value.value("provenance", Json(nullptr)), restoration, counts, arguments, warmup, case_id,
+                case_id.substr(0, separator), case_id.substr(separator + 2), detail, detail == "full");
+            if (value.value("status", std::string{}) != "RECEIPT_STATUS_OK") {
+                if (item.at("status") == "passed") {
+                    --counts.passed;
+                    ++counts.failed;
+                } else if (item.at("status") == "incomplete") {
+                    --counts.incomplete;
+                    ++counts.failed;
+                }
+                item["status"] = "failed";
+                if (item.at("error").is_null()) {
+                    item["error"] = value.value("error", Json({{"code", "ERROR_CODE_INTERNAL"},
+                        {"message", "Matrix case failed without an error."}, {"retryable", false}}));
+                }
+            }
+            item["provenance"] = value.value("provenance", Json(nullptr));
+            cases.push_back(std::move(item));
+        }
+    } else {
+        Json receipts = Json::array();
+        for (const auto* receipt : ordered_receipts(wire)) receipts.push_back(*receipt);
+        cases.push_back(profile_case(receipts, wire.value("provenance", Json(nullptr)), restoration, counts,
+            arguments, warmup, arguments.value("__vibris_case_id", std::string("source--config")),
+            arguments.value("__vibris_source_id", std::string("source")),
+            arguments.value("__vibris_config_id", std::string("config")), detail, false));
+    }
+
+    Json result{{"success", counts.failed == 0 && counts.incomplete == 0},
+        {"kind", matrix ? "profile_matrix" : "profile"},
+        {"status", counts.incomplete != 0 ? "incomplete" :
+            (counts.failed == 0 ? "completed" : "completed_with_failures")},
+        {"result_detail", detail},
+        {"gpu_timing_unit", "ns"},
+        {"metric_filter", arguments.value("metric_filter", Json(nullptr))},
+        {"statistics", arguments.value("statistics", Json(nullptr))},
+        {"converted_units", arguments.value("converted_units", Json::array())},
+        {"requested_cases", counts.requested},
+        {"completed_cases", counts.passed + counts.failed},
+        {"cases_with_metrics", counts.with_metrics},
+        {"missing_cases", counts.requested - counts.with_metrics},
+        {"failed_cases", counts.failed},
+        {"retried_cases", 0},
+        {"passed", counts.passed},
+        {"failed", counts.failed},
+        {"incomplete", counts.incomplete},
+        {"cases", std::move(cases)},
+        {"job_id", terminal.value("job_id", std::string{})},
+        {"request_id", terminal.value("request_id", std::string{})},
+        {"timings", wire.value("timings", Json::object())},
+        {"provenance", wire.value("provenance", Json(nullptr))},
+        {"restoration", restoration},
+        {"action_receipts", wire.value("action_receipts", Json::array())},
+        {"prelude_receipts", wire.value("prelude_receipts", Json::array())},
+        {"artifacts", wire.value("artifacts", Json::array())},
+        {"result_manifest_id", wire.value("result_manifest_id", std::string{})}};
+    return result;
+}
+
+Json normalize_matrix_result(const Json& terminal, const Json& arguments) {
+    const auto& wire = strict_job_result(terminal);
+    const auto matrix = wire.find("matrix");
+    if (matrix == wire.end() || !matrix->is_object()) {
+        throw std::invalid_argument("strict v2 matrix result is missing MatrixResult");
+    }
+    Json cases = Json::array();
+    std::size_t passed = 0;
+    std::size_t failed = 0;
+    for (const auto& value : strict_array(*matrix, "cases")) {
+        if (!value.is_object()) throw std::invalid_argument("MatrixCaseResult is not an object");
+        const auto case_id = value.value("case_id", std::string{});
+        const auto separator = case_id.find("--");
+        if (case_id.empty() || separator == std::string::npos) {
+            throw std::invalid_argument("strict v2 matrix case has an invalid case_id");
+        }
+        const bool ok = value.value("status", std::string{}) == "RECEIPT_STATUS_OK" &&
+            complete_result_provenance(value.value("provenance", Json(nullptr)));
+        ok ? ++passed : ++failed;
+        cases.push_back({{"case_id", case_id}, {"source_id", case_id.substr(0, separator)},
+            {"config_id", case_id.substr(separator + 2)}, {"status", ok ? "passed" : "failed"},
+            {"error", value.value("error", Json(nullptr))},
+            {"action_receipts", strict_array(value, "action_receipts")},
+            {"provenance", value.value("provenance", Json(nullptr))}});
+    }
+    const bool restoration_ok = restored(wire);
+    return {{"success", failed == 0 && restoration_ok}, {"kind", "matrix"},
+        {"status", failed == 0 && restoration_ok ? "completed" : "completed_with_failures"},
+        {"requested_cases", matrix->value("requested_cases", cases.size())},
+        {"completed_cases", matrix->value("completed_cases", cases.size())},
+        {"passed", passed}, {"failed", failed + (restoration_ok ? 0U : 1U)},
+        {"cases", std::move(cases)}, {"job_id", terminal.value("job_id", std::string{})},
+        {"request_id", terminal.value("request_id", std::string{})},
+        {"timings", wire.value("timings", Json::object())},
+        {"provenance", wire.value("provenance", Json(nullptr))},
+        {"restoration", wire.value("restoration", Json(nullptr))},
+        {"artifacts", wire.value("artifacts", Json::array())},
+        {"result_manifest_id", wire.value("result_manifest_id", std::string{})},
+        {"matrix_axes", arguments.value("matrix", Json(nullptr))}};
+}
+
+Json normalize_action_sequence_result(const Json& terminal, const std::string_view kind) {
+    const auto& wire = strict_job_result(terminal);
+    Json frame_ids = Json::array();
+    Json comparisons = Json::array();
+    Json first_error = nullptr;
+    bool receipts_ok = true;
+    for (const auto* receipt : ordered_receipts(wire)) {
+        if (!receipt_ok(*receipt)) {
+            receipts_ok = false;
+            if (first_error.is_null()) first_error = receipt_error(*receipt);
+        }
+        const auto receipt_kind = receipt->value("kind", std::string{});
+        if ((receipt_kind == "ACTION_KIND_TAKE_SCREENSHOT" || receipt_kind == "ACTION_KIND_DUMP_TEXTURE" ||
+                receipt_kind == "ACTION_KIND_DUMP_BUFFER" || receipt_kind == "ACTION_KIND_CAPTURE_PASS" ||
+                receipt_kind == "ACTION_KIND_CAPTURE_MULTI") && receipt->contains("capture")) {
+            const auto& capture = receipt->at("capture");
+            if (capture.is_object() && capture.contains("frame_id")) {
+                frame_ids.push_back(wire_uint64(capture.at("frame_id")));
+            }
+        }
+        if (receipt_kind == "ACTION_KIND_COMPARE_CAPTURES" && receipt->contains("comparison")) {
+            const auto& comparison = receipt->at("comparison");
+            if (!comparison.is_object()) throw std::invalid_argument("CompareReceipt is not an object");
+            auto summary = comparison.value("metrics", Json::object());
+            summary["passed"] = comparison.value("passed", false);
+            summary["violations"] = comparison.value("violations", Json::array());
+            summary["verdict"] = summary.at("passed").get<bool>() ? "passed" : "failed";
+            comparisons.push_back(std::move(summary));
+        }
+    }
+    const bool provenance_ok = complete_result_provenance(wire.value("provenance", Json(nullptr)));
+    const bool restoration_ok = restored(wire);
+    const bool complete = receipts_ok && provenance_ok && restoration_ok;
+    Json result{{"success", complete}, {"kind", kind},
+        {"status", complete ? "completed" : "incomplete"},
+        {"error", std::move(first_error)}, {"job_id", terminal.value("job_id", std::string{})},
+        {"request_id", terminal.value("request_id", std::string{})},
+        {"timings", wire.value("timings", Json::object())},
+        {"provenance", wire.value("provenance", Json(nullptr))},
+        {"restoration", wire.value("restoration", Json(nullptr))},
+        {"action_receipts", wire.value("action_receipts", Json::array())},
+        {"prelude_receipts", wire.value("prelude_receipts", Json::array())},
+        {"artifacts", wire.value("artifacts", Json::array())},
+        {"result_manifest_id", wire.value("result_manifest_id", std::string{})},
+        {"frame_ids", std::move(frame_ids)}, {"comparisons", comparisons}};
+    if (comparisons.size() == 1) result["comparison"] = comparisons.front();
+    return result;
+}
+
+}
+
 SynchronousJobRunner::SynchronousJobRunner(
     GrpcClient& client, SourceHandler& sources, const JobContext& config,
     const std::chrono::milliseconds maximum_wait)
@@ -1042,7 +1041,10 @@ ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& ar
                         });
                 },
                 [this, &server, &context, &control](const Json& visual_arguments) -> ToolOutcome {
-                    return submit_once("vibris_run_recipe", visual_arguments, server, context, control);
+                    auto outcome = submit_once("vibris_run_recipe", visual_arguments, server, context, control);
+                    if (!std::holds_alternative<Json>(outcome)) return outcome;
+                    return detail::normalize_action_sequence_result(
+                        std::get<Json>(std::move(outcome)), "ab_compare");
                 });
         }
         if (recipe == "compile_validate") {
@@ -1055,33 +1057,35 @@ ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& ar
         auto outcome = control.resume_request_id
             ? resume_once(*control.resume_request_id, control)
             : submit_once(tool_name, arguments, server, context, control);
+        if (recipe == "ab_compare" && std::holds_alternative<Json>(outcome)) {
+            auto result = detail::normalize_action_sequence_result(std::get<Json>(std::move(outcome)), recipe);
+            const auto& captures = arguments.at("captures");
+            const bool require_heatmap = std::ranges::any_of(captures, [](const Json& capture) {
+                return capture.is_object() &&
+                    (capture.value("type", std::string{}) == "screenshot" ||
+                        capture.value("format", std::string{}) == "png");
+            });
+            auto visual_guards = visual_comparison_guards(result, require_heatmap);
+            const auto comparison = result.find("comparison");
+            if (!visual_guards.at("passed").get<bool>()) {
+                result["status"] = "invalid_comparison";
+                result["verdict"] = "inconclusive";
+                result["success"] = false;
+                result["error"] = {{"success", false},
+                    {"error_code", "INVALID_VISUAL_RECEIPT"},
+                    {"message", "The visual comparison receipt failed its deterministic-state guards."},
+                    {"retryable", false}, {"details", visual_guards.at("mismatches")}};
+            } else if (comparison != result.end() && comparison->is_object()) {
+                const auto passed = comparison->value("passed", true);
+                result["status"] = passed ? "completed" : "completed_with_failures";
+                result["verdict"] = comparison->value("verdict", std::string("not_evaluated"));
+                result["success"] = passed;
+            }
+            result["visual_guards"] = std::move(visual_guards);
+            return result;
+        }
         if (auto* result = std::get_if<Json>(&outcome)) {
             (*result)["kind"] = recipe;
-            if (recipe == "ab_compare") {
-                const auto& captures = arguments.at("captures");
-                const bool require_heatmap = std::ranges::any_of(captures, [](const Json& capture) {
-                    return capture.is_object() &&
-                        (capture.value("type", std::string{}) == "screenshot" ||
-                            capture.value("format", std::string{}) == "png");
-                });
-                auto visual_guards = visual_comparison_guards(*result, require_heatmap);
-                const auto comparison = result->find("comparison");
-                if (!visual_guards.at("passed").get<bool>()) {
-                    (*result)["status"] = "invalid_comparison";
-                    (*result)["verdict"] = "inconclusive";
-                    (*result)["success"] = false;
-                    (*result)["error"] = {{"success", false},
-                        {"error_code", "INVALID_VISUAL_RECEIPT"},
-                        {"message", "The visual comparison receipt failed its deterministic-state guards."},
-                        {"retryable", false}, {"details", visual_guards.at("mismatches")}};
-                } else if (comparison != result->end() && comparison->is_object()) {
-                    const auto passed = comparison->value("passed", true);
-                    (*result)["status"] = passed ? "completed" : "completed_with_failures";
-                    (*result)["verdict"] = comparison->value("verdict", std::string("not_evaluated"));
-                    (*result)["success"] = passed;
-                }
-                (*result)["visual_guards"] = std::move(visual_guards);
-            }
         }
         return outcome;
     }

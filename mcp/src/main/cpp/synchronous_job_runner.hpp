@@ -7,6 +7,7 @@
 #include "vibris_control.pb.h"
 
 #include <chrono>
+#include <cstddef>
 #include <functional>
 #include <optional>
 #include <stop_token>
@@ -14,6 +15,22 @@
 #include <string_view>
 
 namespace vibris::mcp {
+
+namespace detail {
+
+[[nodiscard]] bool complete_result_provenance(const Json& provenance);
+
+[[nodiscard]] Json normalize_profile_result(
+    const Json& terminal,
+    const Json& arguments,
+    std::size_t default_warmup_frames,
+    bool matrix);
+
+[[nodiscard]] Json normalize_matrix_result(const Json& terminal, const Json& arguments);
+
+[[nodiscard]] Json normalize_action_sequence_result(const Json& terminal, std::string_view kind);
+
+}
 
 struct SynchronousJobProgress final {
     std::string request_id;

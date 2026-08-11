@@ -93,8 +93,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T10 | P0 | Iris | Emit complete Iris compile catalog | DONE | `T10 emit Iris program compile catalog` |
 | T11 | P0 | Vibris | Add compile_validate recipe | DONE | `T11 add compile validation recipe` |
 | T12 | P0 | Vibris | Expand immutable benchmark provenance | DONE | `T12 expand benchmark provenance and stale checks` |
-| T12A | P0 | Vibris | Normalize strict-v2 execution receipts | READY | `T12A normalize strict v2 execution receipts` |
-| T13 | P0 | Vibris | Enforce statistical benchmark guardrails | PENDING | `T13 enforce benchmark semantic guardrails` |
+| T12A | P0 | Vibris | Normalize strict-v2 execution receipts | DONE | `T12A normalize strict v2 execution receipts` |
+| T13 | P0 | Vibris | Enforce statistical benchmark guardrails | READY | `T13 enforce benchmark semantic guardrails` |
 | T14 | P0 | Vibris | Replace artifacts with managed v2 manifests | PENDING | `T14 add managed artifact v2 lifecycle` |
 | T15 | P0 | Vibris | Define named pass resource dump contract | PENDING | `T15 define named pass resource dump contract` |
 | T16 | P0 | Iris | Implement named Iris pass boundary hooks | PENDING | `T16 capture resources after named Iris passes` |
@@ -972,7 +972,7 @@ Evidence:
 
 ### T12A — Normalize strict-v2 execution receipts
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T12
 
@@ -1038,10 +1038,24 @@ Evidence:
   untracked and unread.
 - Control-plane commit: this ledger-only insertion with subject
   `roadmap insert T12A strict v2 result remediation`.
+- Native profile, matrix, inspection, and A/B visual projections now accept only the strict-v2 `JobResult` envelope,
+  consume typed prelude/action receipt details, normalize GPU metrics once, and retain top-level provenance,
+  restoration, artifacts, timings, and result-manifest identity. Paired benchmark consumers use only this normalized
+  surface, including the internal visual gate.
+- The native fake-server fixture was replaced by compact current-v2 terminal-message builders. Focused coverage proves
+  typed runtime mutation, compile-catalog inspection, GPU metrics, matrix cases, capture/comparison details, strict
+  artifacts, provenance, and restoration; an `action_results` result is rejected rather than translated.
+- Release targets `vibris-synchronous-job-runner-tests`, `vibris-job-protocol-tests`,
+  `vibris-paired-benchmark-tests`, and `vibris-profile-matrix-workflow-tests` built successfully. The ledger-specified
+  CTest filter passed 4/4; visual, paired, noise-floor, and durable checkpoint regression passed 9/9.
+- Static production searches found zero reads of removed `action_results`, manifest-path, benchmark-barrier, or
+  synthetic provenance `complete` fields, and zero legacy/fallback/dual-read/compatibility branches in the affected
+  consumers. No deployment or process restart occurred; protected `capture\a.spv` remained untracked and unread.
+- Commit: this task's commit with subject `T12A normalize strict v2 execution receipts`.
 
 ### T13 — Enforce statistical benchmark guardrails
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T12A
 
@@ -1543,3 +1557,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T11 - added durable sync/async compile_validate for single and matrix cases with optional baseline, canonical catalog and stable diagnostic diffs, per-case checkpoints/provenance, fail-closed compile gates, and forced runtime restoration; Core focused 10/10 and native filtered CTest 3/3 passed - Commit title: T11 add compile validation recipe`
 - `2026-08-11 - T12 - expanded immutable source/result provenance, separated HEAD movement from shader-content staleness with deterministic completion deltas, retained provenance through durable checkpoints, and proved active source UUIDs on compile/action receipts; Core 103/103, focused native 7/7, and source/checkpoint regression 14/14 passed - Commit title: T12 expand benchmark provenance and stale checks`
 - `2026-08-11 - T12A inserted - T13 entry auditing found native profile/matrix normalization and fake-server fixtures still consuming removed pre-v2 result fields instead of strict-v2 action receipts, top-level provenance, and restoration; inserted a no-compatibility receipt-normalization remediation before statistical guardrails - Control-plane commit title: roadmap insert T12A strict v2 result remediation`
+- `2026-08-11 - T12A - normalized profile, matrix, inspection, GPU metrics, and A/B visual results from strict-v2 typed receipts only; replaced the v1 fake-server fixture; focused CTest 4/4 and broader visual/paired/checkpoint regression 9/9 passed with zero removed-field or compatibility reads - Commit title: T12A normalize strict v2 execution receipts`
