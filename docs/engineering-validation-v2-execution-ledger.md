@@ -14,7 +14,7 @@ This Git-tracked file is the durable source of truth for the breaking Vibris eng
 - Iris baseline HEAD: `298099f4f12a48fc5968a8846790ae0d78639105`
 - Created: `2026-08-11`
 - Source handoff: `C:\Users\Luna5ama\.codex\attachments\45a3afb1-e7e8-4092-8fcb-e16af79e9805\pasted-text.txt`, the approved v2 implementation plan in the originating Codex task, and the completed `docs\benchmark-reliability-roadmap.md` T00-T12 baseline.
-- Protected pre-existing changes: Vibris untracked `capture\a.spv` plus concurrently introduced tracked modifications to `core\src\main\kotlin\dev\vibris\core\ThreadBoundVibrisRuntimeAdapter.kt` and `core\src\test\kotlin\dev\vibris\core\ThreadBoundVibrisRuntimeAdapterTest.kt`; Iris untracked `.codex\`, `.vibris\`, and `common\logs\`.
+- Protected pre-existing changes: Vibris untracked `capture\a.spv` plus concurrently introduced tracked modifications to `core\src\main\kotlin\dev\vibris\core\ThreadBoundVibrisRuntimeAdapter.kt` and `core\src\test\kotlin\dev\vibris\core\ThreadBoundVibrisRuntimeAdapterTest.kt`; Iris tracked `common\src\main\java\net\irisshaders\iris\vibris\IrisVibrisLifecycle.java` plus untracked `.codex\`, `.vibris\`, and `common\logs\`.
 
 Every Goal continuation must read this file completely before inspecting code, editing, validating, staging, or committing. Source handoffs are background evidence; this ledger owns task order, state, constraints, and completion criteria.
 
@@ -55,6 +55,7 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 - Do not restart Minecraft or its launcher. Do not deploy the MCP server or mod unless the user explicitly authorizes that separate action.
 - Pass-boundary capture v2 covers only named begin, prepare, deferred, composite, final, and shadow-composite stages; high-frequency gbuffer, terrain, and ordinary shadow draws are out of scope.
 - Artifact TTL defaults to 168 hours.
+- `cmake` and `ctest` are not on `PATH`; ledger commands use the Visual Studio copies under `C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin`.
 - Preserve all unrelated and pre-existing user changes; never stage a whole repository.
 - Keep Vibris and Iris commits atomic and separate.
 
@@ -69,6 +70,7 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | `I:\code\Iris` | `.codex\` untracked | User/Codex runtime | Preserve and never stage. |
 | `I:\code\Iris` | `.vibris\` untracked | Runtime artifacts | Preserve and never stage. |
 | `I:\code\Iris` | `common\logs\` untracked | Runtime logs | Preserve and never stage. |
+| `I:\code\Iris` | `common\src\main\java\net\irisshaders\iris\vibris\IrisVibrisLifecycle.java` modified after the T00 commit | User/concurrent work | Do not modify or stage; reconcile ownership before any later overlapping Iris task. |
 | Both | Any later unrelated dirty file | User until proven otherwise | Stop, classify ownership, and keep it outside task staging. |
 
 ## Status board
@@ -76,8 +78,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | ID | Priority | Repository | Task | Status | Expected commit title |
 |---|---|---|---|---|---|
 | T00 | P0 | Vibris | Persist v2 execution ledger | DONE | `T00 persist engineering validation v2 ledger` |
-| T01 | P0 | Vibris | Replace protocol with strict v2 wire contract | READY | `T01 replace control protocol with strict v2` |
-| T02 | P0 | Vibris | Publish compact typed MCP v2 tools | PENDING | `T02 publish compact typed MCP v2 tools` |
+| T01 | P0 | Vibris | Replace protocol with strict v2 wire contract | DONE | `T01 replace control protocol with strict v2` |
+| T02 | P0 | Vibris | Publish compact typed MCP v2 tools | READY | `T02 publish compact typed MCP v2 tools` |
 | T03 | P0 | Vibris | Add truthful runtime lease and status waiting | PENDING | `T03 expose runtime lease and status transitions` |
 | T04 | P0 | Vibris | Generalize durable resumable jobs | PENDING | `T04 add durable resumable workflow jobs` |
 | T05 | P0 | Vibris | Add transactional restoration and recovery | PENDING | `T05 make runtime mutations transactional` |
@@ -155,7 +157,7 @@ Evidence:
 
 ### T01 — Replace protocol with strict v2 wire contract
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T00
 
@@ -202,11 +204,18 @@ Blockers:
 
 Evidence:
 
-- Pending.
+- Replaced the descriptor package and Java package with `vibris.control.v2` / `dev.vibris.protocol.v2`; the generated contract contains status/lease/jobs, typed receipts, effective settings, compile catalog, provenance, managed artifacts, and both named-pass dump messages without v1 reserved aliases.
+- Added Java and C++ version gates with protocol major 2 and exact rejection code `UNSUPPORTED_VERSION`; tests prove v1 and missing-version submit envelopes are rejected before payload handling.
+- `.\gradlew.bat :vibris-protocol-java:test :vibris-api:test --offline` passed: 27 actionable Gradle tasks; `ProtocolEnvelopeTest` 5 tests, 0 failures/errors/skips.
+- Visual Studio CMake configure completed, and native targets `vibris-protocol-smoke`, `vibris-descriptor-dump`, and `vibris-protocol-version-tests` built successfully.
+- `ctest --preset release -R 'descriptor-dump|protocol-smoke|protocol-version'` passed 5/5 tests, including explicit v1 and missing-version rejection.
+- Generated descriptor: `I:\code\vibris\mcp\out\build\Release\vibris_control_descriptor.bin`, 28,486 bytes, SHA-256 `133C6799D61CD28F8236D013A0D36A6CBA3E3B49EDD40D7EA8CB8B31B87C37AE`.
+- Generated Java/C++ bindings remain build outputs and no generated binding is staged.
+- Commit: this task's commit with subject `T01 replace control protocol with strict v2`.
 
 ### T02 — Publish compact typed MCP v2 tools
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T01
 
@@ -1229,3 +1238,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 ## Completion log
 
 - `2026-08-11 - T00 - initialized and validated 22-task strict-v2 serial ledger; verified both repository identities and protected concurrent dirty state - Commit title: T00 persist engineering validation v2 ledger`
+- `2026-08-11 - T01 - generated strict v2 Java/C++ protocol; Java 5/5 and native CTest 5/5 passed; v1 and missing versions reject as UNSUPPORTED_VERSION - Commit title: T01 replace control protocol with strict v2`

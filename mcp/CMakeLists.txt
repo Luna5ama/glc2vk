@@ -151,6 +151,10 @@ if(BUILD_TESTING)
     add_executable(vibris-state-tests src/test/cpp/state_tests.cpp)
     target_link_libraries(vibris-state-tests PRIVATE vibris_mcp_core)
 
+    add_executable(vibris-protocol-version-tests src/test/cpp/protocol_version_tests.cpp)
+    target_include_directories(vibris-protocol-version-tests PRIVATE src/main/cpp)
+    target_link_libraries(vibris-protocol-version-tests PRIVATE vibris_control_protocol)
+
     add_executable(vibris-worktree-discovery-tests src/test/cpp/worktree_discovery_tests.cpp)
     target_link_libraries(vibris-worktree-discovery-tests PRIVATE vibris_mcp_core)
 
@@ -196,6 +200,7 @@ if(BUILD_TESTING)
     target_link_libraries(vibris-paired-benchmark-tests PRIVATE vibris_mcp_core)
 
     if(MSVC)
+        target_compile_options(vibris-protocol-version-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-state-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-worktree-discovery-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-workspace-source-tests PRIVATE /W4 /permissive-)
@@ -213,7 +218,7 @@ if(BUILD_TESTING)
     endif()
 
     add_custom_target(mcp-tests
-        DEPENDS vibris-protocol-smoke vibris-descriptor-dump
+        DEPENDS vibris-protocol-smoke vibris-descriptor-dump vibris-protocol-version-tests
                 vibris-state-tests vibris-worktree-discovery-tests vibris-workspace-source-tests
                 vibris-commit-source-tests vibris-git-repository-security-tests
                 vibris-stdio-fixture-test vibris-grpc-tests vibris-grpc-request-ownership-tests
@@ -228,6 +233,21 @@ if(BUILD_TESTING)
             --output "$<TARGET_FILE_DIR:vibris-descriptor-dump>/vibris_control_descriptor.bin")
     add_test(NAME protocol-smoke-cli-validation COMMAND vibris-protocol-smoke)
     set_tests_properties(protocol-smoke-cli-validation PROPERTIES WILL_FAIL TRUE)
+    add_test(NAME protocol-version-contract COMMAND vibris-protocol-version-tests)
+    add_test(
+        NAME protocol-smoke-reject-v1
+        COMMAND vibris-protocol-smoke
+            --host 127.0.0.1 --port 1 --protocol-major 1 --protocol-minor 0
+            --message-id reject-v1 --scenario hello)
+    set_tests_properties(protocol-smoke-reject-v1 PROPERTIES
+        PASS_REGULAR_EXPRESSION "UNSUPPORTED_VERSION")
+    add_test(
+        NAME protocol-smoke-reject-missing-version
+        COMMAND vibris-protocol-smoke
+            --host 127.0.0.1 --port 1
+            --message-id reject-missing --scenario hello)
+    set_tests_properties(protocol-smoke-reject-missing-version PROPERTIES
+        PASS_REGULAR_EXPRESSION "UNSUPPORTED_VERSION")
 
     add_test(
         NAME stdio-fixture-contract

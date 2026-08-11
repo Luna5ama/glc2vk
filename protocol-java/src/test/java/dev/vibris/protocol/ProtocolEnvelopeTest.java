@@ -1,87 +1,135 @@
 package dev.vibris.protocol;
 
 import com.google.protobuf.Descriptors;
-import dev.vibris.protocol.v1.Capability;
-import dev.vibris.protocol.v1.ClientHello;
-import dev.vibris.protocol.v1.ClientMessage;
-import dev.vibris.protocol.v1.Ping;
-import dev.vibris.protocol.v1.ProtocolVersion;
-import dev.vibris.protocol.v1.ServerHello;
-import dev.vibris.protocol.v1.ServerMessage;
-import dev.vibris.protocol.v1.VibrisControlProto;
+import dev.vibris.protocol.v2.Action;
+import dev.vibris.protocol.v2.ClientHello;
+import dev.vibris.protocol.v2.ClientMessage;
+import dev.vibris.protocol.v2.GetServerInfoRequest;
+import dev.vibris.protocol.v2.GetStatusRequest;
+import dev.vibris.protocol.v2.ListPresetsRequest;
+import dev.vibris.protocol.v2.ListResourcesRequest;
+import dev.vibris.protocol.v2.ProtocolVersion;
+import dev.vibris.protocol.v2.SubmitJob;
+import dev.vibris.protocol.v2.ValidateContextRequest;
+import dev.vibris.protocol.v2.VibrisControlProto;
 import org.junit.jupiter.api.Test;
 
-import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ProtocolEnvelopeTest {
     @Test
-    void validV1EnvelopeRoundTrips() throws Exception {
-        ProtocolVersion version = ProtocolVersion.newBuilder().setMajor(1).setMinor(0).build();
+    void validV2EnvelopeRoundTrips() throws Exception {
+        ProtocolVersion version = ProtocolVersionGate.current();
         ClientMessage hello = ClientMessage.newBuilder()
             .setProtocolVersion(version)
             .setMessageId("message-hello")
-            .setRequestId("request-1")
             .setWorkspaceId("workspace-1")
             .setClientHello(ClientHello.newBuilder()
-                .setProtocolVersion(version)
-                .setMcpVersion("1.0.0")
-                .setWorkspaceId("workspace-1")
-                .setProcessInstanceUuid("58f2e5d8-6587-4d0d-a334-4e259466fb27")
-                .addCapabilities(Capability.CAPABILITY_CONTROL_STREAM))
+                .setClientVersion("2.0.0")
+                .setProcessInstanceId("58f2e5d8-6587-4d0d-a334-4e259466fb27"))
             .build();
-        ClientMessage parsedHello = ClientMessage.parseFrom(hello.toByteArray());
 
-        assertEquals(1, parsedHello.getProtocolVersion().getMajor());
-        assertEquals(0, parsedHello.getProtocolVersion().getMinor());
-        assertEquals("message-hello", parsedHello.getMessageId());
-        assertEquals("request-1", parsedHello.getRequestId());
-        assertEquals("workspace-1", parsedHello.getWorkspaceId());
-        assertTrue(parsedHello.getClientHello().getCapabilitiesList()
-            .contains(Capability.CAPABILITY_CONTROL_STREAM));
+        ClientMessage parsed = ClientMessage.parseFrom(hello.toByteArray());
+        ProtocolVersionGate.requireSupported(parsed);
 
-        ClientMessage ping = ClientMessage.newBuilder()
-            .setProtocolVersion(version)
-            .setMessageId("message-ping")
-            .setRequestId("request-1")
+        assertEquals(2, parsed.getProtocolVersion().getMajor());
+        assertEquals(0, parsed.getProtocolVersion().getMinor());
+        assertEquals("message-hello", parsed.getMessageId());
+        assertEquals("workspace-1", parsed.getWorkspaceId());
+        assertEquals("2.0.0", parsed.getClientHello().getClientVersion());
+    }
+
+    @Test
+    void rejectsV1BeforeInspectingSubmitPayload() {
+        ClientMessage message = ClientMessage.newBuilder()
+            .setProtocolVersion(ProtocolVersion.newBuilder().setMajor(1).setMinor(99))
+            .setMessageId("v1-submit")
             .setWorkspaceId("workspace-1")
-            .setPing(Ping.newBuilder().setSequence(7).setClientTimeUnixMs(1234))
+            .setSubmitJob(SubmitJob.getDefaultInstance())
             .build();
-        ClientMessage parsedPing = ClientMessage.parseFrom(ping.toByteArray());
 
-        assertEquals("message-ping", parsedPing.getMessageId());
-        assertEquals("request-1", parsedPing.getRequestId());
-        assertEquals("workspace-1", parsedPing.getWorkspaceId());
-        assertEquals(7, parsedPing.getPing().getSequence());
-        assertEquals(1234, parsedPing.getPing().getClientTimeUnixMs());
+        UnsupportedProtocolVersionException error = assertThrows(
+            UnsupportedProtocolVersionException.class,
+            () -> ProtocolVersionGate.requireSupported(message));
 
-        ServerMessage serverHello = ServerMessage.newBuilder()
-            .setProtocolVersion(version)
-            .setMessageId("message-server-hello")
-            .setRequestId("request-1")
+        assertEquals(1, error.getSuppliedMajor());
+        assertTrue(error.getMessage().startsWith("UNSUPPORTED_VERSION:"));
+        assertTrue(message.hasSubmitJob());
+    }
+
+    @Test
+    void rejectsMissingVersionBeforeInspectingSubmitPayload() {
+        ClientMessage message = ClientMessage.newBuilder()
+            .setMessageId("missing-version-submit")
             .setWorkspaceId("workspace-1")
-            .setServerHello(ServerHello.newBuilder()
-                .setProtocolVersion(version)
-                .setServerVersion("1.0.0")
-                .setPendingShadersRoot("R:\\vibris\\pending-shaders")
-                .setArtifactRoot("R:\\vibris\\artifacts"))
+            .setSubmitJob(SubmitJob.getDefaultInstance())
             .build();
-        ServerMessage parsedServerHello = ServerMessage.parseFrom(serverHello.toByteArray());
 
-        assertEquals("message-server-hello", parsedServerHello.getMessageId());
-        assertEquals("request-1", parsedServerHello.getRequestId());
-        assertEquals("workspace-1", parsedServerHello.getWorkspaceId());
-        assertEquals("R:\\vibris\\pending-shaders", parsedServerHello.getServerHello().getPendingShadersRoot());
-        assertEquals("R:\\vibris\\artifacts", parsedServerHello.getServerHello().getArtifactRoot());
+        UnsupportedProtocolVersionException error = assertThrows(
+            UnsupportedProtocolVersionException.class,
+            () -> ProtocolVersionGate.requireSupported(message));
 
-        List<Descriptors.FieldDescriptor> fields = VibrisControlProto.getDescriptor().getMessageTypes().stream()
+        assertEquals(null, error.getSuppliedMajor());
+        assertTrue(error.getMessage().endsWith("received missing"));
+    }
+
+    @Test
+    void descriptorContainsOnlyStrictV2Surface() {
+        Descriptors.FileDescriptor descriptor = VibrisControlProto.getDescriptor();
+        assertEquals("vibris.control.v2", descriptor.getPackage());
+        assertEquals("dev.vibris.protocol.v2", descriptor.getOptions().getJavaPackage());
+
+        Set<String> messageNames = descriptor.getMessageTypes().stream()
+            .map(Descriptors.Descriptor::getName)
+            .collect(Collectors.toSet());
+        assertTrue(messageNames.containsAll(Set.of(
+            "ServerStatus",
+            "RuntimeLease",
+            "JobStateSnapshot",
+            "ActionReceipt",
+            "CompileCatalog",
+            "ResultProvenance",
+            "ArtifactManifest",
+            "DumpTextureAfterPass",
+            "DumpBufferAfterPass")));
+
+        Set<String> fieldNames = descriptor.getMessageTypes().stream()
             .flatMap(message -> Stream.concat(Stream.of(message), message.getNestedTypes().stream()))
             .flatMap(message -> message.getFields().stream())
-            .toList();
-        assertTrue(fields.stream().noneMatch(field -> field.getName().equals("absolute_path")));
-        assertTrue(fields.stream().noneMatch(field -> field.getType() == Descriptors.FieldDescriptor.Type.BYTES));
+            .map(Descriptors.FieldDescriptor::getName)
+            .collect(Collectors.toSet());
+        assertFalse(fieldNames.contains("ready"));
+        assertFalse(fieldNames.contains("dump_texture_v2"));
+        assertFalse(fieldNames.contains("list_textures_v2"));
+        assertFalse(fieldNames.contains("absolute_path"));
+        assertTrue(descriptor.getMessageTypes().stream()
+            .flatMap(message -> message.getFields().stream())
+            .noneMatch(field -> field.getType() == Descriptors.FieldDescriptor.Type.BYTES));
+
+        Descriptors.Descriptor action = Action.getDescriptor();
+        assertTrue(action.findFieldByName("dump_texture_after_pass") != null);
+        assertTrue(action.findFieldByName("dump_buffer_after_pass") != null);
+    }
+
+    @Test
+    void everyUnaryRequestCarriesProtocolVersion() {
+        Set<Descriptors.Descriptor> requests = Set.of(
+            GetServerInfoRequest.getDescriptor(),
+            ListPresetsRequest.getDescriptor(),
+            ListResourcesRequest.getDescriptor(),
+            ValidateContextRequest.getDescriptor(),
+            GetStatusRequest.getDescriptor());
+
+        assertTrue(requests.stream().allMatch(request -> {
+            Descriptors.FieldDescriptor version = request.findFieldByName("protocol_version");
+            return version != null && version.getMessageType().getName().equals("ProtocolVersion");
+        }));
     }
 }

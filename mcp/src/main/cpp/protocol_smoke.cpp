@@ -1,4 +1,5 @@
 #include "vibris_control.grpc.pb.h"
+#include "protocol_version.hpp"
 
 #include <grpcpp/grpcpp.h>
 
@@ -15,11 +16,11 @@
 
 namespace {
 
-using vibris::control::v1::CAPABILITY_CONTROL_STREAM;
-using vibris::control::v1::Capability;
-using vibris::control::v1::ClientMessage;
-using vibris::control::v1::ServerMessage;
-using vibris::control::v1::VibrisControl;
+using vibris::control::v2::CAPABILITY_CONTROL_STREAM;
+using vibris::control::v2::Capability;
+using vibris::control::v2::ClientMessage;
+using vibris::control::v2::ServerMessage;
+using vibris::control::v2::VibrisControl;
 
 struct Options {
     std::string host;
@@ -43,7 +44,7 @@ std::optional<T> parse_number(std::string_view value) {
 
 std::optional<Capability> parse_capability(std::string_view value) {
     Capability capability;
-    if (vibris::control::v1::Capability_Parse(std::string(value), &capability)) {
+    if (vibris::control::v2::Capability_Parse(std::string(value), &capability)) {
         return capability;
     }
     const auto number = parse_number<std::uint32_t>(value);
@@ -95,7 +96,7 @@ std::optional<Options> parse_options(int argc, char** argv) {
             return std::nullopt;
         }
     }
-    if (options.host.empty() || options.port == 0 || options.protocol_major == 0 || options.message_id.empty()) {
+    if (options.host.empty() || options.port == 0 || options.message_id.empty()) {
         return std::nullopt;
     }
     if (options.scenario != "hello" && options.scenario != "hello-ping-pong") {
@@ -136,27 +137,21 @@ std::string json_string(std::string_view value) {
 }
 
 void print_message(std::string_view type, const ServerMessage& message) {
-    std::uint32_t major = message.protocol_version().major();
-    std::uint32_t minor = message.protocol_version().minor();
-    if (message.has_server_hello()) {
-        major = message.server_hello().protocol_version().major();
-        minor = message.server_hello().protocol_version().minor();
-    }
     std::cout << "{\"type\":" << json_string(type)
-              << ",\"protocol_major\":" << major
-              << ",\"protocol_minor\":" << minor
+              << ",\"protocol_major\":" << message.protocol_version().major()
+              << ",\"protocol_minor\":" << message.protocol_version().minor()
               << ",\"message_id\":" << json_string(message.message_id()) << "}\n";
 }
 
-bool is_protocol_mismatch(const grpc::Status& status) {
-    return status.error_message().find("PROTOCOL_MISMATCH") != std::string::npos;
+bool is_unsupported_version(const grpc::Status& status) {
+    return status.error_message().find(vibris::mcp::unsupported_version_code) != std::string::npos;
 }
 
 int finish_failed_stream(std::unique_ptr<grpc::ClientReaderWriter<ClientMessage, ServerMessage>>& stream) {
     stream->WritesDone();
     const grpc::Status status = stream->Finish();
-    if (is_protocol_mismatch(status)) {
-        std::cout << "{\"type\":\"ProtocolRejected\",\"code\":\"PROTOCOL_MISMATCH\"}\n";
+    if (is_unsupported_version(status)) {
+        std::cout << "{\"type\":\"ProtocolRejected\",\"code\":\"UNSUPPORTED_VERSION\"}\n";
         return 0;
     }
     std::cerr << "control stream failed: " << status.error_message() << '\n';
@@ -170,11 +165,8 @@ ClientMessage make_hello(const Options& options) {
     message.set_message_id(options.message_id);
     message.set_workspace_id("protocol-smoke");
     auto* hello = message.mutable_client_hello();
-    hello->mutable_protocol_version()->set_major(options.protocol_major);
-    hello->mutable_protocol_version()->set_minor(options.protocol_minor);
-    hello->set_mcp_version("protocol-smoke");
-    hello->set_workspace_id("protocol-smoke");
-    hello->set_process_instance_uuid("protocol-smoke");
+    hello->set_client_version("protocol-smoke");
+    hello->set_process_instance_id("protocol-smoke");
     for (const Capability capability : options.capabilities) {
         hello->add_capabilities(capability);
     }
@@ -200,6 +192,13 @@ int main(int argc, char** argv) {
                      "[--protocol-minor MINOR] [--capability CAPABILITY] --message-id ID "
                      "--scenario hello|hello-ping-pong\n";
         return 2;
+    }
+    vibris::control::v2::ProtocolVersion requested_version;
+    requested_version.set_major(options->protocol_major);
+    requested_version.set_minor(options->protocol_minor);
+    if (!vibris::mcp::protocol_version_supported(options->protocol_major != 0, requested_version)) {
+        std::cerr << "{\"type\":\"ProtocolRejected\",\"code\":\"UNSUPPORTED_VERSION\"}\n";
+        return 0;
     }
 
     auto channel = grpc::CreateChannel(

@@ -1,14 +1,15 @@
 syntax = "proto3";
 
-package vibris.control.v1;
+package vibris.control.v2;
 
 option java_multiple_files = true;
-option java_package = "dev.vibris.protocol.v1";
+option java_package = "dev.vibris.protocol.v2";
 option java_outer_classname = "VibrisControlProto";
 
 service VibrisControl {
     rpc GetServerInfo(GetServerInfoRequest) returns (GetServerInfoResponse);
     rpc ListPresets(ListPresetsRequest) returns (ListPresetsResponse);
+    rpc ListResources(ListResourcesRequest) returns (ListResourcesResponse);
     rpc ValidateContext(ValidateContextRequest) returns (ValidateContextResponse);
     rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
     rpc Control(stream ClientMessage) returns (stream ServerMessage);
@@ -22,10 +23,15 @@ message ProtocolVersion {
 enum Capability {
     CAPABILITY_UNSPECIFIED = 0;
     CAPABILITY_CONTROL_STREAM = 1;
-    CAPABILITY_RESUME = 2;
-    CAPABILITY_PREPARED_SOURCES = 3;
-    CAPABILITY_ACTION_SEQUENCE = 7;
-    CAPABILITY_ARTIFACT_METADATA = 8;
+    CAPABILITY_DURABLE_JOBS = 2;
+    CAPABILITY_RUNTIME_LEASE = 3;
+    CAPABILITY_STATUS_WAIT = 4;
+    CAPABILITY_TRANSACTIONAL_RESTORE = 5;
+    CAPABILITY_EFFECTIVE_SETTINGS = 6;
+    CAPABILITY_COMPILE_CATALOG = 7;
+    CAPABILITY_PROVENANCE = 8;
+    CAPABILITY_MANAGED_ARTIFACTS = 9;
+    CAPABILITY_PASS_BOUNDARY_CAPTURE = 10;
 }
 
 message ClientMessage {
@@ -37,7 +43,7 @@ message ClientMessage {
         ClientHello client_hello = 10;
         SubmitJob submit_job = 11;
         CancelJob cancel_job = 12;
-        ResumeRequest resume_request = 13;
+        ResumeJob resume_job = 13;
         Ping ping = 14;
     }
 }
@@ -53,123 +59,207 @@ message ServerMessage {
         JobProgress job_progress = 12;
         JobCompleted job_completed = 13;
         JobFailed job_failed = 14;
-        ResumeState resume_state = 15;
+        JobStateSnapshot job_state = 15;
         Pong pong = 16;
         ServerShuttingDown server_shutting_down = 17;
     }
 }
 
 message ClientHello {
-    ProtocolVersion protocol_version = 1;
-    string mcp_version = 2;
-    string workspace_id = 3;
-    string process_instance_uuid = 4;
-    optional string worktree_display_name = 5;
-    repeated Capability capabilities = 6;
+    string client_version = 1;
+    string process_instance_id = 2;
+    repeated Capability capabilities = 3;
 }
 
 message ServerHello {
-    ProtocolVersion protocol_version = 1;
-    string server_version = 2;
-    repeated Capability capabilities = 3;
-    bool ready = 4;
-    ServerStatus status = 5;
-    ServerLimits limits = 6;
-    repeated JobActionKind supported_job_actions = 8;
-    repeated ArtifactFormat supported_formats = 9;
-    string pending_shaders_root = 10;
-    string artifact_root = 11;
+    string server_version = 1;
+    repeated Capability capabilities = 2;
+    ServerLimits limits = 3;
+    ServerStatus status = 4;
 }
 
 message ServerLimits {
     uint64 max_source_bytes = 1;
     uint32 max_source_files = 2;
+    uint32 max_queued_jobs = 3;
+    uint32 max_actions_per_job = 4;
+    uint64 max_status_wait_ms = 5;
 }
 
-message GetServerInfoRequest {}
+message GetServerInfoRequest {
+    ProtocolVersion protocol_version = 1;
+}
 
 message GetServerInfoResponse {
-    ServerHello server = 1;
+    ProtocolVersion protocol_version = 1;
+    ServerHello server = 2;
 }
 
-message ListPresetsRequest {}
+message ListPresetsRequest {
+    ProtocolVersion protocol_version = 1;
+    optional string preset_id = 2;
+    repeated string tags = 3;
+}
 
 message ListPresetsResponse {
-    repeated ScenePreset presets = 1;
+    ProtocolVersion protocol_version = 1;
+    repeated ScenePreset presets = 2;
 }
 
 message ScenePreset {
     string preset_id = 1;
     string display_name = 2;
-    SceneContext context = 3;
-    string version = 4;
-    repeated string tags = 5;
-    string preset_sha256 = 6;
+    string version = 3;
+    repeated string tags = 4;
+    string preset_sha256 = 5;
+    SceneContext context = 6;
+}
+
+message ListResourcesRequest {
+    ProtocolVersion protocol_version = 1;
+    ResourceFilter filter = 2;
+}
+
+message ListResourcesResponse {
+    ProtocolVersion protocol_version = 1;
+    ResourceCatalog catalog = 2;
+}
+
+message ResourceFilter {
+    repeated ResourceKind kinds = 1;
+    optional string logical_name = 2;
+    optional string pass_id = 3;
 }
 
 message ValidateContextRequest {
-    SceneContext context = 1;
+    ProtocolVersion protocol_version = 1;
+    SceneContext context = 2;
 }
 
 message ValidateContextResponse {
-    bool valid = 1;
-    repeated ProtocolError errors = 2;
+    ProtocolVersion protocol_version = 1;
+    bool valid = 2;
+    repeated ProtocolError errors = 3;
 }
 
-message GetStatusRequest {}
+enum StatusDetail {
+    STATUS_DETAIL_UNSPECIFIED = 0;
+    STATUS_DETAIL_SUMMARY = 1;
+    STATUS_DETAIL_JOBS = 2;
+    STATUS_DETAIL_FULL = 3;
+}
+
+enum StatusWaitCondition {
+    STATUS_WAIT_CONDITION_UNSPECIFIED = 0;
+    STATUS_WAIT_CONDITION_CAN_START_JOB = 1;
+    STATUS_WAIT_CONDITION_JOB_TERMINAL = 2;
+}
+
+message GetStatusRequest {
+    ProtocolVersion protocol_version = 1;
+    StatusDetail detail = 2;
+    StatusWaitCondition wait_until = 3;
+    optional string job_id = 4;
+    uint64 timeout_ms = 5;
+}
 
 message GetStatusResponse {
-    bool ready = 1;
+    ProtocolVersion protocol_version = 1;
     ServerStatus status = 2;
-    repeated ProtocolError errors = 3;
+    bool wait_satisfied = 3;
+    bool wait_timed_out = 4;
 }
 
 message ServerStatus {
     ServerState state = 1;
-    string active_request_id = 2;
-    repeated JobSummary jobs = 3;
-    bool runtime_ready = 4;
-    RuntimeState runtime_state = 5;
-    string current_save_id = 6;
-    string current_dimension_id = 7;
-    string active_source_uuid = 8;
-    uint32 queue_length = 9;
-    ResourceCatalog resource_catalog = 10;
-    string pending_shaders_root = 11;
-    string artifact_root = 12;
-    uint64 artifact_quota_used_bytes = 13;
-    uint64 artifact_quota_cap_bytes = 14;
-    repeated JobActionKind supported_job_actions = 16;
-    repeated ArtifactFormat supported_formats = 17;
+    RuntimeReadiness readiness = 2;
+    bool can_accept_job = 3;
+    bool can_start_job = 4;
+    optional RuntimeLease active_lease = 5;
+    repeated QueueEntry queue = 6;
+    repeated JobSummary jobs = 7;
+    optional RuntimeFailure last_error = 8;
+    repeated StateTransition transitions = 9;
+    ArtifactCapacity artifact_capacity = 10;
+    string active_source_uuid = 11;
 }
 
 enum ServerState {
     SERVER_STATE_UNSPECIFIED = 0;
     SERVER_STATE_STARTING = 1;
-    SERVER_STATE_READY = 2;
-    SERVER_STATE_BUSY = 3;
-    SERVER_STATE_STOPPING = 4;
-    SERVER_STATE_FAILED = 5;
+    SERVER_STATE_AVAILABLE = 2;
+    SERVER_STATE_OCCUPIED = 3;
+    SERVER_STATE_RECOVERING = 4;
+    SERVER_STATE_STOPPING = 5;
+    SERVER_STATE_FAILED = 6;
 }
 
-enum RuntimeState {
-    RUNTIME_STATE_UNSPECIFIED = 0;
-    RUNTIME_STATE_NOT_READY = 1;
-    RUNTIME_STATE_LOADING_WORLD = 2;
-    RUNTIME_STATE_READY = 3;
-    RUNTIME_STATE_RELOADING_SHADERS = 4;
-    RUNTIME_STATE_FAILED = 5;
+message RuntimeReadiness {
+    bool core_online = 1;
+    bool minecraft_connected = 2;
+    bool world_loaded = 3;
+    bool scene_applied = 4;
+    bool shader_reload_complete = 5;
+    bool gpu_timing_available = 6;
+    RuntimePhase phase = 7;
+    string detail = 8;
 }
 
-message ResourceCatalog {
-    repeated ResourceCatalogEntry textures = 1;
-    repeated ResourceCatalogEntry buffers = 2;
+enum RuntimePhase {
+    RUNTIME_PHASE_UNSPECIFIED = 0;
+    RUNTIME_PHASE_DISCONNECTED = 1;
+    RUNTIME_PHASE_CONNECTING = 2;
+    RUNTIME_PHASE_LOADING_WORLD = 3;
+    RUNTIME_PHASE_APPLYING_SCENE = 4;
+    RUNTIME_PHASE_RELOADING_SHADERS = 5;
+    RUNTIME_PHASE_AVAILABLE = 6;
+    RUNTIME_PHASE_EXECUTING = 7;
+    RUNTIME_PHASE_RESTORING = 8;
+    RUNTIME_PHASE_RECOVERING = 9;
+    RUNTIME_PHASE_FAILED = 10;
 }
 
-message ResourceCatalogEntry {
-    string logical_name = 1;
-    ResourceKind kind = 2;
-    string internal_format = 3;
+message RuntimeLease {
+    string lease_id = 1;
+    string workspace_id = 2;
+    string worktree_root = 3;
+    string job_id = 4;
+    string request_id = 5;
+    string operation = 6;
+    JobStage stage = 7;
+    uint64 started_at_unix_ms = 8;
+    optional uint64 eta_ms = 9;
+    bool cancellation_requested = 10;
+}
+
+message QueueEntry {
+    string job_id = 1;
+    string workspace_id = 2;
+    string operation = 3;
+    uint32 position = 4;
+    uint64 queued_at_unix_ms = 5;
+}
+
+message RuntimeFailure {
+    ErrorCode code = 1;
+    string message = 2;
+    string phase = 3;
+    uint64 failed_at_unix_ms = 4;
+    string request_id = 5;
+    string log_path = 6;
+    bool retryable = 7;
+    optional uint64 retry_after_ms = 8;
+    string recovery_action = 9;
+}
+
+message StateTransition {
+    uint64 sequence = 1;
+    uint64 occurred_at_unix_ms = 2;
+    ServerState from_state = 3;
+    ServerState to_state = 4;
+    RuntimePhase runtime_phase = 5;
+    string job_id = 6;
+    string reason = 7;
 }
 
 message ProtocolError {
@@ -183,59 +273,58 @@ message ProtocolError {
 
 enum ErrorCode {
     ERROR_CODE_UNSPECIFIED = 0;
-    NOT_CONFIGURED = 1;
-    SERVER_OFFLINE = 2;
-    SERVER_NOT_READY = 3;
-    PROTOCOL_MISMATCH = 4;
-    reserved 5;
-    INVALID_WORKTREE = 6;
-    SHADERS_DIRECTORY_MISSING = 7;
-    SOURCE_CHANGED_DURING_SNAPSHOT = 8;
-    SOURCE_TOO_LARGE = 9;
-    SOURCE_TOO_MANY_FILES = 10;
-    SOURCE_CONTAINS_REPARSE_POINT = 11;
-    COMMIT_NOT_FOUND = 12;
-    COMMIT_HAS_NO_SHADERS = 13;
-    INVALID_SOURCE_UUID = 14;
-    SOURCE_DIRECTORY_MISSING = 15;
-    INVALID_PRESET = 16;
-    WORLD_LOAD_FAILED = 17;
-    SOURCE_ACTIVATION_FAILED = 18;
-    SYMLINK_SWITCH_FAILED = 19;
-    SHADER_COMPILE_FAILED = 20;
-    QUEUE_FULL = 21;
-    QUEUE_TIMEOUT = 22;
-    EXECUTION_TIMEOUT = 23;
-    CAPTURE_RESOURCE_NOT_FOUND = 24;
-    CAPTURE_FAILED = 25;
-    ARTIFACT_JOB_TOO_LARGE = 26;
-    ARTIFACT_QUOTA_EXCEEDED = 27;
-    CANCELLED = 28;
-    SERVER_RESTARTED = 29;
-    INTERNAL_ERROR = 30;
-    BENCHMARK_STATE_UNAVAILABLE = 31;
-    BENCHMARK_RESTORE_FAILED = 32;
-    BENCHMARK_BARRIER_FAILED = 33;
+    ERROR_CODE_UNSUPPORTED_VERSION = 1;
+    ERROR_CODE_INVALID_REQUEST = 2;
+    ERROR_CODE_SERVER_OFFLINE = 3;
+    ERROR_CODE_SERVER_NOT_AVAILABLE = 4;
+    ERROR_CODE_INVALID_WORKTREE = 5;
+    ERROR_CODE_SOURCE_CHANGED_DURING_SNAPSHOT = 6;
+    ERROR_CODE_SOURCE_TOO_LARGE = 7;
+    ERROR_CODE_SOURCE_TOO_MANY_FILES = 8;
+    ERROR_CODE_SOURCE_CONTAINS_REPARSE_POINT = 9;
+    ERROR_CODE_COMMIT_NOT_FOUND = 10;
+    ERROR_CODE_COMMIT_HAS_NO_SHADERS = 11;
+    ERROR_CODE_INVALID_SOURCE = 12;
+    ERROR_CODE_INVALID_PRESET = 13;
+    ERROR_CODE_WORLD_LOAD_FAILED = 14;
+    ERROR_CODE_SOURCE_ACTIVATION_FAILED = 15;
+    ERROR_CODE_SHADER_COMPILE_FAILED = 16;
+    ERROR_CODE_QUEUE_FULL = 17;
+    ERROR_CODE_QUEUE_TIMEOUT = 18;
+    ERROR_CODE_EXECUTION_TIMEOUT = 19;
+    ERROR_CODE_RESOURCE_NOT_FOUND = 20;
+    ERROR_CODE_CAPTURE_FAILED = 21;
+    ERROR_CODE_ARTIFACT_TOO_LARGE = 22;
+    ERROR_CODE_ARTIFACT_QUOTA_EXCEEDED = 23;
+    ERROR_CODE_CANCELLED = 24;
+    ERROR_CODE_SERVER_RESTARTED = 25;
+    ERROR_CODE_RESTORE_FAILED = 26;
+    ERROR_CODE_RECOVERY_FAILED = 27;
+    ERROR_CODE_NO_GPU_SAMPLES = 28;
+    ERROR_CODE_STALE_RESULT = 29;
+    ERROR_CODE_INTERNAL = 30;
 }
 
 message PreparedSourceRef {
-    string uuid = 1;
+    string source_uuid = 1;
     SourceOrigin origin = 2;
     uint64 file_count = 3;
     uint64 total_bytes = 4;
     string requested_revision = 5;
     string resolved_revision = 6;
+    string snapshot_sha256 = 7;
 }
 
 message SourceOrigin {
-    oneof kind {
+    oneof origin {
         WorkspaceOrigin workspace = 1;
         CommitOrigin commit = 2;
     }
 }
 
 message WorkspaceOrigin {
-    string display_name = 1;
+    string worktree_root = 1;
+    string display_name = 2;
 }
 
 message CommitOrigin {
@@ -259,118 +348,188 @@ message Resolution {
     uint32 height = 2;
 }
 
+message ShaderConfig {
+    map<string, string> values = 1;
+    bool preserve_current = 2;
+}
+
+enum ShaderSettingOrigin {
+    SHADER_SETTING_ORIGIN_UNSPECIFIED = 0;
+    SHADER_SETTING_ORIGIN_DEFAULT = 1;
+    SHADER_SETTING_ORIGIN_PRESERVED_CURRENT = 2;
+    SHADER_SETTING_ORIGIN_REQUEST_OVERRIDE = 3;
+    SHADER_SETTING_ORIGIN_PRESET = 4;
+}
+
+message EffectiveShaderSetting {
+    string name = 1;
+    string value = 2;
+    string default_value = 3;
+    ShaderSettingOrigin origin = 4;
+    bool changed_from_default = 5;
+}
+
+message EffectiveShaderSettings {
+    repeated EffectiveShaderSetting settings = 1;
+    string settings_sha256 = 2;
+}
+
 message JobTimeouts {
     uint64 queue_timeout_ms = 1;
     uint64 execution_timeout_ms = 2;
     uint64 total_timeout_ms = 3;
 }
 
+message RestorePolicy {
+    bool on_success = 1;
+    bool on_error = 2;
+}
+
 message SubmitJob {
-    string request_id = 1;
-    string workspace_id = 2;
+    JobSpec job = 1;
+}
+
+message JobSpec {
+    string job_id = 1;
+    string preset_id = 2;
     SceneContext context = 3;
     repeated PreparedSourceRef sources = 4;
-    ActionSequence actions = 6;
-    JobTimeouts timeouts = 7;
-    ShaderConfig shader_config = 8;
-    repeated NamedShaderConfig shader_configs = 9;
-    ResultArtifactOptions result_artifacts = 10;
-    BenchmarkProvenance benchmark_provenance = 11;
-    BenchmarkCase benchmark_case = 12;
-}
-
-message BenchmarkProvenance {
-    string preset_id = 1;
-    string preset_version = 2;
-    string preset_display_name = 3;
-}
-
-message BenchmarkCase {
-    string workflow_id = 1;
-    string case_id = 2;
+    JobTimeouts timeouts = 5;
+    RestorePolicy restore_state = 6;
+    ResultArtifactOptions result_artifacts = 7;
+    oneof workload {
+        ActionSequence action_sequence = 20;
+        MatrixRequest matrix = 21;
+        CompileValidationRequest compile_validation = 22;
+        BenchmarkRequest benchmark = 23;
+        RecoverRuntimeRequest recover_runtime = 24;
+    }
 }
 
 message ResultArtifactOptions {
-    bool json = 1;
-    bool csv = 2;
-    string kind = 3;
-    repeated string converted_units = 4;
-    uint32 attempt = 5;
-    repeated ResultAttemptDiagnostic previous_attempts = 6;
+    bool write_json = 1;
+    bool write_csv = 2;
+    repeated string converted_units = 3;
 }
 
-message ResultAttemptDiagnostic {
-    uint32 attempt = 1;
-    string status = 2;
-    string error_code = 3;
-    string message = 4;
-    bool retryable = 5;
+message MatrixRequest {
+    repeated MatrixCase cases = 1;
+    uint32 max_retries = 2;
 }
 
-message ShaderConfig {
-    map<string, string> values = 1;
+message MatrixCase {
+    string case_id = 1;
+    string source_id = 2;
+    string config_id = 3;
+    ShaderConfig config = 4;
+    ActionSequence actions = 5;
 }
 
-message NamedShaderConfig {
-    string id = 1;
-    ShaderConfig config = 2;
-    bool preserve = 3;
+message CompileValidationRequest {
+    repeated CompileValidationCase cases = 1;
+    optional CompileValidationCase baseline = 2;
 }
+
+message CompileValidationCase {
+    string case_id = 1;
+    string source_id = 2;
+    string config_id = 3;
+    ShaderConfig config = 4;
+}
+
+message BenchmarkRequest {
+    string baseline_source_id = 1;
+    string candidate_source_id = 2;
+    ShaderConfig baseline_config = 3;
+    ShaderConfig candidate_config = 4;
+    uint32 warmup_frames = 5;
+    uint32 sample_frames = 6;
+    uint32 repetitions = 7;
+    BenchmarkOrder order = 8;
+    repeated BenchmarkMetricSpec metrics = 9;
+    bool run_same_source_control = 10;
+    optional VisualThresholds visual_thresholds = 11;
+}
+
+enum BenchmarkOrder {
+    BENCHMARK_ORDER_UNSPECIFIED = 0;
+    BENCHMARK_ORDER_ABBA = 1;
+    BENCHMARK_ORDER_ABAB = 2;
+    BENCHMARK_ORDER_RANDOMIZED = 3;
+}
+
+enum BenchmarkMetricRole {
+    BENCHMARK_METRIC_ROLE_UNSPECIFIED = 0;
+    BENCHMARK_METRIC_ROLE_TARGET = 1;
+    BENCHMARK_METRIC_ROLE_SIBLING = 2;
+    BENCHMARK_METRIC_ROLE_SENTINEL = 3;
+}
+
+message BenchmarkMetricSpec {
+    string metric_id = 1;
+    BenchmarkMetricRole role = 2;
+    optional double max_regression_ratio = 3;
+}
+
+message RecoverRuntimeRequest {}
 
 message ActionSequence {
     repeated Action actions = 1;
 }
 
 message Action {
-    reserved 4, 5, 21, 25, 26, 27, 29, 30, 31, 32, 33;
-    reserved "capture_screenshot", "get_shader_status", "get_shader_errors", "schedule_screenshot",
-        "get_screenshot_result", "capture_texture", "capture_buffer", "list_ssbos", "dump_ssbo",
-        "list_textures", "dump_texture", "list_patched_shaders";
     oneof action {
         ResetTemporalState reset_temporal_state = 1;
         WaitFrames wait_frames = 2;
         TakeScreenshot take_screenshot = 3;
-        ActivateSource activate_source = 6;
-        CompareCaptures compare_captures = 7;
-        EmptyAction get_capture_status = 20;
-        CapturePass capture_pass = 22;
-        CaptureMulti capture_multi = 23;
-        EmptyAction inspect_shader = 24;
-        GetGpuMetrics get_gpu_metrics = 28;
-        LoadShader load_shader = 34;
-        EmptyAction list_textures_v2 = 35;
-        DumpTextureV2 dump_texture_v2 = 36;
-        EmptyAction list_buffers = 37;
-        DumpBuffer dump_buffer = 38;
-        GetPatchedShaders get_patched_shaders = 39;
+        ActivateSource activate_source = 4;
+        CompareCaptures compare_captures = 5;
+        GetCaptureStatus get_capture_status = 6;
+        CapturePass capture_pass = 7;
+        CaptureMulti capture_multi = 8;
+        InspectShader inspect_shader = 9;
+        GetGpuMetrics get_gpu_metrics = 10;
+        LoadShader load_shader = 11;
+        ListResourcesAction list_resources = 12;
+        DumpTexture dump_texture = 13;
+        DumpBuffer dump_buffer = 14;
+        GetPatchedShaders get_patched_shaders = 15;
+        DumpTextureAfterPass dump_texture_after_pass = 16;
+        DumpBufferAfterPass dump_buffer_after_pass = 17;
     }
 }
 
-enum JobActionKind {
-    reserved 4, 5, 21, 25, 26, 27, 29, 30, 31, 32, 33;
-    reserved "JOB_ACTION_KIND_CAPTURE_SCREENSHOT", "JOB_ACTION_KIND_GET_SHADER_STATUS",
-        "JOB_ACTION_KIND_GET_SHADER_ERRORS", "JOB_ACTION_KIND_SCHEDULE_SCREENSHOT",
-        "JOB_ACTION_KIND_GET_SCREENSHOT_RESULT", "JOB_ACTION_KIND_CAPTURE_TEXTURE",
-        "JOB_ACTION_KIND_CAPTURE_BUFFER", "JOB_ACTION_KIND_LIST_SSBOS", "JOB_ACTION_KIND_DUMP_SSBO",
-        "JOB_ACTION_KIND_LIST_TEXTURES", "JOB_ACTION_KIND_DUMP_TEXTURE",
-        "JOB_ACTION_KIND_LIST_PATCHED_SHADERS";
-    JOB_ACTION_KIND_UNSPECIFIED = 0;
-    JOB_ACTION_KIND_RESET_TEMPORAL_STATE = 1;
-    JOB_ACTION_KIND_WAIT_FRAMES = 2;
-    JOB_ACTION_KIND_TAKE_SCREENSHOT = 3;
-    JOB_ACTION_KIND_ACTIVATE_SOURCE = 6;
-    JOB_ACTION_KIND_COMPARE_CAPTURES = 7;
-    JOB_ACTION_KIND_GET_CAPTURE_STATUS = 20;
-    JOB_ACTION_KIND_CAPTURE_PASS = 22;
-    JOB_ACTION_KIND_CAPTURE_MULTI = 23;
-    JOB_ACTION_KIND_INSPECT_SHADER = 24;
-    JOB_ACTION_KIND_GET_GPU_METRICS = 28;
-    JOB_ACTION_KIND_LOAD_SHADER = 34;
-    JOB_ACTION_KIND_LIST_TEXTURES_V2 = 35;
-    JOB_ACTION_KIND_DUMP_TEXTURE_V2 = 36;
-    JOB_ACTION_KIND_LIST_BUFFERS = 37;
-    JOB_ACTION_KIND_DUMP_BUFFER = 38;
-    JOB_ACTION_KIND_GET_PATCHED_SHADERS = 39;
+enum ActionKind {
+    ACTION_KIND_UNSPECIFIED = 0;
+    ACTION_KIND_RESET_TEMPORAL_STATE = 1;
+    ACTION_KIND_WAIT_FRAMES = 2;
+    ACTION_KIND_TAKE_SCREENSHOT = 3;
+    ACTION_KIND_ACTIVATE_SOURCE = 4;
+    ACTION_KIND_COMPARE_CAPTURES = 5;
+    ACTION_KIND_GET_CAPTURE_STATUS = 6;
+    ACTION_KIND_CAPTURE_PASS = 7;
+    ACTION_KIND_CAPTURE_MULTI = 8;
+    ACTION_KIND_INSPECT_SHADER = 9;
+    ACTION_KIND_GET_GPU_METRICS = 10;
+    ACTION_KIND_LOAD_SHADER = 11;
+    ACTION_KIND_LIST_RESOURCES = 12;
+    ACTION_KIND_DUMP_TEXTURE = 13;
+    ACTION_KIND_DUMP_BUFFER = 14;
+    ACTION_KIND_GET_PATCHED_SHADERS = 15;
+    ACTION_KIND_DUMP_TEXTURE_AFTER_PASS = 16;
+    ACTION_KIND_DUMP_BUFFER_AFTER_PASS = 17;
+}
+
+message ResetTemporalState {}
+
+message WaitFrames {
+    uint32 frame_count = 1;
+}
+
+message TakeScreenshot {
+    string artifact_name = 1;
+    ArtifactFormat format = 2;
+    uint32 after_frames = 3;
 }
 
 message ActivateSource {
@@ -378,8 +537,8 @@ message ActivateSource {
 }
 
 message CompareCaptures {
-    uint32 baseline_capture_index = 1;
-    uint32 candidate_capture_index = 2;
+    uint32 baseline_action_index = 1;
+    uint32 candidate_action_index = 2;
     string baseline_label = 3;
     string candidate_label = 4;
     VisualThresholds thresholds = 5;
@@ -395,20 +554,53 @@ message VisualThresholds {
     optional double min_ssim = 7;
 }
 
-message ResetTemporalState {}
+message GetCaptureStatus {}
 
-message WaitFrames {
-    uint32 frame_count = 1;
+message CapturePass {
+    string pass_id = 1;
+    string artifact_name = 2;
 }
 
-message TakeScreenshot {
-    string artifact_name = 1;
-    ArtifactFormat format = 2;
-    uint32 after_frames = 3;
+message CaptureMulti {
+    string capture_type = 1;
+    string artifact_name = 2;
 }
 
-message DumpTextureV2 {
+message InspectShader {}
+
+message GetGpuMetrics {
+    uint32 frames = 1;
+    repeated string metric_ids = 2;
+}
+
+message LoadShader {
+    string source_uuid = 1;
+    string source_id = 2;
+    string config_id = 3;
+    ShaderConfig config = 4;
+}
+
+message ListResourcesAction {
+    ResourceFilter filter = 1;
+}
+
+enum TextureView {
+    TEXTURE_VIEW_UNSPECIFIED = 0;
+    TEXTURE_VIEW_CURRENT = 1;
+    TEXTURE_VIEW_ALTERNATE = 2;
+    TEXTURE_VIEW_MAIN = 3;
+    TEXTURE_VIEW_ALT = 4;
+}
+
+message TextureSelector {
     string logical_name = 1;
+    TextureView view = 2;
+    uint32 mip_level = 3;
+    uint32 layer = 4;
+}
+
+message DumpTexture {
+    TextureSelector resource = 1;
     ArtifactFormat format = 2;
     string artifact_name = 3;
 }
@@ -418,13 +610,30 @@ message DumpBuffer {
     string artifact_name = 2;
 }
 
+message GetPatchedShaders {
+    string artifact_name = 1;
+}
+
+message DumpTextureAfterPass {
+    string pass_id = 1;
+    TextureSelector resource = 2;
+    ArtifactFormat format = 3;
+    string artifact_name = 4;
+}
+
+message DumpBufferAfterPass {
+    string pass_id = 1;
+    string logical_name = 2;
+    string artifact_name = 3;
+}
+
 message CancelJob {
-    string request_id = 1;
+    string job_id = 1;
     string reason = 2;
 }
 
-message ResumeRequest {
-    repeated string request_ids = 1;
+message ResumeJob {
+    string job_id = 1;
 }
 
 message Ping {
@@ -439,15 +648,20 @@ message Pong {
 }
 
 message JobAccepted {
-    string request_id = 1;
-    uint32 queue_position = 2;
+    string job_id = 1;
+    string request_id = 2;
+    uint32 queue_position = 3;
+    uint64 accepted_at_unix_ms = 4;
 }
 
 message JobProgress {
-    string request_id = 1;
-    JobStage stage = 2;
-    uint32 percent = 3;
-    string detail = 4;
+    string job_id = 1;
+    string request_id = 2;
+    JobStage stage = 3;
+    uint32 completed_units = 4;
+    uint32 total_units = 5;
+    optional uint64 eta_ms = 6;
+    string detail = 7;
 }
 
 enum JobStage {
@@ -457,29 +671,69 @@ enum JobStage {
     JOB_STAGE_ACTIVATING_SOURCE = 3;
     JOB_STAGE_LOADING_WORLD = 4;
     JOB_STAGE_APPLYING_CONTEXT = 5;
-    JOB_STAGE_RELOADING_SHADERS = 6;
+    JOB_STAGE_COMPILING = 6;
     JOB_STAGE_RESETTING_TEMPORAL_STATE = 7;
     JOB_STAGE_WARMING_UP = 8;
-    JOB_STAGE_CAPTURING = 9;
-    JOB_STAGE_WRITING_ARTIFACTS = 10;
+    JOB_STAGE_SAMPLING = 9;
+    JOB_STAGE_CAPTURING = 10;
     JOB_STAGE_COMPARING = 11;
-    JOB_STAGE_FINALIZING = 12;
-    JOB_STAGE_SAMPLING = 13;
+    JOB_STAGE_WRITING_ARTIFACTS = 12;
+    JOB_STAGE_RESTORING = 13;
+    JOB_STAGE_RECOVERING = 14;
+    JOB_STAGE_FINALIZING = 15;
+}
+
+enum JobState {
+    JOB_STATE_UNSPECIFIED = 0;
+    JOB_STATE_QUEUED = 1;
+    JOB_STATE_RUNNING = 2;
+    JOB_STATE_CANCELLING = 3;
+    JOB_STATE_RESTORING = 4;
+    JOB_STATE_COMPLETED = 5;
+    JOB_STATE_FAILED = 6;
+    JOB_STATE_CANCELLED = 7;
+}
+
+message JobSummary {
+    string job_id = 1;
+    string request_id = 2;
+    string workspace_id = 3;
+    string operation = 4;
+    JobState state = 5;
+    JobStage stage = 6;
+    uint32 completed_units = 7;
+    uint32 total_units = 8;
+    bool resumable = 9;
+    bool cancelable = 10;
+}
+
+message JobStateSnapshot {
+    JobSummary summary = 1;
+    repeated JobEvent events = 2;
+    optional JobResult result = 3;
+    optional ProtocolError error = 4;
+}
+
+message JobEvent {
+    uint64 sequence = 1;
+    uint64 occurred_at_unix_ms = 2;
+    JobState state = 3;
+    JobStage stage = 4;
+    string detail = 5;
 }
 
 message JobCompleted {
-    string request_id = 1;
-    JobResult result = 2;
+    string job_id = 1;
+    string request_id = 2;
+    JobResult result = 3;
 }
 
 message JobFailed {
-    string request_id = 1;
-    ProtocolError error = 2;
-    repeated ArtifactMetadata artifacts = 3;
-}
-
-message ResumeState {
-    repeated JobSummary jobs = 1;
+    string job_id = 1;
+    string request_id = 2;
+    ProtocolError error = 3;
+    optional RestorationReceipt restoration = 4;
+    repeated ArtifactMetadata artifacts = 5;
 }
 
 message ServerShuttingDown {
@@ -487,76 +741,163 @@ message ServerShuttingDown {
     uint64 retry_after_ms = 2;
 }
 
-message JobSummary {
-    string request_id = 1;
-    JobState state = 2;
-    JobStage stage = 3;
-}
-
-enum JobState {
-    JOB_STATE_UNSPECIFIED = 0;
-    JOB_STATE_QUEUED = 1;
-    JOB_STATE_RUNNING = 2;
-    JOB_STATE_COMPLETED = 3;
-    JOB_STATE_FAILED = 4;
-    JOB_STATE_CANCELLED = 5;
-}
-
 message JobResult {
-    JobResultKind kind = 1;
-    repeated ArtifactMetadata artifacts = 2;
-    AbComparisonResult comparison = 3;
-    JobTimings timings = 4;
-    repeated ShaderDiagnostic shader_diagnostics = 5;
-    repeated uint64 frame_ids = 6;
-    string manifest_path = 7;
-    repeated ActionResult action_results = 8;
-    repeated ArtifactGroup artifact_groups = 9;
-    repeated BenchmarkBarrierReceipt benchmark_barriers = 10;
-}
-
-message ArtifactGroup {
-    string name = 1;
-    ResourceDescriptor resource = 2;
-    repeated ArtifactMetadata artifacts = 3;
-}
-
-message ActionResult {
-    uint32 action_index = 1;
-    JobActionKind kind = 2;
-    string json = 3;
-    string case_id = 4;
-}
-
-enum BenchmarkBarrierStage {
-    BENCHMARK_BARRIER_STAGE_UNSPECIFIED = 0;
-    BENCHMARK_BARRIER_STAGE_SOURCE_PUBLISHED = 1;
-    BENCHMARK_BARRIER_STAGE_CONFIG_APPLIED = 2;
-    BENCHMARK_BARRIER_STAGE_SHADER_RELOADED = 3;
-    BENCHMARK_BARRIER_STAGE_SHADER_GENERATION_CONFIRMED = 4;
-    BENCHMARK_BARRIER_STAGE_WARMUP_STARTED = 5;
-    BENCHMARK_BARRIER_STAGE_WARMUP_COMPLETED = 6;
-    BENCHMARK_BARRIER_STAGE_SAMPLE_STARTED = 7;
-    BENCHMARK_BARRIER_STAGE_SAMPLE_COMPLETED = 8;
-    BENCHMARK_BARRIER_STAGE_STATE_RESTORED = 9;
-}
-
-message BenchmarkBarrierReceipt {
-    string case_id = 1;
-    BenchmarkBarrierStage stage = 2;
-    uint32 ordinal = 3;
-    string source_uuid = 4;
-    string config_sha256 = 5;
-    uint64 shader_generation = 6;
-    string detail = 7;
+    JobTimings timings = 1;
+    ResultProvenance provenance = 2;
+    repeated ActionReceipt action_receipts = 3;
+    repeated ActionReceipt prelude_receipts = 4;
+    optional CompileValidationResult compile_validation = 5;
+    optional BenchmarkResult benchmark = 6;
+    optional MatrixResult matrix = 7;
+    optional RestorationReceipt restoration = 8;
+    repeated ArtifactMetadata artifacts = 9;
+    string result_manifest_id = 10;
 }
 
 message JobTimings {
-    uint64 started_at_unix_ms = 1;
-    uint64 completed_at_unix_ms = 2;
-    uint64 queue_ms = 3;
-    uint64 execution_ms = 4;
-    uint64 total_ms = 5;
+    uint64 accepted_at_unix_ms = 1;
+    uint64 started_at_unix_ms = 2;
+    uint64 completed_at_unix_ms = 3;
+    uint64 queue_ms = 4;
+    uint64 execution_ms = 5;
+    uint64 total_ms = 6;
+}
+
+enum ReceiptStatus {
+    RECEIPT_STATUS_UNSPECIFIED = 0;
+    RECEIPT_STATUS_OK = 1;
+    RECEIPT_STATUS_FAILED = 2;
+    RECEIPT_STATUS_CANCELLED = 3;
+}
+
+message ActionReceipt {
+    uint32 action_index = 1;
+    ActionKind kind = 2;
+    ReceiptStatus status = 3;
+    optional ProtocolError error = 4;
+    oneof detail {
+        WaitFramesReceipt wait_frames = 10;
+        RuntimeMutationReceipt runtime_mutation = 11;
+        CaptureReceipt capture = 12;
+        CompareReceipt comparison = 13;
+        CaptureStatusReceipt capture_status = 14;
+        ShaderInspectionReceipt shader_inspection = 15;
+        GpuMetricsReceipt gpu_metrics = 16;
+        ResourceCatalog resource_catalog = 17;
+        PatchedShadersReceipt patched_shaders = 18;
+        EmptyReceipt empty = 19;
+    }
+}
+
+message EmptyReceipt {}
+
+message WaitFramesReceipt {
+    uint32 requested_frames = 1;
+    uint64 start_frame = 2;
+    uint64 end_frame = 3;
+    uint32 completed_frames = 4;
+}
+
+message RuntimeMutationReceipt {
+    string source_uuid = 1;
+    string source_sha256 = 2;
+    EffectiveShaderSettings effective_settings = 3;
+    string scene_sha256 = 4;
+    uint64 completed_at_unix_ms = 5;
+}
+
+message CaptureReceipt {
+    uint64 frame_id = 1;
+    optional string pass_id = 2;
+    optional uint32 pass_occurrence = 3;
+    ResourceDescriptor resource = 4;
+    repeated ArtifactMetadata artifacts = 5;
+}
+
+message CompareReceipt {
+    VisualMetrics metrics = 1;
+    bool passed = 2;
+    repeated string violations = 3;
+}
+
+message CaptureStatusReceipt {
+    string state = 1;
+    uint32 pending_requests = 2;
+}
+
+message ShaderInspectionReceipt {
+    CompileCatalog catalog = 1;
+}
+
+message GpuMetricsReceipt {
+    string timing_unit = 1;
+    repeated GpuTimingMetric metrics = 2;
+    uint32 sampled_frames = 3;
+}
+
+message GpuTimingMetric {
+    string metric_id = 1;
+    string program_id = 2;
+    string pass_id = 3;
+    uint64 average_ns = 4;
+    uint64 p50_ns = 5;
+    uint64 p95_ns = 6;
+    repeated uint64 samples_ns = 7;
+}
+
+message PatchedShadersReceipt {
+    uint64 shader_generation = 1;
+    string patched_shader_sha256 = 2;
+    repeated ArtifactMetadata artifacts = 3;
+}
+
+message RestorationReceipt {
+    ReceiptStatus status = 1;
+    string expected_source_uuid = 2;
+    string actual_source_uuid = 3;
+    string expected_source_sha256 = 4;
+    string actual_source_sha256 = 5;
+    string expected_settings_sha256 = 6;
+    string actual_settings_sha256 = 7;
+    string expected_scene_sha256 = 8;
+    string actual_scene_sha256 = 9;
+    bool temporal_state_reset = 10;
+    uint64 verified_at_unix_ms = 11;
+    optional ProtocolError error = 12;
+}
+
+message CompileCatalog {
+    repeated CompileProgramEntry programs = 1;
+    string mapping_sha256 = 2;
+    uint64 shader_generation = 3;
+}
+
+message CompileProgramEntry {
+    string program_id = 1;
+    string pass_id = 2;
+    repeated ShaderStage stages = 3;
+    CompileState compile_state = 4;
+    CompileState link_state = 5;
+    string patched_source_sha256 = 6;
+    repeated ShaderDiagnostic diagnostics = 7;
+}
+
+enum ShaderStage {
+    SHADER_STAGE_UNSPECIFIED = 0;
+    SHADER_STAGE_VERTEX = 1;
+    SHADER_STAGE_TESS_CONTROL = 2;
+    SHADER_STAGE_TESS_EVALUATION = 3;
+    SHADER_STAGE_GEOMETRY = 4;
+    SHADER_STAGE_FRAGMENT = 5;
+    SHADER_STAGE_COMPUTE = 6;
+}
+
+enum CompileState {
+    COMPILE_STATE_UNSPECIFIED = 0;
+    COMPILE_STATE_NOT_PRESENT = 1;
+    COMPILE_STATE_SUCCEEDED = 2;
+    COMPILE_STATE_FAILED = 3;
+    COMPILE_STATE_NOT_APPLICABLE = 4;
 }
 
 message ShaderDiagnostic {
@@ -565,7 +906,8 @@ message ShaderDiagnostic {
     uint32 line = 3;
     uint32 column = 4;
     string message = 5;
-    string log_path = 6;
+    string fingerprint_sha256 = 6;
+    string log_path = 7;
 }
 
 enum DiagnosticSeverity {
@@ -575,96 +917,154 @@ enum DiagnosticSeverity {
     DIAGNOSTIC_SEVERITY_ERROR = 3;
 }
 
-enum JobResultKind {
-    JOB_RESULT_KIND_UNSPECIFIED = 0;
-    JOB_RESULT_KIND_ACTION_SEQUENCE = 4;
+message CompileValidationResult {
+    repeated CompileCaseResult cases = 1;
 }
 
-message AbComparisonResult {
-    string baseline_label = 1;
-    string candidate_label = 2;
-    double mean_absolute_error = 3;
-    double root_mean_square_error = 4;
-    double max_absolute_error = 5;
-    double p95_absolute_error = 6;
-    double threshold_pixel_ratio = 7;
-    optional double ssim = 8;
-    uint64 sample_count = 9;
-    uint64 pixel_count = 10;
-    double pixel_error_threshold = 11;
-    bool passed = 12;
-    string verdict = 13;
-    repeated string violations = 14;
-    VisualThresholds thresholds = 15;
+message CompileCaseResult {
+    string case_id = 1;
+    CompileCatalog catalog = 2;
+    repeated ShaderDiagnostic added_diagnostics = 3;
+    repeated ShaderDiagnostic resolved_diagnostics = 4;
+    repeated ShaderDiagnostic unchanged_diagnostics = 5;
+    ResultProvenance provenance = 6;
 }
 
-message ArtifactMetadata {
-    string artifact_id = 1;
-    string file_name = 2;
-    ArtifactKind kind = 3;
-    ArtifactFormat format = 4;
-    string media_type = 5;
-    uint64 byte_size = 6;
-    ResourceDescriptor resource = 7;
-    string path = 8;
-    ArtifactRole role = 9;
-    optional uint32 subresource_index = 10;
+message MatrixResult {
+    repeated MatrixCaseResult cases = 1;
+    uint32 requested_cases = 2;
+    uint32 completed_cases = 3;
+    uint32 failed_cases = 4;
 }
 
-enum ArtifactRole {
-    ARTIFACT_ROLE_UNSPECIFIED = 0;
-    ARTIFACT_ROLE_PRIMARY = 1;
-    ARTIFACT_ROLE_SUBRESOURCE = 2;
-    ARTIFACT_ROLE_METADATA = 3;
+message MatrixCaseResult {
+    string case_id = 1;
+    ReceiptStatus status = 2;
+    repeated ActionReceipt action_receipts = 3;
+    ResultProvenance provenance = 4;
+    optional ProtocolError error = 5;
 }
 
-enum ArtifactKind {
-    ARTIFACT_KIND_UNSPECIFIED = 0;
-    ARTIFACT_KIND_SCREENSHOT = 1;
-    ARTIFACT_KIND_TEXTURE = 2;
-    ARTIFACT_KIND_BUFFER = 3;
-    ARTIFACT_KIND_SHADER_COMPILE_LOG = 4;
-    ARTIFACT_KIND_AB_METRICS = 5;
-    ARTIFACT_KIND_HEATMAP = 6;
-    ARTIFACT_KIND_MANIFEST = 7;
-    ARTIFACT_KIND_PATCHED_SHADER = 8;
-    ARTIFACT_KIND_PROFILE_RESULT = 9;
+enum BenchmarkVerdict {
+    BENCHMARK_VERDICT_UNSPECIFIED = 0;
+    BENCHMARK_VERDICT_ACCEPTED = 1;
+    BENCHMARK_VERDICT_REGRESSION = 2;
+    BENCHMARK_VERDICT_INCONCLUSIVE = 3;
+    BENCHMARK_VERDICT_GATE_FAILED = 4;
 }
 
-enum ArtifactFormat {
-    reserved 3;
-    reserved "ARTIFACT_FORMAT_RAW";
-    ARTIFACT_FORMAT_UNSPECIFIED = 0;
-    ARTIFACT_FORMAT_PNG = 1;
-    ARTIFACT_FORMAT_EXR = 2;
-    ARTIFACT_FORMAT_BIN = 4;
-    ARTIFACT_FORMAT_TEXT = 5;
-    ARTIFACT_FORMAT_JSON = 6;
-    ARTIFACT_FORMAT_CSV = 7;
+message BenchmarkResult {
+    BenchmarkVerdict verdict = 1;
+    repeated BenchmarkMetricResult metrics = 2;
+    double measured_noise_floor = 3;
+    double order_effect = 4;
+    bool direction_reversed = 5;
+    bool thermal_or_temporal_drift = 6;
+    repeated string violations = 7;
+    optional CompareReceipt visual_gate = 8;
+    ResultProvenance baseline_provenance = 9;
+    ResultProvenance candidate_provenance = 10;
+}
+
+message BenchmarkMetricResult {
+    string metric_id = 1;
+    BenchmarkMetricRole role = 2;
+    double baseline_p50 = 3;
+    double candidate_p50 = 4;
+    double baseline_p95 = 5;
+    double candidate_p95 = 6;
+    double paired_delta = 7;
+    double confidence_interval_low = 8;
+    double confidence_interval_high = 9;
+    bool guardrail_passed = 10;
+}
+
+message VisualMetrics {
+    double mean_absolute_error = 1;
+    double root_mean_square_error = 2;
+    double max_absolute_error = 3;
+    double p95_absolute_error = 4;
+    double threshold_pixel_ratio = 5;
+    optional double ssim = 6;
+    uint64 sample_count = 7;
+    uint64 pixel_count = 8;
+}
+
+message ResultProvenance {
+    string workspace_id = 1;
+    string worktree_root = 2;
+    string branch = 3;
+    string requested_revision = 4;
+    string resolved_revision = 5;
+    string start_head = 6;
+    string completion_head = 7;
+    bool head_changed = 8;
+    bool stale = 9;
+    string shader_tree_id = 10;
+    string dirty_shader_delta_sha256 = 11;
+    string source_snapshot_sha256 = 12;
+    string active_source_uuid = 13;
+    string config_sha256 = 14;
+    string preset_id = 15;
+    string preset_sha256 = 16;
+    string scene_sha256 = 17;
+    EffectiveShaderSettings effective_settings = 18;
+    uint64 shader_loaded_at_unix_ms = 19;
+    EnvironmentProvenance environment = 20;
+    string pass_mapping_sha256 = 21;
+}
+
+message EnvironmentProvenance {
+    string minecraft_version = 1;
+    string iris_version = 2;
+    string vibris_version = 3;
+    string java_version = 4;
+    string operating_system = 5;
+    string gpu_vendor = 6;
+    string gpu_renderer = 7;
+    string opengl_version = 8;
+    string driver_version = 9;
+}
+
+message ResourceCatalog {
+    repeated ResourceDescriptor resources = 1;
+    repeated PassDescriptor passes = 2;
+    string mapping_sha256 = 3;
+}
+
+message PassDescriptor {
+    string pass_id = 1;
+    PassStage stage = 2;
+    string program_id = 3;
+    uint32 order = 4;
+    repeated string readable_resources = 5;
+}
+
+enum PassStage {
+    PASS_STAGE_UNSPECIFIED = 0;
+    PASS_STAGE_BEGIN = 1;
+    PASS_STAGE_PREPARE = 2;
+    PASS_STAGE_DEFERRED = 3;
+    PASS_STAGE_COMPOSITE = 4;
+    PASS_STAGE_FINAL = 5;
+    PASS_STAGE_SHADOW_COMPOSITE = 6;
 }
 
 message ResourceDescriptor {
     string logical_name = 1;
     ResourceKind kind = 2;
-    uint32 width = 3;
-    uint32 height = 4;
-    uint32 depth = 5;
-    uint32 mip_level = 6;
-    uint32 layer = 7;
-    string internal_format = 8;
-    uint32 channel_count = 9;
-    ScalarType scalar_type = 10;
-    uint64 byte_size = 11;
-    uint64 frame_id = 12;
-    string semantic_label = 13;
-    string category = 14;
-    string texture_target = 15;
-    string channel_layout = 16;
-    string numeric_class = 17;
-    uint32 component_bits = 18;
-    string readback_format = 19;
-    string readback_type = 20;
-    uint32 mip_levels = 21;
+    repeated TextureView available_views = 3;
+    uint32 width = 4;
+    uint32 height = 5;
+    uint32 depth = 6;
+    uint32 mip_levels = 7;
+    uint32 layers = 8;
+    string internal_format = 9;
+    uint32 channel_count = 10;
+    ScalarType scalar_type = 11;
+    uint64 byte_size = 12;
+    uint64 frame_id = 13;
+    string physical_name = 14;
 }
 
 enum ResourceKind {
@@ -687,30 +1087,75 @@ enum ScalarType {
     SCALAR_TYPE_FLOAT32 = 8;
 }
 
-message EmptyAction {}
-
-message GetPatchedShaders {
-    string artifact_name = 1;
+message ArtifactMetadata {
+    string artifact_id = 1;
+    string job_id = 2;
+    string request_id = 3;
+    string relative_path = 4;
+    ArtifactKind kind = 5;
+    ArtifactFormat format = 6;
+    ArtifactRole role = 7;
+    string media_type = 8;
+    uint64 byte_size = 9;
+    string sha256 = 10;
+    uint64 created_at_unix_ms = 11;
+    uint64 expires_at_unix_ms = 12;
+    optional ResourceDescriptor resource = 13;
 }
 
-message LoadShader {
-    string source_uuid = 1;
-    string source_id = 2;
-    string config_id = 3;
-    string case_id = 4;
-    bool continue_on_failure = 5;
+message ArtifactManifest {
+    string manifest_id = 1;
+    string workspace_id = 2;
+    string job_id = 3;
+    string request_id = 4;
+    string recipe = 5;
+    uint64 created_at_unix_ms = 6;
+    uint64 completed_at_unix_ms = 7;
+    uint64 expires_at_unix_ms = 8;
+    uint64 total_bytes = 9;
+    repeated ArtifactMetadata files = 10;
+    string manifest_sha256 = 11;
 }
 
-message CapturePass {
-    string pass = 1;
-    optional string path = 2;
+message ArtifactCapacity {
+    uint64 cap_bytes = 1;
+    uint64 used_bytes = 2;
+    uint64 reserved_bytes = 3;
+    uint64 estimated_job_bytes = 4;
+    bool warning = 5;
+    bool fits = 6;
+    repeated string eviction_manifest_ids = 7;
 }
 
-message CaptureMulti {
-    string type = 1;
-    optional string path = 2;
+enum ArtifactKind {
+    ARTIFACT_KIND_UNSPECIFIED = 0;
+    ARTIFACT_KIND_SCREENSHOT = 1;
+    ARTIFACT_KIND_TEXTURE = 2;
+    ARTIFACT_KIND_BUFFER = 3;
+    ARTIFACT_KIND_SHADER_COMPILE_LOG = 4;
+    ARTIFACT_KIND_BENCHMARK_METRICS = 5;
+    ARTIFACT_KIND_HEATMAP = 6;
+    ARTIFACT_KIND_MANIFEST = 7;
+    ARTIFACT_KIND_PATCHED_SHADER = 8;
+    ARTIFACT_KIND_RESULT = 9;
+    ARTIFACT_KIND_EVENT_LOG = 10;
 }
 
-message GetGpuMetrics {
-    uint32 frames = 1;
+enum ArtifactFormat {
+    ARTIFACT_FORMAT_UNSPECIFIED = 0;
+    ARTIFACT_FORMAT_PNG = 1;
+    ARTIFACT_FORMAT_EXR = 2;
+    ARTIFACT_FORMAT_BIN = 3;
+    ARTIFACT_FORMAT_TEXT = 4;
+    ARTIFACT_FORMAT_JSON = 5;
+    ARTIFACT_FORMAT_CSV = 6;
+}
+
+enum ArtifactRole {
+    ARTIFACT_ROLE_UNSPECIFIED = 0;
+    ARTIFACT_ROLE_PRIMARY = 1;
+    ARTIFACT_ROLE_SUBRESOURCE = 2;
+    ARTIFACT_ROLE_METADATA = 3;
+    ARTIFACT_ROLE_DIAGNOSTIC = 4;
+    ARTIFACT_ROLE_RAW_SAMPLES = 5;
 }

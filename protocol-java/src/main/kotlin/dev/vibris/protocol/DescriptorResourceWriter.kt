@@ -1,6 +1,6 @@
 package dev.vibris.protocol
 
-import dev.vibris.protocol.v1.VibrisControlProto
+import dev.vibris.protocol.v2.VibrisControlProto
 import java.nio.file.Files
 import java.nio.file.Path
 

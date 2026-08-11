@@ -14,7 +14,7 @@ int main(int argc, char** argv) {
     }
 
     google::protobuf::FileDescriptorProto descriptor;
-    vibris::control::v1::ClientMessage::descriptor()->file()->CopyTo(&descriptor);
+    vibris::control::v2::ClientMessage::descriptor()->file()->CopyTo(&descriptor);
 
     std::ofstream output(std::filesystem::path(argv[2]), std::ios::binary | std::ios::trunc);
     if (!output || !descriptor.SerializeToOstream(&output)) {
