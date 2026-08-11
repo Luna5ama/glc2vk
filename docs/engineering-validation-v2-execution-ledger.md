@@ -99,7 +99,7 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T15 | P0 | Vibris | Define named pass resource dump contract | DONE | `T15 define named pass resource dump contract` |
 | T16 | P0 | Iris | Implement named Iris pass boundary hooks | DONE | `T16 capture resources after named Iris passes` |
 | T17 | P0 | Vibris | Integrate after-pass texture and buffer jobs | DONE | `T17 integrate after-pass resource dump jobs` |
-| T18 | P0 | Vibris | Complete strict v2 cutover and documentation | READY | `T18 complete strict v2 cutover` |
+| T18 | P0 | Vibris | Complete strict v2 cutover and documentation | BLOCKED | `T18 complete strict v2 cutover` |
 | T19 | P0 | Vibris | Run offline integrated acceptance | PENDING | `T19 verify offline v2 integration` |
 | T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | PENDING | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
@@ -1394,7 +1394,7 @@ Evidence:
 
 ### T18 — Complete strict v2 cutover and documentation
 
-Status: `READY`
+Status: `BLOCKED`
 
 Dependencies: T17
 
@@ -1437,11 +1437,27 @@ Expected commit title: `T18 complete strict v2 cutover`
 
 Blockers:
 
-- None known.
+- Requires fresh explicit user approval for the disclosed hard-cutover impact before execution can reject persisted
+  schema-v1 configuration, workspace identity, and delivery receipts, and before obsolete v1-only integration suites
+  can be removed. Old user data will remain untouched on disk; no deployment is included. The requested approval text
+  is `批准 T18 hard cutover`.
 
 Evidence:
 
-- Pending.
+- `2026-08-11`: the continuation re-read this ledger and the roadmap skill completely, then verified Vibris
+  `main` at `70e6967906227bda702373ee9153488dadf103e7`, Iris `1.21.11-shaderdev` at
+  `38a7d2eaf88939983e0e01f731ccd4c627fbf6a9`, every declared auxiliary worktree and branch, empty staging areas,
+  and the exact protected untracked state in both repositories. The ledger checker reported
+  `Ledger valid: 24 task(s); next=T18; READY=1, PENDING=3, BLOCKED=0, DONE=20, SUPERSEDED=0.` before this transition.
+- T18 entry auditing found that the strict cutover must reject existing schema-v1 configuration, workspace identity,
+  build receipts, and delivery transaction manifests without reading or migrating them. It must also remove obsolete
+  integration suites tied to deleted v1 result fields while retaining their maintained strict-v2 Core/test-runtime
+  coverage. The execution environment rejected both irreversible operations pending fresh user approval after these
+  effects were disclosed; the agent did not retry through another mechanism.
+- Partial task-owned namespace/test-runtime migration remains uncommitted for later T18 resumption. No production
+  schema acceptance, legacy reader, dual output, documentation, user data, deployment, Minecraft process, launcher,
+  or T19 file was changed. Protected `capture\a.spv` remained unread, untracked, and unstaged; Iris `.codex\`,
+  `.vibris\`, and `common\logs\` remained untracked and unstaged.
 
 ### T19 — Run offline integrated acceptance
 
@@ -1652,3 +1668,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T14 - replaced artifacts with strict-v2 TTL/hash/grouped manifests, capacity reservations, ownership-safe list/detail/delete, worktree-local MCP paths, and durable expired metadata; Core 94/94 plus focused native 3/3 passed - Commit title: T14 add managed artifact v2 lifecycle`
 - `2026-08-11 - T16 - Iris registered ordered named pass boundaries, captured flip-correct texture/SSBO snapshots only after compute/graphics completion, moved encoding/writes off-thread, and removed cancelled/timed-out hooks; external commit 38a7d2eaf88939983e0e01f731ccd4c627fbf6a9; bridge tests 15/15 and offline Iris build passed - Owner receipt commit title: T16 record Iris named pass capture receipt`
 - `2026-08-11 - T17 - grouped exact next-frame after-pass texture/buffer registrations into one artifact-v2 transaction, returned complete physical-view/pass/hash receipts, strengthened GPU visibility barriers, preserved flipped PNG/native BIN semantics, and released timeout/cancel/error registrations; capture 26/26, Core 100/100, real OpenGL 4.6 runtime 1/1, and native protocol/schema 2/2 passed - Commit title: T17 integrate after-pass resource dump jobs`
+- `2026-08-11 - T18 blocked - hard cutover rejects persisted schema-v1 state and removes obsolete v1-only integration suites; execution requires fresh explicit user approval after impact disclosure, while old data remains untouched and no deployment occurs - Control-plane commit title: roadmap block T18 pending hard cutover approval`
