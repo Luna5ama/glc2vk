@@ -115,12 +115,12 @@ void collect_paths(Json& value, std::vector<Json*>& paths) {
             paths.push_back(&*found);
         }
     };
-    const auto collect_artifacts = [&paths](Json& object) {
-        const auto found = object.find("artifacts");
+    const auto collect_artifacts = [&paths](Json& object, std::string_view collection, std::string_view field) {
+        const auto found = object.find(collection);
         if (found == object.end() || !found->is_array()) return;
         for (auto& artifact : *found) {
             if (!artifact.is_object()) continue;
-            const auto path = artifact.find("path");
+            const auto path = artifact.find(field);
             if (path != artifact.end() && path->is_string() && !path->get_ref<const std::string&>().empty()) {
                 paths.push_back(&*path);
             }
@@ -129,7 +129,14 @@ void collect_paths(Json& value, std::vector<Json*>& paths) {
 
     collect_string(value, "manifest_path");
     collect_string(value, "log_path");
-    collect_artifacts(value);
+    collect_artifacts(value, "artifacts", "path");
+    collect_artifacts(value, "files", "relative_path");
+    const auto manifests = value.find("manifests");
+    if (manifests != value.end() && manifests->is_array()) {
+        for (auto& manifest : *manifests) collect_paths(manifest, paths);
+    }
+    const auto manifest = value.find("manifest");
+    if (manifest != value.end() && manifest->is_object()) collect_paths(*manifest, paths);
     const auto diagnostics = value.find("diagnostics");
     if (diagnostics != value.end() && diagnostics->is_array()) {
         for (auto& diagnostic : *diagnostics) collect_string(diagnostic, "log_path");
@@ -138,10 +145,11 @@ void collect_paths(Json& value, std::vector<Json*>& paths) {
 
 fs::path artifact_workspace_directory(const std::vector<Json*>& paths, std::string_view workspace_id) {
     const auto first = fs::path(paths.front()->get_ref<const std::string&>()).lexically_normal();
-    if (!first.is_absolute() || first.parent_path().empty() || first.parent_path().parent_path().empty()) {
+    if (!first.is_absolute() || first.parent_path().empty() ||
+        first.parent_path().parent_path().empty() || first.parent_path().parent_path().parent_path().empty()) {
         artifact_link_error("The server returned an invalid artifact path.");
     }
-    const auto candidate = first.parent_path().parent_path();
+    const auto candidate = first.parent_path().parent_path().parent_path();
     if (!equal_component(candidate.filename(), fs::path(workspace_id))) {
         artifact_link_error("The server artifact path does not belong to this workspace ID.");
     }

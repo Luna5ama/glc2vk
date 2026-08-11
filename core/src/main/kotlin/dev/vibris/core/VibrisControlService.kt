@@ -11,6 +11,9 @@ import dev.vibris.protocol.v2.ListPresetsRequest
 import dev.vibris.protocol.v2.ListPresetsResponse
 import dev.vibris.protocol.v2.ListResourcesRequest
 import dev.vibris.protocol.v2.ListResourcesResponse
+import dev.vibris.protocol.v2.ManageArtifactsRequest
+import dev.vibris.protocol.v2.ManageArtifactsResponse
+import dev.vibris.protocol.v2.ArtifactOperation
 import dev.vibris.protocol.v2.Pong
 import dev.vibris.protocol.v2.ScenePreset
 import dev.vibris.protocol.v2.ServerMessage
@@ -28,7 +31,11 @@ class VibrisControlService internal constructor(
     private val runtime: VibrisRuntimeAdapter,
     shaderLink: ShaderLink,
 ) : VibrisControlGrpc.VibrisControlImplBase(), AutoCloseable {
-    private val artifacts = ArtifactManager(configuration.paths.artifactRoot, configuration.artifactQuotaBytes)
+    private val artifacts = ArtifactManager(
+        configuration.paths.artifactRoot,
+        configuration.artifactQuotaBytes,
+        configuration.artifactTtl,
+    )
     private val engine = VibrisCoreEngine(
         configuration.paths.pendingShadersRoot,
         runtime,
@@ -210,6 +217,76 @@ class VibrisControlService internal constructor(
         }
         observer.onNext(response.build())
         observer.onCompleted()
+    }
+
+    override fun manageArtifacts(
+        request: ManageArtifactsRequest,
+        observer: StreamObserver<ManageArtifactsResponse>,
+    ) {
+        if (!request.hasProtocolVersion() || request.protocolVersion.major != 2) {
+            observer.onError(Status.FAILED_PRECONDITION.withDescription("UNSUPPORTED_VERSION").asRuntimeException())
+            return
+        }
+        if (request.workspaceId.isBlank()) {
+            observer.onError(Status.INVALID_ARGUMENT.withDescription("WORKSPACE_ID_REQUIRED").asRuntimeException())
+            return
+        }
+        try {
+            val response = ManageArtifactsResponse.newBuilder().setProtocolVersion(ProtocolMessages.V2)
+            when (request.operation) {
+                ArtifactOperation.ARTIFACT_OPERATION_LIST -> {
+                    artifacts.manifests(
+                        request.workspaceId,
+                        request.jobId.takeIf { request.hasJobId() },
+                        request.requestId.takeIf { request.hasRequestId() },
+                    ).forEach { response.addManifests(artifactManifest(it)) }
+                }
+                ArtifactOperation.ARTIFACT_OPERATION_GET -> {
+                    if (!request.hasManifestId() || request.manifestId.isBlank()) {
+                        throw IllegalArgumentException("MANIFEST_ID_REQUIRED")
+                    }
+                    response.setManifest(artifactManifest(artifacts.manifest(request.workspaceId, request.manifestId)))
+                }
+                ArtifactOperation.ARTIFACT_OPERATION_CAPACITY -> response.setCapacity(artifacts.capacity())
+                ArtifactOperation.ARTIFACT_OPERATION_DELETE -> {
+                    if (!request.hasManifestId() || request.manifestId.isBlank() ||
+                        !request.hasExpectedManifestSha256() || request.expectedManifestSha256.isBlank()
+                    ) throw IllegalArgumentException("MANIFEST_ID_AND_EXPECTED_SHA_REQUIRED")
+                    artifacts.delete(request.workspaceId, request.manifestId, request.expectedManifestSha256)
+                    response.deleted = true
+                }
+                else -> throw IllegalArgumentException("ARTIFACT_OPERATION_REQUIRED")
+            }
+            observer.onNext(response.build())
+            observer.onCompleted()
+        } catch (exception: ArtifactManager.OwnershipException) {
+            observer.onError(Status.PERMISSION_DENIED.withDescription("ARTIFACT_WORKSPACE_MISMATCH").asRuntimeException())
+        } catch (exception: ArtifactManager.DeletionRaceException) {
+            observer.onError(Status.FAILED_PRECONDITION.withDescription("ARTIFACT_MANIFEST_CHANGED").asRuntimeException())
+        } catch (exception: IllegalArgumentException) {
+            observer.onError(Status.INVALID_ARGUMENT.withDescription(exception.message).asRuntimeException())
+        } catch (exception: java.io.IOException) {
+            observer.onError(Status.NOT_FOUND.withDescription(exception.message).asRuntimeException())
+        }
+    }
+
+    private fun artifactManifest(managed: ArtifactManager.ManagedManifest): dev.vibris.protocol.v2.ArtifactManifest {
+        val document = managed.document
+        return dev.vibris.protocol.v2.ArtifactManifest.newBuilder()
+            .setManifestId(document.manifestId)
+            .setWorkspaceId(document.workspaceId)
+            .setJobId(document.jobId)
+            .setRequestId(document.requestId)
+            .setRecipe(document.recipe)
+            .setCreatedAtUnixMs(document.createdAtUnixMs)
+            .setCompletedAtUnixMs(document.completedAtUnixMs)
+            .setExpiresAtUnixMs(document.expiresAtUnixMs)
+            .setTotalBytes(document.totalBytes)
+            .addAllFiles(managed.files)
+            .setManifestSha256(managed.manifestSha256)
+            .setManifestPath(managed.manifestPath.toAbsolutePath().normalize().toString())
+            .setExpired(false)
+            .build()
     }
 
     override fun control(responses: StreamObserver<ServerMessage>): StreamObserver<ClientMessage> {

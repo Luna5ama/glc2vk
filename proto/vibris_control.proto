@@ -12,6 +12,7 @@ service VibrisControl {
     rpc ListResources(ListResourcesRequest) returns (ListResourcesResponse);
     rpc ValidateContext(ValidateContextRequest) returns (ValidateContextResponse);
     rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+    rpc ManageArtifacts(ManageArtifactsRequest) returns (ManageArtifactsResponse);
     rpc Control(stream ClientMessage) returns (stream ServerMessage);
 }
 
@@ -1117,6 +1118,7 @@ message ArtifactMetadata {
     uint64 created_at_unix_ms = 11;
     uint64 expires_at_unix_ms = 12;
     optional ResourceDescriptor resource = 13;
+    bool expired = 14;
 }
 
 message ArtifactManifest {
@@ -1131,6 +1133,34 @@ message ArtifactManifest {
     uint64 total_bytes = 9;
     repeated ArtifactMetadata files = 10;
     string manifest_sha256 = 11;
+    string manifest_path = 12;
+    bool expired = 13;
+}
+
+enum ArtifactOperation {
+    ARTIFACT_OPERATION_UNSPECIFIED = 0;
+    ARTIFACT_OPERATION_LIST = 1;
+    ARTIFACT_OPERATION_GET = 2;
+    ARTIFACT_OPERATION_CAPACITY = 3;
+    ARTIFACT_OPERATION_DELETE = 4;
+}
+
+message ManageArtifactsRequest {
+    ProtocolVersion protocol_version = 1;
+    string workspace_id = 2;
+    ArtifactOperation operation = 3;
+    optional string manifest_id = 4;
+    optional string expected_manifest_sha256 = 5;
+    optional string job_id = 6;
+    optional string request_id = 7;
+}
+
+message ManageArtifactsResponse {
+    ProtocolVersion protocol_version = 1;
+    repeated ArtifactManifest manifests = 2;
+    optional ArtifactManifest manifest = 3;
+    optional ArtifactCapacity capacity = 4;
+    bool deleted = 5;
 }
 
 message ArtifactCapacity {
@@ -1140,7 +1170,6 @@ message ArtifactCapacity {
     uint64 estimated_job_bytes = 4;
     bool warning = 5;
     bool fits = 6;
-    repeated string eviction_manifest_ids = 7;
 }
 
 enum ArtifactKind {

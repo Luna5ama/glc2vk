@@ -21,6 +21,12 @@ internal open class ArtifactJobTransaction internal constructor(
     private val temporary: Path,
     private val directoryValue: Path,
     private val workspaceIdentityValue: OwnedPathIdentity,
+    private val workspaceId: String,
+    private val jobId: String,
+    private val requestId: String,
+    private val recipe: String,
+    private val createdAtUnixMs: Long,
+    private val expiresAtUnixMs: Long,
 ) : ArtifactSink, AutoCloseable {
     private val temporaryIdentity = OwnedPathIdentity.captureDirectory(temporary)
     private val artifacts = LinkedHashMap<String, ArtifactRecord>()
@@ -55,10 +61,6 @@ internal open class ArtifactJobTransaction internal constructor(
             throw exception
         }
     }
-
-    @Synchronized
-    @Throws(IOException::class)
-    fun commit(): ArtifactManager.CommittedJob = commit(null)
 
     @Synchronized
     fun checkpoint(): Checkpoint {
@@ -97,7 +99,7 @@ internal open class ArtifactJobTransaction internal constructor(
 
     @Synchronized
     @Throws(IOException::class)
-    fun commit(expectedArtifacts: Set<String?>?): ArtifactManager.CommittedJob {
+    fun commit(specifications: Map<String, ArtifactManifest.FileSpec>): ArtifactManager.CommittedJob {
         requireActive()
         if (openStreams.isNotEmpty()) {
             throw IOException("Artifact streams must be closed before commit.")
@@ -105,15 +107,39 @@ internal open class ArtifactJobTransaction internal constructor(
         if (writeFailed) {
             throw IOException("Artifact output did not flush successfully.")
         }
-        if (expectedArtifacts != null) {
-            requireExpectedArtifacts(expectedArtifacts)
-        }
+        requireSpecifications(specifications)
         verifyTemporaryAndArtifacts()
         state = State.FINALIZING
         val artifactSizes = artifactSizes()
-        val manifestBytes = ArtifactManifest.encode(artifactSizes)
+        val completedAt = manager.now()
+        val entries = artifacts.map { (name, artifact) ->
+            ArtifactManifest.FileEntry(
+                manager.artifactId(workspaceId, jobId, requestId, name),
+                name,
+                specifications.getValue(name),
+                artifact.bytes,
+                ArtifactManifest.sha256(artifact.path),
+                createdAtUnixMs,
+                expiresAtUnixMs,
+            )
+        }
+        val encoded = ArtifactManifest.encode(
+            ArtifactManifest.Document(
+                manager.manifestId(workspaceId, jobId, requestId),
+                workspaceId,
+                jobId,
+                requestId,
+                recipe,
+                createdAtUnixMs,
+                completedAt,
+                expiresAtUnixMs,
+                0,
+                entries,
+            ),
+        )
+        val manifestBytes = encoded.bytes
         try {
-            manager.reserve(this, Math.addExact(artifactBytes, manifestBytes.size.toLong()))
+            manager.reserve(this, encoded.document.totalBytes)
             val manifest = temporary.resolve(MANIFEST)
             lateinit var manifestIdentity: ArtifactFiles.RegularFileIdentity
             FileChannel.open(manifest, CREATE_NEW, WRITE, NOFOLLOW_LINKS).use { channel ->
@@ -127,7 +153,6 @@ internal open class ArtifactJobTransaction internal constructor(
             ArtifactFiles.verifyIdentity(manifest, manifestIdentity)
             manifestIdentity = ArtifactFiles.captureRegularFile(manifest)
             ArtifactFiles.verifiedSize(manifest, manifestIdentity, manifestBytes.size.toLong())
-            val completedAt = Files.getLastModifiedTime(manifest).toMillis()
             verifyTemporaryAndArtifacts()
             ArtifactFiles.verifiedSize(manifest, manifestIdentity, manifestBytes.size.toLong())
             manager.verifyStorageIdentity(temporary.parent, workspaceIdentityValue)
@@ -136,19 +161,26 @@ internal open class ArtifactJobTransaction internal constructor(
             } catch (exception: AtomicMoveNotSupportedException) {
                 throw IOException("Artifact filesystem does not support atomic job finalize.", exception)
             }
-            val totalBytes = Math.addExact(artifactBytes, manifestBytes.size.toLong())
             state = State.COMMITTED
-            manager.complete(this, totalBytes, completedAt)
+            manager.complete(this, encoded)
             val finalArtifacts = LinkedHashMap<String, Path>()
             artifacts.keys.forEach { name -> finalArtifacts[name] = directoryValue.resolve(name) }
             val fileByteSizes = LinkedHashMap(artifactSizes)
             fileByteSizes[MANIFEST] = manifestBytes.size.toLong()
+            val metadata = LinkedHashMap<String, dev.vibris.protocol.v2.ArtifactMetadata>()
+            entries.forEach { entry ->
+                metadata[entry.relativePath] = entry.metadata(jobId, requestId, directoryValue.resolve(entry.relativePath))
+            }
             return ArtifactManager.CommittedJob(
                 directoryValue,
                 directoryValue.resolve(MANIFEST),
                 finalArtifacts,
                 fileByteSizes,
-                totalBytes,
+                metadata,
+                encoded.document.manifestId,
+                encoded.sha256,
+                expiresAtUnixMs,
+                encoded.document.totalBytes,
             )
         } catch (exception: IOException) {
             abortAfterFailure(exception)
@@ -276,17 +308,18 @@ internal open class ArtifactJobTransaction internal constructor(
     }
 
     @Throws(IOException::class)
-    private fun requireExpectedArtifacts(expectedArtifacts: Set<String?>) {
+    private fun requireSpecifications(specifications: Map<String, ArtifactManifest.FileSpec>) {
         val expected = HashSet<String>()
-        for (name in expectedArtifacts) {
+        for ((name, specification) in specifications) {
             artifactPath(name)
-            if (!expected.add(canonical(name!!))) {
-                throw IOException("Expected artifact names are repeated.")
-            }
+            if (!expected.add(canonical(name))) throw IOException("Artifact specifications are repeated.")
+            if (specification.kind.name.endsWith("UNSPECIFIED") ||
+                specification.format.name.endsWith("UNSPECIFIED") ||
+                specification.role.name.endsWith("UNSPECIFIED") ||
+                specification.mediaType.isBlank()
+            ) throw IOException("Artifact specification is incomplete.")
         }
-        if (expected != artifactNames) {
-            throw IOException("Runtime did not write the expected artifacts.")
-        }
+        if (expected != artifactNames) throw IOException("Runtime did not write the specified artifacts.")
     }
 
     private fun artifactSizes(): Map<String, Long> {

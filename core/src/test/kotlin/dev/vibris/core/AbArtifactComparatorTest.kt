@@ -108,6 +108,8 @@ class AbArtifactComparatorTest {
     ) = ArtifactManager(temp.resolve("artifacts-$request"), 1024 * 1024).beginJob(
         WORKSPACE_ID,
         request,
+        request,
+        "comparison",
         0,
     ).use { transaction ->
         transaction.open("baseline.png").use { ImageIO.write(baseline, "png", it) }
@@ -120,8 +122,28 @@ class AbArtifactComparatorTest {
             "candidate",
             thresholds,
         )
+        val image = ArtifactManifest.FileSpec(
+            dev.vibris.protocol.v2.ArtifactKind.ARTIFACT_KIND_SCREENSHOT,
+            dev.vibris.protocol.v2.ArtifactFormat.ARTIFACT_FORMAT_PNG,
+            dev.vibris.protocol.v2.ArtifactRole.ARTIFACT_ROLE_PRIMARY,
+            "image/png",
+        )
+        val diagnostic = ArtifactManifest.FileSpec(
+            dev.vibris.protocol.v2.ArtifactKind.ARTIFACT_KIND_BENCHMARK_METRICS,
+            dev.vibris.protocol.v2.ArtifactFormat.ARTIFACT_FORMAT_JSON,
+            dev.vibris.protocol.v2.ArtifactRole.ARTIFACT_ROLE_DIAGNOSTIC,
+            "application/json",
+        )
         val committed = transaction.commit(
-            setOf("baseline.png", "candidate.png", "diff.json", "diff-heatmap.png"),
+            mapOf(
+                "baseline.png" to image,
+                "candidate.png" to image,
+                "diff.json" to diagnostic,
+                "diff-heatmap.png" to image.copy(
+                    kind = dev.vibris.protocol.v2.ArtifactKind.ARTIFACT_KIND_HEATMAP,
+                    role = dev.vibris.protocol.v2.ArtifactRole.ARTIFACT_ROLE_DIAGNOSTIC,
+                ),
+            ),
         )
         val output = temp.resolve(request)
         Files.createDirectory(output)

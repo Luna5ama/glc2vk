@@ -54,7 +54,7 @@ class VibrisCoreEngine internal constructor(
     private val sources = SourceRegistry(pendingRoot, probe, maxSourceBytes, maxSourceFiles)
     private val activator = SourceActivator(sources, shaderLink)
     private val executor = RuntimeJobExecutor(runtime, probe, activator, shaderLogs, maxActionsPerJob)
-    private val delivery = TerminalDelivery(shaderLogs)
+    private val delivery = TerminalDelivery()
     private val disconnectTimer: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "Vibris Disconnect Grace").apply { isDaemon = true }
     }
@@ -253,8 +253,6 @@ class VibrisCoreEngine internal constructor(
                 delivery.send(
                     session,
                     accepted.snapshot!!.result!!.message(message.messageId, requestId, session.workspaceId()),
-                    session.workspaceId(),
-                    requestId,
                 )
                 return
             }
@@ -326,7 +324,7 @@ class VibrisCoreEngine internal constructor(
             responses = ResumeResponses.create(session, message, requests, liveJobs)
         }
         for (response in responses) {
-            delivery.send(session, response, session.workspaceId(), response.requestId)
+            delivery.send(session, response)
         }
     }
 
@@ -493,8 +491,6 @@ class VibrisCoreEngine internal constructor(
         delivery.send(
             session,
             terminal.message(job.messageId, job.requestId, job.workspaceId),
-            job.workspaceId,
-            job.requestId,
         )
     }
 

@@ -72,7 +72,7 @@ class VibrisBootstrapTest {
     }
 
     @Test
-    void missingServerConfigStartsListenerInNotReadyState() throws Exception {
+    void missingServerConfigWritesV2DefaultsAndStartsReady() throws Exception {
         RuntimeTestAdapter runtime = new RuntimeTestAdapter();
         AtomicReference<BindableService> captured = new AtomicReference<>();
 
@@ -82,12 +82,11 @@ class VibrisBootstrapTest {
             return new TestListener();
         });
 
-        assertFalse(bootstrap.ready());
+        assertTrue(bootstrap.ready());
+        assertTrue(Files.readString(temp.resolve("config/vibris/server.json"))
+            .contains("\"schema_version\": 2"));
         GetStatusResponse status = status(captured.get());
-        assertFalse(status.getStatus().getCanStartJob());
-        assertEquals(ErrorCode.ERROR_CODE_SERVER_NOT_AVAILABLE,
-            status.getStatus().getLastError().getCode());
-        assertTrue(status.getStatus().getLastError().getMessage().contains("server.json"));
+        assertTrue(status.getStatus().getCanAcceptJob());
         bootstrap.close();
         assertEquals(1, runtime.closeCount);
     }
@@ -125,6 +124,25 @@ class VibrisBootstrapTest {
         ServerConfiguration configuration = ServerConfiguration.Companion.load(temp);
 
         assertEquals(pending.toAbsolutePath().normalize(), configuration.getPaths().pendingShadersRoot());
+    }
+
+    @Test
+    void nonV2ServerConfigFailsExplicitlyWithoutRewrite() throws Exception {
+        Path pending = temp.resolve("v1-pending");
+        Path artifacts = temp.resolve("v1-artifacts");
+        Path shaderpack = temp.resolve("v1-shaderpack");
+        writeServerConfig(temp, pending, artifacts, shaderpack, 50123);
+        Path file = temp.resolve("config/vibris/server.json");
+        String v1 = Files.readString(file).replace("\"schema_version\": 2", "\"schema_version\": 1");
+        Files.writeString(file, v1);
+
+        ServerConfiguration.Failure failure = assertThrows(
+            ServerConfiguration.Failure.class,
+            () -> ServerConfiguration.Companion.load(temp)
+        );
+
+        assertTrue(failure.getMessage().contains("UNSUPPORTED_VERSION"));
+        assertEquals(v1, Files.readString(file));
     }
 
     @Test
@@ -465,11 +483,12 @@ class VibrisBootstrapTest {
         Files.createDirectories(config.getParent());
         Files.writeString(config, """
             {
-              "schema_version": 1,
+              "schema_version": 2,
               "listen_address": "127.0.0.1:%d",
               "pending_shaders_root": "%s",
               "artifact_root": "%s",
               "artifact_quota_bytes": 3221225472,
+              "artifact_ttl_hours": 168,
               "shaderpack_root": "%s",
               "max_source_bytes": 536870912,
               "max_source_files": 100000,

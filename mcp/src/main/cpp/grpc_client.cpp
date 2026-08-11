@@ -186,6 +186,11 @@ bool GrpcClient::get_status(
     GetStatusCompletion completion) {
     return impl_->get_status(std::move(request), std::move(completion));
 }
+bool GrpcClient::manage_artifacts(
+    ::vibris::control::v2::ManageArtifactsRequest request,
+    ManageArtifactsCompletion completion) {
+    return impl_->manage_artifacts(std::move(request), std::move(completion));
+}
 bool GrpcClient::submit(::vibris::control::v2::ClientMessage message, GrpcCompletion completion) {
     return impl_->submit(std::move(message), std::move(completion));
 }

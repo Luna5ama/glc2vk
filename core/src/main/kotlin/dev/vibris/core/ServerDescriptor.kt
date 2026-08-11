@@ -2,7 +2,6 @@ package dev.vibris.core
 
 import dev.vibris.api.RuntimeStatus
 import dev.vibris.api.VibrisRuntimeAdapter
-import dev.vibris.protocol.v2.ArtifactCapacity
 import dev.vibris.protocol.v2.Capability
 import dev.vibris.protocol.v2.ResourceCatalog
 import dev.vibris.protocol.v2.ResourceDescriptor
@@ -73,10 +72,7 @@ internal class ServerDescriptor @JvmOverloads constructor(
             .setCanAcceptJob(snapshot.canAcceptJob)
             .setCanStartJob(snapshot.canStartJob)
             .setArtifactCapacity(
-                ArtifactCapacity.newBuilder()
-                    .setCapBytes(artifacts.quotaBytes())
-                    .setUsedBytes(artifacts.usedBytes())
-                    .setFits(artifacts.usedBytes() <= artifacts.quotaBytes()),
+                artifacts.capacity(),
             )
             .setActiveSourceUuid(snapshot.activeSourceUuid)
         snapshot.activeLease?.let(builder::setActiveLease)

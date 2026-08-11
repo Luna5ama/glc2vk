@@ -53,10 +53,18 @@ internal class CaptureJobExecutor(
         val shaderLog = shaderLog(diagnostics)
         var transaction: ArtifactManager.JobTransaction? = null
         try {
+            val manifestFileCount = capturePlans.sumOf { plan ->
+                plan.targets.sumOf { target -> target.outputs.size }
+            } + 9
             transaction = manager.beginJob(
                 job.workspaceId,
+                job.submission.jobId,
                 job.requestId,
-                Math.addExact(estimate, shaderLog.size.toLong()),
+                job.submission.workloadCase.name.removeSuffix("_WORKLOAD").lowercase(),
+                Math.addExact(
+                    Math.addExact(estimate, shaderLog.size.toLong()),
+                    ArtifactManifest.reservationBytes(manifestFileCount),
+                ),
             )
             return Prepared(transaction, capturePlans, diagnostics)
         } catch (exception: Exception) {

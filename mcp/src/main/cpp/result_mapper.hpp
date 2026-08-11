@@ -16,6 +16,8 @@ public:
         const ::vibris::control::v2::ValidateContextResponse& response);
     [[nodiscard]] static nlohmann::json status(
         const ::vibris::control::v2::GetStatusResponse& response);
+    [[nodiscard]] static nlohmann::json artifacts(
+        const ::vibris::control::v2::ManageArtifactsResponse& response);
     [[nodiscard]] static nlohmann::json server_message(
         const ::vibris::control::v2::ServerMessage& response);
     static void finalize_provenance(nlohmann::json& result);

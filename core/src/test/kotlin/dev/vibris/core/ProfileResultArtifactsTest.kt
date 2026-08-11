@@ -27,13 +27,20 @@ class ProfileResultArtifactsTest {
             .build()
         val manager = ArtifactManager(temp.resolve("artifacts"), 1024 * 1024)
 
-        val committed = manager.beginJob(WORKSPACE_ID, "request", 0).use { transaction ->
+        val committed = manager.beginJob(WORKSPACE_ID, "job", "request", "actions", 0).use { transaction ->
             val generated = ProfileResultArtifacts.write(job, transaction, listOf(receipt))
             assertEquals(
                 listOf(ProfileResultArtifacts.JSON_FILE, ProfileResultArtifacts.CSV_FILE),
                 generated.map { it.fileName },
             )
-            transaction.commit(generated.map { it.fileName }.toSet())
+            transaction.commit(generated.associate { artifact ->
+                artifact.fileName to ArtifactManifest.FileSpec(
+                    artifact.kind,
+                    artifact.format,
+                    dev.vibris.protocol.v2.ArtifactRole.ARTIFACT_ROLE_PRIMARY,
+                    artifact.mediaType,
+                )
+            })
         }
 
         val json = Files.readString(committed.artifacts().getValue(ProfileResultArtifacts.JSON_FILE))

@@ -27,6 +27,7 @@ public:
     bool list_resources(proto::ListResourcesRequest request, ListResourcesCompletion completion);
     bool validate_context(proto::ValidateContextRequest request, ValidateContextCompletion completion);
     bool get_status(proto::GetStatusRequest request, GetStatusCompletion completion);
+    bool manage_artifacts(proto::ManageArtifactsRequest request, ManageArtifactsCompletion completion);
     bool submit(proto::ClientMessage message, GrpcCompletion completion);
     bool resume(std::string request_id, GrpcCompletion completion);
     bool cancel(std::string_view request_id, std::string reason);

@@ -95,8 +95,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T12 | P0 | Vibris | Expand immutable benchmark provenance | DONE | `T12 expand benchmark provenance and stale checks` |
 | T12A | P0 | Vibris | Normalize strict-v2 execution receipts | DONE | `T12A normalize strict v2 execution receipts` |
 | T13 | P0 | Vibris | Enforce statistical benchmark guardrails | DONE | `T13 enforce benchmark semantic guardrails` |
-| T14 | P0 | Vibris | Replace artifacts with managed v2 manifests | READY | `T14 add managed artifact v2 lifecycle` |
-| T15 | P0 | Vibris | Define named pass resource dump contract | PENDING | `T15 define named pass resource dump contract` |
+| T14 | P0 | Vibris | Replace artifacts with managed v2 manifests | DONE | `T14 add managed artifact v2 lifecycle` |
+| T15 | P0 | Vibris | Define named pass resource dump contract | READY | `T15 define named pass resource dump contract` |
 | T16 | P0 | Iris | Implement named Iris pass boundary hooks | PENDING | `T16 capture resources after named Iris passes` |
 | T17 | P0 | Vibris | Integrate after-pass texture and buffer jobs | PENDING | `T17 integrate after-pass resource dump jobs` |
 | T18 | P0 | Vibris | Complete strict v2 cutover and documentation | PENDING | `T18 complete strict v2 cutover` |
@@ -1115,7 +1115,7 @@ Evidence:
 
 ### T14 — Replace artifacts with managed v2 manifests
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T13
 
@@ -1161,11 +1161,30 @@ Blockers:
 
 Evidence:
 
-- Pending.
+- Replaced the artifact store directly with strict schema v2: missing `server.json` now writes canonical v2 defaults,
+  non-v2 configuration fails with `UNSUPPORTED_VERSION`, TTL defaults to 168 hours, and the artifact manager indexes
+  only workspace/job/request-grouped v2 manifests carrying typed roles/formats, per-file sizes and SHA-256, created and
+  expiry times, inclusive totals, and an external content hash for guarded deletion. The removed v1 recovery,
+  unreported-result protection, quota eviction, and terminal-delivery compatibility paths were not retained.
+- Startup, status-periodic, list/detail, and pre-reservation expiration now delete only indexed expired v2 groups;
+  non-v2 artifact data remains untouched and unindexed. Capacity reports used/reserved/estimated bytes, warns at 80
+  percent, never evicts a live manifest, and capture admission reserves catalog-derived readback bytes plus a bounded
+  manifest envelope before GPU readback. Exact manifest ID/SHA and workspace ownership are revalidated at deletion.
+- Added the strict-v2 `ManageArtifacts` Core RPC and wired `vibris_artifacts` list/get/capacity/delete through MCP.
+  Returned files and manifests accept only the v2 workspace/job/request layout before rewriting beneath the explicit
+  worktree `.vibris\artifact` link. Durable job result reads preserve missing artifact entries with `expired=true`.
+- `\.\gradlew.bat :vibris-core:test --offline` passed 94/94 tests with focused default-config,
+  unsupported-version, TTL/startup expiration, v1 preservation, canonical hash/total, reservation/quota warning,
+  ownership, and deletion-race coverage. The release `vibris-mcp` target linked successfully; strict-v2 protocol,
+  action-schema, and durable-workflow/expired-artifact native executables passed 3/3. A broader non-gating
+  `mcp-tests` aggregate build still encounters pre-existing removed-v1 reconnect/source fixture and obsolete
+  `PreparedSourceRef.uuid` compile failures outside T14; T14 production targets and focused checks compile cleanly.
+- Protected `capture\a.spv` remained untracked and unstaged. No deployment, Minecraft/launcher restart, or generated
+  delivery refresh occurred.
 
 ### T15 — Define named pass resource dump contract
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T14
 
@@ -1570,3 +1589,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T12A inserted - T13 entry auditing found native profile/matrix normalization and fake-server fixtures still consuming removed pre-v2 result fields instead of strict-v2 action receipts, top-level provenance, and restoration; inserted a no-compatibility receipt-normalization remediation before statistical guardrails - Control-plane commit title: roadmap insert T12A strict v2 result remediation`
 - `2026-08-11 - T12A - normalized profile, matrix, inspection, GPU metrics, and A/B visual results from strict-v2 typed receipts only; replaced the v1 fake-server fixture; focused CTest 4/4 and broader visual/paired/checkpoint regression 9/9 passed with zero removed-field or compatibility reads - Commit title: T12A normalize strict v2 execution receipts`
 - `2026-08-11 - T13 - enforced typed target/sibling/sentinel guardrails, paired p50/p95 confidence and measured-noise decisions, order/reversal/drift reporting, and mandatory compile/provenance/restoration/visual/statistical gates; release targets built and focused CTest passed 12/12 - Commit title: T13 enforce benchmark semantic guardrails`
+- `2026-08-11 - T14 - replaced artifacts with strict-v2 TTL/hash/grouped manifests, capacity reservations, ownership-safe list/detail/delete, worktree-local MCP paths, and durable expired metadata; Core 94/94 plus focused native 3/3 passed - Commit title: T14 add managed artifact v2 lifecycle`

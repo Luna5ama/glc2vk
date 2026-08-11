@@ -90,6 +90,17 @@ bool GrpcClient::Impl::get_status(proto::GetStatusRequest request, GetStatusComp
         });
 }
 
+bool GrpcClient::Impl::manage_artifacts(
+    proto::ManageArtifactsRequest request, ManageArtifactsCompletion completion) {
+    request.mutable_protocol_version()->set_major(2);
+    return start_unary<proto::ManageArtifactsRequest, proto::ManageArtifactsResponse>(
+        std::move(request), std::move(completion),
+        [](proto::VibrisControl::Stub& stub, grpc::ClientContext& context,
+            const proto::ManageArtifactsRequest& value, grpc::CompletionQueue& queue) {
+            return stub.AsyncManageArtifacts(&context, value, &queue);
+        });
+}
+
 bool GrpcClient::Impl::list_resources(
     proto::ListResourcesRequest request, ListResourcesCompletion completion) {
     request.mutable_protocol_version()->set_major(2);

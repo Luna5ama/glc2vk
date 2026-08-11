@@ -11,11 +11,14 @@ import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption.CREATE_NEW
+import java.time.Duration
 
 internal data class ServerConfiguration(
     val address: InetSocketAddress,
     val paths: VibrisBootstrap.Config,
     val artifactQuotaBytes: Long,
+    val artifactTtl: Duration,
     val maxSourceBytes: Long,
     val maxSourceFiles: Int,
     val maxGlobalQueue: Int,
@@ -36,6 +39,7 @@ internal data class ServerConfiguration(
             "pending_shaders_root",
             "artifact_root",
             "artifact_quota_bytes",
+            "artifact_ttl_hours",
             "shaderpack_root",
             "max_source_bytes",
             "max_source_files",
@@ -47,6 +51,7 @@ internal data class ServerConfiguration(
             InetSocketAddress("127.0.0.1", paths.port),
             paths,
             ArtifactManager.DEFAULT_QUOTA_BYTES,
+            ArtifactManager.DEFAULT_TTL,
             DEFAULT_MAX_SOURCE_BYTES,
             DEFAULT_MAX_SOURCE_FILES,
             DEFAULT_MAX_GLOBAL_QUEUE,
@@ -65,11 +70,14 @@ internal data class ServerConfiguration(
             val file = game.resolve("config/vibris/server.json")
             var parsedAddress: InetSocketAddress? = null
             try {
+                if (!Files.exists(file, NOFOLLOW_LINKS)) writeDefaults(game, file)
                 val root = read(file)
-                require(root.keys == REQUIRED_KEYS) {
-                    "server.json fields do not match schema version 1"
+                if (root["schema_version"]?.jsonPrimitive?.longOrNull != 2L) {
+                    throw Failure("UNSUPPORTED_VERSION: server.json schema_version must be 2")
                 }
-                require(number(root, "schema_version") == 1L) { "schema_version must be 1" }
+                require(root.keys == REQUIRED_KEYS) {
+                    "server.json fields do not match schema version 2"
+                }
                 val address = address(text(root, "listen_address"))
                 parsedAddress = address
                 val pending = path(game, text(root, "pending_shaders_root"))
@@ -79,6 +87,7 @@ internal data class ServerConfiguration(
                 requireWritableDirectory(artifacts, "artifact_root")
                 requireWritableDirectory(shaderpack, "shaderpack_root")
                 val quota = positive(root, "artifact_quota_bytes")
+                val ttl = Duration.ofHours(positive(root, "artifact_ttl_hours"))
                 val sourceBytes = positive(root, "max_source_bytes")
                 val sourceFiles = positiveInt(root, "max_source_files")
                 val queue = positiveInt(root, "max_global_queue")
@@ -87,6 +96,7 @@ internal data class ServerConfiguration(
                     address,
                     VibrisBootstrap.Config(address.port, pending, artifacts, shaderpack),
                     quota,
+                    ttl,
                     sourceBytes,
                     sourceFiles,
                     queue,
@@ -165,6 +175,36 @@ internal data class ServerConfiguration(
                 throw IllegalArgumentException("$field is missing or not writable", exception)
             }
         }
+
+        private fun writeDefaults(game: Path, file: Path) {
+            try {
+                OwnedPathIdentity.createDirectoriesSafely(file.parent)
+                val pending = game.resolve("vibris/pending").toAbsolutePath().normalize()
+                val artifacts = game.resolve("vibris/artifacts").toAbsolutePath().normalize()
+                val shaderpacks = game.resolve("shaderpacks").toAbsolutePath().normalize()
+                val json = """
+                    {
+                      "schema_version": 2,
+                      "listen_address": "127.0.0.1:$DEFAULT_PORT",
+                      "pending_shaders_root": "${escape(pending.toString())}",
+                      "artifact_root": "${escape(artifacts.toString())}",
+                      "artifact_quota_bytes": ${ArtifactManager.DEFAULT_QUOTA_BYTES},
+                      "artifact_ttl_hours": ${ArtifactManager.DEFAULT_TTL.toHours()},
+                      "shaderpack_root": "${escape(shaderpacks.toString())}",
+                      "max_source_bytes": $DEFAULT_MAX_SOURCE_BYTES,
+                      "max_source_files": $DEFAULT_MAX_SOURCE_FILES,
+                      "max_global_queue": $DEFAULT_MAX_GLOBAL_QUEUE,
+                      "max_actions_per_job": $DEFAULT_MAX_ACTIONS_PER_JOB
+                    }
+
+                """.trimIndent()
+                Files.writeString(file, json, CREATE_NEW)
+            } catch (exception: Exception) {
+                throw Failure("server.json v2 defaults could not be created", exception)
+            }
+        }
+
+        private fun escape(value: String): String = value.replace("\\", "\\\\").replace("\"", "\\\"")
 
         private fun text(root: JsonObject, field: String): String =
             root.getValue(field).jsonPrimitive.contentOrNull

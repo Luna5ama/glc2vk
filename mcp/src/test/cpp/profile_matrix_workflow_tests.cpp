@@ -58,6 +58,7 @@ Json matrix(const std::size_t count, std::string execution = "sync") {
 		{"configs", std::move(configs)},
 		{"matrix", {{"sources", Json::array({"source"})}, {"configs", std::move(axis)}}},
 		{"__vibris_scene_context", scene()}, {"frames", 16}, {"warmup_frames", 4},
+		{"metrics", Json::array({{{"metric_id", "composite_total"}, {"role", "target"}}})},
 		{"execution", std::move(execution)}};
 }
 
@@ -67,7 +68,9 @@ ToolOutcome profile_success(const DurableJobStepExecution& execution) {
 		{"cases", Json::array({{{"case_id", case_id},
 			{"source_id", execution.arguments.at("__vibris_source_id")},
 			{"config_id", execution.arguments.at("__vibris_config_id")},
-			{"status", "passed"}, {"error", nullptr}, {"metrics", {{"gpuTimings", {{"total", {{"avg", 1}}}}}}}}})},
+			{"status", "passed"}, {"error", nullptr},
+			{"metrics", {{"metrics", Json::array({{{"metric_id", "composite_total"},
+				{"average_ns", 1}, {"p50_ns", 1}, {"p95_ns", 1}}})}}}}})},
 		{"artifacts", Json::array()}};
 }
 
@@ -304,6 +307,7 @@ void matrix_and_benchmark_use_step_plans() {
 	Json benchmark{{"recipe", "benchmark_ab"}, {"baseline", {{"kind", "workspace"}}},
 		{"candidate", {{"kind", "workspace"}}}, {"frames", 4}, {"rounds", 2},
 		{"control_rounds", 2}, {"visual", {{"pixel_error_threshold", 0.0}}},
+		{"metrics", Json::array({{{"metric_id", "composite_total"}, {"role", "target"}}})},
 		{"__vibris_scene_context", scene()}, {"execution", "async"}};
 	const auto started = std::get<Json>(
 		benchmark_workflow.start("vibris_run_recipe", benchmark, config()));
@@ -324,6 +328,27 @@ void matrix_and_benchmark_use_step_plans() {
 		{{"operation", "cancel"}, {"job_id", started.at("job_id")}}));
 }
 
+void expired_artifacts_remain_in_durable_results() {
+	WorkspaceFixture workspace;
+	const auto artifact = workspace.worktree() / ".vibris" / "artifact" / "job" / "request" / "payload.bin";
+	std::filesystem::create_directories(artifact.parent_path());
+	vibris::mcp::test::write_file(artifact, "payload");
+	DurableJobWorkflow workflow(workspace.worktree(), std::string(workspace_id),
+		[&](DurableJobStepExecution execution) -> ToolOutcome {
+			auto outcome = std::get<Json>(profile_success(execution));
+			outcome["artifacts"] = Json::array({{{"artifact_id", "artifact-1"},
+				{"path", artifact.string()}, {"expired", false}}});
+			return outcome;
+		});
+	const auto completed = std::get<Json>(workflow.start("vibris_run_recipe", matrix(1), config()));
+	const auto job_id = completed.at("job_id").get<std::string>();
+	std::filesystem::remove(artifact);
+	const auto result = std::get<Json>(workflow.control(
+		{{"operation", "result"}, {"job_id", job_id}, {"event_cursor", 0}}));
+	require(result.at("result").at("artifacts").front().at("expired").get<bool>(),
+		"expired artifacts were removed from or not marked in the durable result projection");
+}
+
 } // namespace
 
 int main() {
@@ -333,6 +358,7 @@ int main() {
 		generic_plans_checkpoint_each_case();
 		compile_matrix_checkpoints_and_aggregates_every_case();
 		matrix_and_benchmark_use_step_plans();
+		expired_artifacts_remain_in_durable_results();
 		std::cout << "PASS DurableWorkflowCheckpointResume\n";
 		return 0;
 	} catch (const std::exception& error) {

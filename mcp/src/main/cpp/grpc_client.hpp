@@ -45,6 +45,9 @@ using GetStatusCompletion = std::function<void(
 using ListResourcesCompletion = std::function<void(
     const grpc::Status&,
     const ::vibris::control::v2::ListResourcesResponse&)>;
+using ManageArtifactsCompletion = std::function<void(
+    const grpc::Status&,
+    const ::vibris::control::v2::ManageArtifactsResponse&)>;
 
 class GrpcClient final {
 public:
@@ -70,6 +73,9 @@ public:
     bool get_status(
         ::vibris::control::v2::GetStatusRequest request,
         GetStatusCompletion completion);
+    bool manage_artifacts(
+        ::vibris::control::v2::ManageArtifactsRequest request,
+        ManageArtifactsCompletion completion);
     bool submit(::vibris::control::v2::ClientMessage message, GrpcCompletion completion);
     bool resume(std::string request_id, GrpcCompletion completion);
     bool cancel(std::string_view request_id, std::string reason);

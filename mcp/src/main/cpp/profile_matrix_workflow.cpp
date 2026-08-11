@@ -47,6 +47,24 @@ bool reparse_point(const fs::path& path) {
 		(attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 }
 
+void refresh_artifact_expiry(Json& value) {
+	if (value.is_array()) {
+		for (auto& item : value) refresh_artifact_expiry(item);
+		return;
+	}
+	if (!value.is_object()) return;
+	if (value.contains("artifact_id")) {
+		const auto path = value.value("path", value.value("relative_path", std::string{}));
+		if (!path.empty()) {
+			std::error_code error;
+			value["expired"] = !fs::is_regular_file(fs::path(path), error) || error;
+		}
+	}
+	for (auto& [key, item] : value.items()) {
+		if (key != "expired") refresh_artifact_expiry(item);
+	}
+}
+
 void ensure_directory(const fs::path& path) {
 	std::error_code error;
 	fs::create_directories(path, error);
@@ -642,8 +660,10 @@ Json DurableJobWorkflow::snapshot(
 		{"last_error", state.at("last_error")}, {"event_cursor", state.at("event_sequence")},
 		{"events", events(state.at("job_id").get<std::string>(), event_cursor)}};
 	if (include_result && workflow_state == "completed") {
-		result["result"] = Json::parse(read_file(
+		auto durable_result = Json::parse(read_file(
 			state_directory_ / state.at("job_id").get<std::string>() / "result.json"));
+		refresh_artifact_expiry(durable_result);
+		result["result"] = std::move(durable_result);
 	}
 	return result;
 }

@@ -15,10 +15,7 @@ import dev.vibris.protocol.v2.JobResult
 import dev.vibris.protocol.v2.PatchedShadersReceipt
 import dev.vibris.protocol.v2.WaitFramesReceipt
 import java.io.IOException
-import java.nio.charset.StandardCharsets
 import java.nio.file.Path
-import java.util.LinkedHashSet
-import java.util.UUID
 
 internal class CaptureProtocolArtifacts {
     @Throws(Exception::class)
@@ -38,8 +35,8 @@ internal class CaptureProtocolArtifacts {
             )
         }
         plans.indices.forEach { index -> validateResult(plans[index], captured[index]) }
-        val committed = transaction.commit(expectedArtifacts(plans, comparison != null, additionalArtifacts))
-        val result = JobResult.newBuilder().setResultManifestId(job.submission.jobId + "-manifest")
+        val committed = transaction.commit(specifications(plans, comparison != null, additionalArtifacts))
+        val result = JobResult.newBuilder().setResultManifestId(committed.manifestId())
         for (index in plans.indices) {
             val plan = plans[index]
             for (group in captured[index].groups) {
@@ -47,7 +44,6 @@ internal class CaptureProtocolArtifacts {
                 for (artifact in group.artifacts) {
                     result.addArtifacts(
                         captureArtifact(
-                            job,
                             target,
                             group.resource,
                             artifact,
@@ -59,64 +55,24 @@ internal class CaptureProtocolArtifacts {
         }
         if (comparison != null) {
             result.addArtifacts(
-                fileArtifact(
-                    job,
-                    AbArtifactComparator.METRICS_FILE,
-                    ArtifactKind.ARTIFACT_KIND_BENCHMARK_METRICS,
-                    ArtifactFormat.ARTIFACT_FORMAT_JSON,
-                    ArtifactRole.ARTIFACT_ROLE_DIAGNOSTIC,
-                    "application/json",
-                    requireArtifact(committed, AbArtifactComparator.METRICS_FILE),
-                ),
+                requireArtifact(committed, AbArtifactComparator.METRICS_FILE),
             )
             AbArtifactComparator.heatmapFiles(plans.first()).forEach { fileName ->
                 result.addArtifacts(
-                    fileArtifact(
-                        job,
-                        fileName,
-                        ArtifactKind.ARTIFACT_KIND_HEATMAP,
-                        ArtifactFormat.ARTIFACT_FORMAT_PNG,
-                        ArtifactRole.ARTIFACT_ROLE_DIAGNOSTIC,
-                        "image/png",
-                        requireArtifact(committed, fileName),
-                    ),
+                    requireArtifact(committed, fileName),
                 )
             }
         }
         additionalArtifacts.forEach { artifact ->
             result.addArtifacts(
-                fileArtifact(
-                    job,
-                    artifact.fileName,
-                    artifact.kind,
-                    artifact.format,
-                    ArtifactRole.ARTIFACT_ROLE_PRIMARY,
-                    artifact.mediaType,
-                    requireArtifact(committed, artifact.fileName),
-                ),
+                requireArtifact(committed, artifact.fileName),
             )
         }
         result.addArtifacts(
-            fileArtifact(
-                job,
-                "shader.log",
-                ArtifactKind.ARTIFACT_KIND_SHADER_COMPILE_LOG,
-                ArtifactFormat.ARTIFACT_FORMAT_TEXT,
-                ArtifactRole.ARTIFACT_ROLE_DIAGNOSTIC,
-                "text/plain; charset=utf-8",
-                requireArtifact(committed, "shader.log"),
-            ),
+            requireArtifact(committed, "shader.log"),
         )
         result.addArtifacts(
-            fileArtifact(
-                job,
-                "manifest.json",
-                ArtifactKind.ARTIFACT_KIND_MANIFEST,
-                ArtifactFormat.ARTIFACT_FORMAT_JSON,
-                ArtifactRole.ARTIFACT_ROLE_METADATA,
-                "application/json",
-                requireManifest(committed),
-            ),
+            requireManifest(committed),
         )
         return result.build()
     }
@@ -177,47 +133,12 @@ internal class CaptureProtocolArtifacts {
     }
 
     private fun captureArtifact(
-        job: CoreJob,
         target: CapturePlan.Target,
         resource: ResourceCatalog.ResourceDescriptor,
         artifact: CaptureResult.CapturedArtifact,
-        file: CommittedFile,
-    ): ArtifactMetadata = fileArtifact(
-        job,
-        artifact.fileName,
-        kind(target.kind),
-        protocolFormat(artifact.format),
-        protocolRole(artifact.role),
-        mediaType(artifact.format),
-        file,
-    ).toBuilder()
+        file: ArtifactMetadata,
+    ): ArtifactMetadata = file.toBuilder()
         .setResource(toProtocol(resource, target))
-        .build()
-
-    private fun fileArtifact(
-        job: CoreJob,
-        fileName: String,
-        kind: ArtifactKind,
-        format: ArtifactFormat,
-        role: ArtifactRole,
-        mediaType: String,
-        file: CommittedFile,
-    ): ArtifactMetadata = ArtifactMetadata.newBuilder()
-        .setArtifactId(
-            UUID.nameUUIDFromBytes(
-                (job.workspaceId + '\u0000' + job.requestId + '\u0000' + fileName)
-                    .toByteArray(StandardCharsets.UTF_8),
-            ).toString(),
-        )
-        .setJobId(job.submission.jobId)
-        .setRequestId(job.requestId)
-        .setRelativePath(file.path.toString())
-        .setKind(kind)
-        .setFormat(format)
-        .setRole(role)
-        .setMediaType(mediaType)
-        .setByteSize(file.byteSize)
-        .setCreatedAtUnixMs(System.currentTimeMillis())
         .build()
 
     private fun receiptArtifacts(target: CapturePlan.Target, committed: JobResult): List<ArtifactMetadata> {
@@ -255,31 +176,89 @@ internal class CaptureProtocolArtifacts {
         .setPhysicalName(resource.semanticLabel.ifBlank { target.logicalName })
         .build()
 
-    private fun expectedArtifacts(
+    private fun specifications(
         plans: List<CapturePlan>,
         comparison: Boolean,
         additionalArtifacts: List<GeneratedArtifact>,
-    ): Set<String> = LinkedHashSet<String>().apply {
-        add("shader.log")
-        plans.flatMap { it.targets }.flatMap { it.outputs }.forEach { add(it.fileName) }
-        if (comparison) {
-            add(AbArtifactComparator.METRICS_FILE)
-            addAll(AbArtifactComparator.heatmapFiles(plans.first()))
+    ): Map<String, ArtifactManifest.FileSpec> = LinkedHashMap<String, ArtifactManifest.FileSpec>().apply {
+        put(
+            "shader.log",
+            ArtifactManifest.FileSpec(
+                ArtifactKind.ARTIFACT_KIND_SHADER_COMPILE_LOG,
+                ArtifactFormat.ARTIFACT_FORMAT_TEXT,
+                ArtifactRole.ARTIFACT_ROLE_DIAGNOSTIC,
+                "text/plain; charset=utf-8",
+            ),
+        )
+        plans.flatMap { it.targets }.forEach { target ->
+            target.outputs.forEach { output ->
+                put(
+                    output.fileName,
+                    ArtifactManifest.FileSpec(
+                        kind(target.kind),
+                        protocolFormat(output.format),
+                        protocolRole(output.role),
+                        mediaType(output.format),
+                    ),
+                )
+            }
         }
-        additionalArtifacts.forEach { add(it.fileName) }
+        if (comparison) {
+            put(
+                AbArtifactComparator.METRICS_FILE,
+                ArtifactManifest.FileSpec(
+                    ArtifactKind.ARTIFACT_KIND_BENCHMARK_METRICS,
+                    ArtifactFormat.ARTIFACT_FORMAT_JSON,
+                    ArtifactRole.ARTIFACT_ROLE_DIAGNOSTIC,
+                    "application/json",
+                ),
+            )
+            AbArtifactComparator.heatmapFiles(plans.first()).forEach { fileName ->
+                put(
+                    fileName,
+                    ArtifactManifest.FileSpec(
+                        ArtifactKind.ARTIFACT_KIND_HEATMAP,
+                        ArtifactFormat.ARTIFACT_FORMAT_PNG,
+                        ArtifactRole.ARTIFACT_ROLE_DIAGNOSTIC,
+                        "image/png",
+                    ),
+                )
+            }
+        }
+        additionalArtifacts.forEach { artifact ->
+            put(
+                artifact.fileName,
+                ArtifactManifest.FileSpec(
+                    artifact.kind,
+                    artifact.format,
+                    ArtifactRole.ARTIFACT_ROLE_PRIMARY,
+                    artifact.mediaType,
+                ),
+            )
+        }
     }
 
-    private fun requireArtifact(committed: ArtifactManager.CommittedJob, name: String): CommittedFile {
-        val path = committed.artifacts()[name]
-        val byteSize = committed.fileByteSizes()[name]
-        if (path == null || byteSize == null) throw IOException("Runtime did not write $name.")
-        return CommittedFile(path, byteSize)
-    }
+    private fun requireArtifact(committed: ArtifactManager.CommittedJob, name: String): ArtifactMetadata =
+        committed.metadata()[name] ?: throw IOException("Runtime did not write $name.")
 
-    private fun requireManifest(committed: ArtifactManager.CommittedJob): CommittedFile {
+    private fun requireManifest(committed: ArtifactManager.CommittedJob): ArtifactMetadata {
         val byteSize = committed.fileByteSizes()["manifest.json"]
             ?: throw IOException("Artifact manifest size is unavailable.")
-        return CommittedFile(committed.manifest(), byteSize)
+        val createdAt = committed.metadata().values.firstOrNull()?.createdAtUnixMs ?: System.currentTimeMillis()
+        return ArtifactMetadata.newBuilder()
+            .setArtifactId(committed.manifestId())
+            .setJobId(committed.metadata().values.firstOrNull()?.jobId ?: "manifest")
+            .setRequestId(committed.metadata().values.firstOrNull()?.requestId ?: "manifest")
+            .setRelativePath(committed.manifest().toString())
+            .setKind(ArtifactKind.ARTIFACT_KIND_MANIFEST)
+            .setFormat(ArtifactFormat.ARTIFACT_FORMAT_JSON)
+            .setRole(ArtifactRole.ARTIFACT_ROLE_METADATA)
+            .setMediaType("application/json")
+            .setByteSize(byteSize)
+            .setSha256(committed.manifestSha256())
+            .setCreatedAtUnixMs(createdAt)
+            .setExpiresAtUnixMs(committed.expiresAtUnixMs())
+            .build()
     }
 
     private fun protocolFormat(format: CapturePlan.ArtifactFormat): ArtifactFormat =
@@ -306,5 +285,4 @@ internal class CaptureProtocolArtifacts {
         CapturePlan.ArtifactRole.METADATA -> ArtifactRole.ARTIFACT_ROLE_METADATA
     }
 
-    private data class CommittedFile(val path: Path, val byteSize: Long)
 }

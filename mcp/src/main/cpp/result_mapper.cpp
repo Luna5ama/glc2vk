@@ -88,6 +88,10 @@ nlohmann::json ResultMapper::status(const proto::GetStatusResponse& response) {
     return map_message(response);
 }
 
+nlohmann::json ResultMapper::artifacts(const proto::ManageArtifactsResponse& response) {
+    return map_message(response);
+}
+
 nlohmann::json ResultMapper::server_message(const proto::ServerMessage& response) {
     return map_message(response);
 }

@@ -129,10 +129,7 @@ private:
             if (name == "vibris_list_resources") return list_resources(arguments);
             if (name == "vibris_get_status") return get_status(arguments);
             if (name == "vibris_job") return job(arguments);
-            if (name == "vibris_artifacts") {
-                return ToolFailure{"SERVER_NOT_AVAILABLE",
-                    "Managed artifact v2 operations are not available from this runtime.", true};
-            }
+            if (name == "vibris_artifacts") return artifacts(arguments);
             if (name == "vibris_run_recipe" || name == "vibris_run_actions" || name == "vibris_run_matrix") {
                 const bool durable = arguments.value("execution", std::string("sync")) == "async" ||
                     (name == "vibris_run_recipe" &&
@@ -185,7 +182,20 @@ private:
                 return ToolFailure{"SERVER_OFFLINE", "The local Vibris server did not respond before its deadline.", true};
             }
             auto [status, response] = result.get();
-            if (!status.ok()) return ToolFailure{"SERVER_OFFLINE", bounded(status.error_message()), true};
+            if (!status.ok()) {
+                switch (status.error_code()) {
+                case grpc::StatusCode::INVALID_ARGUMENT:
+                    return ToolFailure{"INVALID_REQUEST", bounded(status.error_message()), false};
+                case grpc::StatusCode::PERMISSION_DENIED:
+                    return ToolFailure{"WORKSPACE_MISMATCH", bounded(status.error_message()), false};
+                case grpc::StatusCode::NOT_FOUND:
+                    return ToolFailure{"ARTIFACT_NOT_FOUND", bounded(status.error_message()), false};
+                case grpc::StatusCode::FAILED_PRECONDITION:
+                    return ToolFailure{"ARTIFACT_MANIFEST_CHANGED", bounded(status.error_message()), false};
+                default:
+                    return ToolFailure{"SERVER_OFFLINE", bounded(status.error_message()), true};
+                }
+            }
             return std::forward<Map>(map)(response);
         }
 
@@ -295,6 +305,36 @@ private:
 
         ToolOutcome job(const Json& arguments) {
             return jobs_.control(arguments);
+        }
+
+        ToolOutcome artifacts(const Json& arguments) {
+            control::ManageArtifactsRequest request;
+            request.set_workspace_id(workspace_id_);
+            const auto operation = arguments.at("operation").get<std::string>();
+            if (operation == "list") request.set_operation(control::ARTIFACT_OPERATION_LIST);
+            else if (operation == "get") request.set_operation(control::ARTIFACT_OPERATION_GET);
+            else if (operation == "capacity") request.set_operation(control::ARTIFACT_OPERATION_CAPACITY);
+            else if (operation == "delete") request.set_operation(control::ARTIFACT_OPERATION_DELETE);
+            if (arguments.contains("manifest_id")) {
+                request.set_manifest_id(arguments.at("manifest_id").get<std::string>());
+            }
+            if (arguments.contains("expected_manifest_sha256")) {
+                request.set_expected_manifest_sha256(
+                    arguments.at("expected_manifest_sha256").get<std::string>());
+            }
+            if (arguments.contains("job_id")) request.set_job_id(arguments.at("job_id").get<std::string>());
+            if (arguments.contains("request_id")) {
+                request.set_request_id(arguments.at("request_id").get<std::string>());
+            }
+            return unary<control::ManageArtifactsResponse>(
+                [this, request = std::move(request)](auto completion) mutable {
+                    return client().manage_artifacts(std::move(request), std::move(completion));
+                },
+                [this](const auto& response) -> ToolOutcome {
+                    ToolOutcome outcome = ResultMapper::artifacts(response);
+                    artifact_link_.rewrite(outcome);
+                    return outcome;
+                });
         }
 
         ToolOutcome run_durable_step(DurableJobStepExecution execution) {
