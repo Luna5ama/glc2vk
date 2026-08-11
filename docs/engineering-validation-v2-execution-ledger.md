@@ -90,8 +90,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T07 | P0 | Iris | Implement effective settings in Iris host | DONE | `T07 report effective shader settings from Iris` |
 | T08 | P1 | Vibris | Return one ordered receipt per action | DONE | `T08 return complete ordered action receipts` |
 | T09 | P0 | Vibris | Define compile catalog runtime contract | DONE | `T09 define compile validation catalog contract` |
-| T10 | P0 | Iris | Emit complete Iris compile catalog | READY | `T10 emit Iris program compile catalog` |
-| T11 | P0 | Vibris | Add compile_validate recipe | PENDING | `T11 add compile validation recipe` |
+| T10 | P0 | Iris | Emit complete Iris compile catalog | DONE | `T10 emit Iris program compile catalog` |
+| T11 | P0 | Vibris | Add compile_validate recipe | READY | `T11 add compile validation recipe` |
 | T12 | P0 | Vibris | Expand immutable benchmark provenance | PENDING | `T12 expand benchmark provenance and stale checks` |
 | T13 | P0 | Vibris | Enforce statistical benchmark guardrails | PENDING | `T13 enforce benchmark semantic guardrails` |
 | T14 | P0 | Vibris | Replace artifacts with managed v2 manifests | PENDING | `T14 add managed artifact v2 lifecycle` |
@@ -780,7 +780,7 @@ Evidence:
 
 ### T10 — Emit complete Iris compile catalog
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T09
 
@@ -825,11 +825,26 @@ Blockers:
 
 Evidence:
 
-- Pending external implementation and owner-repository receipt.
+- Iris external implementation commit: `0ccdadd3a9b80891d147ace95a3c3919b7055b76` with subject
+  `T10 emit Iris program compile catalog`; the commit is the current `1.21.11-shaderdev` HEAD, its parent is the
+  previously recorded Iris HEAD `6322cb2833edfddbfa64d0ac6001988c4d49efd1`, and it is an ancestor of the branch.
+- Pipeline construction registers complete intended begin, prepare, deferred, composite, final, shadow-composite,
+  setup/shadow/final compute, and resolved gbuffer/shadow program variants before compilation can abort. Entries retain
+  terminal compile/link state, canonical stages, structured diagnostics, and a domain-separated patched-source SHA-256;
+  equivalent mappings are canonicalized independently of discovery/registration order.
+- The runtime host publishes the immutable catalog only after pipeline construction and the reload install/restore path
+  has completed. Failed or unattempted intended entries remain explicit, compiler/linker failures fail closed, and no
+  shader discovery order, rendering-correctness claim, compatibility route, deployment, or process restart was added.
+- `2026-08-11`: `.\gradlew.bat :fabric:vibrisBridgeTest :common:compileJava :fabric:build --offline
+  --console=plain` passed with 43 actionable tasks. Bridge results contain 11/11 tests with zero failures, errors, or
+  skips; `IrisVibrisCompileCatalogTest` passed 1/1 and proves complete missing/success/failure terminal states,
+  deterministic mapping hashes across registration order, stable patched-source identity, and diagnostic locations.
+- Iris protected `.codex\`, `.vibris\`, and `common\logs\` remained untracked and unstaged. Vibris protected
+  `capture/a.spv` remained unread and unstaged. This owner-repository receipt is ledger-only.
 
 ### T11 — Add compile_validate recipe
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T10
 
@@ -1423,3 +1438,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T09 blocked - operational compile-catalog query requires the still-dirty protected ThreadBound runtime adapter; no fallback or compatibility path was added and T10 was not started - Control-plane commit title: roadmap block T09 on protected runtime adapter`
 - `2026-08-11 - T09 unblocked - user committed the protected Vibris adapter/test as b7a0931d85042442c0360a38c50e30d811be9486 and Iris lifecycle as 6322cb2833edfddbfa64d0ac6001988c4d49efd1; tracked dirt is resolved and T09 is READY - Control-plane commit title: roadmap unblock T09 after user merges`
 - `2026-08-11 - T09 - defined canonical compile catalogs and stable diagnostic fingerprints, replaced string shader inspection with a typed runtime query/receipt, and passed API 7/7 plus Core 101/101 tests - Commit title: T09 define compile validation catalog contract`
+- `2026-08-11 - T10 - Iris emits complete canonical program/pass compile catalogs with terminal diagnostics and patched-source identities only after pipeline/reload completion; external commit 0ccdadd3a9b80891d147ace95a3c3919b7055b76; bridge tests 11/11 and offline Iris build passed - Owner receipt commit title: T10 record Iris compile catalog receipt`
