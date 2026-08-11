@@ -388,7 +388,11 @@ if(BUILD_TESTING)
             MeasuredNoiseFloorRejection
             PairedMismatchGuards
             PairedVisualGate
-            PairedVisualReceiptGuards)
+            PairedVisualReceiptGuards
+            TypedGuardrailRegression
+            PairedDirectionReversal
+            PairedTemporalDrift
+            PairedCompileGate)
         add_test(NAME ${scenario} COMMAND vibris-paired-benchmark-tests ${scenario})
     endforeach()
 

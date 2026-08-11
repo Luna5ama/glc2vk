@@ -363,6 +363,17 @@ void build_recipe(const Json& arguments, const JobContext& config, const SourceM
         benchmark->set_order(order == "abab" ? proto::BENCHMARK_ORDER_ABAB :
             order == "randomized" ? proto::BENCHMARK_ORDER_RANDOMIZED : proto::BENCHMARK_ORDER_ABBA);
         benchmark->set_run_same_source_control(true);
+        for (const auto& input : arguments.at("metrics")) {
+            auto* metric = benchmark->add_metrics();
+            metric->set_metric_id(input.at("metric_id").get<std::string>());
+            const auto role = input.at("role").get<std::string>();
+            metric->set_role(role == "sibling" ? proto::BENCHMARK_METRIC_ROLE_SIBLING :
+                role == "sentinel" ? proto::BENCHMARK_METRIC_ROLE_SENTINEL :
+                proto::BENCHMARK_METRIC_ROLE_TARGET);
+            if (input.contains("max_regression_ratio")) {
+                metric->set_max_regression_ratio(input.at("max_regression_ratio").get<double>());
+            }
+        }
         return;
     }
 
@@ -371,6 +382,7 @@ void build_recipe(const Json& arguments, const JobContext& config, const SourceM
         const auto& source = require_source(sources, "source");
         const auto& shader = require_config(configs, "config");
         append_load(*sequence, source, "source", "config", shader);
+        if (arguments.value("__vibris_compile_gate", false)) sequence->add_actions()->mutable_inspect_shader();
         append_wait(*sequence, arguments.value("warmup_frames", config.default_warmup_frames));
         if (recipe == "profile") {
             auto* metrics = sequence->add_actions()->mutable_get_gpu_metrics();

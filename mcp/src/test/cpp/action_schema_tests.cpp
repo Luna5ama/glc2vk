@@ -134,6 +134,25 @@ void exact_filters_and_job_control() {
     benchmark["restore_state"] = {{"on_success", false}, {"on_error", false}};
     require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_recipe", benchmark)),
         "always-restored benchmark accepted a disabled restore policy");
+    benchmark.erase("restore_state");
+    benchmark["metrics"] = Json::array({
+        {{"metric_id", "target"}, {"role", "target"}},
+        {{"metric_id", "sibling"}, {"role", "sibling"}, {"max_regression_ratio", 0.03}},
+        {{"metric_id", "sentinel"}, {"role", "sentinel"}, {"max_regression_ratio", 0.01}},
+    });
+    benchmark["visual"] = {{"max_threshold_pixel_ratio", 0.001}};
+    require(std::holds_alternative<Json>(registry.invoke("vibris_run_recipe", benchmark)),
+        "typed benchmark metrics with explicit guardrails were rejected");
+    benchmark["visual"] = {{"warmup_frames", 4}};
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_recipe", benchmark)),
+        "benchmark accepted a visual gate without a deterministic threshold");
+    benchmark["visual"] = {{"max_threshold_pixel_ratio", 0.001}};
+    benchmark["metrics"][0]["max_regression_ratio"] = 0.0;
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_recipe", benchmark)),
+        "target metric accepted a sibling/sentinel regression threshold");
+    benchmark["metrics"].erase(benchmark["metrics"].begin());
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_recipe", benchmark)),
+        "benchmark metrics without a target were accepted");
 }
 
 void typed_actions_reject_aliases() {

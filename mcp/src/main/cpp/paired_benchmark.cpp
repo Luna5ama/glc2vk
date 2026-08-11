@@ -1,4 +1,5 @@
 #include "paired_benchmark.hpp"
+#include "native_metrics.hpp"
 #include "synchronous_job_runner.hpp"
 
 #include <algorithm>
@@ -34,7 +35,8 @@ struct PlannedMeasurement final {
 
 struct MetricValue final {
     Json identity;
-    double nanoseconds = 0.0;
+    double p50_ns = 0.0;
+    double p95_ns = 0.0;
 };
 
 struct Measurement final {
@@ -52,7 +54,9 @@ struct GuardState final {
     std::set<std::string> aggregate_identities;
     std::set<std::string> program_identities;
     Json identities = Json::object();
+    std::map<std::string, Json> metric_specs;
     bool runtime_state_restored = true;
+    bool compile_catalogs_passed = true;
 };
 
 std::string padded(std::size_t value) {
@@ -105,8 +109,9 @@ Json profile_arguments(const Json& arguments, const PlannedMeasurement& measurem
                 {"frames", arguments.at("frames")},
                 {"warmup_frames", arguments.value("warmup_frames", default_warmup_frames)},
                 {"result_detail", "metrics"},
-                {"statistics", Json::array({arguments.value("statistic", std::string("avg"))})},
+                {"statistics", Json::array({"p50", "p95"})},
                 {"max_retries", arguments.value("max_retries", std::size_t{2})},
+                {"__vibris_compile_gate", true},
                 {"__vibris_case_id", measurement.case_id},
                 {"__vibris_source_id", measurement.physical_source},
                 {"__vibris_config_id", "config"},
@@ -117,7 +122,9 @@ Json profile_arguments(const Json& arguments, const PlannedMeasurement& measurem
                 {"__vibris_benchmark_slot", measurement.slot},
                 {"__vibris_benchmark_variant", measurement.variant}};
     if (arguments.contains("config")) result["config"] = arguments.at("config");
-    if (arguments.contains("metric_filter")) result["metric_filter"] = arguments.at("metric_filter");
+    Json metric_filter = Json::array();
+    for (const auto& metric : arguments.at("metrics")) metric_filter.push_back(metric.at("metric_id"));
+    result["metric_filter"] = std::move(metric_filter);
     if (arguments.contains("__vibris_preset")) {
         result["__vibris_preset"] = arguments.at("__vibris_preset");
     }
@@ -228,16 +235,16 @@ std::string text_at(const Json& value, std::initializer_list<const char*> path) 
     return current->is_string() ? current->get<std::string>() : std::string{};
 }
 
-std::map<std::string, MetricValue> metric_values(const Json& profile_case, std::string_view statistic) {
+std::map<std::string, MetricValue> metric_values(const Json& profile_case) {
     std::map<std::string, MetricValue> result;
     const auto metrics = profile_case.find("metrics");
     if (metrics == profile_case.end() || !metrics->is_object()) return result;
     const auto values = metrics->value("metrics", Json::array());
-    const auto field = statistic == "p50" ? "p50_ns" : statistic == "p95" ? "p95_ns" : "average_ns";
     for (const auto& timing : values) {
         if (!timing.is_object()) continue;
-        const auto value = timing.find(field);
-        if (value == timing.end() || !value->is_number()) continue;
+        const auto p50 = timing.find("p50_ns");
+        const auto p95 = timing.find("p95_ns");
+        if (p50 == timing.end() || !p50->is_number() || p95 == timing.end() || !p95->is_number()) continue;
         const auto program = timing.value("program_id", std::string{});
         const auto pass = timing.value("pass_id", std::string{});
         Json identity{{"timing_kind", program.empty() && pass.empty() ? "aggregate" : "program"},
@@ -247,7 +254,7 @@ std::map<std::string, MetricValue> metric_values(const Json& profile_case, std::
             identity["framework_pass"] = pass;
         }
         const auto key = identity.dump();
-        result.emplace(key, MetricValue{std::move(identity), value->get<double>()});
+        result.emplace(key, MetricValue{std::move(identity), p50->get<double>(), p95->get<double>()});
     }
     return result;
 }
@@ -256,6 +263,30 @@ bool restored(const Json& profile) {
     const auto receipt = profile.find("restoration");
     return receipt != profile.end() && receipt->is_object() &&
         receipt->value("status", std::string{}) == "RECEIPT_STATUS_OK";
+}
+
+bool compile_catalog_passed(const Json& profile) {
+    const auto receipts = profile.find("action_receipts");
+    if (receipts == profile.end() || !receipts->is_array()) return false;
+    for (const auto& receipt : *receipts) {
+        if (!receipt.is_object() || receipt.value("kind", std::string{}) != "ACTION_KIND_INSPECT_SHADER" ||
+            receipt.value("status", std::string{}) != "RECEIPT_STATUS_OK") continue;
+        const auto inspection = receipt.find("shader_inspection");
+        if (inspection == receipt.end() || !inspection->is_object()) return false;
+        const auto catalog = inspection->find("catalog");
+        if (catalog == inspection->end() || !catalog->is_object() ||
+            catalog->value("mapping_sha256", std::string{}).empty() ||
+            catalog->value("shader_generation", std::uint64_t{}) == 0) return false;
+        const auto programs = catalog->find("programs");
+        return programs != catalog->end() && programs->is_array() && !programs->empty() &&
+            std::ranges::all_of(*programs, [](const Json& program) {
+                return program.is_object() &&
+                    program.value("compile_state", std::string{}) == "COMPILE_STATE_SUCCEEDED" &&
+                    program.value("link_state", std::string{}) == "COMPILE_STATE_SUCCEEDED" &&
+                    !program.value("patched_source_sha256", std::string{}).empty();
+            });
+    }
+    return false;
 }
 
 void mismatch(GuardState& guards, std::string code, const PlannedMeasurement& measurement,
@@ -290,6 +321,11 @@ void validate_guards(const std::vector<Measurement>& measurements, const Json& a
             guards.runtime_state_restored = false;
             mismatch(guards, "RUNTIME_STATE_RESTORE_MISSING", measurement.plan,
                 "restoration.status", "RECEIPT_STATUS_OK", nullptr);
+        }
+        if (!compile_catalog_passed(measurement.profile)) {
+            guards.compile_catalogs_passed = false;
+            mismatch(guards, "COMPILE_GATE_FAILED", measurement.plan, "action_receipts.shader_inspection",
+                "complete successful compile catalog", nullptr);
         }
         if (profile_case.value("status", std::string{}) != "passed") {
             mismatch(guards, "MEASUREMENT_INCOMPLETE", measurement.plan, "status", "passed",
@@ -364,6 +400,23 @@ void validate_guards(const std::vector<Measurement>& measurements, const Json& a
         guards.mismatches.push_back({{"code", "NO_COMPARABLE_METRICS"},
             {"field", "metrics"}, {"expected", "at least one selected timing"}, {"actual", nullptr}});
     }
+    Json selected = Json::object();
+    for (const auto& spec : arguments.at("metrics")) {
+        const auto metric_id = spec.at("metric_id").get<std::string>();
+        std::vector<std::string> matches;
+        for (const auto& [key, identity] : guards.identities.items()) {
+            if (identity.value("metric", std::string{}) == metric_id) matches.push_back(key);
+        }
+        if (matches.size() != 1) {
+            guards.mismatches.push_back({{"code", "TYPED_METRIC_IDENTITY_NOT_UNIQUE"},
+                {"field", "metrics." + metric_id}, {"expected", "exactly one timing identity"},
+                {"actual", matches.size()}});
+            continue;
+        }
+        selected[matches.front()] = guards.identities.at(matches.front());
+        guards.metric_specs.emplace(matches.front(), spec);
+    }
+    guards.identities = std::move(selected);
 }
 
 double median(std::vector<double> values) {
@@ -384,51 +437,6 @@ double quantile(std::vector<double> values, double probability) {
     return values[lower] + (values[upper] - values[lower]) * fraction;
 }
 
-std::vector<std::size_t> outlier_rounds(const std::vector<double>& values) {
-    std::vector<std::size_t> result;
-    if (values.size() < 4) return result;
-    const auto q1 = quantile(values, 0.25);
-    const auto q3 = quantile(values, 0.75);
-    const auto iqr = q3 - q1;
-    const auto lower = q1 - 1.5 * iqr;
-    const auto upper = q3 + 1.5 * iqr;
-    for (std::size_t index = 0; index < values.size(); ++index) {
-        if (values[index] < lower || values[index] > upper) result.push_back(index + 1);
-    }
-    return result;
-}
-
-double t_critical_95(std::size_t samples) {
-    constexpr std::array values{
-        0.0, 12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262,
-        2.228, 2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093,
-        2.086, 2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042,
-    };
-    if (samples < 2) return std::numeric_limits<double>::quiet_NaN();
-    const auto degrees = samples - 1;
-    return degrees < values.size() ? values[degrees] : 1.96;
-}
-
-Json confidence_interval(const std::vector<double>& values) {
-    if (values.size() < 2) return nullptr;
-    const auto mean = std::accumulate(values.begin(), values.end(), 0.0) /
-        static_cast<double>(values.size());
-    double squared = 0.0;
-    for (const auto value : values) squared += (value - mean) * (value - mean);
-    const auto variance = squared / static_cast<double>(values.size() - 1);
-    const auto margin = t_critical_95(values.size()) * std::sqrt(variance / static_cast<double>(values.size()));
-    return {{"low_ns", mean - margin}, {"high_ns", mean + margin},
-            {"confidence", 0.95}, {"method", "paired_student_t"}};
-}
-
-double sample_variance(const std::vector<double>& values) {
-    if (values.size() < 2) return std::numeric_limits<double>::quiet_NaN();
-    const auto mean = std::accumulate(values.begin(), values.end(), 0.0) /
-        static_cast<double>(values.size());
-    double squared = 0.0;
-    for (const auto value : values) squared += (value - mean) * (value - mean);
-    return squared / static_cast<double>(values.size() - 1);
-}
 
 const Measurement& find_measurement(
     const std::vector<Measurement>& measurements, std::string_view phase, std::size_t round, std::size_t slot) {
@@ -440,12 +448,13 @@ const Measurement& find_measurement(
 }
 
 std::vector<double> samples_for(const std::vector<Measurement>& measurements, std::string_view phase,
-    std::size_t round, std::string_view variant, std::string_view identity) {
+    std::size_t round, std::string_view variant, std::string_view identity, const bool p95 = false) {
     std::vector<double> result;
     for (const auto& measurement : measurements) {
         if (measurement.plan.phase != phase || measurement.plan.round != round ||
             measurement.plan.variant != variant) continue;
-        result.push_back(measurement.metrics.at(std::string(identity)).nanoseconds);
+        const auto& metric = measurement.metrics.at(std::string(identity));
+        result.push_back(p95 ? metric.p95_ns : metric.p50_ns);
     }
     return result;
 }
@@ -465,13 +474,19 @@ Json round_samples(const std::vector<Measurement>& measurements, const GuardStat
         for (const auto& [key, identity] : guards.identities.items()) {
             auto first_samples = samples_for(measurements, phase, round, first, key);
             auto second_samples = samples_for(measurements, phase, round, second, key);
+            auto first_p95 = samples_for(measurements, phase, round, first, key, true);
+            auto second_p95 = samples_for(measurements, phase, round, second, key, true);
             const auto first_median = median(first_samples);
             const auto second_median = median(second_samples);
             Json metric{{"identity", identity},
-                        {std::string(first) + "_samples_ns", first_samples},
-                        {std::string(second) + "_samples_ns", second_samples},
-                        {std::string(first) + "_median_ns", first_median},
-                        {std::string(second) + "_median_ns", second_median},
+                        {std::string(first) + "_p50_samples_ns", first_samples},
+                        {std::string(second) + "_p50_samples_ns", second_samples},
+                        {std::string(first) + "_p95_samples_ns", first_p95},
+                        {std::string(second) + "_p95_samples_ns", second_p95},
+                        {std::string(first) + "_p50_ns", first_median},
+                        {std::string(second) + "_p50_ns", second_median},
+                        {std::string(first) + "_p95_ns", median(first_p95)},
+                        {std::string(second) + "_p95_ns", median(second_p95)},
                         {"delta_ns", second_median - first_median}};
             metric["delta_percent"] = first_median == 0.0 ? Json(nullptr) :
                 Json((second_median - first_median) / first_median * 100.0);
@@ -490,59 +505,108 @@ const Json& round_metric(const Json& rounds, std::size_t round, const Json& iden
     throw std::logic_error("paired benchmark round lost a metric identity");
 }
 
-Json comparison_table(const GuardState& guards, const Json& comparison_rounds, const Json& control_rounds) {
+Json comparison_table(const std::vector<Measurement>& measurements, const GuardState& guards,
+    const Json& comparison_rounds, const Json& control_rounds) {
     Json table = Json::array();
     for (const auto& [key, identity] : guards.identities.items()) {
-        static_cast<void>(key);
-        std::vector<double> baseline_medians;
-        std::vector<double> candidate_medians;
+        std::vector<double> baseline_p50;
+        std::vector<double> candidate_p50;
+        std::vector<double> baseline_p95;
+        std::vector<double> candidate_p95;
+        for (const auto& measurement : measurements) {
+            if (measurement.plan.phase != "comparison") continue;
+            const auto& value = measurement.metrics.at(key);
+            if (measurement.plan.variant == "baseline") {
+                baseline_p50.push_back(value.p50_ns);
+                baseline_p95.push_back(value.p95_ns);
+            } else {
+                candidate_p50.push_back(value.p50_ns);
+                candidate_p95.push_back(value.p95_ns);
+            }
+        }
         std::vector<double> paired_deltas;
         for (std::size_t round = 1; round <= comparison_rounds.size(); ++round) {
             const auto& metric = round_metric(comparison_rounds, round, identity);
-            baseline_medians.push_back(metric.at("baseline_median_ns").get<double>());
-            candidate_medians.push_back(metric.at("candidate_median_ns").get<double>());
             paired_deltas.push_back(metric.at("delta_ns").get<double>());
         }
         std::vector<double> noise_deltas;
         for (std::size_t round = 1; round <= control_rounds.size(); ++round) {
             noise_deltas.push_back(round_metric(control_rounds, round, identity).at("delta_ns").get<double>());
         }
-        std::vector<double> absolute_noise;
-        absolute_noise.reserve(noise_deltas.size());
-        std::ranges::transform(noise_deltas, std::back_inserter(absolute_noise), [](double value) {
-            return std::abs(value);
-        });
-        const auto baseline = median(baseline_medians);
-        const auto candidate = median(candidate_medians);
-        const auto absolute_delta = candidate - baseline;
-        const auto paired_delta = median(paired_deltas);
-        const auto paired_mean = std::accumulate(paired_deltas.begin(), paired_deltas.end(), 0.0) /
-            static_cast<double>(paired_deltas.size());
-        const auto noise_floor = quantile(absolute_noise, 0.95);
-        const auto interval = confidence_interval(paired_deltas);
-        const bool confidence_excludes_zero = interval.is_object() &&
-            (interval.at("low_ns").get<double>() > 0.0 || interval.at("high_ns").get<double>() < 0.0);
-        const bool clears_noise_floor = std::abs(paired_delta) > noise_floor;
-        const auto outliers = outlier_rounds(paired_deltas);
-        const auto verdict = !outliers.empty() ? "unstable" :
-            (clears_noise_floor && confidence_excludes_zero ? "stable" : "inconclusive");
-        const auto direction = !clears_noise_floor ? "unchanged" :
-            (paired_delta < 0.0 ? "improved" : "regressed");
-        Json row{{"identity", identity},
-                 {"baseline_median_ns", baseline},
-                 {"candidate_median_ns", candidate},
-                 {"absolute_delta_ns", absolute_delta},
-                 {"percentage_delta", baseline == 0.0 ? Json(nullptr) : Json(absolute_delta / baseline * 100.0)},
-                 {"paired_delta_median_ns", paired_delta},
-                 {"paired_delta_mean_ns", paired_mean},
-                 {"paired_delta_variance_ns2", sample_variance(paired_deltas)},
-                 {"confidence_interval_95", interval},
+        std::vector<double> first_order_deltas;
+        std::vector<double> second_order_deltas;
+        for (std::size_t round = 1; round <= comparison_rounds.size(); ++round) {
+            std::vector<const Measurement*> baseline;
+            std::vector<const Measurement*> candidate;
+            for (const auto& measurement : measurements) {
+                if (measurement.plan.phase != "comparison" || measurement.plan.round != round) continue;
+                (measurement.plan.variant == "baseline" ? baseline : candidate).push_back(&measurement);
+            }
+            first_order_deltas.push_back(candidate.at(0)->metrics.at(key).p50_ns - baseline.at(0)->metrics.at(key).p50_ns);
+            second_order_deltas.push_back(candidate.at(1)->metrics.at(key).p50_ns - baseline.at(1)->metrics.at(key).p50_ns);
+        }
+        std::vector<double> control_levels;
+        for (std::size_t round = 1; round <= control_rounds.size(); ++round) {
+            std::vector<double> values;
+            for (const auto& measurement : measurements) {
+                if (measurement.plan.phase == "control" && measurement.plan.round == round) {
+                    values.push_back(measurement.metrics.at(key).p50_ns);
+                }
+            }
+            control_levels.push_back(median(std::move(values)));
+        }
+
+        const auto statistics = analyze_paired_metric(baseline_p50, candidate_p50, baseline_p95, candidate_p95,
+            paired_deltas, noise_deltas, first_order_deltas, second_order_deltas, control_levels);
+        Json interval = nullptr;
+        if (statistics.confidence_interval_95_ns) {
+            interval = {{"low_ns", statistics.confidence_interval_95_ns->first},
+                {"high_ns", statistics.confidence_interval_95_ns->second},
+                {"confidence", 0.95}, {"method", "paired_student_t"}};
+        }
+        const auto& spec = guards.metric_specs.at(key);
+        const auto role = spec.at("role").get<std::string>();
+        const auto regression_ratio = statistics.baseline_p50_ns == 0.0 ? 0.0 :
+            (statistics.candidate_p50_ns - statistics.baseline_p50_ns) / statistics.baseline_p50_ns;
+        const bool order_unstable = statistics.order_effect_ns > statistics.noise_floor_ns;
+        const bool statistically_stable = statistics.clears_noise_floor && statistics.confidence_excludes_zero &&
+            statistics.outlier_rounds.empty() && !order_unstable && !statistics.direction_reversed &&
+            !statistics.thermal_or_temporal_drift;
+        const bool statistically_unstable = !statistics.outlier_rounds.empty() || order_unstable ||
+            statistics.direction_reversed || statistics.thermal_or_temporal_drift;
+        const bool stable_improvement = statistically_stable && statistics.paired_delta_ns < 0.0;
+        const bool stable_regression = statistically_stable && statistics.paired_delta_ns > 0.0;
+        const auto maximum_regression = spec.value("max_regression_ratio", 0.0);
+        const bool guardrail_regression = role != "target" && stable_regression &&
+            regression_ratio > maximum_regression;
+        const auto decision = role == "target"
+            ? (stable_improvement ? "ACCEPTED" : stable_regression ? "REGRESSION" : "INCONCLUSIVE")
+            : (statistically_unstable ? "INCONCLUSIVE" :
+                guardrail_regression ? "REGRESSION" : "GUARDRAIL_PASSED");
+        const auto direction = !statistics.clears_noise_floor ? "unchanged" :
+            (statistics.paired_delta_ns < 0.0 ? "improved" : "regressed");
+        Json row{{"metric_id", spec.at("metric_id")}, {"role", role}, {"identity", identity},
+                 {"baseline_p50_ns", statistics.baseline_p50_ns},
+                 {"candidate_p50_ns", statistics.candidate_p50_ns},
+                 {"baseline_p95_ns", statistics.baseline_p95_ns},
+                 {"candidate_p95_ns", statistics.candidate_p95_ns},
+                 {"paired_delta_ns", statistics.paired_delta_ns},
+                 {"paired_delta_mean_ns", statistics.paired_delta_mean_ns},
+                 {"paired_delta_variance_ns2", statistics.paired_delta_variance_ns2},
+                 {"regression_ratio", regression_ratio},
+                 {"max_regression_ratio", role == "target" ? Json(nullptr) : Json(maximum_regression)},
+                 {"confidence_interval_95", std::move(interval)},
                  {"control_paired_deltas_ns", noise_deltas},
-                 {"noise_floor_ns", noise_floor},
-                 {"noise_floor_percent", baseline == 0.0 ? Json(nullptr) : Json(noise_floor / baseline * 100.0)},
-                 {"clears_noise_floor", clears_noise_floor},
-                 {"outlier_rounds", outliers},
-                 {"verdict", verdict},
+                 {"noise_floor_ns", statistics.noise_floor_ns},
+                 {"order_effect_ns", statistics.order_effect_ns},
+                 {"direction_reversed", statistics.direction_reversed},
+                 {"thermal_or_temporal_drift", statistics.thermal_or_temporal_drift},
+                 {"clears_noise_floor", statistics.clears_noise_floor},
+                 {"confidence_excludes_zero", statistics.confidence_excludes_zero},
+                 {"outlier_rounds", statistics.outlier_rounds},
+                 {"guardrail_passed", role == "target" ? stable_improvement :
+                    !statistically_unstable && !guardrail_regression},
+                 {"decision", decision},
                  {"direction", direction}};
         table.push_back(std::move(row));
     }
@@ -550,13 +614,19 @@ Json comparison_table(const GuardState& guards, const Json& comparison_rounds, c
 }
 
 std::string overall_verdict(const Json& table) {
-    bool inconclusive = false;
+    bool target = false;
+    bool inconclusive = table.empty();
     for (const auto& row : table) {
-        const auto verdict = row.at("verdict").get<std::string>();
-        if (verdict == "unstable") return "unstable";
-        if (verdict == "inconclusive") inconclusive = true;
+        const auto decision = row.at("decision").get<std::string>();
+        if (decision == "REGRESSION") return "REGRESSION";
+        if (row.at("role") == "target") {
+            target = true;
+            if (decision != "ACCEPTED") inconclusive = true;
+        } else if (decision == "INCONCLUSIVE") {
+            inconclusive = true;
+        }
     }
-    return inconclusive || table.empty() ? "inconclusive" : "stable";
+    return !target || inconclusive ? "INCONCLUSIVE" : "ACCEPTED";
 }
 
 Json compact_execution(const Measurement& measurement) {
@@ -582,6 +652,7 @@ Json guard_receipt(const GuardState& guards, const Json& arguments) {
             {"source_identity_sha256", std::move(source_hashes)},
             {"aggregate_identity_count", guards.aggregate_identities.size()},
             {"program_identity_count", guards.program_identities.size()},
+            {"compile_catalogs_passed", guards.compile_catalogs_passed},
             {"runtime_state_restored", guards.runtime_state_restored},
             {"mismatches", guards.mismatches}};
 }
@@ -760,8 +831,7 @@ ToolOutcome run_paired_benchmark(const Json& arguments, std::string_view workflo
                 {"cases", Json::array({failed_case(item, arguments, error, default_warmup_frames)})}};
             measurement.profile_case = measurement.profile.at("cases").front();
         }
-        measurement.metrics = metric_values(
-            measurement.profile_case, arguments.value("statistic", std::string("avg")));
+        measurement.metrics = metric_values(measurement.profile_case);
         measurements.push_back(std::move(measurement));
         if (!restored(measurements.back().profile)) {
             halted_without_restore = true;
@@ -785,7 +855,7 @@ ToolOutcome run_paired_benchmark(const Json& arguments, std::string_view workflo
             arguments.value("rounds", std::size_t{3}), "baseline", "candidate");
         control_rounds = round_samples(measurements, guards, "control",
             arguments.value("control_rounds", arguments.value("rounds", std::size_t{3})), "a", "b");
-        table = comparison_table(guards, comparison_rounds, control_rounds);
+        table = comparison_table(measurements, guards, comparison_rounds, control_rounds);
     }
 
     Json executions = Json::array();
@@ -803,9 +873,9 @@ ToolOutcome run_paired_benchmark(const Json& arguments, std::string_view workflo
             profiles.push_back(measurement.profile);
         }
     }
-    const auto performance_verdict = valid ? overall_verdict(table) : "inconclusive";
-    Json visual{{"requested", false}, {"success", true}, {"status", "not_requested"},
-                {"verdict", "not_requested"}, {"comparison", nullptr}, {"artifacts", Json::array()}};
+    const auto performance_verdict = valid ? overall_verdict(table) : "INCONCLUSIVE";
+    Json visual{{"requested", false}, {"success", false}, {"status", "missing"},
+                {"verdict", "inconclusive"}, {"comparison", nullptr}, {"artifacts", Json::array()}};
     if (arguments.contains("visual")) {
         if (!execute_visual) {
             visual = {{"requested", true}, {"success", false}, {"status", "failed"},
@@ -832,14 +902,45 @@ ToolOutcome run_paired_benchmark(const Json& arguments, std::string_view workflo
     const bool performance_success = failed == 0 && incomplete == 0 && valid;
     const bool visual_success = visual.at("success").get<bool>();
     const bool visual_invalid = visual.value("status", std::string{}) == "invalid";
+    const auto combined_verdict = !performance_success || !visual_success
+        ? std::string("GATE_FAILED") : performance_verdict;
     const auto status = halted_without_restore || incomplete != 0 ? "incomplete" :
-        (failed != 0 ? "completed_with_failures" :
-            (!valid || visual_invalid ? "invalid_comparison" :
-                (!visual_success ? "completed_with_failures" : "completed")));
-    const auto combined_verdict = !valid || visual.at("verdict") == "inconclusive"
-        ? std::string("inconclusive")
-        : (visual.at("verdict") == "failed" ? std::string("failed") : performance_verdict);
-    Json result{{"success", performance_success && visual_success},
+        (!valid || visual_invalid ? "invalid_comparison" :
+            (combined_verdict == "ACCEPTED" || combined_verdict == "INCONCLUSIVE"
+                ? "completed" : "completed_with_failures"));
+    double measured_noise_floor = 0.0;
+    double order_effect = 0.0;
+    bool direction_reversed = false;
+    bool thermal_or_temporal_drift = false;
+    Json violations = Json::array();
+    for (const auto& row : table) {
+        measured_noise_floor = std::max(measured_noise_floor, row.at("noise_floor_ns").get<double>());
+        order_effect = std::max(order_effect, row.at("order_effect_ns").get<double>());
+        direction_reversed = direction_reversed || row.at("direction_reversed").get<bool>();
+        thermal_or_temporal_drift = thermal_or_temporal_drift ||
+            row.at("thermal_or_temporal_drift").get<bool>();
+        if (row.at("decision") == "REGRESSION") {
+            violations.push_back({{"code", "METRIC_REGRESSION"}, {"metric_id", row.at("metric_id")},
+                {"role", row.at("role")}});
+        }
+    }
+    if (!valid) violations.push_back({{"code", "BENCHMARK_GUARD_FAILED"}});
+    if (!visual_success) violations.push_back({{"code", "VISUAL_GATE_FAILED"}});
+    if (performance_verdict == "INCONCLUSIVE") violations.push_back({{"code", "STATISTICAL_INCONCLUSIVE"}});
+    if (direction_reversed) violations.push_back({{"code", "DIRECTION_REVERSED"}});
+    if (thermal_or_temporal_drift) violations.push_back({{"code", "THERMAL_OR_TEMPORAL_DRIFT"}});
+    const bool provenance_passed = std::ranges::none_of(guards.mismatches, [](const Json& value) {
+        const auto code = value.value("code", std::string{});
+        return code == "PROVENANCE_GUARD_MISSING" || code == "CONFIG_HASH_MISMATCH" ||
+            code == "SCENE_HASH_MISMATCH" || code == "SOURCE_IDENTITY_MISMATCH" ||
+            code == "SOURCE_ROLE_MISMATCH";
+    });
+    Json acceptance_gates{{"compile", guards.compile_catalogs_passed},
+        {"provenance", provenance_passed},
+        {"restoration", guards.runtime_state_restored},
+        {"visual", visual_success},
+        {"statistical", performance_verdict == "ACCEPTED"}};
+    Json result{{"success", combined_verdict == "ACCEPTED"},
                 {"kind", "benchmark_ab"},
                 {"status", status},
                 {"verdict", combined_verdict},
@@ -848,8 +949,7 @@ ToolOutcome run_paired_benchmark(const Json& arguments, std::string_view workflo
                 {"visual", std::move(visual)},
                 {"result_detail", arguments.value("result_detail", std::string("metrics"))},
                 {"gpu_timing_unit", "ns"},
-                {"statistic", arguments.value("statistic", std::string("avg"))},
-                {"metric_filter", arguments.value("metric_filter", Json(nullptr))},
+                {"metrics", arguments.at("metrics")},
                 {"order", arguments.value("order", std::string("abba"))},
                 {"random_seed", arguments.value("random_seed", std::uint32_t{0})},
                 {"round_count", arguments.value("rounds", std::size_t{3})},
@@ -862,6 +962,12 @@ ToolOutcome run_paired_benchmark(const Json& arguments, std::string_view workflo
                 {"incomplete_measurements", incomplete},
                 {"remaining_measurements", measurements_plan.size() - measurements.size()},
                 {"same_commit_control_source", "baseline"},
+                {"measured_noise_floor_ns", measured_noise_floor},
+                {"order_effect_ns", order_effect},
+                {"direction_reversed", direction_reversed},
+                {"thermal_or_temporal_drift", thermal_or_temporal_drift},
+                {"violations", std::move(violations)},
+                {"acceptance_gates", std::move(acceptance_gates)},
                 {"guards", guard_receipt(guards, arguments)},
                 {"executions", std::move(executions)},
                 {"round_samples", std::move(comparison_rounds)},

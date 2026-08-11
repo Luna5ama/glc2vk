@@ -5,6 +5,7 @@
 #include <initializer_list>
 #include <limits>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -113,6 +114,14 @@ Json benchmark_visual_schema() {
     return schema;
 }
 
+Json benchmark_metrics_schema() {
+    return Json{{"type", "array"}, {"minItems", 1}, {"maxItems", 256}, {"items", closed_object({
+        {"metric_id", {{"type", "string"}, {"minLength", 1}}},
+        {"role", enum_string({"target", "sibling", "sentinel"})},
+        {"max_regression_ratio", {{"type", "number"}, {"minimum", 0.0}}},
+    }, {"metric_id", "role"})}};
+}
+
 Json restore_policy_schema() {
     return closed_object({{"on_success", {{"type", "boolean"}}},
                           {"on_error", {{"type", "boolean"}}}},
@@ -169,6 +178,7 @@ Json recipe_schema() {
         {"buffers", string_array(64)},
         {"captures", {{"type", "array"}, {"items", capture_schema()}, {"minItems", 1}, {"maxItems", 64}}},
         {"visual", benchmark_visual_schema()},
+        {"metrics", benchmark_metrics_schema()},
         {"visual_thresholds", visual_thresholds_schema()},
     }, {"recipe"}), false);
     return schema;
@@ -281,9 +291,10 @@ Json build_definitions() {
                    "shader source and config, waits for the requested warmup frames, and saves a screenshot. Profile "
                    "recipes return normalized cases with summary, metrics, or full result detail. Long-running "
                    "recipes support durable sync/async execution; query, result, resume and cancellation use vibris_job. "
-                   "benchmark_ab runs repeated paired ABBA, ABAB, or seeded randomized profiles plus same-commit "
-                   "controls and returns guarded confidence and measured-noise comparisons; optional visual "
-                   "thresholds add a deterministic screenshot gate and a combined performance/visual verdict. "
+                   "benchmark_ab requires typed target, sibling, and sentinel metrics, repeated ABBA, ABAB, or "
+                   "seeded randomized profiles, same-source controls, and deterministic visual thresholds; it "
+                   "accepts only stable target improvements after compile, provenance, restoration, statistical, "
+                   "guardrail, and visual gates pass. "
                    "recover_runtime is the only recipe without a preset or source; it reapplies and verifies the "
                    "retained safe snapshot after a transactional restore failure.",
                    recipe_schema(), false),
@@ -498,8 +509,41 @@ std::optional<std::string> validate_operation_shape(const std::string_view name,
             if (arguments.contains("restore_state")) {
                 return "arguments.restore_state is not allowed for always-restored workloads";
             }
-            return recipe == "profile_matrix" ? require({"sources", "configs", "matrix", "frames"}) :
-                require({"baseline", "candidate", "frames"});
+            if (recipe == "profile_matrix") return require({"sources", "configs", "matrix", "frames"});
+            if (const auto missing = require({"baseline", "candidate", "frames", "metrics", "visual"})) {
+                return missing;
+            }
+            if (arguments.contains("statistic") || arguments.contains("metric_filter")) {
+                return "benchmark_ab uses only typed metrics and paired p50/p95 statistics";
+            }
+            bool visual_threshold = false;
+            for (const auto& [key, ignored] : arguments.at("visual").items()) {
+                static_cast<void>(ignored);
+                if (key != "warmup_frames") visual_threshold = true;
+            }
+            if (!visual_threshold) return "arguments.visual must contain at least one deterministic threshold";
+            std::set<std::string> metric_ids;
+            bool target = false;
+            for (std::size_t index = 0; index < arguments.at("metrics").size(); ++index) {
+                const auto& metric = arguments.at("metrics").at(index);
+                const auto metric_id = metric.at("metric_id").get<std::string>();
+                if (!metric_ids.insert(metric_id).second) {
+                    return "arguments.metrics contains duplicate metric_id " + metric_id;
+                }
+                const auto role = metric.at("role").get<std::string>();
+                if (role == "target") {
+                    target = true;
+                    if (metric.contains("max_regression_ratio")) {
+                        return "arguments.metrics[" + std::to_string(index) +
+                            "].max_regression_ratio is not allowed for a target metric";
+                    }
+                } else if (!metric.contains("max_regression_ratio")) {
+                    return "arguments.metrics[" + std::to_string(index) +
+                        "].max_regression_ratio is required for a sibling or sentinel metric";
+                }
+            }
+            return target ? std::nullopt : std::optional<std::string>(
+                "arguments.metrics must contain at least one target metric");
         }
         if (recipe == "ab_compare") return require({"a", "b", "captures"});
     }

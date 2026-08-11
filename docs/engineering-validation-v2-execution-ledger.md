@@ -94,8 +94,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T11 | P0 | Vibris | Add compile_validate recipe | DONE | `T11 add compile validation recipe` |
 | T12 | P0 | Vibris | Expand immutable benchmark provenance | DONE | `T12 expand benchmark provenance and stale checks` |
 | T12A | P0 | Vibris | Normalize strict-v2 execution receipts | DONE | `T12A normalize strict v2 execution receipts` |
-| T13 | P0 | Vibris | Enforce statistical benchmark guardrails | READY | `T13 enforce benchmark semantic guardrails` |
-| T14 | P0 | Vibris | Replace artifacts with managed v2 manifests | PENDING | `T14 add managed artifact v2 lifecycle` |
+| T13 | P0 | Vibris | Enforce statistical benchmark guardrails | DONE | `T13 enforce benchmark semantic guardrails` |
+| T14 | P0 | Vibris | Replace artifacts with managed v2 manifests | READY | `T14 add managed artifact v2 lifecycle` |
 | T15 | P0 | Vibris | Define named pass resource dump contract | PENDING | `T15 define named pass resource dump contract` |
 | T16 | P0 | Iris | Implement named Iris pass boundary hooks | PENDING | `T16 capture resources after named Iris passes` |
 | T17 | P0 | Vibris | Integrate after-pass texture and buffer jobs | PENDING | `T17 integrate after-pass resource dump jobs` |
@@ -1055,7 +1055,7 @@ Evidence:
 
 ### T13 — Enforce statistical benchmark guardrails
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T12A
 
@@ -1100,11 +1100,22 @@ Blockers:
 
 Evidence:
 
-- Pending.
+- `benchmark_ab` now accepts only unique typed target/sibling/sentinel metrics. Target metrics use paired p50 deltas,
+  p95 reporting, Student-t confidence, measured same-source p95 noise floors, order effects, direction reversal,
+  outliers, and thermal/temporal drift; sibling and sentinel metrics require explicit maximum regression ratios.
+- Every nested measurement performs a canonical compile-catalog inspection. Acceptance requires complete compile,
+  provenance, restoration, deterministic visual-threshold, and statistical gates; stable target or guardrail
+  regressions return `REGRESSION`, unstable/below-noise evidence returns `INCONCLUSIVE`, and missing gates return
+  `GATE_FAILED`. The removed single-statistic/metric-filter benchmark shape is rejected rather than translated.
+- Release targets `vibris-paired-benchmark-tests` and `vibris-action-schema-tests` built successfully. The
+  ledger-specified paired/noise/order/guardrail/visual filter plus the typed action-schema contract passed 12/12,
+  covering ABBA/ABAB/randomized planning, target/sibling/sentinel decisions, unchanged sentinels, noise, confidence,
+  reversal, drift, compile, provenance, restoration, and visual failures. Protected `capture\a.spv` remained
+  untracked and unstaged; no deployment or process restart occurred.
 
 ### T14 — Replace artifacts with managed v2 manifests
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T13
 
@@ -1526,7 +1537,7 @@ Queue order is authoritative and serial even where technical dependencies could 
 - [x] Every input action produces exactly one ordered receipt.
 - [x] Compile validation reports every intended program/pass and baseline diagnostic changes without GPU warmup.
 - [ ] Every result contains complete immutable provenance and correct shader-content stale semantics.
-- [ ] Benchmark decisions enforce target/sibling/sentinel guardrails, measured noise, confidence, order, drift, compile, visual, provenance, and restoration gates.
+- [x] Benchmark decisions enforce target/sibling/sentinel guardrails, measured noise, confidence, order, drift, compile, visual, provenance, and restoration gates.
 - [ ] Artifact v2 supports TTL, hash manifests, request/job grouping, capacity prediction, ownership-safe list/detail/delete, and worktree-local paths.
 - [ ] `dump_texture_after_pass` and `dump_buffer_after_pass` capture exact named pass boundaries with correct flip, visibility, bytes, artifacts, and GL-state restoration.
 - [ ] Full Vibris native/Gradle and Iris build validation passes.
@@ -1558,3 +1569,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T12 - expanded immutable source/result provenance, separated HEAD movement from shader-content staleness with deterministic completion deltas, retained provenance through durable checkpoints, and proved active source UUIDs on compile/action receipts; Core 103/103, focused native 7/7, and source/checkpoint regression 14/14 passed - Commit title: T12 expand benchmark provenance and stale checks`
 - `2026-08-11 - T12A inserted - T13 entry auditing found native profile/matrix normalization and fake-server fixtures still consuming removed pre-v2 result fields instead of strict-v2 action receipts, top-level provenance, and restoration; inserted a no-compatibility receipt-normalization remediation before statistical guardrails - Control-plane commit title: roadmap insert T12A strict v2 result remediation`
 - `2026-08-11 - T12A - normalized profile, matrix, inspection, GPU metrics, and A/B visual results from strict-v2 typed receipts only; replaced the v1 fake-server fixture; focused CTest 4/4 and broader visual/paired/checkpoint regression 9/9 passed with zero removed-field or compatibility reads - Commit title: T12A normalize strict v2 execution receipts`
+- `2026-08-11 - T13 - enforced typed target/sibling/sentinel guardrails, paired p50/p95 confidence and measured-noise decisions, order/reversal/drift reporting, and mandatory compile/provenance/restoration/visual/statistical gates; release targets built and focused CTest passed 12/12 - Commit title: T13 enforce benchmark semantic guardrails`

@@ -34,7 +34,12 @@ Json arguments(std::string order = "abba", std::size_t rounds = 2) {
             {"control_rounds", rounds},
             {"order", std::move(order)},
             {"random_seed", 7},
-            {"statistic", "avg"},
+            {"metrics", Json::array({
+                {{"metric_id", "composite_total"}, {"role", "target"}},
+                {{"metric_id", "begin3_a_compute"}, {"role", "sibling"}, {"max_regression_ratio", 0.05}},
+                {{"metric_id", "shadow_total"}, {"role", "sentinel"}, {"max_regression_ratio", 0.02}},
+            })},
+            {"visual", {{"pixel_error_threshold", 0.01}, {"max_threshold_pixel_ratio", 0.001}}},
             {"__vibris_preset", {{"preset_id", "spawn"}, {"version", "2"},
                 {"display_name", "Spawn"}}},
             {"max_retries", 1}};
@@ -72,6 +77,9 @@ Json profile_result(const Json& request, double value, std::string config_hash =
             {{"metric_id", "begin3_a_compute"}, {"program_id", std::move(program_id)},
                 {"pass_id", "begin3"}, {"average_ns", value / 2.0}, {"p50_ns", value / 2.0},
                 {"p95_ns", value / 2.0}, {"samples_ns", Json::array({value / 2.0})}},
+            {{"metric_id", "shadow_total"}, {"program_id", "shadow"}, {"pass_id", "shadow"},
+                {"average_ns", value * 0.75}, {"p50_ns", value * 0.75},
+                {"p95_ns", value * 0.75}, {"samples_ns", Json::array({value * 0.75})}},
         })}};
     const auto provenance = strict_provenance(source_id, std::move(config_hash), std::move(scene_hash));
     Json profile_case{{"case_id", case_id},
@@ -83,9 +91,15 @@ Json profile_result(const Json& request, double value, std::string config_hash =
                       {"warmup_frames", request.at("warmup_frames")},
                       {"metrics", metrics},
                       {"attempt_count", 1}};
+    const Json compile_catalog{{"mapping_sha256", "mapping-sha"}, {"shader_generation", 7},
+        {"programs", Json::array({{{"program_id", "begin3_a"}, {"pass_id", "begin3"},
+            {"compile_state", "COMPILE_STATE_SUCCEEDED"}, {"link_state", "COMPILE_STATE_SUCCEEDED"},
+            {"patched_source_sha256", "patched-sha"}}})}};
+    const Json compile_receipt{{"action_index", 1}, {"kind", "ACTION_KIND_INSPECT_SHADER"},
+        {"status", "RECEIPT_STATUS_OK"}, {"shader_inspection", {{"catalog", compile_catalog}}}};
     return {{"success", true}, {"status", "completed"},
             {"cases", Json::array({std::move(profile_case)})}, {"artifacts", Json::array()},
-            {"action_receipts", Json::array()}, {"prelude_receipts", Json::array()},
+            {"action_receipts", Json::array({compile_receipt})}, {"prelude_receipts", Json::array()},
             {"provenance", provenance},
             {"restoration", {{"status", "RECEIPT_STATUS_OK"}}},
             {"result_manifest_id", "profile-manifest"}};
@@ -141,8 +155,16 @@ Json stable_run(const Json& request_arguments, std::vector<Json>* requests = nul
     const auto outcome = vibris::mcp::run_paired_benchmark(
         request_arguments, workflow_id, 19, [requests](const Json& request) -> ToolOutcome {
             if (requests != nullptr) requests->push_back(request);
-            return profile_result(request, stable_value(request));
-        });
+            auto profile = profile_result(request, stable_value(request));
+            for (auto& metric : profile["cases"][0]["metrics"]["metrics"]) {
+                if (metric.at("metric_id") == "shadow_total") {
+                    metric["average_ns"] = 75.0;
+                    metric["p50_ns"] = 75.0;
+                    metric["p95_ns"] = 75.0;
+                }
+            }
+            return profile;
+        }, [](const Json&) -> ToolOutcome { return visual_result(true); });
     require(std::holds_alternative<Json>(outcome), "Paired benchmark returned a tool failure.");
     return std::get<Json>(outcome);
 }
@@ -160,8 +182,7 @@ std::vector<std::string> comparison_order(const std::vector<Json>& requests) {
 const Json& aggregate_row(const Json& result) {
     const auto& table = result.at("comparison_table");
     const auto found = std::ranges::find_if(table, [](const Json& row) {
-        return row.at("identity").at("timing_kind") == "aggregate" &&
-            row.at("identity").at("metric") == "composite_total";
+        return row.at("metric_id") == "composite_total";
     });
     if (found == table.end()) {
         throw std::runtime_error("Aggregate comparison row is missing: " + table.dump());
@@ -186,6 +207,9 @@ void order_strategies_are_balanced_and_reproducible() {
             "A nested profile omitted the isolation workflow identity.");
         require(request.at("__vibris_preset") == arguments().at("__vibris_preset"),
             "A nested profile omitted the request-scoped scene-preset provenance.");
+        require(request.at("__vibris_compile_gate") == true &&
+                request.at("statistics") == Json::array({"p50", "p95"}),
+            "A nested profile omitted its mandatory compile gate or p50/p95 statistics.");
         if (request.at("__vibris_benchmark_phase") == "control") {
             require(request.at("source") == arguments().at("baseline") &&
                     request.at("__vibris_source_id") == "baseline",
@@ -221,22 +245,32 @@ void paired_aggregation_reports_effect_noise_and_confidence() {
     const auto result = stable_run(arguments("abba", 4));
     const auto& row = aggregate_row(result);
     require(result.at("success") == true && result.at("status") == "completed" &&
-            result.at("verdict") == "stable" && result.at("guards").at("passed") == true &&
+            result.at("verdict") == "ACCEPTED" && result.at("guards").at("passed") == true &&
             result.at("guards").at("runtime_state_restored") == true,
         "Stable paired samples did not produce a successful guarded result.");
-    require(row.at("baseline_median_ns") == 100.0 && row.at("candidate_median_ns") == 80.0 &&
-            row.at("absolute_delta_ns") == -20.0 && row.at("percentage_delta") == -20.0 &&
-            row.at("paired_delta_median_ns") == -20.0 && row.at("paired_delta_variance_ns2") == 0.0 &&
+    require(row.at("role") == "target" && row.at("baseline_p50_ns") == 100.0 &&
+            row.at("candidate_p50_ns") == 80.0 && row.at("baseline_p95_ns") == 100.0 &&
+            row.at("candidate_p95_ns") == 80.0 && row.at("paired_delta_ns") == -20.0 &&
+            row.at("paired_delta_variance_ns2") == 0.0 &&
             row.at("noise_floor_ns") == 1.0 && row.at("clears_noise_floor") == true &&
             row.at("confidence_interval_95").at("low_ns") == -20.0 &&
             row.at("confidence_interval_95").at("high_ns") == -20.0 &&
-            row.at("outlier_rounds").empty() && row.at("verdict") == "stable" &&
-            row.at("direction") == "improved",
+            row.at("order_effect_ns") == 0.0 && row.at("direction_reversed") == false &&
+            row.at("thermal_or_temporal_drift") == false && row.at("outlier_rounds").empty() &&
+            row.at("decision") == "ACCEPTED" && row.at("direction") == "improved" &&
+            result.at("acceptance_gates").at("compile") == true &&
+            result.at("acceptance_gates").at("visual") == true,
         "Paired aggregation lost its median-of-runs, delta, variance, confidence, noise, or verdict fields.");
     require(result.at("round_samples").size() == 4 &&
-            result.at("round_samples").at(0).at("metrics").at(0).contains("baseline_samples_ns") &&
-            result.at("comparison_table").size() == 2,
+            result.at("round_samples").at(0).at("metrics").at(0).contains("baseline_p50_samples_ns") &&
+            result.at("comparison_table").size() == 3,
         "Paired result omitted per-round samples or the compact aggregate/program comparison table.");
+    const auto sentinel = std::ranges::find_if(result.at("comparison_table"), [](const Json& value) {
+        return value.at("role") == "sentinel";
+    });
+    require(sentinel != result.at("comparison_table").end() && sentinel->at("clears_noise_floor") == false &&
+            sentinel->at("decision") == "GUARDRAIL_PASSED" && sentinel->at("guardrail_passed") == true,
+        "An unchanged below-noise sentinel did not pass its non-regression guardrail.");
 }
 
 void measured_noise_floor_rejects_small_effects() {
@@ -248,12 +282,12 @@ void measured_noise_floor_rejects_small_effects() {
             const auto value = phase == "comparison" ? (variant == "candidate" ? 105.0 : 100.0) :
                 (variant == "b" ? 110.0 : 100.0);
             return profile_result(request, value);
-        });
+        }, [](const Json&) -> ToolOutcome { return visual_result(true); });
     const auto& result = std::get<Json>(outcome);
     const auto& row = aggregate_row(result);
-    require(result.at("success") == true && result.at("verdict") == "inconclusive" &&
-            row.at("paired_delta_median_ns") == 5.0 && row.at("noise_floor_ns") == 10.0 &&
-            row.at("clears_noise_floor") == false && row.at("verdict") == "inconclusive" &&
+    require(result.at("success") == false && result.at("verdict") == "INCONCLUSIVE" &&
+            row.at("paired_delta_ns") == 5.0 && row.at("noise_floor_ns") == 10.0 &&
+            row.at("clears_noise_floor") == false && row.at("decision") == "INCONCLUSIVE" &&
             row.at("direction") == "unchanged",
         "A candidate effect inside the measured same-commit noise floor was accepted as stable.");
 }
@@ -274,7 +308,7 @@ void mismatched_frames_config_scene_and_program_identity_fail_closed() {
         codes.insert(mismatch.at("code").get<std::string>());
     }
     require(result.at("success") == false && result.at("status") == "invalid_comparison" &&
-            result.at("verdict") == "inconclusive" && result.at("comparison_table").empty() &&
+            result.at("verdict") == "GATE_FAILED" && result.at("comparison_table").empty() &&
             codes.contains("FRAME_COUNT_MISMATCH") && codes.contains("CONFIG_HASH_MISMATCH") &&
             codes.contains("SCENE_HASH_MISMATCH") && codes.contains("PROGRAM_IDENTITY_MISMATCH"),
         "Paired comparison did not fail closed on frames, effective config, scene, and program identity mismatches.");
@@ -326,8 +360,8 @@ void visual_gate_returns_combined_performance_and_visual_verdicts() {
             visual_request.at("visual_thresholds").at("min_ssim") == 0.995,
         "The paired benchmark did not request a deterministic screenshot comparison with its sources and thresholds.");
     require(result.at("success") == false && result.at("status") == "completed_with_failures" &&
-            result.at("performance_verdict") == "stable" && result.at("visual_verdict") == "failed" &&
-            result.at("verdict") == "failed" && result.at("visual").at("status") == "failed" &&
+            result.at("performance_verdict") == "ACCEPTED" && result.at("visual_verdict") == "failed" &&
+            result.at("verdict") == "GATE_FAILED" && result.at("visual").at("status") == "failed" &&
             result.at("visual").at("comparison").at("ssim") == 0.98 &&
             result.at("visual").at("guards").at("passed") == true &&
             result.at("artifacts").back().at("benchmark_phase") == "visual",
@@ -356,9 +390,9 @@ void visual_receipts_fail_closed_on_state_or_artifact_mismatch() {
         mismatch_codes.insert(mismatch.at("code").get<std::string>());
     }
     require(mismatched.at("success") == false && mismatched.at("status") == "invalid_comparison" &&
-            mismatched.at("performance_verdict") == "stable" &&
+            mismatched.at("performance_verdict") == "ACCEPTED" &&
             mismatched.at("visual_verdict") == "inconclusive" &&
-            mismatched.at("verdict") == "inconclusive" &&
+            mismatched.at("verdict") == "GATE_FAILED" &&
             mismatched.at("visual").at("error").at("error_code") == "INVALID_VISUAL_RECEIPT" &&
             mismatch_codes.contains("VISUAL_CONFIG_HASH_MISMATCH") &&
             mismatch_codes.contains("VISUAL_SCENE_HASH_MISMATCH"),
@@ -367,19 +401,135 @@ void visual_receipts_fail_closed_on_state_or_artifact_mismatch() {
     const auto missing_artifact = run("visual-config-hash", "visual-scene-hash", false);
     require(missing_artifact.at("success") == false &&
             missing_artifact.at("status") == "invalid_comparison" &&
-            missing_artifact.at("verdict") == "inconclusive" &&
+            missing_artifact.at("verdict") == "GATE_FAILED" &&
             missing_artifact.at("visual").at("guards").at("diff_heatmap_artifact") == false,
         "A visual receipt without the required difference heatmap was accepted.");
 }
 
+void typed_sibling_and_sentinel_guardrails_reject_regressions() {
+    auto request_arguments = arguments("abba", 4);
+    const auto outcome = vibris::mcp::run_paired_benchmark(
+        request_arguments, workflow_id, 19,
+        [](const Json& request) -> ToolOutcome {
+            auto profile = profile_result(request, stable_value(request));
+            if (request.at("__vibris_benchmark_phase") == "comparison" &&
+                request.at("__vibris_benchmark_variant") == "candidate") {
+                for (auto& metric : profile["cases"][0]["metrics"]["metrics"]) {
+                    if (metric.at("metric_id") == "begin3_a_compute") {
+                        metric["average_ns"] = 60.0;
+                        metric["p50_ns"] = 60.0;
+                        metric["p95_ns"] = 60.0;
+                    } else if (metric.at("metric_id") == "shadow_total") {
+                        metric["average_ns"] = 90.0;
+                        metric["p50_ns"] = 90.0;
+                        metric["p95_ns"] = 90.0;
+                    }
+                }
+            }
+            return profile;
+        }, [](const Json&) -> ToolOutcome { return visual_result(true); });
+    const auto& result = std::get<Json>(outcome);
+    const auto& table = result.at("comparison_table");
+    const auto sibling = std::ranges::find_if(table, [](const Json& row) {
+        return row.at("role") == "sibling";
+    });
+    const auto sentinel = std::ranges::find_if(table, [](const Json& row) {
+        return row.at("role") == "sentinel";
+    });
+    require(result.at("verdict") == "REGRESSION" && result.at("success") == false &&
+            sibling != table.end() && sibling->at("guardrail_passed") == false &&
+            std::abs(sibling->at("regression_ratio").get<double>() - 0.2) < 1e-9 &&
+            sibling->at("decision") == "REGRESSION" && sentinel != table.end() &&
+            sentinel->at("guardrail_passed") == false && sentinel->at("decision") == "REGRESSION",
+        "A stable sibling or sentinel regression beyond its explicit guardrail was not rejected.");
+
+    const auto target_outcome = vibris::mcp::run_paired_benchmark(
+        request_arguments, workflow_id, 19,
+        [](const Json& request) -> ToolOutcome {
+            const auto phase = request.at("__vibris_benchmark_phase").get<std::string>();
+            const auto variant = request.at("__vibris_benchmark_variant").get<std::string>();
+            const auto value = phase == "comparison" ? (variant == "candidate" ? 120.0 : 100.0) :
+                (variant == "b" ? 101.0 : 100.0);
+            return profile_result(request, value);
+        }, [](const Json&) -> ToolOutcome { return visual_result(true); });
+    const auto& target_result = std::get<Json>(target_outcome);
+    require(target_result.at("verdict") == "REGRESSION" &&
+            aggregate_row(target_result).at("decision") == "REGRESSION",
+        "A stable target regression was not rejected.");
+}
+
+void direction_reversal_is_inconclusive() {
+    const auto request_arguments = arguments("abba", 4);
+    const auto outcome = vibris::mcp::run_paired_benchmark(
+        request_arguments, workflow_id, 19,
+        [](const Json& request) -> ToolOutcome {
+            const auto phase = request.at("__vibris_benchmark_phase").get<std::string>();
+            const auto variant = request.at("__vibris_benchmark_variant").get<std::string>();
+            double value = 100.0;
+            if (phase == "comparison" && variant == "candidate") {
+                value = request.at("__vibris_benchmark_slot") == 2 ? 80.0 : 120.0;
+            } else if (phase == "control" && variant == "b") {
+                value = 101.0;
+            }
+            return profile_result(request, value);
+        }, [](const Json&) -> ToolOutcome { return visual_result(true); });
+    const auto& result = std::get<Json>(outcome);
+    const auto& row = aggregate_row(result);
+    require(result.at("verdict") == "INCONCLUSIVE" && result.at("direction_reversed") == true &&
+            row.at("direction_reversed") == true && row.at("decision") == "INCONCLUSIVE",
+        "Opposite above-noise order directions were not reported as an inconclusive reversal.");
+}
+
+void thermal_or_temporal_drift_is_inconclusive() {
+    const auto request_arguments = arguments("abab", 4);
+    const auto outcome = vibris::mcp::run_paired_benchmark(
+        request_arguments, workflow_id, 19,
+        [](const Json& request) -> ToolOutcome {
+            const auto phase = request.at("__vibris_benchmark_phase").get<std::string>();
+            const auto variant = request.at("__vibris_benchmark_variant").get<std::string>();
+            double value = stable_value(request);
+            if (phase == "control" && request.at("__vibris_benchmark_round").get<std::size_t>() > 2) {
+                value += 20.0;
+            }
+            return profile_result(request, value);
+        }, [](const Json&) -> ToolOutcome { return visual_result(true); });
+    const auto& result = std::get<Json>(outcome);
+    require(result.at("verdict") == "INCONCLUSIVE" && result.at("thermal_or_temporal_drift") == true &&
+            aggregate_row(result).at("thermal_or_temporal_drift") == true,
+        "Same-source control drift did not block benchmark acceptance.");
+}
+
+void compile_catalog_is_a_mandatory_gate() {
+    const auto request_arguments = arguments("abba", 2);
+    const auto outcome = vibris::mcp::run_paired_benchmark(
+        request_arguments, workflow_id, 19,
+        [](const Json& request) -> ToolOutcome {
+            auto profile = profile_result(request, stable_value(request));
+            profile["action_receipts"] = Json::array();
+            return profile;
+        }, [](const Json&) -> ToolOutcome { return visual_result(true); });
+    const auto& result = std::get<Json>(outcome);
+    std::set<std::string> codes;
+    for (const auto& mismatch : result.at("guards").at("mismatches")) {
+        codes.insert(mismatch.at("code").get<std::string>());
+    }
+    require(result.at("verdict") == "GATE_FAILED" && result.at("success") == false &&
+            result.at("acceptance_gates").at("compile") == false && codes.contains("COMPILE_GATE_FAILED"),
+        "A missing compile catalog receipt did not fail the mandatory benchmark gate.");
+}
+
 using TestCase = std::pair<std::string_view, void (*)()>;
-constexpr std::array<TestCase, 6> test_cases{{
+constexpr std::array<TestCase, 10> test_cases{{
     {"PairedOrderStrategies", order_strategies_are_balanced_and_reproducible},
     {"PairedAggregation", paired_aggregation_reports_effect_noise_and_confidence},
     {"MeasuredNoiseFloorRejection", measured_noise_floor_rejects_small_effects},
     {"PairedMismatchGuards", mismatched_frames_config_scene_and_program_identity_fail_closed},
     {"PairedVisualGate", visual_gate_returns_combined_performance_and_visual_verdicts},
     {"PairedVisualReceiptGuards", visual_receipts_fail_closed_on_state_or_artifact_mismatch},
+    {"TypedGuardrailRegression", typed_sibling_and_sentinel_guardrails_reject_regressions},
+    {"PairedDirectionReversal", direction_reversal_is_inconclusive},
+    {"PairedTemporalDrift", thermal_or_temporal_drift_is_inconclusive},
+    {"PairedCompileGate", compile_catalog_is_a_mandatory_gate},
 }};
 
 } // namespace
