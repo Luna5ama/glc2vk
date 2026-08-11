@@ -87,7 +87,7 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T06 | P0 | Vibris | Define effective shader settings contract | DONE | `T06 expose resolved shader settings contract` |
 | T07 | P0 | Iris | Implement effective settings in Iris host | DONE | `T07 report effective shader settings from Iris` |
 | T08 | P1 | Vibris | Return one ordered receipt per action | DONE | `T08 return complete ordered action receipts` |
-| T09 | P0 | Vibris | Define compile catalog runtime contract | READY | `T09 define compile validation catalog contract` |
+| T09 | P0 | Vibris | Define compile catalog runtime contract | BLOCKED | `T09 define compile validation catalog contract` |
 | T10 | P0 | Iris | Emit complete Iris compile catalog | PENDING | `T10 emit Iris program compile catalog` |
 | T11 | P0 | Vibris | Add compile_validate recipe | PENDING | `T11 add compile validation recipe` |
 | T12 | P0 | Vibris | Expand immutable benchmark provenance | PENDING | `T12 expand benchmark provenance and stale checks` |
@@ -699,7 +699,7 @@ Evidence:
 
 ### T09 — Define compile catalog runtime contract
 
-Status: `READY`
+Status: `BLOCKED`
 
 Dependencies: T08
 
@@ -737,11 +737,24 @@ Expected commit title: `T09 define compile validation catalog contract`
 
 Blockers:
 
-- None known.
+- The typed runtime query must be delegated through
+  `VibrisRuntimeAdapter -> ThreadBoundVibrisRuntimeAdapter -> VibrisRuntimeHost`, but
+  `core/src/main/kotlin/dev/vibris/core/ThreadBoundVibrisRuntimeAdapter.kt` still contains protected concurrent user
+  changes (`11/4` numstat). The protected-state contract forbids modifying or staging that file until the user change
+  is committed/merged or the user explicitly authorizes a narrowly separated overlap. A default empty/unavailable
+  catalog or reuse of the string-returning legacy inspection action would violate the truthful contract and the
+  strict no-compatibility requirement.
 
 Evidence:
 
-- Pending.
+- `2026-08-11`: the continuation re-read the complete ledger and verified Vibris `main` at
+  `7084bf440e2cc97f066a2fd03893954e2824e94d`, Iris `1.21.11-shaderdev` at
+  `7096295b3875a13b6f00607b6f30d0649bd4f68f`, every declared worktree, and empty staging areas.
+- The protected adapter and its test remain at their recorded `11/4` and `8/6` numstats. Source inspection proved
+  that `ThreadBoundVibrisRuntimeAdapter` is the sole production bridge from the public runtime adapter to
+  `VibrisRuntimeHost`; therefore an operational compile-catalog query cannot be added without overlapping the
+  protected file.
+- No product source, protected file, deployment, or process state was changed. T10 remains `PENDING`.
 
 ### T10 — Emit complete Iris compile catalog
 
@@ -1385,3 +1398,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T06 - required complete runtime-resolved shader settings, deterministic origins/default diff/hash, and propagated them through mutation/restoration provenance; API 6/6 and Core 95/95 passed - Commit title: T06 expose resolved shader settings contract`
 - `2026-08-11 - T07 - Iris snapshots active settings before preserve reloads and returns complete post-install values/defaults/origins/hash; bridge tests 10/10 and Iris offline build passed; external commit 7096295b3875a13b6f00607b6f30d0649bd4f68f - Commit title: T07 report effective shader settings from Iris`
 - `2026-08-11 - T08 - returned one terminal receipt per input action, separated generated preludes, retained grouped-capture indices, nested screenshot waits, and preserved partial receipts on failure; protocol Java 5/5, Core 97/97, focused 13/13, and native CTest 2/2 passed - Commit title: T08 return complete ordered action receipts`
+- `2026-08-11 - T09 blocked - operational compile-catalog query requires the still-dirty protected ThreadBound runtime adapter; no fallback or compatibility path was added and T10 was not started - Control-plane commit title: roadmap block T09 on protected runtime adapter`
