@@ -1,5 +1,6 @@
 package dev.vibris.core
 
+import dev.vibris.api.EffectiveShaderSettings
 import dev.vibris.api.ReloadResult
 import dev.vibris.api.RuntimeStatus
 import dev.vibris.protocol.v2.Action
@@ -74,7 +75,7 @@ class RuntimeLeaseStatusTest {
         val terminalWaiter = CompletableFuture.supplyAsync {
             engine.awaitStatus(StatusWaitCondition.STATUS_WAIT_CONDITION_JOB_TERMINAL, "cancel-safe", 2_000)
         }
-        reload.complete(ReloadResult.success(emptyList()))
+        reload.complete(ReloadResult.success(EffectiveShaderSettings.empty(), emptyList()))
         assertTrue(terminal.await(2, TimeUnit.SECONDS))
         val result = waiter.get(2, TimeUnit.SECONDS)
         assertTrue(result.satisfied)
@@ -123,7 +124,7 @@ class RuntimeLeaseStatusTest {
         assertTrue(baselineSession.terminal.await(2, TimeUnit.SECONDS))
 
         val candidate = source(pending)
-        runtime.reloads.add(ReloadResult.success(emptyList()))
+        runtime.reloads.add(ReloadResult.success(EffectiveShaderSettings.empty(), emptyList()))
         runtime.reloads.add(ReloadResult.failure(emptyList()))
         val candidateSession = recordingSession()
         engine.submit(candidateSession.session, loadJob("candidate", candidate, true))
@@ -143,7 +144,7 @@ class RuntimeLeaseStatusTest {
         val rejected = rejectedSession.messages.last { it.hasJobFailed() }.jobFailed
         assertTrue(rejected.error.code == ErrorCode.ERROR_CODE_SERVER_NOT_AVAILABLE)
 
-        runtime.reloads.add(ReloadResult.success(emptyList()))
+        runtime.reloads.add(ReloadResult.success(EffectiveShaderSettings.empty(), emptyList()))
         val recoverySession = recordingSession()
         engine.submit(recoverySession.session, recoveryJob("recover"))
         assertTrue(recoverySession.terminal.await(2, TimeUnit.SECONDS))

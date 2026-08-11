@@ -1,5 +1,6 @@
 package dev.vibris.core;
 
+import dev.vibris.api.EffectiveShaderSettings;
 import dev.vibris.api.ReloadResult;
 import dev.vibris.api.RuntimeStatus;
 import dev.vibris.protocol.v2.Action;
@@ -149,7 +150,7 @@ class ServerDescriptorTest {
         assertTrue(status.getActiveLease().getStartedAtUnixMs() > 0);
         assertEquals(1, status.getJobsCount());
         assertTrue(status.getTransitionsCount() <= 32);
-        reload.complete(ReloadResult.success(List.of()));
+        reload.complete(ReloadResult.success(EffectiveShaderSettings.empty(), List.of()));
         assertTrue(terminal.await(2, TimeUnit.SECONDS));
         engine.close();
     }

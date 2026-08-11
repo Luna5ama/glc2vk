@@ -31,6 +31,10 @@ interface VibrisRuntimeAdapter : AutoCloseable {
         cancellation: CancellationToken,
     ): CompletionStage<ContextApplyResult>
 
+    /**
+     * Reloads the active source. A null config preserves the runtime's current setting values.
+     * Every successful result must report the complete resolved setting set, including defaults and origins.
+     */
     fun reloadVibrisShaderpack(
         config: Map<String, String>?,
         cancellation: CancellationToken,

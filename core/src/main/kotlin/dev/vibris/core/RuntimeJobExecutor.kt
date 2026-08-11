@@ -4,6 +4,7 @@ import dev.vibris.api.CancellationToken
 import dev.vibris.api.CapturePlan
 import dev.vibris.api.CaptureResult
 import dev.vibris.api.ContextApplyResult
+import dev.vibris.api.EffectiveShaderSettings
 import dev.vibris.api.ReloadResult
 import dev.vibris.api.SceneContext
 import dev.vibris.api.TemporalResetResult
@@ -35,7 +36,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     private var activeContext: SceneContext? = null
 
     @Volatile
-    private var activeShaderSettings: Map<String, String>? = null
+    private var activeShaderSettings: EffectiveShaderSettings? = null
 
     @Volatile
     private var pendingRecovery: PendingRecovery? = null
@@ -171,7 +172,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         }
         val context = applyContext(job, progress, deadline)
         reset(job, progress, deadline)
-        return LoadResult(reload, context, settings)
+        return LoadResult(reload, context)
     }
 
     @Throws(Failure::class)
@@ -248,7 +249,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         progress.accept(JobStage.JOB_STAGE_COMPILING)
         probe.event(job.requestId, "RELOADING_SHADERS")
         val result = await(runtime.reloadVibrisShaderpack(config, job.cancellation.token()), job, deadline)
-        if (result.successful && config != null) activeShaderSettings = config.toMap()
+        if (result.successful) activeShaderSettings = result.effectiveSettings
         return result
     }
 
@@ -313,6 +314,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             val result = runtime.reloadVibrisShaderpack(null, CancellationToken.none())
                 .toCompletableFuture()
                 .join()
+            if (result.successful) activeShaderSettings = result.effectiveSettings
             return result.successful
         } catch (_: Exception) {
             return false
@@ -449,10 +451,14 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     private fun restore(expected: BenchmarkCaseIsolation.Snapshot): BenchmarkCaseIsolation.Snapshot {
         activator.restore(expected.source)
         if (expected.source != null) {
-            val reload = restoreAwait(runtime.reloadVibrisShaderpack(expected.shaderSettings, CancellationToken.none()))
+            val reload = restoreAwait(
+                runtime.reloadVibrisShaderpack(expected.shaderSettings!!.values(), CancellationToken.none()),
+            )
             check(reload.successful) { "The safe shader source or settings could not be reloaded." }
+            activeShaderSettings = reload.effectiveSettings
+        } else {
+            activeShaderSettings = null
         }
-        activeShaderSettings = expected.shaderSettings?.toMap()
         expected.scene?.let { scene ->
             val context = restoreAwait(runtime.ensureWorldAndContext(scene, CancellationToken.none()))
             check(context.successful && context.context == scene) { "The safe scene context could not be restored exactly." }
@@ -466,14 +472,18 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         check(expected.source?.snapshotSha256 == actual.source?.snapshotSha256) {
             "Restored source content does not match the safe snapshot."
         }
-        check(expected.shaderSettings == actual.shaderSettings) { "Restored shader settings do not match the safe snapshot." }
+        val actualSettings = actual.shaderSettings
+        check(expected.shaderSettings?.let { actualSettings != null && it.hasSameResolvedState(actualSettings) }
+            ?: (actualSettings == null)) {
+            "Restored shader settings do not match the safe snapshot."
+        }
         check(expected.scene == actual.scene) { "Restored scene does not match the safe snapshot." }
         return actual
     }
 
     private fun currentSnapshot(): BenchmarkCaseIsolation.Snapshot = BenchmarkCaseIsolation.Snapshot(
         activator.activeSnapshot(),
-        activeShaderSettings?.toMap(),
+        activeShaderSettings,
         activeContext,
     )
 
@@ -511,7 +521,6 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     data class LoadResult(
         val reload: ReloadResult,
         val context: ContextApplyResult,
-        val effectiveShaderSettings: Map<String, String>?,
     )
 
     class Failure internal constructor(

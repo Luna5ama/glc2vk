@@ -84,8 +84,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T03 | P0 | Vibris | Add truthful runtime lease and status waiting | DONE | `T03 expose runtime lease and status transitions` |
 | T04 | P0 | Vibris | Generalize durable resumable jobs | DONE | `T04 add durable resumable workflow jobs` |
 | T05 | P0 | Vibris | Add transactional restoration and recovery | DONE | `T05 make runtime mutations transactional` |
-| T06 | P0 | Vibris | Define effective shader settings contract | READY | `T06 expose resolved shader settings contract` |
-| T07 | P0 | Iris | Implement effective settings in Iris host | PENDING | `T07 report effective shader settings from Iris` |
+| T06 | P0 | Vibris | Define effective shader settings contract | DONE | `T06 expose resolved shader settings contract` |
+| T07 | P0 | Iris | Implement effective settings in Iris host | READY | `T07 report effective shader settings from Iris` |
 | T08 | P1 | Vibris | Return one ordered receipt per action | PENDING | `T08 return complete ordered action receipts` |
 | T09 | P0 | Vibris | Define compile catalog runtime contract | PENDING | `T09 define compile validation catalog contract` |
 | T10 | P0 | Iris | Emit complete Iris compile catalog | PENDING | `T10 emit Iris program compile catalog` |
@@ -508,7 +508,7 @@ Evidence:
 
 ### T06 — Define effective shader settings contract
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T05
 
@@ -550,11 +550,26 @@ Blockers:
 
 Evidence:
 
-- Pending.
+- Added the immutable `EffectiveShaderSettings` API contract with canonical name ordering, per-setting resolved value,
+  default value, changed-from-default derivation, and exhaustive `DEFAULT`, `PRESERVED_CURRENT`, `REQUEST_OVERRIDE`,
+  and `PRESET` origins. Duplicate or blank names and caller-supplied non-canonical hashes are rejected.
+- Defined a domain-separated, length-prefixed SHA-256 over the complete ordered name/value/default state. Origin is
+  intentionally excluded from state identity, so preserve, preset, and explicit override paths that resolve to the
+  same settings produce the same restoration hash while retaining different audit origins.
+- Removed the source-free success factory: every successful `ReloadResult` now requires a non-null complete effective
+  settings snapshot. Core stores only the runtime-returned snapshot for preserve and override reloads, emits its full
+  settings/default/diff/origin/hash in runtime-mutation receipts, and never derives effective state from request input.
+- Transaction snapshots and restoration receipts now carry the effective settings hash. Restoration reapplies the
+  returned resolved values, accepts an origin change only when name/value/default state is identical, and verifies the
+  runtime-returned post-restore snapshot before releasing ownership.
+- `2026-08-11`: `.\gradlew.bat :vibris-api:test :vibris-core:test --offline` passed with API 6/6 and Core 95/95
+  tests, zero failures, errors, or skips. Contract coverage rejects missing/invalid successful settings, proves
+  deterministic preserve/override origins and hashes, proves receipts use runtime values rather than request values,
+  and proves transactional restore replays the runtime-resolved baseline.
 
 ### T07 — Implement effective settings in Iris host
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T06
 
@@ -1311,7 +1326,7 @@ Queue order is authoritative and serial even where technical dependencies could 
 - [x] Shared runtime ownership, queue, progress, error history, readiness, waits, cancellation, and recovery are truthful.
 - [ ] Long jobs are durable, queryable, resumable when safe, and never duplicate completed or uncertain side effects.
 - [ ] All state-mutating validation restores source, effective settings, scene, and temporal state with receipts.
-- [ ] Preserve returns complete effective settings, origins, diff, and stable hash.
+- [x] Preserve returns complete effective settings, origins, diff, and stable hash.
 - [ ] Every input action produces exactly one ordered receipt.
 - [ ] Compile validation reports every intended program/pass and baseline diagnostic changes without GPU warmup.
 - [ ] Every result contains complete immutable provenance and correct shader-content stale semantics.
@@ -1336,3 +1351,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T02A inserted - T03 baseline exposed 44 Core files still importing the deleted v1 Java package and broader removed-v1 API usage; inserted a strict-v2 Core migration remediation before T03 - Control-plane commit title: roadmap insert T02A strict v2 Core remediation`
 - `2026-08-11 - T02A - migrated maintained Core directly to strict v2 jobs, status, actions, artifacts, and tests; removed v1-only benchmark isolation; protocol/Core tests passed with 83 Core tests and zero v1 references - Commit title: T02A migrate Core directly to strict v2`
 - `2026-08-11 - T03 - exposed authoritative runtime lease, fair cross-workspace queue, truthful readiness/error/transitions, safe cancellation, and event-driven status waits; Core 86/86 and native filtered CTest 7/7 passed - Commit title: T03 expose runtime lease and status transitions`
+- `2026-08-11 - T06 - required complete runtime-resolved shader settings, deterministic origins/default diff/hash, and propagated them through mutation/restoration provenance; API 6/6 and Core 95/95 passed - Commit title: T06 expose resolved shader settings contract`

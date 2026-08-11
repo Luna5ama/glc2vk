@@ -5,6 +5,7 @@ import dev.vibris.api.CancellationToken;
 import dev.vibris.api.CapturePlan;
 import dev.vibris.api.CaptureResult;
 import dev.vibris.api.ContextApplyResult;
+import dev.vibris.api.EffectiveShaderSettings;
 import dev.vibris.api.ReloadResult;
 import dev.vibris.api.ResourceCatalog;
 import dev.vibris.api.RuntimeStatus;
@@ -84,7 +85,9 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
         shaderConfigs.add(config == null ? null : Map.copyOf(config));
         beforeReloadResult.run();
         if (!reloadStages.isEmpty()) return reloadStages.removeFirst();
-        ReloadResult result = reloads.isEmpty() ? ReloadResult.success(List.of()) : reloads.removeFirst();
+        ReloadResult result = reloads.isEmpty()
+            ? ReloadResult.success(EffectiveShaderSettings.empty(), List.of())
+            : reloads.removeFirst();
         return completed(cancellation, result);
     }
 

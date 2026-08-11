@@ -12,6 +12,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -89,7 +90,7 @@ class RuntimeAdapterContractTest {
             ReloadResult.Severity.ERROR, "program.glsl", 7, "compile failed"
         );
         var diagnostics = new ArrayList<>(List.of(diagnostic));
-        ReloadResult reload = new ReloadResult(false, true, diagnostics);
+        ReloadResult reload = new ReloadResult(false, true, EffectiveShaderSettings.empty(), diagnostics);
         diagnostics.clear();
         assertEquals(List.of(diagnostic), reload.diagnostics());
         assertThrows(UnsupportedOperationException.class, () -> reload.diagnostics().clear());
@@ -99,6 +100,47 @@ class RuntimeAdapterContractTest {
         resources.clear();
         assertEquals(List.of(descriptor), catalog.resources());
         assertThrows(UnsupportedOperationException.class, () -> catalog.resources().clear());
+    }
+
+    @Test
+    void effectiveSettingsAreCompleteCanonicalAndDeterministic() {
+        var quality = new EffectiveShaderSettings.Setting(
+            "QUALITY", "high", "medium", EffectiveShaderSettings.Origin.REQUEST_OVERRIDE
+        );
+        var shadows = new EffectiveShaderSettings.Setting(
+            "SHADOWS", "true", "true", EffectiveShaderSettings.Origin.DEFAULT
+        );
+        var input = new ArrayList<>(List.of(shadows, quality));
+
+        EffectiveShaderSettings override = EffectiveShaderSettings.of(input);
+        input.clear();
+        assertEquals(List.of(quality, shadows), override.settings());
+        assertEquals(Map.of("QUALITY", "high", "SHADOWS", "true"), override.values());
+        assertEquals(List.of(quality), override.changedFromDefault());
+        assertThrows(UnsupportedOperationException.class, () -> override.settings().clear());
+
+        EffectiveShaderSettings preserved = EffectiveShaderSettings.of(List.of(
+            new EffectiveShaderSettings.Setting(
+                "SHADOWS", "true", "true", EffectiveShaderSettings.Origin.PRESERVED_CURRENT
+            ),
+            new EffectiveShaderSettings.Setting(
+                "QUALITY", "high", "medium", EffectiveShaderSettings.Origin.PRESERVED_CURRENT
+            )
+        ));
+        assertEquals(override.settingsSha256(), preserved.settingsSha256());
+        assertTrue(override.hasSameResolvedState(preserved));
+        assertNotEquals(override.settings(), preserved.settings());
+
+        assertThrows(IllegalArgumentException.class, () -> EffectiveShaderSettings.of(List.of(
+            quality,
+            new EffectiveShaderSettings.Setting(
+                "QUALITY", "low", "medium", EffectiveShaderSettings.Origin.PRESET
+            )
+        )));
+        assertThrows(IllegalArgumentException.class, () -> new EffectiveShaderSettings(
+            List.of(quality), "0".repeat(64)
+        ));
+        assertThrows(NullPointerException.class, () -> ReloadResult.success(null, List.of()));
     }
 
     @Test
@@ -116,7 +158,9 @@ class RuntimeAdapterContractTest {
         assertRecord(CapturePlan.class, "targets");
         assertRecord(CaptureResult.class, "frameId", "groups");
         assertRecord(ContextValidationResult.class, "valid", "errors");
-        assertRecord(ReloadResult.class, "successful", "activeStatePreserved", "diagnostics");
+        assertRecord(EffectiveShaderSettings.class, "settings", "settingsSha256");
+        assertRecord(EffectiveShaderSettings.Setting.class, "name", "value", "defaultValue", "origin");
+        assertRecord(ReloadResult.class, "successful", "activeStatePreserved", "effectiveSettings", "diagnostics");
         assertRecord(ResourceCatalog.class, "resources");
     }
 
@@ -146,7 +190,7 @@ class RuntimeAdapterContractTest {
         public CompletionStage<ReloadResult> reloadVibrisShaderpack(
             Map<String, String> config, CancellationToken cancellation
         ) {
-            return CompletableFuture.completedFuture(ReloadResult.success(List.of()));
+            return CompletableFuture.completedFuture(ReloadResult.success(EffectiveShaderSettings.empty(), List.of()));
         }
 
         @Override

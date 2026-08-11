@@ -1,5 +1,6 @@
 package dev.vibris.core
 
+import dev.vibris.api.EffectiveShaderSettings
 import dev.vibris.api.SceneContext
 import dev.vibris.protocol.v2.ErrorCode
 import dev.vibris.protocol.v2.JobSpec
@@ -50,7 +51,7 @@ internal class BenchmarkCaseIsolation private constructor(
 
     data class Snapshot(
         val source: SourceRegistry.Lease?,
-        val shaderSettings: Map<String, String>?,
+        val shaderSettings: EffectiveShaderSettings?,
         val scene: SceneContext?,
     )
 
@@ -64,7 +65,7 @@ internal class BenchmarkCaseIsolation private constructor(
         fun begin(
             job: CoreJob,
             activator: SourceActivator,
-            shaderSettings: Map<String, String>?,
+            shaderSettings: EffectiveShaderSettings?,
             scene: SceneContext?,
         ): BenchmarkCaseIsolation {
             val forced = when (job.submission.workloadCase) {
@@ -87,7 +88,7 @@ internal class BenchmarkCaseIsolation private constructor(
             } catch (failure: SourceActivator.Failure) {
                 throw RuntimeJobExecutor.Failure(failure.code, failure.message)
             }
-            val snapshot = Snapshot(source, shaderSettings?.let(Map<String, String>::toMap), scene)
+            val snapshot = Snapshot(source, shaderSettings, scene)
             if (changesSourceSettingsOrScene && (restoreOnSuccess || restoreOnError) &&
                 (snapshot.scene == null || snapshot.source != null && snapshot.shaderSettings == null)
             ) {
@@ -138,8 +139,8 @@ internal class BenchmarkCaseIsolation private constructor(
                 .setActualSourceUuid(actual.source?.uuid.orEmpty())
                 .setExpectedSourceSha256(expected.source?.snapshotSha256.orEmpty())
                 .setActualSourceSha256(actual.source?.snapshotSha256.orEmpty())
-                .setExpectedSettingsSha256(expected.shaderSettings?.let(BenchmarkProvenance::shaderConfigHash).orEmpty())
-                .setActualSettingsSha256(actual.shaderSettings?.let(BenchmarkProvenance::shaderConfigHash).orEmpty())
+                .setExpectedSettingsSha256(expected.shaderSettings?.settingsSha256.orEmpty())
+                .setActualSettingsSha256(actual.shaderSettings?.settingsSha256.orEmpty())
                 .setExpectedSceneSha256(expected.scene?.let(BenchmarkProvenance::sceneHash).orEmpty())
                 .setActualSceneSha256(actual.scene?.let(BenchmarkProvenance::sceneHash).orEmpty())
                 .setTemporalStateReset(temporalStateReset)

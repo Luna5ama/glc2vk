@@ -1,5 +1,6 @@
 package dev.vibris.core;
 
+import dev.vibris.api.EffectiveShaderSettings;
 import dev.vibris.api.ReloadResult;
 import dev.vibris.api.TemporalResetResult;
 import dev.vibris.protocol.v2.Action;
@@ -38,6 +39,15 @@ class RuntimeJobExecutorTest {
     void loadAppliesContextResetsTemporalStateAndReturnsTypedReceipts() throws Exception {
         Fixture fixture = new Fixture();
         Source source = fixture.source("A");
+        EffectiveShaderSettings runtimeSettings = EffectiveShaderSettings.of(List.of(
+            new EffectiveShaderSettings.Setting(
+                "SETTING_SAMPLE_COUNT",
+                "64",
+                "16",
+                EffectiveShaderSettings.Origin.PRESET
+            )
+        ));
+        fixture.runtime.reloads.add(ReloadResult.success(runtimeSettings, List.of()));
         CoreJob job = fixture.job(source, ActionSequence.newBuilder()
             .addActions(Action.newBuilder().setLoadShader(LoadShader.newBuilder()
                 .setSourceUuid(source.uuid)
@@ -57,6 +67,15 @@ class RuntimeJobExecutorTest {
             terminal.completed().getResult().getActionReceipts(0).getKind());
         assertEquals(source.uuid,
             terminal.completed().getResult().getActionReceipts(0).getRuntimeMutation().getSourceUuid());
+        var effective = terminal.completed().getResult().getActionReceipts(0)
+            .getRuntimeMutation().getEffectiveSettings();
+        assertEquals(runtimeSettings.settingsSha256(), effective.getSettingsSha256());
+        assertEquals("64", effective.getSettings(0).getValue());
+        assertEquals(dev.vibris.protocol.v2.ShaderSettingOrigin.SHADER_SETTING_ORIGIN_PRESET,
+            effective.getSettings(0).getOrigin());
+        assertTrue(effective.getSettings(0).getChangedFromDefault());
+        assertEquals(runtimeSettings.settingsSha256(),
+            terminal.completed().getResult().getRestoration().getActualSettingsSha256());
         assertEquals(ReceiptStatus.RECEIPT_STATUS_OK,
             terminal.completed().getResult().getActionReceipts(1).getStatus());
         assertEquals(3,
@@ -70,7 +89,7 @@ class RuntimeJobExecutorTest {
         fixture.activate(baseline);
         Source candidate = fixture.source("candidate");
         fixture.runtime.reloads.add(ReloadResult.failure(List.of(error("candidate failed"))));
-        fixture.runtime.reloads.add(ReloadResult.success(List.of()));
+        fixture.runtime.reloads.add(ReloadResult.success(EffectiveShaderSettings.empty(), List.of()));
 
         RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
             () -> fixture.executor.execute(fixture.activateJob(candidate), ignored -> {}));

@@ -1,6 +1,7 @@
 package dev.vibris.core
 
 import dev.vibris.api.CaptureResult
+import dev.vibris.api.EffectiveShaderSettings
 import dev.vibris.api.ReloadResult
 import dev.vibris.api.RuntimeAction
 import dev.vibris.api.VibrisRuntimeAdapter
@@ -25,7 +26,6 @@ internal class ActionJobExecutor(
 ) {
     @Throws(RuntimeJobExecutor.Failure::class)
     fun execute(job: CoreJob, progress: Consumer<JobStage>, deadline: Long): JobResult {
-        var reload = ReloadResult.success(emptyList())
         val action = captures.prepareActions(job, runtime.getResourceCatalog(), emptyList())
         val prepared = action.prepared
         val diagnostics = ArrayList<ReloadResult.Diagnostic>()
@@ -40,23 +40,23 @@ internal class ActionJobExecutor(
                         CaptureProgramBuilder.ActionType.LOAD -> {
                             val load = step.loadShader!!
                             val loaded = load(job, load, progress, deadline)
-                            reload = loaded.reload
+                            val reload = loaded.reload
                             diagnostics.addAll(reload.diagnostics)
                             prepared?.addDiagnostics(reload.diagnostics)
                             owner.await(runtime.executeAction(RuntimeAction.InspectShader), job, deadline)
                             receipts.add(
                                 success(step.actionIndex, ActionKind.ACTION_KIND_LOAD_SHADER)
-                                    .setRuntimeMutation(mutation(load.sourceUuid))
+                                    .setRuntimeMutation(mutation(load.sourceUuid, reload.effectiveSettings))
                                     .build(),
                             )
                         }
                         CaptureProgramBuilder.ActionType.ACTIVATE -> {
-                            reload = activate(job, step.sourceUuid!!, progress, deadline)
+                            val reload = activate(job, step.sourceUuid!!, progress, deadline)
                             diagnostics.addAll(reload.diagnostics)
                             prepared?.addDiagnostics(reload.diagnostics)
                             receipts.add(
                                 success(step.actionIndex, ActionKind.ACTION_KIND_ACTIVATE_SOURCE)
-                                    .setRuntimeMutation(mutation(step.sourceUuid))
+                                    .setRuntimeMutation(mutation(step.sourceUuid, reload.effectiveSettings))
                                     .build(),
                             )
                         }
@@ -181,8 +181,12 @@ internal class ActionJobExecutor(
     private fun captureKind(job: CoreJob, actionIndex: Int): ActionKind =
         RuntimeActionProtocol.kind(job.submission.actionSequence.getActions(actionIndex))
 
-    private fun mutation(sourceUuid: String): RuntimeMutationReceipt = RuntimeMutationReceipt.newBuilder()
+    private fun mutation(
+        sourceUuid: String,
+        effectiveSettings: EffectiveShaderSettings,
+    ): RuntimeMutationReceipt = RuntimeMutationReceipt.newBuilder()
         .setSourceUuid(sourceUuid)
+        .setEffectiveSettings(BenchmarkProvenance.effectiveSettings(effectiveSettings))
         .setCompletedAtUnixMs(System.currentTimeMillis())
         .build()
 

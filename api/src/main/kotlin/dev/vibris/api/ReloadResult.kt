@@ -4,8 +4,14 @@ package dev.vibris.api
 data class ReloadResult(
     val successful: Boolean,
     val activeStatePreserved: Boolean,
+    val effectiveSettings: EffectiveShaderSettings,
     @field:DefensiveSnapshot val diagnostics: List<Diagnostic>,
 ) {
+    init {
+        require(!successful || !activeStatePreserved) {
+            "A successful reload establishes a new verified active state"
+        }
+    }
 
     @JvmRecord
     data class Diagnostic(
@@ -27,15 +33,19 @@ data class ReloadResult(
 
     companion object {
         @JvmStatic
-        fun success(diagnostics: List<Diagnostic>): ReloadResult =
-            ReloadResult(true, false, java.util.List.copyOf(diagnostics))
+        fun success(
+            effectiveSettings: EffectiveShaderSettings,
+            diagnostics: List<Diagnostic>,
+        ): ReloadResult = ReloadResult(true, false, effectiveSettings, diagnostics)
 
         @JvmStatic
         fun failure(diagnostics: List<Diagnostic>): ReloadResult =
-            ReloadResult(false, false, java.util.List.copyOf(diagnostics))
+            ReloadResult(false, false, EffectiveShaderSettings.empty(), diagnostics)
 
         @JvmStatic
-        fun failurePreservingActiveState(diagnostics: List<Diagnostic>): ReloadResult =
-            ReloadResult(false, true, java.util.List.copyOf(diagnostics))
+        fun failurePreservingActiveState(
+            effectiveSettings: EffectiveShaderSettings,
+            diagnostics: List<Diagnostic>,
+        ): ReloadResult = ReloadResult(false, true, effectiveSettings, diagnostics)
     }
 }

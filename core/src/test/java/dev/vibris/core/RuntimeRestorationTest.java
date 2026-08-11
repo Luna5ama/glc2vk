@@ -1,5 +1,6 @@
 package dev.vibris.core;
 
+import dev.vibris.api.EffectiveShaderSettings;
 import dev.vibris.api.ReloadResult;
 import dev.vibris.protocol.v2.Action;
 import dev.vibris.protocol.v2.ActionSequence;
@@ -39,8 +40,18 @@ class RuntimeRestorationTest {
     @Test
     void successRestoresAndVerifiesTheSafeSnapshot() throws Exception {
         Fixture fixture = new Fixture();
+        EffectiveShaderSettings baselineSettings = settings("runtime-baseline", EffectiveShaderSettings.Origin.PRESET);
+        fixture.runtime.reloads.add(ReloadResult.success(baselineSettings, List.of()));
         Source baseline = fixture.bootstrap();
         Source candidate = fixture.source("candidate");
+        fixture.runtime.reloads.add(ReloadResult.success(
+            settings("runtime-candidate", EffectiveShaderSettings.Origin.REQUEST_OVERRIDE),
+            List.of()
+        ));
+        fixture.runtime.reloads.add(ReloadResult.success(
+            settings("runtime-baseline", EffectiveShaderSettings.Origin.REQUEST_OVERRIDE),
+            List.of()
+        ));
 
         TerminalResult result = fixture.executor.execute(fixture.mutatingJob(candidate), ignored -> {});
 
@@ -48,8 +59,17 @@ class RuntimeRestorationTest {
         assertEquals(ReceiptStatus.RECEIPT_STATUS_OK, receipt.getStatus());
         assertEquals(baseline.uuid, receipt.getExpectedSourceUuid());
         assertEquals(baseline.uuid, receipt.getActualSourceUuid());
+        assertEquals(baselineSettings.settingsSha256(), receipt.getExpectedSettingsSha256());
+        assertEquals(baselineSettings.settingsSha256(), receipt.getActualSettingsSha256());
+        assertEquals("runtime-baseline", fixture.runtime.shaderConfigs.getLast().get("QUALITY"));
         assertTrue(receipt.getTemporalStateReset());
         assertEquals(baseline.uuid, fixture.registry.activeUuid());
+    }
+
+    private static EffectiveShaderSettings settings(String value, EffectiveShaderSettings.Origin origin) {
+        return EffectiveShaderSettings.of(List.of(
+            new EffectiveShaderSettings.Setting("QUALITY", value, "default", origin)
+        ));
     }
 
     @Test
@@ -126,7 +146,7 @@ class RuntimeRestorationTest {
         Fixture fixture = new Fixture();
         fixture.bootstrap();
         Source candidate = fixture.source("candidate");
-        fixture.runtime.reloads.add(ReloadResult.success(List.of()));
+        fixture.runtime.reloads.add(ReloadResult.success(EffectiveShaderSettings.empty(), List.of()));
         fixture.runtime.reloads.add(ReloadResult.failure(List.of()));
 
         RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
@@ -145,7 +165,7 @@ class RuntimeRestorationTest {
         Fixture fixture = new Fixture();
         Source baseline = fixture.bootstrap();
         Source candidate = fixture.source("candidate");
-        fixture.runtime.reloads.add(ReloadResult.success(List.of()));
+        fixture.runtime.reloads.add(ReloadResult.success(EffectiveShaderSettings.empty(), List.of()));
         fixture.runtime.reloads.add(ReloadResult.failure(List.of()));
         assertThrows(RuntimeJobExecutor.Failure.class,
             () -> fixture.executor.execute(fixture.mutatingJob(candidate), ignored -> {}));
@@ -157,7 +177,7 @@ class RuntimeRestorationTest {
         assertTrue(failedRecovery.getMessage().contains("Do not release"));
         assertTrue(fixture.executor.hasPendingRecovery());
 
-        fixture.runtime.reloads.add(ReloadResult.success(List.of()));
+        fixture.runtime.reloads.add(ReloadResult.success(EffectiveShaderSettings.empty(), List.of()));
         TerminalResult recovered = fixture.executor.execute(fixture.recoveryJob(), ignored -> {});
         assertEquals(ReceiptStatus.RECEIPT_STATUS_OK,
             recovered.completed().getResult().getRestoration().getStatus());
