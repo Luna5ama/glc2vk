@@ -14,6 +14,7 @@ import dev.vibris.protocol.v2.ServerHello
 import dev.vibris.protocol.v2.ServerLimits
 import dev.vibris.protocol.v2.ServerState
 import dev.vibris.protocol.v2.ServerStatus
+import dev.vibris.protocol.v2.StatusDetail
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
@@ -32,63 +33,68 @@ internal class ServerDescriptor @JvmOverloads constructor(
     private val baseHello = ServerHello.newBuilder()
         .setServerVersion("vibris-core")
         .addCapabilities(Capability.CAPABILITY_CONTROL_STREAM)
+        .addCapabilities(Capability.CAPABILITY_RUNTIME_LEASE)
+        .addCapabilities(Capability.CAPABILITY_STATUS_WAIT)
         .setLimits(
             ServerLimits.newBuilder()
                 .setMaxSourceBytes(maxSourceBytes)
                 .setMaxSourceFiles(maxSourceFiles)
                 .setMaxQueuedJobs(maxQueuedJobs)
                 .setMaxActionsPerJob(maxActionsPerJob)
-                .setMaxStatusWaitMs(0),
+                .setMaxStatusWaitMs(VibrisCoreEngine.MAX_STATUS_WAIT_MS),
         )
         .setPendingSourceRoot(pending.toString())
         .build()
 
-    fun status(engine: VibrisCoreEngine): ServerStatus {
-        var activeJob = engine.activeJob()
-        var current = if (activeJob == null) runtimeStatus() else cachedRuntimeStatus()
-        if (!current.ready && activeJob == null) {
-            activeJob = engine.activeJob()
-            if (activeJob != null) current = cachedRuntimeStatus()
-        }
-        val coreReady = engine.ready()
-        val runtimeReady = current.ready
-        val available = coreReady && runtimeReady
-        val queueLength = engine.queueLength()
-        val phase = runtimePhase(coreReady, activeJob, runtimeReady)
-        val state = when {
-            !coreReady -> ServerState.SERVER_STATE_FAILED
-            activeJob != null || queueLength > 0 -> ServerState.SERVER_STATE_OCCUPIED
-            runtimeReady -> ServerState.SERVER_STATE_AVAILABLE
-            else -> ServerState.SERVER_STATE_FAILED
-        }
-        val activeSource = engine.activeSourceUuid().ifBlank { current.activeSourceUuid }
-        return ServerStatus.newBuilder()
-            .setState(state)
+    @JvmOverloads
+    fun status(
+        engine: VibrisCoreEngine,
+        detail: StatusDetail = StatusDetail.STATUS_DETAIL_FULL,
+    ): ServerStatus {
+        val observation = if (engine.activeJob() == null) runtimeStatus() else cachedRuntimeStatus()
+        engine.observeRuntimeStatus(observation.status, observation.unavailableDetail)
+        val snapshot = engine.statusSnapshot()
+        val current = snapshot.runtimeStatus
+        val shaderReady = current.ready && snapshot.phase != RuntimePhase.RUNTIME_PHASE_RELOADING_SHADERS
+        val builder = ServerStatus.newBuilder()
+            .setState(snapshot.state)
             .setReadiness(
                 RuntimeReadiness.newBuilder()
-                    .setCoreOnline(coreReady)
-                    .setMinecraftConnected(runtimeReady)
-                    .setWorldLoaded(runtimeReady && current.currentSaveId.isNotBlank())
-                    .setSceneApplied(runtimeReady && current.currentDimensionId.isNotBlank())
-                    .setShaderReloadComplete(available)
+                    .setCoreOnline(snapshot.coreOnline)
+                    .setMinecraftConnected(current.ready)
+                    .setWorldLoaded(current.ready && current.currentSaveId.isNotBlank())
+                    .setSceneApplied(current.ready && current.currentDimensionId.isNotBlank())
+                    .setShaderReloadComplete(shaderReady)
                     .setGpuTimingAvailable(false)
-                    .setPhase(phase)
-                    .setDetail(readinessDetail(coreReady, current)),
+                    .setPhase(snapshot.phase)
+                    .setDetail(readinessDetail(snapshot)),
             )
-            .setCanAcceptJob(coreReady)
-            .setCanStartJob(available && activeJob == null && queueLength == 0)
+            .setCanAcceptJob(snapshot.canAcceptJob)
+            .setCanStartJob(snapshot.canStartJob)
             .setArtifactCapacity(
                 ArtifactCapacity.newBuilder()
                     .setCapBytes(artifacts.quotaBytes())
                     .setUsedBytes(artifacts.usedBytes())
                     .setFits(artifacts.usedBytes() <= artifacts.quotaBytes()),
             )
-            .setActiveSourceUuid(activeSource)
-            .build()
+            .setActiveSourceUuid(snapshot.activeSourceUuid)
+        snapshot.activeLease?.let(builder::setActiveLease)
+
+        if (detail == StatusDetail.STATUS_DETAIL_JOBS || detail == StatusDetail.STATUS_DETAIL_FULL) {
+            builder.addAllQueue(snapshot.queue)
+            builder.addAllJobs(snapshot.jobs)
+        }
+        if (detail == StatusDetail.STATUS_DETAIL_FULL) {
+            snapshot.lastError?.let(builder::setLastError)
+            builder.addAllTransitions(snapshot.transitions)
+        } else if (snapshot.state == ServerState.SERVER_STATE_FAILED) {
+            snapshot.lastError?.let(builder::setLastError)
+        }
+        return builder.build()
     }
 
     fun hello(engine: VibrisCoreEngine): ServerHello = baseHello.toBuilder()
-        .setStatus(status(engine))
+        .setStatus(status(engine, StatusDetail.STATUS_DETAIL_SUMMARY))
         .build()
 
     fun resources(): ResourceCatalog {
@@ -114,47 +120,37 @@ internal class ServerDescriptor @JvmOverloads constructor(
         return catalog.build()
     }
 
-    private fun runtimeStatus(): RuntimeStatus {
+    private fun runtimeStatus(): Observation {
         val current = try {
             runtime.getStatus().toCompletableFuture().get(5, TimeUnit.SECONDS)
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
-            unavailable()
-        } catch (_: Exception) {
-            unavailable()
+            return Observation(unavailable(), "Runtime status query was interrupted.")
+        } catch (failure: Exception) {
+            return Observation(
+                unavailable(),
+                "Runtime status query failed: " +
+                    (failure.message?.takeIf(String::isNotBlank) ?: failure.javaClass.simpleName),
+            )
         }
-        if (current.ready) lastReadyStatus = current
-        return current
+        if (current.ready) {
+            lastReadyStatus = current
+            return Observation(current, "")
+        }
+        return Observation(current, "Minecraft runtime reported unavailable.")
     }
 
-    private fun cachedRuntimeStatus(): RuntimeStatus = lastReadyStatus ?: unavailable()
+    private fun cachedRuntimeStatus(): Observation = lastReadyStatus?.let { Observation(it, "") }
+        ?: Observation(unavailable(), "No ready runtime status has been observed.")
 
-    private fun runtimePhase(
-        coreReady: Boolean,
-        activeJob: VibrisCoreEngine.ActiveJob?,
-        runtimeReady: Boolean,
-    ): RuntimePhase {
-        if (!coreReady) return RuntimePhase.RUNTIME_PHASE_FAILED
-        if (activeJob == null) {
-            return if (runtimeReady) RuntimePhase.RUNTIME_PHASE_AVAILABLE else RuntimePhase.RUNTIME_PHASE_DISCONNECTED
-        }
-        return when (activeJob.stage) {
-            dev.vibris.protocol.v2.JobStage.JOB_STAGE_ACTIVATING_SOURCE,
-            dev.vibris.protocol.v2.JobStage.JOB_STAGE_COMPILING,
-            -> RuntimePhase.RUNTIME_PHASE_RELOADING_SHADERS
-            dev.vibris.protocol.v2.JobStage.JOB_STAGE_LOADING_WORLD -> RuntimePhase.RUNTIME_PHASE_LOADING_WORLD
-            dev.vibris.protocol.v2.JobStage.JOB_STAGE_APPLYING_CONTEXT -> RuntimePhase.RUNTIME_PHASE_APPLYING_SCENE
-            dev.vibris.protocol.v2.JobStage.JOB_STAGE_RESTORING -> RuntimePhase.RUNTIME_PHASE_RESTORING
-            dev.vibris.protocol.v2.JobStage.JOB_STAGE_RECOVERING -> RuntimePhase.RUNTIME_PHASE_RECOVERING
-            else -> RuntimePhase.RUNTIME_PHASE_EXECUTING
-        }
-    }
-
-    private fun readinessDetail(coreReady: Boolean, current: RuntimeStatus): String = when {
-        !coreReady -> "Core source activation is unavailable."
-        !current.ready -> "Minecraft runtime is unavailable."
+    private fun readinessDetail(snapshot: VibrisCoreEngine.StatusSnapshot): String = when {
+        !snapshot.coreOnline -> "Core source activation is unavailable."
+        snapshot.activeLease != null ->
+            "Runtime lease ${snapshot.activeLease.leaseId} is owned by workspace ${snapshot.activeLease.workspaceId}."
+        snapshot.queue.isNotEmpty() -> "Runtime work is queued."
+        !snapshot.runtimeStatus.ready -> snapshot.lastError?.message ?: "Minecraft runtime is unavailable."
         else -> "Runtime is available."
-    }
+    }.take(512)
 
     private fun resourceKind(kind: dev.vibris.api.ResourceCatalog.ResourceKind): ResourceKind = when (kind) {
         dev.vibris.api.ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER ->
@@ -166,4 +162,6 @@ internal class ServerDescriptor @JvmOverloads constructor(
     }
 
     private fun unavailable(): RuntimeStatus = RuntimeStatus(false, "", "", "")
+
+    private data class Observation(val status: RuntimeStatus, val unavailableDetail: String)
 }

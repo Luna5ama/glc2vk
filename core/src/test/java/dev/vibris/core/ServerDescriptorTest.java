@@ -14,6 +14,7 @@ import dev.vibris.protocol.v2.RuntimePhase;
 import dev.vibris.protocol.v2.SceneContext;
 import dev.vibris.protocol.v2.ServerMessage;
 import dev.vibris.protocol.v2.ServerState;
+import dev.vibris.protocol.v2.StatusDetail;
 import dev.vibris.protocol.v2.SubmitJob;
 import io.grpc.stub.StreamObserver;
 import org.junit.jupiter.api.Test;
@@ -68,7 +69,11 @@ class ServerDescriptorTest {
 
         var hello = descriptor.hello(engine);
 
-        assertEquals(List.of(Capability.CAPABILITY_CONTROL_STREAM), hello.getCapabilitiesList());
+        assertEquals(List.of(
+            Capability.CAPABILITY_CONTROL_STREAM,
+            Capability.CAPABILITY_RUNTIME_LEASE,
+            Capability.CAPABILITY_STATUS_WAIT), hello.getCapabilitiesList());
+        assertEquals(VibrisCoreEngine.MAX_STATUS_WAIT_MS, hello.getLimits().getMaxStatusWaitMs());
         assertEquals("vibris-core", hello.getServerVersion());
         assertEquals(ServerState.SERVER_STATE_AVAILABLE, hello.getStatus().getState());
         engine.close();
@@ -127,12 +132,22 @@ class ServerDescriptorTest {
         submit(engine, session, message);
         assertTrue(compiling.await(2, TimeUnit.SECONDS));
         runtime.status = new RuntimeStatus(false, "", "", "");
-        var status = descriptor.status(engine);
+        var status = descriptor.status(engine, StatusDetail.STATUS_DETAIL_FULL);
 
         assertEquals(1, runtime.statusCalls);
         assertEquals(ServerState.SERVER_STATE_OCCUPIED, status.getState());
         assertEquals(RuntimePhase.RUNTIME_PHASE_RELOADING_SHADERS, status.getReadiness().getPhase());
         assertFalse(status.getCanStartJob());
+        assertTrue(status.hasActiveLease());
+        assertEquals(WORKSPACE_ID, status.getActiveLease().getWorkspaceId());
+        assertEquals("long-reload", status.getActiveLease().getJobId());
+        assertEquals("long-reload", status.getActiveLease().getRequestId());
+        assertEquals("action_sequence", status.getActiveLease().getOperation());
+        assertEquals(JobStage.JOB_STAGE_COMPILING, status.getActiveLease().getStage());
+        assertEquals(pending.toString(), status.getActiveLease().getWorktreeRoot());
+        assertTrue(status.getActiveLease().getStartedAtUnixMs() > 0);
+        assertEquals(1, status.getJobsCount());
+        assertTrue(status.getTransitionsCount() <= 32);
         reload.complete(ReloadResult.success(List.of()));
         assertTrue(terminal.await(2, TimeUnit.SECONDS));
         engine.close();
@@ -147,7 +162,9 @@ class ServerDescriptorTest {
             .setRequestedRevision("workspace")
             .setResolvedRevision("a".repeat(40))
             .setOrigin(dev.vibris.protocol.v2.SourceOrigin.newBuilder()
-                .setWorkspace(dev.vibris.protocol.v2.WorkspaceOrigin.newBuilder().setDisplayName("fixture")))
+                .setWorkspace(dev.vibris.protocol.v2.WorkspaceOrigin.newBuilder()
+                    .setDisplayName("fixture")
+                    .setWorktreeRoot(pending.toString())))
             .setFileCount(1)
             .setTotalBytes(Files.size(file))
             .build();

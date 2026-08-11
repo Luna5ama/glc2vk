@@ -81,8 +81,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T01 | P0 | Vibris | Replace protocol with strict v2 wire contract | DONE | `T01 replace control protocol with strict v2` |
 | T02 | P0 | Vibris | Publish compact typed MCP v2 tools | DONE | `T02 publish compact typed MCP v2 tools` |
 | T02A | P0 | Vibris | Restore a strict v2 Core compilation baseline | DONE | `T02A migrate Core directly to strict v2` |
-| T03 | P0 | Vibris | Add truthful runtime lease and status waiting | READY | `T03 expose runtime lease and status transitions` |
-| T04 | P0 | Vibris | Generalize durable resumable jobs | PENDING | `T04 add durable resumable workflow jobs` |
+| T03 | P0 | Vibris | Add truthful runtime lease and status waiting | DONE | `T03 expose runtime lease and status transitions` |
+| T04 | P0 | Vibris | Generalize durable resumable jobs | READY | `T04 add durable resumable workflow jobs` |
 | T05 | P0 | Vibris | Add transactional restoration and recovery | PENDING | `T05 make runtime mutations transactional` |
 | T06 | P0 | Vibris | Define effective shader settings contract | PENDING | `T06 expose resolved shader settings contract` |
 | T07 | P0 | Iris | Implement effective settings in Iris host | PENDING | `T07 report effective shader settings from Iris` |
@@ -334,7 +334,7 @@ Evidence:
 
 ### T03 — Add truthful runtime lease and status waiting
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T02A
 
@@ -380,11 +380,21 @@ Blockers:
 
 Evidence:
 
-- Pending.
+- `FairJobScheduler` now publishes the single active runtime owner plus a deterministic cross-workspace round-robin queue; the regression fixture held workspace A's first lease, queued A then B, observed positions B=1/A=2, and executed A1/B1/A2.
+- `ServerDescriptor` advertises strict-v2 `RUNTIME_LEASE` and `STATUS_WAIT`, separates `can_accept_job` from `can_start_job`, reports the authoritative owner/request/worktree/operation/stage/start time/cancellation state, and omits optional ETA when no truthful estimate exists.
+- Core status now exposes bounded job summaries, recovery-bearing last-error metadata, and the newest 32 state/phase transitions; FULL/JOBS/SUMMARY detail levels do not invent unavailable GPU-timing readiness.
+- Cancellation marks the active lease before runtime completion and does not release it until the blocked runtime future reaches a safe completion; synchronous adapter cancellation is normalized to a terminal v2 `CANCELLED` result.
+- Both `CAN_START_JOB` and `JOB_TERMINAL` waits wake from monitor notifications on matching state transitions; a zero-duration occupied wait returns a bounded timeout receipt without a polling loop.
+- `mcp/src/test/cpp/grpc_request_ownership_tests.cpp` was ported directly from removed v1 resume messages to strict-v2 `ResumeJob` and non-terminal `JobStateSnapshot` ownership semantics; no compatibility path was added.
+- `mcp/src/test/cpp/state_tests.cpp` proves protobuf-to-MCP JSON preservation of lease ownership, cancellation, fair queue position, transition history, last-error recovery advice, and wait flags.
+- `.\gradlew.bat :vibris-core:test --offline --console=plain` passed with 86 tests.
+- Visual Studio CMake build passed for `vibris-state-tests` and `vibris-grpc-request-ownership-tests`; `ctest --preset release -R "RequestScoped|Ownership|Status|Lease|Transition"` passed 7/7 scenarios (run with process-local PowerShell execution-policy bypass so the existing `FakeServerStatus` script could execute).
+- Protected `ThreadBoundVibrisRuntimeAdapter.kt` and `ThreadBoundVibrisRuntimeAdapterTest.kt` remained outside task staging with their pre-existing `11/4` and `8/6` numstat; untracked `capture\a.spv` also remained outside staging.
+- Commit: this task's commit with subject `T03 expose runtime lease and status transitions`.
 
 ### T04 — Generalize durable resumable jobs
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T03
 
@@ -1283,7 +1293,7 @@ Queue order is authoritative and serial even where technical dependencies could 
 
 - [x] MCP publishes exactly the eight typed v2 tools and never duplicates the structured payload.
 - [ ] No affected v1 compatibility parser, alias, adapter, fallback, migration, dual-read, or dual-write remains.
-- [ ] Shared runtime ownership, queue, progress, error history, readiness, waits, cancellation, and recovery are truthful.
+- [x] Shared runtime ownership, queue, progress, error history, readiness, waits, cancellation, and recovery are truthful.
 - [ ] Long jobs are durable, queryable, resumable when safe, and never duplicate completed or uncertain side effects.
 - [ ] All state-mutating validation restores source, effective settings, scene, and temporal state with receipts.
 - [ ] Preserve returns complete effective settings, origins, diff, and stable hash.
@@ -1310,3 +1320,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T02 - published exactly eight typed MCP v2 tools; native CTest 5/5 and direct schema/stdio fixtures passed; removed old control client and v1 stdio fixture dependency - Commit title: T02 publish compact typed MCP v2 tools`
 - `2026-08-11 - T02A inserted - T03 baseline exposed 44 Core files still importing the deleted v1 Java package and broader removed-v1 API usage; inserted a strict-v2 Core migration remediation before T03 - Control-plane commit title: roadmap insert T02A strict v2 Core remediation`
 - `2026-08-11 - T02A - migrated maintained Core directly to strict v2 jobs, status, actions, artifacts, and tests; removed v1-only benchmark isolation; protocol/Core tests passed with 83 Core tests and zero v1 references - Commit title: T02A migrate Core directly to strict v2`
+- `2026-08-11 - T03 - exposed authoritative runtime lease, fair cross-workspace queue, truthful readiness/error/transitions, safe cancellation, and event-driven status waits; Core 86/86 and native filtered CTest 7/7 passed - Commit title: T03 expose runtime lease and status transitions`

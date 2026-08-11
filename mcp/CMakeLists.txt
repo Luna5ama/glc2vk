@@ -274,7 +274,8 @@ if(BUILD_TESTING)
             RequestScopedWorktreeRouting
             TypedPresetDiscoveryAndRequestScene
             ToolMetadataIsRequestScoped
-            ResourceListsAreEmpty)
+            ResourceListsAreEmpty
+            StatusLeaseTransitionMapping)
         add_test(NAME ${scenario} COMMAND vibris-state-tests ${scenario})
     endforeach()
 
@@ -341,8 +342,8 @@ if(BUILD_TESTING)
         PROPERTIES RUN_SERIAL TRUE TIMEOUT 30)
 
     foreach(scenario
-            AcceptedRequestReconnectsWithResume
-            ResumeNotFoundFinishesWithoutResubmit)
+            AcceptedRequestOwnershipReconnectsWithResumeJob
+            JobStateOwnershipSnapshotRemainsPending)
         add_test(NAME ${scenario} COMMAND vibris-grpc-request-ownership-tests ${scenario})
     endforeach()
 

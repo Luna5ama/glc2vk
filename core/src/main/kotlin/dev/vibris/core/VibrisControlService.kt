@@ -14,6 +14,8 @@ import dev.vibris.protocol.v2.ListResourcesResponse
 import dev.vibris.protocol.v2.Pong
 import dev.vibris.protocol.v2.ScenePreset
 import dev.vibris.protocol.v2.ServerMessage
+import dev.vibris.protocol.v2.StatusDetail
+import dev.vibris.protocol.v2.StatusWaitCondition
 import dev.vibris.protocol.v2.ValidateContextRequest
 import dev.vibris.protocol.v2.ValidateContextResponse
 import dev.vibris.protocol.v2.VibrisControlGrpc
@@ -43,6 +45,8 @@ class VibrisControlService internal constructor(
         runtime,
         configuration.maxSourceBytes,
         configuration.maxSourceFiles,
+        configuration.maxGlobalQueue,
+        configuration.maxActionsPerJob,
     )
 
     internal constructor(
@@ -172,13 +176,39 @@ class VibrisControlService internal constructor(
         request: GetStatusRequest,
         observer: StreamObserver<GetStatusResponse>,
     ) {
-        val status = descriptor.status(engine)
-        observer.onNext(
-            GetStatusResponse.newBuilder()
-                .setProtocolVersion(ProtocolMessages.V2)
-                .setStatus(status)
-                .build(),
-        )
+        val detail = request.detail.takeUnless { it == StatusDetail.STATUS_DETAIL_UNSPECIFIED }
+            ?: StatusDetail.STATUS_DETAIL_SUMMARY
+        descriptor.status(engine, detail)
+        val wait = request.waitUntil
+        if (wait == StatusWaitCondition.STATUS_WAIT_CONDITION_JOB_TERMINAL &&
+            (!request.hasJobId() || request.jobId.isBlank())
+        ) {
+            observer.onError(Status.INVALID_ARGUMENT.withDescription("JOB_ID_REQUIRED").asRuntimeException())
+            return
+        }
+        val result = try {
+            if (wait == StatusWaitCondition.STATUS_WAIT_CONDITION_UNSPECIFIED) {
+                null
+            } else {
+                engine.awaitStatus(
+                    wait,
+                    request.jobId,
+                    minOf(request.timeoutMs, VibrisCoreEngine.MAX_STATUS_WAIT_MS),
+                )
+            }
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            observer.onError(Status.CANCELLED.withDescription("STATUS_WAIT_INTERRUPTED").asRuntimeException())
+            return
+        }
+        val response = GetStatusResponse.newBuilder()
+            .setProtocolVersion(ProtocolMessages.V2)
+            .setStatus(descriptor.status(engine, detail))
+        if (result != null) {
+            response.setWaitSatisfied(result.satisfied)
+            response.setWaitTimedOut(result.timedOut)
+        }
+        observer.onNext(response.build())
         observer.onCompleted()
     }
 

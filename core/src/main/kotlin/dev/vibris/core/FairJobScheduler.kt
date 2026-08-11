@@ -3,14 +3,17 @@ package dev.vibris.core
 import java.util.ArrayDeque
 import java.util.LinkedHashMap
 
-internal class FairJobScheduler(private val capacity: Int = CAPACITY) : AutoCloseable {
+internal class FairJobScheduler(
+    private val capacity: Int = CAPACITY,
+    private val stateChanged: () -> Unit = {},
+) : AutoCloseable {
     private val queues = LinkedHashMap<String, ArrayDeque<Entry>>()
     private val workspaceRing = ArrayDeque<String>()
     private val worker = Thread(::workLoop, "Vibris Core Scheduler").apply {
         isDaemon = true
         start()
     }
-    private var activeWorkspace: String? = null
+    private var active: ActiveJob? = null
     private var queued = 0
     private var peakSize = 0
     private var closed = false
@@ -19,51 +22,69 @@ internal class FairJobScheduler(private val capacity: Int = CAPACITY) : AutoClos
         require(capacity > 0) { "capacity must be positive" }
     }
 
-    @Synchronized
-    fun submit(requestId: String?, workspaceId: String?, task: Runnable?): Boolean {
-        val request = requireId(requestId, "request ID")
-        val workspace = requireId(workspaceId, "workspace ID")
+    fun submit(metadata: JobMetadata, task: Runnable?): Submission {
         val requiredTask = requireNotNull(task) { "task" }
-        if (closed || queued >= capacity) {
-            return false
+        val result = synchronized(this) {
+            requireMetadata(metadata)
+            if (closed || queued >= capacity) {
+                return@synchronized Submission(false, 0)
+            }
+            queues.computeIfAbsent(metadata.workspaceId) { ArrayDeque() }
+                .addLast(Entry(metadata, requiredTask))
+            queued++
+            peakSize = maxOf(peakSize, queued)
+            if (metadata.workspaceId != active?.metadata?.workspaceId &&
+                !workspaceRing.contains(metadata.workspaceId)
+            ) {
+                workspaceRing.addLast(metadata.workspaceId)
+            }
+            monitorNotifyAll()
+            val position = orderedQueue().indexOfFirst { it.requestId == metadata.requestId } + 1
+            Submission(true, position)
         }
+        if (result.accepted) stateChanged()
+        return result
+    }
 
-        queues.computeIfAbsent(workspace) { ArrayDeque() }
-            .addLast(Entry(request, workspace, requiredTask))
-        queued++
-        peakSize = maxOf(peakSize, queued)
-        if (workspace != activeWorkspace && !workspaceRing.contains(workspace)) {
-            workspaceRing.addLast(workspace)
+    fun cancel(requestId: String?): Boolean {
+        val request = requireId(requestId, "request ID")
+        val cancelled = synchronized(this) {
+            val workspaces = queues.entries.iterator()
+            while (workspaces.hasNext()) {
+                val candidate = workspaces.next()
+                val jobs = candidate.value.iterator()
+                while (jobs.hasNext()) {
+                    if (jobs.next().metadata.requestId != request) continue
+                    jobs.remove()
+                    queued--
+                    if (candidate.value.isEmpty() && candidate.key != active?.metadata?.workspaceId) {
+                        workspaces.remove()
+                        workspaceRing.remove(candidate.key)
+                    }
+                    return@synchronized true
+                }
+            }
+            false
         }
-        monitorNotifyAll()
-        return true
+        if (cancelled) stateChanged()
+        return cancelled
     }
 
     @Synchronized
-    fun cancel(requestId: String?): Boolean {
-        val request = requireId(requestId, "request ID")
-        val workspaces = queues.entries.iterator()
-        while (workspaces.hasNext()) {
-            val candidate = workspaces.next()
-            val jobs = candidate.value.iterator()
-            while (jobs.hasNext()) {
-                if (jobs.next().requestId != request) {
-                    continue
-                }
-                jobs.remove()
-                queued--
-                if (candidate.value.isEmpty() && candidate.key != activeWorkspace) {
-                    workspaces.remove()
-                    workspaceRing.remove(candidate.key)
-                }
-                return true
-            }
-        }
-        return false
+    fun snapshot(): Snapshot {
+        val ordered = orderedQueue()
+        return Snapshot(
+            active,
+            ordered.mapIndexed { index, metadata -> QueuedJob(metadata, index + 1) },
+            closed,
+        )
     }
 
     @Synchronized
     fun size(): Int = queued
+
+    @Synchronized
+    fun canAccept(): Boolean = !closed && queued < capacity
 
     @Synchronized
     fun peakSize(): Int = peakSize
@@ -72,15 +93,17 @@ internal class FairJobScheduler(private val capacity: Int = CAPACITY) : AutoClos
     fun isClosed(): Boolean = closed
 
     override fun close() {
-        synchronized(this) {
-            if (!closed) {
+        val changed = synchronized(this) {
+            if (closed) {
+                false
+            } else {
                 closed = true
                 monitorNotifyAll()
+                true
             }
         }
-        if (Thread.currentThread() == worker) {
-            return
-        }
+        if (changed) stateChanged()
+        if (Thread.currentThread() == worker) return
 
         var interrupted = false
         while (worker.isAlive) {
@@ -90,9 +113,7 @@ internal class FairJobScheduler(private val capacity: Int = CAPACITY) : AutoClos
                 interrupted = true
             }
         }
-        if (interrupted) {
-            Thread.currentThread().interrupt()
-        }
+        if (interrupted) Thread.currentThread().interrupt()
     }
 
     private fun workLoop() {
@@ -103,6 +124,7 @@ internal class FairJobScheduler(private val capacity: Int = CAPACITY) : AutoClos
                 continue
             } ?: return
 
+            stateChanged()
             try {
                 job.task.run()
             } catch (failure: RuntimeException) {
@@ -110,7 +132,8 @@ internal class FairJobScheduler(private val capacity: Int = CAPACITY) : AutoClos
             } catch (failure: Error) {
                 worker.uncaughtExceptionHandler.uncaughtException(worker, failure)
             } finally {
-                finish(job.workspaceId)
+                finish(job.metadata.workspaceId)
+                stateChanged()
             }
         }
     }
@@ -119,29 +142,52 @@ internal class FairJobScheduler(private val capacity: Int = CAPACITY) : AutoClos
     @Throws(InterruptedException::class)
     private fun take(): Entry? {
         while (workspaceRing.isEmpty()) {
-            if (closed && queued == 0) {
-                return null
-            }
+            if (closed && queued == 0) return null
             monitorWait()
         }
         val workspaceId = workspaceRing.removeFirst()
         val workspaceQueue = queues.getValue(workspaceId)
         val job = workspaceQueue.removeFirst()
         queued--
-        activeWorkspace = workspaceId
+        active = ActiveJob(job.metadata, System.currentTimeMillis())
         return job
     }
 
     @Synchronized
     private fun finish(workspaceId: String) {
-        activeWorkspace = null
-        val workspaceQueue = queues.getValue(workspaceId)
-        if (workspaceQueue.isEmpty()) {
+        active = null
+        val workspaceQueue = queues[workspaceId]
+        if (workspaceQueue == null || workspaceQueue.isEmpty()) {
             queues.remove(workspaceId)
-        } else {
+        } else if (!workspaceRing.contains(workspaceId)) {
             workspaceRing.addLast(workspaceId)
         }
         monitorNotifyAll()
+    }
+
+    @Synchronized
+    private fun orderedQueue(): List<JobMetadata> {
+        if (queued == 0) return emptyList()
+        val copies = LinkedHashMap<String, ArrayDeque<JobMetadata>>()
+        queues.forEach { (workspace, jobs) ->
+            if (jobs.isNotEmpty()) copies[workspace] = ArrayDeque(jobs.map(Entry::metadata))
+        }
+        val ring = ArrayDeque(workspaceRing)
+        val activeWorkspace = active?.metadata?.workspaceId
+        if (activeWorkspace != null && !ring.contains(activeWorkspace) &&
+            copies[activeWorkspace]?.isNotEmpty() == true
+        ) {
+            ring.addLast(activeWorkspace)
+        }
+        val ordered = ArrayList<JobMetadata>(queued)
+        while (ring.isNotEmpty()) {
+            val workspace = ring.removeFirst()
+            val jobs = copies[workspace] ?: continue
+            if (jobs.isEmpty()) continue
+            ordered.add(jobs.removeFirst())
+            if (jobs.isNotEmpty()) ring.addLast(workspace)
+        }
+        return ordered
     }
 
     @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
@@ -155,15 +201,43 @@ internal class FairJobScheduler(private val capacity: Int = CAPACITY) : AutoClos
     }
 
     @JvmRecord
-    private data class Entry(val requestId: String, val workspaceId: String, val task: Runnable)
+    data class JobMetadata(
+        val requestId: String,
+        val workspaceId: String,
+        val jobId: String,
+        val worktreeRoot: String,
+        val operation: String,
+        val queuedAtUnixMs: Long,
+    )
+
+    @JvmRecord
+    data class ActiveJob(val metadata: JobMetadata, val startedAtUnixMs: Long)
+
+    @JvmRecord
+    data class QueuedJob(val metadata: JobMetadata, val position: Int)
+
+    @JvmRecord
+    data class Snapshot(val active: ActiveJob?, val queued: List<QueuedJob>, val closed: Boolean)
+
+    @JvmRecord
+    data class Submission(val accepted: Boolean, val position: Int)
+
+    @JvmRecord
+    private data class Entry(val metadata: JobMetadata, val task: Runnable)
 
     companion object {
         const val CAPACITY = 32
 
+        private fun requireMetadata(metadata: JobMetadata) {
+            requireId(metadata.requestId, "request ID")
+            requireId(metadata.workspaceId, "workspace ID")
+            requireId(metadata.jobId, "job ID")
+            requireId(metadata.operation, "operation")
+            require(metadata.queuedAtUnixMs >= 0) { "queued timestamp must not be negative" }
+        }
+
         private fun requireId(value: String?, name: String): String {
-            if (value.isNullOrBlank()) {
-                throw IllegalArgumentException("$name must not be blank")
-            }
+            if (value.isNullOrBlank()) throw IllegalArgumentException("$name must not be blank")
             return value
         }
     }

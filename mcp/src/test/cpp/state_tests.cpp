@@ -3,6 +3,7 @@
 #include "git_executable_resolver.hpp"
 #include "mcp_backend.hpp"
 #include "mcp_stdio_server.hpp"
+#include "result_mapper.hpp"
 #include "state_error.hpp"
 #include "tool_registry.hpp"
 #include "workspace_identity_store.hpp"
@@ -38,6 +39,7 @@
 namespace fs = std::filesystem;
 using vibris::mcp::JobContext;
 using vibris::mcp::StateError;
+namespace proto = ::vibris::control::v2;
 
 namespace {
 
@@ -1025,8 +1027,63 @@ void resource_lists_are_empty() {
             "resources/templates/list must return an empty resource template array.");
 }
 
+void status_lease_transition_mapping() {
+    proto::GetStatusResponse response;
+    response.mutable_protocol_version()->set_major(2);
+    response.mutable_protocol_version()->set_minor(0);
+    response.set_wait_satisfied(true);
+    auto* status = response.mutable_status();
+    status->set_state(proto::SERVER_STATE_OCCUPIED);
+    status->set_can_accept_job(true);
+    status->set_can_start_job(false);
+    status->mutable_readiness()->set_phase(proto::RUNTIME_PHASE_RELOADING_SHADERS);
+    auto* lease = status->mutable_active_lease();
+    lease->set_lease_id("lease-a");
+    lease->set_workspace_id("workspace-a");
+    lease->set_worktree_root("I:/fixture/a");
+    lease->set_job_id("job-a");
+    lease->set_request_id("request-a");
+    lease->set_operation("action_sequence");
+    lease->set_stage(proto::JOB_STAGE_COMPILING);
+    lease->set_started_at_unix_ms(100);
+    lease->set_cancellation_requested(true);
+    auto* queued = status->add_queue();
+    queued->set_job_id("job-b");
+    queued->set_workspace_id("workspace-b");
+    queued->set_operation("benchmark");
+    queued->set_position(1);
+    queued->set_queued_at_unix_ms(101);
+    auto* transition = status->add_transitions();
+    transition->set_sequence(7);
+    transition->set_from_state(proto::SERVER_STATE_AVAILABLE);
+    transition->set_to_state(proto::SERVER_STATE_OCCUPIED);
+    transition->set_runtime_phase(proto::RUNTIME_PHASE_RELOADING_SHADERS);
+    transition->set_job_id("job-a");
+    transition->set_reason("job-started");
+    auto* failure = status->mutable_last_error();
+    failure->set_code(proto::ERROR_CODE_SERVER_NOT_AVAILABLE);
+    failure->set_message("runtime disconnected");
+    failure->set_recovery_action("Reconnect the runtime bridge.");
+
+    const auto mapped = vibris::mcp::ResultMapper::status(response);
+    require(mapped.at("wait_satisfied") == true && mapped.at("wait_timed_out") == false,
+        "Status wait flags were not mapped truthfully.");
+    const auto& mapped_status = mapped.at("status");
+    require(mapped_status.at("active_lease").at("workspace_id") == "workspace-a" &&
+            mapped_status.at("active_lease").at("cancellation_requested") == true,
+        "Authoritative runtime lease was not preserved by the MCP result mapper.");
+    require(mapped_status.at("queue").size() == 1 &&
+            mapped_status.at("queue").front().at("position") == 1,
+        "Fair queue position was not preserved by the MCP result mapper.");
+    require(mapped_status.at("transitions").size() == 1 &&
+            mapped_status.at("transitions").front().at("job_id") == "job-a",
+        "Status transition history was not preserved by the MCP result mapper.");
+    require(mapped_status.at("last_error").at("recovery_action") == "Reconnect the runtime bridge.",
+        "Bounded recovery advice was not preserved by the MCP result mapper.");
+}
+
 using TestCase = std::pair<std::string_view, void (*)()>;
-constexpr std::array<TestCase, 19> test_cases {{
+constexpr std::array<TestCase, 20> test_cases {{
     {"WorkspaceIdentityConcurrentFirstUse", workspace_identity_concurrent_first_use},
     {"WorkspaceIdentityDeterministicPublication", workspace_identity_deterministic_publication},
     {"WorkspaceIdentityIoFailuresCleanup", workspace_identity_io_failures_cleanup},
@@ -1046,6 +1103,7 @@ constexpr std::array<TestCase, 19> test_cases {{
     {"TypedPresetDiscoveryAndRequestScene", typed_preset_discovery_and_request_scene},
     {"ToolMetadataIsRequestScoped", tool_metadata_is_request_scoped},
     {"ResourceListsAreEmpty", resource_lists_are_empty},
+    {"StatusLeaseTransitionMapping", status_lease_transition_mapping},
 }};
 
 } // namespace

@@ -41,11 +41,16 @@ internal object ProtocolMessages {
             .build()
 
     @JvmStatic
-    fun failure(requestId: String, code: ErrorCode, message: String): TerminalResult =
-        failure(requestId, code, message, emptyList())
+    fun failure(
+        jobId: String,
+        requestId: String,
+        code: ErrorCode,
+        message: String,
+    ): TerminalResult = failure(jobId, requestId, code, message, emptyList())
 
     @JvmStatic
     fun failure(
+        jobId: String,
         requestId: String,
         code: ErrorCode,
         message: String,
@@ -64,7 +69,7 @@ internal object ProtocolMessages {
         }
         return TerminalResult.failed(
             JobFailed.newBuilder()
-                .setJobId(requestId)
+                .setJobId(jobId)
                 .setRequestId(requestId)
                 .setError(error)
                 .addAllArtifacts(artifacts)
@@ -79,7 +84,15 @@ internal object ProtocolMessages {
         code: ErrorCode,
         detail: String,
     ): ServerMessage =
-        failure(message.requestId, code, detail)
+        failure(
+            message.takeIf { it.hasSubmitJob() && it.submitJob.hasJob() }
+                ?.submitJob?.job?.jobId
+                ?.takeIf(String::isNotBlank)
+                ?: message.requestId,
+            message.requestId,
+            code,
+            detail,
+        )
             .message(message.messageId, message.requestId, workspaceId)
 
     @JvmStatic
