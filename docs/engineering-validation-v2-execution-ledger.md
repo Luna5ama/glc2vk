@@ -109,7 +109,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T19D | P0 | Vibris | Return typed live GPU metric receipts | DONE | `T19D return typed GPU metric receipts` |
 | T19E | P0 | Vibris | Define strict detached-worktree provenance contract | DONE | `T19E define strict detached provenance contract` |
 | T19F | P0 | Iris | Implement and prove live detached-worktree provenance | DONE | `T19F complete live detached provenance` |
-| T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | READY | `T20 record live v2 acceptance` |
+| T19G | P0 | Vibris | Repair live paired-benchmark finalization | READY | `T19G repair live paired benchmark finalization` |
+| T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | PENDING | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
 
 ## Task details
@@ -2174,11 +2175,105 @@ Evidence:
 - Final entry audit preserved every declared worktree HEAD, empty staging area, and all recorded Iris, AP2, AP4,
   AP4a/AP4b, AP6, AP7, runtime, and untracked user-owned state. No shader source was modified or staged.
 
-### T20 — Run live two-worktree 720p acceptance
+### T19G — Repair live paired-benchmark finalization
 
 Status: `READY`
 
 Dependencies: T19F
+
+Repository: `I:\code\vibris`
+
+Worktree: `I:\code\vibris`
+
+Branch: `main`
+
+Primary files:
+
+- `mcp/src/main/cpp/paired_benchmark.cpp`
+- `mcp/src/main/cpp/profile_matrix_workflow.cpp`
+- `mcp/src/main/cpp/synchronous_job_runner.cpp`
+- Focused paired-benchmark, durable-workflow, JobProtocol, and synchronous-runner tests
+
+Scope:
+
+- Preserve the exact explicit `preset_id` through paired-benchmark profile/visual children and any retry path so every
+  nested strict-v2 Core job carries the same preset identity as the outer request and returns complete provenance.
+- Normalize protobuf-JSON integer scalars exactly once at the maintained strict-v2 native boundary before typed
+  benchmark guards consume them. The native paired-benchmark representation must use one canonical numeric shape for
+  compile-catalog generations, GPU timing samples, frame IDs, timestamps, sizes, and any other typed integer it reads;
+  do not scatter dual-shape parsing through benchmark logic.
+- Make finalization-only failure safely resumable when every planned step already has an immutable receipt: rebuild and
+  publish the final result from those receipts with zero child executor/Core calls and zero side-effect replay. Do not
+  make arbitrary non-retryable step failures resumable.
+- Keep visual comparison fail-closed. A receipt that fails the configured pixel/SSIM thresholds remains a failed gate;
+  neither finalization recovery nor normalization may weaken, skip, or reinterpret the thresholds.
+
+Non-scope:
+
+- Do not add aliases, legacy fields, fallback readers, compatibility adapters, migrations, or accept two maintained
+  native result shapes.
+- Do not weaken benchmark, provenance, restoration, statistical, compile, or visual gates; do not modify either shader
+  worktree or continue T20 captures in this task.
+- Do not execute T99.
+
+Acceptance:
+
+- Every nested paired-benchmark measurement and visual request contains the exact non-empty outer `preset_id`; its live
+  normalized result has complete provenance with that same ID and preset hash.
+- A live-shaped strict-v2 fixture containing protobuf-JSON integer strings such as compile-catalog
+  `shader_generation="35"` is normalized once and produces a deterministic paired result without a JSON type exception.
+- A durable job with `next_step == completed_steps == total_steps`, all receipt files present, no accepted in-flight
+  request, and no result file can resume finalization, publish atomically, and prove the executor/Core call count stayed
+  zero. A non-checkpointed non-retryable failure remains non-resumable.
+- The recorded AP3/AP4 visual receipt with SSIM `0.8143305138814317` and threshold-pixel ratio
+  `0.9270258246527778` still produces `VISUAL_GATE_FAILED`/`GATE_FAILED`; no threshold is relaxed.
+
+Verification:
+
+- Release build of the paired-benchmark, profile-matrix/durable-workflow, synchronous-runner, and JobProtocol targets.
+- Focused CTest coverage for nested preset provenance, canonical integer normalization, fully-checkpointed
+  finalization-only resume, non-resumable unsafe failures, and fail-closed visual thresholds.
+- After verified deployment, one focused live `night-gi-1-720p` benchmark proof that publishes a terminal result from
+  complete receipts and restores the original AP4 source/settings/scene state.
+- Ledger checker, staged-diff check, and protected Git-state audit.
+
+Expected commit title: `T19G repair live paired benchmark finalization`
+
+Blockers:
+
+- None. Session authorization for MCP/Mod deployment and the existing MultiMC restart remains active; restarting Codex
+  remains user-owned.
+
+Evidence:
+
+- T20 durable job `76e06187-da08-4e96-9df9-d3edc6e1195d` completed and checkpointed all 17 planned steps, then
+  final-result publication changed the state to `paused` with `next_step=completed_steps=total_steps=17`, null current
+  step, no `result.json`, and non-retryable `INTERNAL_ERROR: [json.exception.type_error.302] type must be number, but
+  is string`. Its request/state SHA-256 values are
+  `FEFE9533A5A34A6746251D9F98E8162AAA7D8BAE215272DC00B0B26D5D3E6899` and
+  `4D217707D1667C5FB9F66F6168EB559ED0E75BA0E64AF6A1A41F1AEB60B2F37C`.
+- Receipt `00000000.json` is 284,221 bytes with SHA-256
+  `9375117E8637BDF36EC1E3B90581AB2B6463F60497D30F7D43F3771ACDD866FE`. Its child arguments retain
+  `__vibris_preset.preset_id=night-gi-1-720p` but omit `preset_id`, so JobProtocol submits an empty preset ID while
+  retaining preset SHA-256 `d3d37c2f3d751464214223d06ddd8b8924a54ac28be978608fd7eff5ea16dece`.
+  All 16 profile receipts therefore report `INCOMPLETE_PROVENANCE` despite successful Core execution and restoration.
+- The same receipt proves the exact type boundary: its raw strict-v2 compile catalog stores protobuf-JSON
+  `shader_generation` as string `"35"`, while `compile_catalog_passed` consumes that field as native `uint64_t`.
+  GPU timing scalars are likewise raw strings but already become native integers in the normalized case. The final
+  replay reaches the unnormalized compile-catalog generation and throws before a benchmark verdict can be published.
+- Visual receipt `00000016.json` is 284,791 bytes with SHA-256
+  `72C08A31D7F7B513B28C18C9D0465320B84400932886611E8BC9B8139B53450B`. It restored successfully but correctly
+  returned `invalid_comparison`, SSIM `0.8143305138814317`, threshold-pixel ratio `0.9270258246527778`, and
+  `comparison.passed=false`; this evidence must remain a failed visual gate after remediation.
+- Final live status is `SERVER_STATE_AVAILABLE` with empty queue, both accept/start true, and AP4 source UUID
+  `59b584ca-1698-45a1-9861-c67e3821c19a`, proving the finalization defect did not strand runtime ownership or prevent
+  restoration. No shader source was modified or staged.
+
+### T20 — Run live two-worktree 720p acceptance
+
+Status: `PENDING`
+
+Dependencies: T19G
 
 Repository: `I:\code\vibris` and `I:\code\Iris`
 
@@ -2219,8 +2314,8 @@ Expected commit title: `T20 record live v2 acceptance`
 
 Blockers:
 
-- None. The user-authorized repeated MCP/Mod deployment and MultiMC `1.21.11-Iris` restart scope remains active;
-  Codex application restart remains user-owned.
+- T19G is the sole unmet dependency. The user-authorized repeated MCP/Mod deployment and MultiMC `1.21.11-Iris`
+  restart scope remains active; Codex application restart remains user-owned.
 
 Evidence:
 
@@ -2470,12 +2565,32 @@ Evidence:
   sole `READY` task against the already supplied Alpha-Piscium-4 and Alpha-Piscium-3 worktrees. No deployment, build,
   restart, runtime request, artifact write, or source mutation occurs in this control-plane continuation; execution
   resumes next continuation so this permission change remains an atomic ledger-only commit.
+- `2026-08-12` current T20 attempt used the verified current MCP directly against the shared runtime. AP4 compile job
+  `f99a5b92-f405-4ee1-8e08-2daec1247809` and AP3 compile job
+  `06f09b4b-1759-446f-a28c-c7baafc08620` each passed all 182 programs with exact detached HEADs and no diagnostics.
+  Concurrent AP4/AP3 profiles `29aee41b-bec5-489d-a2ec-152bca4f0ca2` and
+  `cb27a4eb-d071-45a6-afbe-b3dfc5c585d7` completed through one fair shared queue; the latter recorded 12,375 ms of
+  queue time, and both restored the AP4 baseline.
+- Effective-settings transaction `52b8cdea-dd08-4196-9357-1f482b1c8e61` proved preserved
+  `SETTING_DEBUG_WHITE_WORLD=false`, explicit override `true`, exact origins, and restoration to source/settings/scene
+  SHA-256 values `d3ca7a48b7589b9b185ab3c9357364f3817776de138c163851a170d338153e65`,
+  `8313635afeae14ac96a2c3262474154f0942daf2a4315c20d878761b26d99944`, and
+  `6541ce12e1e9e7ecbea47971c0a7eec90fde0d50407b547377791b8c099fa674`. Screenshot job
+  `541a76eb-aa6e-446c-851f-6f012b012243` produced a visually verified upright 1280x720 PNG at the worktree-local artifact
+  link, 2,250,111 bytes with SHA-256 `6613FD3BADE684FFB0DADDA92B05AE349E8C10C386E0998517D121922E2CFDCA`.
+- Formal ABBA job `76e06187-da08-4e96-9df9-d3edc6e1195d` used AP3 commit
+  `9325c7a091647a3d8243720d06802bdc2640292e` against AP4 workspace, two 60-frame comparison rounds, two same-source
+  controls, target `composite_total`, sibling `begin3_a_compute`, sentinel `final_total`, and unchanged strict visual
+  thresholds. All 17 steps were checkpointed, but final publication failed on an unnormalized protobuf-JSON integer;
+  every nested profile also lacked explicit `preset_id` and was marked provenance-incomplete. The visual receipt
+  independently failed its unchanged thresholds with SSIM `0.8143305138814317`. T19G is inserted before any rerun;
+  no fresh after-pass capture, threshold weakening, result fabrication, or T20 acceptance claim occurred.
 
 ### T99 — Final integrated audit
 
 Status: `PENDING`
 
-Dependencies: T01, T02, T02A, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T12A, T13, T14, T15, T16, T17, T18, T19, T19A, T19B, T19C, T19D, T19E, T19F, T20
+Dependencies: T01, T02, T02A, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T12A, T13, T14, T15, T16, T17, T18, T19, T19A, T19B, T19C, T19D, T19E, T19F, T19G, T20
 
 Repository: `I:\code\vibris`
 
@@ -2529,7 +2644,7 @@ Evidence:
 ```text
 T00 -> T01 -> T02 -> T02A -> T03 -> T04 -> T05 -> T06 -> T07 -> T08 -> T09
     -> T10 -> T11 -> T12 -> T12A -> T13 -> T14 -> T15 -> T16 -> T17 -> T18
-    -> T19 -> T19A -> T19B -> T19C -> T19D -> T19E -> T19F -> T20 -> T99
+    -> T19 -> T19A -> T19B -> T19C -> T19D -> T19E -> T19F -> T19G -> T20 -> T99
 ```
 
 Queue order is authoritative and serial even where technical dependencies could allow parallel work.
@@ -2610,3 +2725,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T19E/T19F split - contract auditing proved truthful Minecraft/GPU environment identity requires a direct Iris host implementation while detached VCS state belongs to Vibris protocol/Core/native code; split the work so Vibris T19E lands the strict contract before external Iris T19F implements and proves it live - Control-plane commit title: roadmap split T19E cross repository provenance`
 - `2026-08-11 - T19E - required exact host-supplied runtime environment identity, added canonical attached/detached checkout provenance through source checkpoints and results, rejected branch-only and malformed detached shapes, and passed API 9/9, Core 108/108, test-runtime compilation, native 30/30, and zero-match no-fallback scans - Commit title: T19E define strict detached provenance contract`
 - `2026-08-12 - T19F - Iris external commit 5c5909726df7e39dcf35e1199d27aacd6ab64cf2 supplied exact client-thread runtime identity; bridge tests passed 17/17, deployed MCP/Mod hashes matched, AP3/AP4 retained exact detached HEADs, and AP4 night-gi-1-720p profile 0f8d20d6-4a98-4472-8b91-9006aecff159 passed one attempt with typed samples and restoration - Owner receipt commit title: T19F record live detached provenance receipt`
+- `2026-08-12 - T19G inserted - T20 checkpointed all 17 paired-benchmark steps but final publication hit a protobuf-JSON integer type exception; nested requests omitted preset_id and made every profile provenance-incomplete, while the fully checkpointed non-retryable state could not resume finalization without replay - Control-plane commit title: roadmap insert T19G live benchmark remediation`
