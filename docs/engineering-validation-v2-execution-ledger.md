@@ -2032,6 +2032,26 @@ Evidence:
   `can_start_job=false`, and `RUNTIME_PHASE_DISCONNECTED`. No job, artifact write, deployment, restart, configuration
   mutation, or source mutation occurred. This is the second consecutive blocked Goal turn after T19B; T20 remains
   `BLOCKED`, T99 remains `PENDING`, and the Goal remains active.
+- `2026-08-11` post-T19B blocker audit 3: Vibris entered on `main` at
+  `82ae5d0d26404001e74497fb6795b4f97a5a034c`, Iris remained on `1.21.11-shaderdev` at
+  `38a7d2eaf88939983e0e01f731ccd4c627fbf6a9`, every declared auxiliary worktree remained at its recorded HEAD, all
+  staging areas were empty, and the checker again reported
+  `Ledger valid: 26 task(s); next=none; READY=0, PENDING=1, BLOCKED=1, DONE=24, SUPERSEDED=0.` The recorded
+  Alpha-Piscium-4, Alpha-Piscium-6, Alpha-Piscium-7, runtime, and untracked user-owned state remained exact and was
+  not read, modified, or staged.
+- `config.toml` still selects the 15,350,272-byte MCP with SHA-256
+  `2BA67FAB3290C0222A4F5CA8FB62D8DF59DBD8C29808BEFEF460033C1922CC26`; the post-T19B release executable remains
+  15,368,192 bytes with SHA-256 `8CD4AC8B9E93E6E75FD2F294340673A77C518AD833819300C0EB7D54F6F615C6`.
+  The installed Mod remains the 28,145,118-byte pre-T19A build with SHA-256
+  `C0E856A3F169E57DBC23283383A77059E82030A847B799EC468A890F02A1E02F`. The active schema-2 configuration and archived
+  schema-v1 file remain unchanged at SHA-256 `6607CF94249CE8335CEA7FEAB1DE98A1A8ACA5F96256CECF4003DC3B86F94EFA`
+  and `9CF549579FF4B8E4892504DB25D89A4C6C5F85673BFCDF0878F9A8739065BA70`.
+- The same Java PID 52460 still listens from `2026-08-12T02:21:23.6188834Z`. Fresh read-only status calls for both
+  recorded workspace IDs again returned `SERVER_STATE_FAILED`, `core_online=true`, `minecraft_connected=false`,
+  `world_loaded=false`, `can_start_job=false`, and `RUNTIME_PHASE_DISCONNECTED`. No job, artifact write, deployment,
+  restart, configuration mutation, or source mutation occurred. This is the third consecutive blocked Goal turn after
+  T19B; after this ledger-only atomic checkpoint the Goal is marked `blocked`, while T20 remains `BLOCKED` and T99
+  remains `PENDING`.
 
 ### T99 — Final integrated audit
 
@@ -2164,3 +2184,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T20 resumed blocker audit 3 - reverified the unchanged schema-v1 server.json rejection for the third consecutive blocked Goal turn after resumption; the Goal is marked blocked after the ledger-only atomic checkpoint - Control-plane commit title: roadmap confirm T20 blocked on v2 config cutover`
 - `2026-08-11 - T20 post-T19B blocker audit - current Mod predates T19A, configured MCP predates T19B, and the runtime bridge is disconnected; no job, deployment, or restart was attempted - Control-plane commit title: roadmap block T20 pending current live deployment`
 - `2026-08-11 - T20 post-T19B blocker audit 2 - reverified the unchanged stale MCP/Mod deployment and disconnected runtime for the second consecutive Goal turn; new Alpha-Piscium-6 dirt was protected as user-owned - Control-plane commit title: roadmap recheck T20 current live deployment blocker`
+- `2026-08-11 - T20 post-T19B blocker audit 3 - reverified the unchanged stale MCP/Mod deployment and disconnected runtime for the third consecutive Goal turn; the Goal is marked blocked after the ledger-only checkpoint - Control-plane commit title: roadmap confirm T20 blocked on current live deployment`
