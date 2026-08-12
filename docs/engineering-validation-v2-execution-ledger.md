@@ -101,8 +101,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T17 | P0 | Vibris | Integrate after-pass texture and buffer jobs | DONE | `T17 integrate after-pass resource dump jobs` |
 | T18 | P0 | Vibris | Complete strict v2 cutover and documentation | DONE | `T18 complete strict v2 cutover` |
 | T19 | P0 | Vibris | Run offline integrated acceptance | DONE | `T19 verify offline v2 integration` |
-| T19A | P0 | Vibris | Repair strict v2 live bootstrap | READY | `T19A repair strict v2 live bootstrap` |
-| T19B | P0 | Vibris | Compact capture results and localize artifact paths | PENDING | `T19B compact capture results and localize artifact paths` |
+| T19A | P0 | Vibris | Repair strict v2 live bootstrap | DONE | `T19A repair strict v2 live bootstrap` |
+| T19B | P0 | Vibris | Compact capture results and localize artifact paths | READY | `T19B compact capture results and localize artifact paths` |
 | T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | PENDING | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
 
@@ -1581,7 +1581,7 @@ Evidence:
 
 ### T19A — Repair strict v2 live bootstrap
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T19
 
@@ -1668,10 +1668,42 @@ Evidence:
 - `UnavailableVibrisControlService` overrides only server info, status, and the control stream, so `ListPresets` and
   the other maintained unary calls fall through to gRPC `UNIMPLEMENTED` when configuration/runtime bootstrap fails.
   No product source, deployment, process, or shader worktree was changed during this control-plane insertion.
+- `2026-08-11`: entry gates verified Vibris `main` at
+  `3335eb203f38fd43aec14ceebe14de2673599af2`, Iris `1.21.11-shaderdev` at
+  `38a7d2eaf88939983e0e01f731ccd4c627fbf6a9`, every declared review/runtime worktree and branch, empty staging areas,
+  and all protected/user-owned dirty state. T19 commit `4fe98606bb879f589ea706e6f11f76981d8fec76` is an ancestor;
+  the ledger checker reported `Ledger valid: 26 task(s); next=T19A; READY=1, PENDING=3, BLOCKED=0, DONE=22,
+  SUPERSEDED=0.`
+- Fresh configuration now writes schema 2 with the strict ordinary root `<game>\shaderpacks\vibris`. The focused
+  fixtures prove that directory is created, a configured symbolic-link root is rejected without a parent fallback,
+  and schema-v1 content remains byte-for-byte untouched while failing with `UNSUPPORTED_VERSION`.
+- `UnavailableVibrisControlService` now implements all six unary v2 RPCs plus the control stream. Loopback gRPC
+  coverage proves `GetServerInfo` and `GetStatus` return protocol-major-2 failed status envelopes, while presets,
+  resources, context validation, and artifact management return explicit `UNAVAILABLE` failures containing
+  `ERROR_CODE_SERVER_NOT_AVAILABLE`; no method returns gRPC `UNIMPLEMENTED`.
+- The public `load_shader` action policy now resolves only declared `source_id` / `config_id`. The action-schema fixture
+  accepts that exact typed shape and rejects obsolete `source` / `config`; the JobProtocol fixture preserves the
+  selected source UUID, config values, and identifiers and proves `load_and_screenshot` emits exactly one load prelude
+  followed by its wait and screenshot.
+- Action execution completes a first load prelude before resolving capture resources or opening its authoritative
+  artifact reservation, then plans against the post-load resource catalog and skips the already completed load step.
+  `freshRuntimeLoadsThenPlansScreenshotFromPostLoadCatalog` starts from an empty catalog, establishes the safe snapshot
+  with one explicit false/false load, publishes the catalog during the generated prelude, completes the screenshot and
+  transactional restore, and proves the job performed exactly one load rather than a sacrificial or duplicated load.
+- `\.\gradlew.bat :vibris-core:test --offline --console=plain` passed 102/102 tests with zero failures, errors, or
+  skips; `VibrisBootstrapTest` passed 16/16 and `RuntimeJobExecutorCaptureTest` passed 11/11. Release native targets
+  `vibris-action-schema-tests` and `vibris-job-protocol-tests` built successfully, and
+  `ctest --preset release -R 'ActionSchema|JobProtocol|Unavailable|Bootstrap' --output-on-failure` passed 2/2.
+  Static checks found only `source_id` / `config_id` in the load action schema/policy/protocol and no compatibility,
+  legacy, fallback, migration, schema-v1, or parent-root branch in the affected production files.
+- No deployment, configuration mutation outside isolated test directories, Minecraft/launcher restart, live T20
+  request, or shader-worktree edit occurred. Protected Vibris `capture/a.spv`, Iris runtime directories, and all
+  unrelated Alpha-Piscium worktree changes remained unstaged and untouched. Commit: this task's commit with subject
+  `T19A repair strict v2 live bootstrap`.
 
 ### T19B — Compact capture results and localize artifact paths
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T19A
 
@@ -2007,7 +2039,7 @@ Queue order is authoritative and serial even where technical dependencies could 
   with no internal storage-path leakage.
 - [x] `dump_texture_after_pass` and `dump_buffer_after_pass` capture exact named pass boundaries with correct flip, visibility, bytes, artifacts, and GL-state restoration.
 - [x] Full Vibris native/Gradle and Iris build validation passes.
-- [ ] A fresh schema-2 runtime has the correct fixed-pack root, truthful unavailable unary failures, a usable typed
+- [x] A fresh schema-2 runtime has the correct fixed-pack root, truthful unavailable unary failures, a usable typed
   first-load action, and post-load screenshot resource planning without a sacrificial job.
 - [ ] Live two-worktree 720p acceptance passes without autonomous deployment or process restart.
 - [ ] Every expected commit is present in the intended repository and branch.
@@ -2046,6 +2078,7 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T18 - completed the schema-2 hard cutover, removed obsolete pre-v2 integration/probe/fixture and dual-read/write paths, rewrote the operator guide, passed Gradle plus the release CMake build and 79/79 CTest cases, and left protected/runtime/user data untouched - Commit title: T18 complete strict v2 cutover`
 - `2026-08-11 - T19 - passed fresh 163-test JVM, 79-test native, 15-test Iris bridge, and four-test OpenGL runtime acceptance; proved strict-v2 negotiation/restart and recorded hashes for the local MCP/mod delivery outputs without deployment - Commit title: T19 verify offline v2 integration`
 - `2026-08-11 - T19A inserted - live clean-cutover recovery exposed an invalid default shaderpack root, unavailable unary UNIMPLEMENTED responses, a load_shader field mismatch, and pre-load screenshot resource planning; inserted a no-compatibility strict-v2 bootstrap remediation before T20 - Control-plane commit title: roadmap insert T19A strict v2 live bootstrap remediation`
+- `2026-08-11 - T19A - fixed the strict schema-2 shaderpack root, implemented every unavailable unary RPC, aligned load_shader on source_id/config_id only, and moved capture planning/reservation after the single generated load prelude; Core 102/102 and focused native 2/2 passed with no compatibility path - Commit title: T19A repair strict v2 live bootstrap`
 - `2026-08-11 - T19B inserted - a live load_and_screenshot response returned a 192710-character raw JobResult with 692 expanded setting entries and five Minecraft-internal artifact paths; inserted compact recipe projection and recursive worktree-path localization remediation before T20 - Control-plane commit title: roadmap insert T19B compact screenshot result remediation`
 - `2026-08-11 - T20 blocked - the live instance embeds 335 v1 and zero v2 protocol entries, the configured MCP publishes only the old five-tool surface, and no two shader worktrees were supplied; no compatibility path, deployment, or restart was attempted - Control-plane commit title: roadmap block T20 pending matching live scope`
 - `2026-08-11 - T20 blocker audit 2 - reverified the unchanged pre-v2 runtime/MCP and missing two-worktree scope; this is the second consecutive blocked Goal turn, so the Goal remains active - Control-plane commit title: roadmap recheck T20 live scope blocker`

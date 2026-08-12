@@ -134,8 +134,8 @@ std::optional<InvocationError> validate_argument_policy(std::string_view tool_na
                     return InvocationError{InvocationErrorCode::InvalidArguments,
                         "arguments.actions must not load shaders inside a matrix template"};
                 }
-                const auto source = (*actions)[index].value("source", std::string{});
-                const auto config = (*actions)[index].value("config", std::string{});
+                const auto source = (*actions)[index].value("source_id", std::string{});
+                const auto config = (*actions)[index].value("config_id", std::string{});
                 if (!source_ids.contains(source) || !config_ids.contains(config)) {
                     return InvocationError{InvocationErrorCode::InvalidArguments,
                         "load_shader references an unknown source or config id"};

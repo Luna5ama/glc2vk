@@ -173,7 +173,7 @@ internal data class ServerConfiguration(
                 OwnedPathIdentity.createDirectoriesSafely(file.parent)
                 val pending = game.resolve("vibris/pending").toAbsolutePath().normalize()
                 val artifacts = game.resolve("vibris/artifacts").toAbsolutePath().normalize()
-                val shaderpacks = game.resolve("shaderpacks").toAbsolutePath().normalize()
+                val shaderpacks = game.resolve("shaderpacks/vibris").toAbsolutePath().normalize()
                 val json = """
                     {
                       "schema_version": 2,

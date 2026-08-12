@@ -87,6 +87,39 @@ void strict_v2_request_contains_typed_texture_and_buffer_actions() {
 	require(texture && buffer, "typed strict-v2 texture/buffer capture actions were not encoded");
 }
 
+void explicit_load_action_uses_declared_v2_ids() {
+	const Json arguments{
+		{"sources", Json::array({{{"id", "candidate"}, {"kind", "workspace"}}})},
+		{"configs", Json::array({{{"id", "quality"}, {"values", {{"QUALITY", 2}}}}})},
+		{"actions", Json::array({{{"type", "load_shader"},
+			{"source_id", "candidate"}, {"config_id", "quality"}}})},
+	};
+	const std::vector sources{source()};
+	const auto request = JobProtocol::request(
+		"vibris_run_actions", arguments, config(), scene(), sources, std::string(request_id));
+	const auto& actions = request.submit_job().job().action_sequence().actions();
+	require(actions.size() == 1 && actions[0].has_load_shader(),
+		"typed explicit load action was not encoded");
+	const auto& load = actions[0].load_shader();
+	require(!actions[0].prelude() && load.source_id() == "candidate" && load.config_id() == "quality" &&
+		load.source_uuid() == sources[0].source_uuid() && !load.config().preserve_current() &&
+		load.config().values().at("QUALITY") == "2",
+		"explicit load action lost its declared source_id/config_id mapping");
+}
+
+void load_and_screenshot_emits_one_post_load_capture_sequence() {
+	const Json arguments{{"recipe", "load_and_screenshot"}, {"source", {{"kind", "workspace"}}},
+		{"config", {{"QUALITY", 2}}}, {"warmup_frames", 3}, {"preset_id", "quality"}};
+	const std::vector sources{source()};
+	const auto request = JobProtocol::request(
+		"vibris_run_recipe", arguments, config(), scene(), sources, std::string(request_id));
+	const auto& actions = request.submit_job().job().action_sequence().actions();
+	require(actions.size() == 3 && actions[0].prelude() && actions[0].has_load_shader() &&
+		actions[1].has_wait_frames() && actions[1].wait_frames().frame_count() == 3 &&
+		actions[2].has_take_screenshot(),
+		"load_and_screenshot did not emit one load prelude followed by wait and capture");
+}
+
 void after_pass_actions_preserve_exact_pass_and_resource_selectors() {
 	const Json arguments{{"preset_id", "quality"}, {"actions", Json::array({
 		{{"type", "dump_texture_after_pass"}, {"pass_id", "composite/composite21"},
@@ -339,6 +372,8 @@ void resume_registration_and_terminal_mapping_are_strict_v2() {
 int main() {
 	try {
 		strict_v2_request_contains_typed_texture_and_buffer_actions();
+		explicit_load_action_uses_declared_v2_ids();
+		load_and_screenshot_emits_one_post_load_capture_sequence();
 		after_pass_actions_preserve_exact_pass_and_resource_selectors();
 		after_pass_terminal_mapping_preserves_complete_artifact_receipt();
 		matrix_auto_load_is_a_prelude_receipt_action();

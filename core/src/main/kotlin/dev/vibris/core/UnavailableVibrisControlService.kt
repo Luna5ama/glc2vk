@@ -7,6 +7,12 @@ import dev.vibris.protocol.v2.GetServerInfoRequest
 import dev.vibris.protocol.v2.GetServerInfoResponse
 import dev.vibris.protocol.v2.GetStatusRequest
 import dev.vibris.protocol.v2.GetStatusResponse
+import dev.vibris.protocol.v2.ListPresetsRequest
+import dev.vibris.protocol.v2.ListPresetsResponse
+import dev.vibris.protocol.v2.ListResourcesRequest
+import dev.vibris.protocol.v2.ListResourcesResponse
+import dev.vibris.protocol.v2.ManageArtifactsRequest
+import dev.vibris.protocol.v2.ManageArtifactsResponse
 import dev.vibris.protocol.v2.Pong
 import dev.vibris.protocol.v2.RuntimeFailure
 import dev.vibris.protocol.v2.RuntimePhase
@@ -15,6 +21,8 @@ import dev.vibris.protocol.v2.ServerHello
 import dev.vibris.protocol.v2.ServerMessage
 import dev.vibris.protocol.v2.ServerState
 import dev.vibris.protocol.v2.ServerStatus
+import dev.vibris.protocol.v2.ValidateContextRequest
+import dev.vibris.protocol.v2.ValidateContextResponse
 import dev.vibris.protocol.v2.VibrisControlGrpc
 import io.grpc.Status
 import io.grpc.stub.StreamObserver
@@ -73,6 +81,26 @@ internal class UnavailableVibrisControlService(
         observer.onCompleted()
     }
 
+    override fun listPresets(
+        request: ListPresetsRequest,
+        observer: StreamObserver<ListPresetsResponse>,
+    ) = unavailable(observer)
+
+    override fun listResources(
+        request: ListResourcesRequest,
+        observer: StreamObserver<ListResourcesResponse>,
+    ) = unavailable(observer)
+
+    override fun validateContext(
+        request: ValidateContextRequest,
+        observer: StreamObserver<ValidateContextResponse>,
+    ) = unavailable(observer)
+
+    override fun manageArtifacts(
+        request: ManageArtifactsRequest,
+        observer: StreamObserver<ManageArtifactsResponse>,
+    ) = unavailable(observer)
+
     override fun control(responses: StreamObserver<ServerMessage>): StreamObserver<ClientMessage> =
         object : StreamObserver<ClientMessage> {
             private var workspaceId: String? = null
@@ -128,5 +156,13 @@ internal class UnavailableVibrisControlService(
         if (closed.compareAndSet(false, true)) {
             runtime.close()
         }
+    }
+
+    private fun <T> unavailable(observer: StreamObserver<T>) {
+        observer.onError(
+            Status.UNAVAILABLE
+                .withDescription("${error.code.name}: ${error.message}")
+                .asRuntimeException(),
+        )
     }
 }

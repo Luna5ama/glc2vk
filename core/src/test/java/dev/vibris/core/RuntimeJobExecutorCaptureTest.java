@@ -18,9 +18,12 @@ import dev.vibris.protocol.v2.DumpTextureAfterPass;
 import dev.vibris.protocol.v2.ErrorCode;
 import dev.vibris.protocol.v2.GetPatchedShaders;
 import dev.vibris.protocol.v2.JobSpec;
+import dev.vibris.protocol.v2.LoadShader;
 import dev.vibris.protocol.v2.PreparedSourceRef;
 import dev.vibris.protocol.v2.ReceiptStatus;
+import dev.vibris.protocol.v2.RestorePolicy;
 import dev.vibris.protocol.v2.SceneContext;
+import dev.vibris.protocol.v2.ShaderConfig;
 import dev.vibris.protocol.v2.TakeScreenshot;
 import dev.vibris.protocol.v2.ResourceSelector;
 import dev.vibris.protocol.v2.TextureView;
@@ -121,6 +124,44 @@ class RuntimeJobExecutorCaptureTest {
             .map(artifact -> Path.of(artifact.getRelativePath()))
             .allMatch(Files::isRegularFile));
         assertFalse(result.getResultManifestId().isBlank());
+    }
+
+    @Test
+    void freshRuntimeLoadsThenPlansScreenshotFromPostLoadCatalog() throws Exception {
+        Fixture fixture = new Fixture();
+        TerminalResult bootstrap = fixture.executor.execute(
+            fixture.loadJob(false, ActionSequence.getDefaultInstance(), false),
+            ignored -> {}
+        );
+        assertEquals(1, bootstrap.completed().getResult().getActionReceiptsCount());
+        assertEquals(ActionKind.ACTION_KIND_LOAD_SHADER,
+            bootstrap.completed().getResult().getActionReceipts(0).getKind());
+        assertEquals(1, fixture.runtime.shaderConfigs.size());
+
+        ResourceCatalog.ResourceDescriptor screenshot = resource(
+            "final", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 12, 16);
+        fixture.runtime.catalog = ResourceCatalog.empty();
+        fixture.runtime.beforeReloadResult = () -> fixture.runtime.catalog =
+            ResourceCatalog.of(List.of(screenshot), List.of());
+        fixture.runtime.captureResult = captureResult(12, Map.of("screenshot", screenshot));
+        fixture.runtime.captureFiles.put("screenshot.png", new byte[]{1, 2, 3});
+
+        TerminalResult terminal = fixture.executor.execute(
+            fixture.loadJob(true, screenshotActions(), true),
+            ignored -> {}
+        );
+
+        var result = terminal.completed().getResult();
+        assertEquals(1, result.getPreludeReceiptsCount());
+        assertEquals(ActionKind.ACTION_KIND_LOAD_SHADER, result.getPreludeReceipts(0).getKind());
+        assertEquals(ReceiptStatus.RECEIPT_STATUS_OK, result.getPreludeReceipts(0).getStatus());
+        assertEquals(1, result.getActionReceiptsCount());
+        assertEquals(ActionKind.ACTION_KIND_TAKE_SCREENSHOT, result.getActionReceipts(0).getKind());
+        assertEquals("final", result.getActionReceipts(0).getCapture().getResource().getLogicalName());
+        assertEquals(3, fixture.runtime.shaderConfigs.size(),
+            "the screenshot job must execute one load and one transactional restore");
+        assertTrue(result.getArtifactsList().stream().anyMatch(artifact ->
+            artifact.getKind() == ArtifactKind.ARTIFACT_KIND_SCREENSHOT));
     }
 
     @Test
@@ -587,6 +628,32 @@ class RuntimeJobExecutorCaptureTest {
                 .build();
             if (timeoutMs > 0) spec = spec.toBuilder()
                 .setTimeouts(spec.getTimeouts().toBuilder().setExecutionTimeoutMs(timeoutMs))
+                .build();
+            CoreJob job = new CoreJob(spec, spec.getJobId(), WORKSPACE_ID, "message", null);
+            job.initialize(List.of(source));
+            return job;
+        }
+
+        CoreJob loadJob(boolean prelude, ActionSequence actions, boolean restore) {
+            Action load = Action.newBuilder()
+                .setPrelude(prelude)
+                .setLoadShader(LoadShader.newBuilder()
+                    .setSourceUuid(source.uuid())
+                    .setSourceId("source")
+                    .setConfigId("config")
+                    .setConfig(ShaderConfig.newBuilder().setPreserveCurrent(true)))
+                .build();
+            JobSpec spec = JobSpec.newBuilder()
+                .setJobId("job-" + UUID.randomUUID())
+                .setContext(SceneContext.newBuilder().setSaveId("save")
+                    .setDimensionId("minecraft:overworld").setFov(70.0))
+                .addSources(source.reference())
+                .setActionSequence(ActionSequence.newBuilder()
+                    .addActions(load)
+                    .addAllActions(actions.getActionsList()))
+                .setRestoreState(RestorePolicy.newBuilder()
+                    .setOnSuccess(restore)
+                    .setOnError(restore))
                 .build();
             CoreJob job = new CoreJob(spec, spec.getJobId(), WORKSPACE_ID, "message", null);
             job.initialize(List.of(source));

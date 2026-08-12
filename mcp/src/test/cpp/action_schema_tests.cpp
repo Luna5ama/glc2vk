@@ -158,6 +158,18 @@ void exact_filters_and_job_control() {
 void typed_actions_reject_aliases() {
     const ToolRegistry registry([](std::string_view, const Json& arguments) { return arguments; });
     Json request{{"worktree_root", "I:\\shader-worktree"}, {"preset_id", "scene"}};
+    Json load = request;
+    load["sources"] = Json::array({{{"id", "candidate"}, {"kind", "workspace"}}});
+    load["configs"] = Json::array({{{"id", "quality"}, {"values", {{"QUALITY", 2}}}}});
+    load["actions"] = Json::array({{{"type", "load_shader"},
+        {"source_id", "candidate"}, {"config_id", "quality"}}});
+    require(std::holds_alternative<Json>(registry.invoke("vibris_run_actions", load)),
+        "typed source_id/config_id load action was rejected");
+    load["actions"] = Json::array({{{"type", "load_shader"},
+        {"source", "candidate"}, {"config", "quality"}}});
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_actions", load)),
+        "obsolete source/config load action was accepted");
+
     request["actions"] = Json::array({
         {{"type", "dump_texture"},
          {"resource", {{"logical_name", "colortex0"}, {"view", "alternate"}, {"mip_level", 1}, {"layer", 0}}},

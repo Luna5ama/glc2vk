@@ -32,9 +32,27 @@ internal class ActionJobExecutor(
         val pendingCaptureIndices = LinkedHashSet<Int>()
         var activeIndices: List<Int> = emptyList()
         try {
-            val action = captures.prepareActions(job, runtime.getResourceCatalog(), emptyList())
-            val prepared = action.prepared
             val diagnostics = ArrayList<ReloadResult.Diagnostic>()
+            var preloadedActionIndex: Int? = null
+            val wireActions = job.submission.actionSequence.actionsList
+            if (wireActions.size > 1 && wireActions.first().hasLoadShader()) {
+                activeIndices = listOf(0)
+                val execution = load(job, wireActions.first().loadShader, progress, deadline)
+                diagnostics.addAll(execution.reload.diagnostics)
+                owner.observeCatalog(
+                    owner.await(runtime.getCompileCatalog(job.cancellation.token()), job, deadline),
+                )
+                receiptBook.put(
+                    0,
+                    receiptBook.success(0)
+                        .setRuntimeMutation(mutation(execution))
+                        .build(),
+                )
+                activeIndices = emptyList()
+                preloadedActionIndex = 0
+            }
+            val action = captures.prepareActions(job, runtime.getResourceCatalog(), diagnostics)
+            val prepared = action.prepared
             val captured = ArrayList<CaptureResult>()
             val completedCapturePlans = ArrayList<CapturePlan>()
             val captureExecutions = ArrayList<CaptureExecution>()
@@ -44,6 +62,12 @@ internal class ActionJobExecutor(
 
             fun executeSteps() {
                 for (step in action.program.steps) {
+                    if (step.actionIndex == preloadedActionIndex) {
+                        check(step.type == CaptureProgramBuilder.ActionType.LOAD) {
+                            "The post-load capture plan did not retain its load prelude."
+                        }
+                        continue
+                    }
                     activeIndices = step.actionIndices()
                     when (step.type) {
                         CaptureProgramBuilder.ActionType.LOAD -> {

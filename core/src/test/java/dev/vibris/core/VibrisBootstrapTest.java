@@ -3,20 +3,27 @@ package dev.vibris.core;
 import dev.vibris.api.SceneContext;
 import dev.vibris.api.ScenePreset;
 import dev.vibris.protocol.v2.ErrorCode;
+import dev.vibris.protocol.v2.GetServerInfoRequest;
+import dev.vibris.protocol.v2.GetServerInfoResponse;
 import dev.vibris.protocol.v2.GetStatusRequest;
 import dev.vibris.protocol.v2.GetStatusResponse;
 import dev.vibris.protocol.v2.ListPresetsRequest;
 import dev.vibris.protocol.v2.ListPresetsResponse;
+import dev.vibris.protocol.v2.ListResourcesRequest;
+import dev.vibris.protocol.v2.ManageArtifactsRequest;
 import dev.vibris.protocol.v2.ValidateContextRequest;
 import dev.vibris.protocol.v2.ValidateContextResponse;
 import dev.vibris.protocol.v2.VibrisControlGrpc;
 import io.grpc.BindableService;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
+import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
 import io.grpc.stub.StreamObserver;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
+import org.junit.jupiter.api.function.Executable;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
@@ -85,6 +92,9 @@ class VibrisBootstrapTest {
         assertTrue(bootstrap.ready());
         assertTrue(Files.readString(temp.resolve("config/vibris/server.json"))
             .contains("\"schema_version\": 2"));
+        Path defaultShaderpack = temp.resolve("shaderpacks/vibris").toAbsolutePath().normalize();
+        assertTrue(Files.isDirectory(defaultShaderpack, NOFOLLOW_LINKS));
+        assertEquals(defaultShaderpack, ServerConfiguration.Companion.load(temp).getPaths().shaderpackRoot());
         GetStatusResponse status = status(captured.get());
         assertTrue(status.getStatus().getCanAcceptJob());
         bootstrap.close();
@@ -146,7 +156,25 @@ class VibrisBootstrapTest {
     }
 
     @Test
-    void notReadyStatusIsQueryableOverLoopbackGrpc() throws Exception {
+    void configuredShaderpackRootRejectsLinksWithoutParentFallback() throws Exception {
+        Path pending = Files.createDirectory(temp.resolve("link-pending"));
+        Path artifacts = Files.createDirectory(temp.resolve("link-artifacts"));
+        Path target = Files.createDirectory(temp.resolve("link-target"));
+        Path shaderpack = temp.resolve("shaderpack-link");
+        Files.createSymbolicLink(shaderpack, target);
+        writeServerConfig(temp, pending, artifacts, shaderpack, 50123);
+
+        ServerConfiguration.Failure failure = assertThrows(
+            ServerConfiguration.Failure.class,
+            () -> ServerConfiguration.Companion.load(temp)
+        );
+
+        assertTrue(failure.getMessage().contains("shaderpack_root"));
+        assertTrue(Files.isSymbolicLink(shaderpack));
+    }
+
+    @Test
+    void notReadyServiceImplementsEveryUnaryOverLoopbackGrpc() throws Exception {
         int port;
         try (ServerSocket reservation = new ServerSocket(0)) {
             port = reservation.getLocalPort();
@@ -162,13 +190,21 @@ class VibrisBootstrapTest {
             .usePlaintext()
             .build();
         try {
-            GetStatusResponse response = VibrisControlGrpc.newBlockingStub(channel)
-                .withDeadlineAfter(5, TimeUnit.SECONDS)
-                .getStatus(GetStatusRequest.getDefaultInstance());
+            var stub = VibrisControlGrpc.newBlockingStub(channel).withDeadlineAfter(5, TimeUnit.SECONDS);
+            GetServerInfoResponse info = stub.getServerInfo(GetServerInfoRequest.getDefaultInstance());
+            assertEquals(2, info.getProtocolVersion().getMajor());
+            assertEquals(ErrorCode.ERROR_CODE_SERVER_NOT_AVAILABLE,
+                info.getServer().getStatus().getLastError().getCode());
+            GetStatusResponse response = stub.getStatus(GetStatusRequest.getDefaultInstance());
+            assertEquals(2, response.getProtocolVersion().getMajor());
             assertFalse(response.getStatus().getCanStartJob());
             assertEquals(ErrorCode.ERROR_CODE_SERVER_NOT_AVAILABLE,
                 response.getStatus().getLastError().getCode());
             assertTrue(response.getStatus().getLastError().getMessage().contains("pending_source_root"));
+            assertUnavailable(() -> stub.listPresets(ListPresetsRequest.getDefaultInstance()));
+            assertUnavailable(() -> stub.listResources(ListResourcesRequest.getDefaultInstance()));
+            assertUnavailable(() -> stub.validateContext(ValidateContextRequest.getDefaultInstance()));
+            assertUnavailable(() -> stub.manageArtifacts(ManageArtifactsRequest.getDefaultInstance()));
         } finally {
             channel.shutdownNow().awaitTermination(5, TimeUnit.SECONDS);
             bootstrap.close();
@@ -392,6 +428,13 @@ class VibrisBootstrapTest {
         try (var children = Files.list(directory)) {
             assertTrue(children.findAny().isEmpty());
         }
+    }
+
+    private static void assertUnavailable(Executable call) {
+        StatusRuntimeException failure = assertThrows(StatusRuntimeException.class, call);
+        assertEquals(Status.Code.UNAVAILABLE, failure.getStatus().getCode());
+        assertTrue(failure.getStatus().getDescription().contains("ERROR_CODE_SERVER_NOT_AVAILABLE"));
+        assertTrue(failure.getStatus().getDescription().contains("pending_source_root"));
     }
 
     private static GetStatusResponse status(BindableService service) {
