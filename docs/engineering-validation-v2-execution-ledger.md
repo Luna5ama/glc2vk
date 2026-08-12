@@ -56,6 +56,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 - Protocol/config/checkpoint/manifest version mismatches fail with an explicit `UNSUPPORTED_VERSION`; old data remains untouched on disk but is never read, indexed, migrated, or deleted automatically.
 - All user-visible outputs continue through the request worktree's `.vibris\artifact` path.
 - Do not restart Minecraft or its launcher. Do not deploy the MCP server or mod unless the user explicitly authorizes that separate action.
+  On `2026-08-11`, the user authorized repeated MCP/Mod deployment and restart of the existing MultiMC
+  `1.21.11-Iris` instance as needed for the remainder of this session. Restarting Codex remains user-owned.
 - Pass-boundary capture v2 covers only named begin, prepare, deferred, composite, final, and shadow-composite stages; high-frequency gbuffer, terrain, and ordinary shadow draws are out of scope.
 - Artifact TTL defaults to 168 hours.
 - `cmake` and `ctest` are not on `PATH`; ledger commands use the Visual Studio copies under `C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin`.
@@ -103,7 +105,7 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T19 | P0 | Vibris | Run offline integrated acceptance | DONE | `T19 verify offline v2 integration` |
 | T19A | P0 | Vibris | Repair strict v2 live bootstrap | DONE | `T19A repair strict v2 live bootstrap` |
 | T19B | P0 | Vibris | Compact capture results and localize artifact paths | DONE | `T19B compact capture results and localize artifact paths` |
-| T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | BLOCKED | `T20 record live v2 acceptance` |
+| T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | READY | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
 
 ## Task details
@@ -1809,7 +1811,7 @@ Evidence:
 
 ### T20 — Run live two-worktree 720p acceptance
 
-Status: `BLOCKED`
+Status: `READY`
 
 Dependencies: T19B
 
@@ -1831,7 +1833,9 @@ Scope:
 
 Non-scope:
 
-- Do not restart Minecraft, switch launchers, deploy builds, or choose shader worktrees without explicit user-provided runtime scope.
+- Do not switch launchers or choose shader worktrees outside the user-supplied Alpha-Piscium-4 and Alpha-Piscium-3
+  paths. Repeated MCP/Mod deployment and restart of the existing MultiMC `1.21.11-Iris` instance are authorized for
+  this session; restarting Codex remains user-owned.
 
 Acceptance:
 
@@ -1850,10 +1854,9 @@ Expected commit title: `T20 record live v2 acceptance`
 
 Blockers:
 
-- Live acceptance requires a user-started runtime containing the T19A Core changes and a Codex MCP delivery containing
-  the T19B compact-result/path-localization changes. The current installed mod predates T19A, the configured MCP
-  predates T19B, and the runtime bridge is disconnected. Resume only after the user explicitly authorizes deployment
-  of the current Mod/MCP builds and restarts Minecraft/Codex as needed; T20 itself must not deploy or restart them.
+- None. On `2026-08-11`, the user explicitly authorized this session to rebuild and redeploy the current MCP and Mod
+  repeatedly and to restart the existing MultiMC `1.21.11-Iris` instance as needed. If the Codex application itself
+  must restart to adopt a changed MCP command, stop after deployment and hand that restart to the user.
 
 Evidence:
 
@@ -2052,6 +2055,16 @@ Evidence:
   restart, configuration mutation, or source mutation occurred. This is the third consecutive blocked Goal turn after
   T19B; after this ledger-only atomic checkpoint the Goal is marked `blocked`, while T20 remains `BLOCKED` and T99
   remains `PENDING`.
+- `2026-08-11` deployment-permission resolution: entry gates verified Vibris `main` at
+  `3f8899a334fbb8c7b45db923943252a5731c0f14`, Iris `1.21.11-shaderdev` at
+  `38a7d2eaf88939983e0e01f731ccd4c627fbf6a9`, every declared auxiliary worktree at its recorded HEAD, every staging
+  area empty, and all recorded protected and user-owned dirty state unchanged. Before this transition the checker
+  reported `Ledger valid: 26 task(s); next=none; READY=0, PENDING=1, BLOCKED=1, DONE=24, SUPERSEDED=0.`
+- The user explicitly authorized repeated MCP/Mod deployment and restart of the existing MultiMC `1.21.11-Iris`
+  instance for the remainder of this session. Codex application restart remains user-owned. T20 is restored as the
+  sole `READY` task against the already supplied Alpha-Piscium-4 and Alpha-Piscium-3 worktrees. No deployment, build,
+  restart, runtime request, artifact write, or source mutation occurs in this control-plane continuation; execution
+  resumes next continuation so this permission change remains an atomic ledger-only commit.
 
 ### T99 — Final integrated audit
 
@@ -2185,3 +2198,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T20 post-T19B blocker audit - current Mod predates T19A, configured MCP predates T19B, and the runtime bridge is disconnected; no job, deployment, or restart was attempted - Control-plane commit title: roadmap block T20 pending current live deployment`
 - `2026-08-11 - T20 post-T19B blocker audit 2 - reverified the unchanged stale MCP/Mod deployment and disconnected runtime for the second consecutive Goal turn; new Alpha-Piscium-6 dirt was protected as user-owned - Control-plane commit title: roadmap recheck T20 current live deployment blocker`
 - `2026-08-11 - T20 post-T19B blocker audit 3 - reverified the unchanged stale MCP/Mod deployment and disconnected runtime for the third consecutive Goal turn; the Goal is marked blocked after the ledger-only checkpoint - Control-plane commit title: roadmap confirm T20 blocked on current live deployment`
+- `2026-08-11 - T20 unblocked after T19B - user authorized repeated current MCP/Mod deployments and MultiMC 1.21.11-Iris restarts for this session; Codex restart remains user-owned - Control-plane commit title: roadmap unblock T20 for authorized live deployment`
