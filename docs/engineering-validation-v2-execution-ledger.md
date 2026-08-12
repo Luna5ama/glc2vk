@@ -107,7 +107,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T19B | P0 | Vibris | Compact capture results and localize artifact paths | DONE | `T19B compact capture results and localize artifact paths` |
 | T19C | P0 | Iris | Make the main-menu runtime ready for jobs | DONE | `T19C make main menu runtime ready` |
 | T19D | P0 | Vibris | Return typed live GPU metric receipts | DONE | `T19D return typed GPU metric receipts` |
-| T19E | P0 | Vibris | Complete live detached-worktree provenance | READY | `T19E complete live detached provenance` |
+| T19E | P0 | Vibris | Define strict detached-worktree provenance contract | READY | `T19E define strict detached provenance contract` |
+| T19F | P0 | Iris | Implement and prove live detached-worktree provenance | PENDING | `T19F complete live detached provenance` |
 | T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | BLOCKED | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
 
@@ -1992,7 +1993,7 @@ Evidence:
   source active. The profile independently exposed incomplete provenance because the detached worktree's branch and
   live Minecraft version are empty; T19E is inserted before T20 rather than hiding that separate acceptance blocker.
 
-### T19E — Complete live detached-worktree provenance
+### T19E — Define strict detached-worktree provenance contract
 
 Status: `READY`
 
@@ -2006,38 +2007,47 @@ Branch: `main`
 
 Primary files:
 
+- `I:\code\vibris\api\src\main\kotlin\dev\vibris\api\`
 - `I:\code\vibris\core\src\main\kotlin\dev\vibris\core\BenchmarkProvenance.kt`
+- `I:\code\vibris\core\src\main\kotlin\dev\vibris\core\ThreadBoundVibrisRuntimeAdapter.kt`
+- `I:\code\vibris\proto\vibris_control.proto`
 - `I:\code\vibris\mcp\src\main\cpp\source_preparer.cpp`
 - `I:\code\vibris\mcp\src\main\cpp\synchronous_job_runner.cpp`
 - Focused Core/source/provenance/profile tests
 
 Scope:
 
-- Record the current Minecraft version through one maintained runtime contract and make detached Git worktrees carry
-  an explicit truthful VCS state rather than an empty required branch string.
-- Keep strict-v2 provenance complete for user-supplied detached worktrees without claiming a named branch, then prove
-  the live AP4 profile passes the provenance and restoration gates with its typed T19D metrics.
-- Rebuild, redeploy, and restart the already authorized MultiMC instance for the live proof.
+- Define one required maintained host environment contract carrying exact Minecraft, Iris, GPU, OpenGL, and driver
+  identity, and make Core provenance consume that contract directly instead of reflective probing or property values.
+- Add an explicit strict-v2 attached/detached checkout state to prepared-source and result provenance. Require a real
+  branch only for attached checkouts and require an empty branch plus exact HEAD for detached checkouts.
+- Update source preparation, durable source projection, Core provenance, native normalization, and completeness gates
+  on this one canonical shape.
 
 Non-scope:
 
-- Do not add reflective method probing, version fallbacks, placeholder versions, a synthetic named branch, aliases,
-  legacy provenance fields, compatibility parsing, or modify either shader worktree.
-- Do not execute the remaining paired benchmark or claim T20 acceptance.
+- Do not add reflective method probing, system-property or version fallbacks, placeholder versions, a synthetic named
+  branch, aliases, legacy provenance fields, compatibility parsing, or modify Iris or either shader worktree.
+- Do not deploy, restart Minecraft, execute the live profile, run the remaining paired benchmark, or claim T20
+  acceptance; Iris implementation and live proof are owned by T19F.
 
 Acceptance:
 
-- Runtime provenance contains the exact non-empty Minecraft version from the maintained host contract.
-- Detached AP4/AP3 sources retain their exact HEAD and an explicit detached state without masquerading as a branch.
-- A live filtered AP4 profile has complete provenance, successful restoration, one attempt, and selectable typed GPU
-  samples; no provenance gate is bypassed or weakened.
+- The public/runtime host environment contract requires non-empty exact identity values and Core provenance contains
+  only the host-supplied values with no reflective or property fallback.
+- Source fixtures prove attached worktrees require a non-empty branch, while detached worktrees require an empty branch,
+  explicit detached state, and exact immutable HEAD throughout preparation, durable projection, and result provenance.
+- Strict-v2 profile/provenance completeness accepts the detached shape without weakening any other required field or
+  accepting the old branch-only shape.
 
 Verification:
 
-- Focused Core and native source/provenance/profile tests.
-- Iris Fabric build, authorized deployment/restart, and a live AP4 `night-gi-1-720p` filtered profile.
+- `.\gradlew.bat :vibris-api:test :vibris-core:test --offline --console=plain`
+- Build and run focused native source/provenance/profile/JobProtocol tests.
+- Static checks prove the affected production path contains no reflective environment probing, property fallback,
+  synthetic branch, legacy field, or compatibility parser.
 
-Expected commit title: `T19E complete live detached provenance`
+Expected commit title: `T19E define strict detached provenance contract`
 
 Blockers:
 
@@ -2048,12 +2058,81 @@ Evidence:
 - T19D live profile `67149367-c986-4988-a7bf-4ba7e33a8b67` returned valid filtered typed metrics and restoration but
   `complete_result_provenance(...)` rejected the result. The terminal provenance shows `branch=""` for detached AP4
   and `environment.minecraft_version=""`; both fields are mandatory and T20 uses the same detached AP4/AP3 scope.
+- `2026-08-11`: entry auditing proved the Minecraft version cannot be completed truthfully inside the Vibris-only
+  task: `BenchmarkProvenance` currently reflectively probes Minecraft/Iris/GL classes, while the only maintained
+  runtime host is implemented by Iris. The strict contract and VCS state therefore remain T19E Vibris work, and the
+  direct Iris implementation plus deployment/live proof are split into external task T19F so each repository can land
+  one atomic commit. No product source, deployment, process, configuration, or shader worktree was changed during this
+  control-plane insertion.
+
+### T19F — Implement and prove live detached-worktree provenance
+
+Status: `PENDING`
+
+Dependencies: T19E
+
+Repository: `I:\code\Iris`
+
+Worktree: `I:\code\Iris`
+
+Branch: `1.21.11-shaderdev`
+
+Primary files:
+
+- `I:\code\Iris\common\src\main\java\net\irisshaders\iris\vibris\MinecraftVibrisRuntimeHost.java`
+- Focused Iris Vibris bridge tests
+- `I:\code\vibris\docs\engineering-validation-v2-execution-ledger.md` in the later owner-repository receipt
+
+Scope:
+
+- Implement the T19E maintained environment contract directly from Minecraft `SharedConstants`, Iris version state,
+  and current OpenGL driver strings on the client thread.
+- Rebuild and deploy the current MCP and Mod, restart the already authorized MultiMC instance, and prove detached AP4
+  and AP3 retain exact HEAD plus explicit detached state.
+- Run one live AP4 `night-gi-1-720p` filtered profile and prove complete provenance, successful restoration, one
+  attempt, and selectable typed T19D samples.
+- Commit the Iris implementation first; on the next continuation record its full SHA and live receipts in this ledger
+  through the owner-repository receipt commit.
+
+Non-scope:
+
+- Do not add reflection, version/property fallbacks, placeholders, synthetic named branches, aliases, legacy fields,
+  compatibility parsing, or modify either shader worktree.
+- Do not execute the remaining paired benchmark or claim T20 acceptance.
+
+Acceptance:
+
+- Runtime provenance contains the exact non-empty Minecraft version and other required identity directly supplied by
+  the maintained Iris host contract.
+- Detached AP4/AP3 sources retain their exact HEAD and explicit detached state without masquerading as a branch.
+- The live filtered AP4 profile passes provenance and restoration with one attempt and non-empty selectable typed GPU
+  samples; no provenance gate is bypassed or weakened.
+- Iris compile/build and focused bridge tests pass, deployed MCP/Mod hashes match their verified build outputs, and the
+  external full Iris commit SHA is recorded in the later owner receipt.
+
+Verification:
+
+- `.\gradlew.bat :fabric:vibrisBridgeTest :common:compileJava :fabric:build --offline --console=plain`
+- Authorized MCP/Mod deployment and MultiMC restart.
+- Live AP4/AP3 source preparation checks and an AP4 `night-gi-1-720p` filtered profile.
+- SHA-256 verification of deployed artifacts and protected Git-state checks.
+
+Expected commit title: `T19F complete live detached provenance`
+
+Blockers:
+
+- Waiting for T19E to land the required Vibris contract.
+
+Evidence:
+
+- Inserted after T19E contract auditing proved truthful environment provenance requires a direct Iris host
+  implementation and therefore cannot share an atomic commit with Vibris protocol/Core/native changes.
 
 ### T20 — Run live two-worktree 720p acceptance
 
 Status: `BLOCKED`
 
-Dependencies: T19E
+Dependencies: T19F
 
 Repository: `I:\code\vibris` and `I:\code\Iris`
 
@@ -2095,7 +2174,8 @@ Expected commit title: `T20 record live v2 acceptance`
 Blockers:
 
 - Live typed GPU metrics now pass, but detached AP4/AP3 provenance remains incomplete because its required branch and
-  Minecraft-version fields are empty. T19E must make those fields truthful before the paired benchmark can run.
+  Minecraft-version fields are empty. T19E must define the strict contract and T19F must implement and prove it live
+  before the paired benchmark can run.
 - On `2026-08-11`, the user explicitly authorized this session to rebuild and redeploy the current MCP and Mod
   repeatedly and to restart the existing MultiMC `1.21.11-Iris` instance as needed. If the Codex application itself
   must restart to adopt a changed MCP command, stop after deployment and hand that restart to the user.
@@ -2350,7 +2430,7 @@ Evidence:
 
 Status: `PENDING`
 
-Dependencies: T01, T02, T02A, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T12A, T13, T14, T15, T16, T17, T18, T19, T19A, T19B, T19C, T19D, T19E, T20
+Dependencies: T01, T02, T02A, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T12A, T13, T14, T15, T16, T17, T18, T19, T19A, T19B, T19C, T19D, T19E, T19F, T20
 
 Repository: `I:\code\vibris`
 
@@ -2404,7 +2484,7 @@ Evidence:
 ```text
 T00 -> T01 -> T02 -> T02A -> T03 -> T04 -> T05 -> T06 -> T07 -> T08 -> T09
     -> T10 -> T11 -> T12 -> T12A -> T13 -> T14 -> T15 -> T16 -> T17 -> T18
-    -> T19 -> T19A -> T19B -> T19C -> T19D -> T19E -> T20 -> T99
+    -> T19 -> T19A -> T19B -> T19C -> T19D -> T19E -> T19F -> T20 -> T99
 ```
 
 Queue order is authoritative and serial even where technical dependencies could allow parallel work.
@@ -2482,3 +2562,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T20 unblocked after T19B - user authorized repeated current MCP/Mod deployments and MultiMC 1.21.11-Iris restarts for this session; Codex restart remains user-owned - Control-plane commit title: roadmap unblock T20 for authorized live deployment`
 - `2026-08-11 - T19D inserted - live get_gpu_metrics completed OK but Core discarded the runtime JSON and emitted EmptyReceipt, preventing profile and paired-benchmark statistics; inserted a no-compatibility typed metric-receipt remediation before T20 - Control-plane commit title: roadmap insert T19D typed GPU metric remediation`
 - `2026-08-11 - T19D - preserved canonical live GPU timing JSON as filtered strict-v2 typed receipts with real samples and explicit empty/malformed failures; Capture 26/26, Core 105/105, native 13/13, Iris build, deployed hashes, and a one-attempt filtered live AP4 profile passed; inserted T19E for the separately exposed detached provenance blocker - Commit title: T19D return typed GPU metric receipts`
+- `2026-08-11 - T19E/T19F split - contract auditing proved truthful Minecraft/GPU environment identity requires a direct Iris host implementation while detached VCS state belongs to Vibris protocol/Core/native code; split the work so Vibris T19E lands the strict contract before external Iris T19F implements and proves it live - Control-plane commit title: roadmap split T19E cross repository provenance`
