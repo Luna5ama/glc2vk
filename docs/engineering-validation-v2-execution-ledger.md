@@ -102,6 +102,7 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T18 | P0 | Vibris | Complete strict v2 cutover and documentation | DONE | `T18 complete strict v2 cutover` |
 | T19 | P0 | Vibris | Run offline integrated acceptance | DONE | `T19 verify offline v2 integration` |
 | T19A | P0 | Vibris | Repair strict v2 live bootstrap | READY | `T19A repair strict v2 live bootstrap` |
+| T19B | P0 | Vibris | Compact capture results and localize artifact paths | PENDING | `T19B compact capture results and localize artifact paths` |
 | T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | PENDING | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
 
@@ -1668,11 +1669,91 @@ Evidence:
   the other maintained unary calls fall through to gRPC `UNIMPLEMENTED` when configuration/runtime bootstrap fails.
   No product source, deployment, process, or shader worktree was changed during this control-plane insertion.
 
-### T20 — Run live two-worktree 720p acceptance
+### T19B — Compact capture results and localize artifact paths
 
 Status: `PENDING`
 
 Dependencies: T19A
+
+Repository: `I:\code\vibris`
+
+Worktree: `I:\code\vibris`
+
+Branch: `main`
+
+Primary files:
+
+- `I:\code\vibris\mcp\src\main\cpp\synchronous_job_runner.cpp`
+- `I:\code\vibris\mcp\src\main\cpp\workspace_artifact_link.cpp`
+- `I:\code\vibris\mcp\src\test\cpp\synchronous_job_runner_tests.cpp`
+- A focused `workspace_artifact_link` test target and CTest registration
+
+Scope:
+
+- Project synchronous `load_and_screenshot` results into a compact task-specific schema containing the request/job
+  identity and state, the primary screenshot identity/path/hash/size/resource metadata, manifest identity/path/hash,
+  concise restoration state, source/config/preset identities, and useful timings.
+- Keep the complete immutable Core `JobResult`, effective settings, provenance, action/prelude receipts, and all audit
+  detail in its durable result artifact and explicit job/artifact inspection surfaces; do not repeat those structures
+  in the synchronous screenshot response or duplicate artifact arrays at multiple levels.
+- Recursively discover and rewrite every strict-v2 user-visible `relative_path`, `manifest_path`, and `log_path` in a
+  tool outcome, including nested results, receipts, manifests, diagnostics, and matrix/case envelopes. Validate every
+  target before mutation, create or verify the request worktree `.vibris\artifact` link, and return only localized
+  absolute paths beneath that link.
+- Preserve fail-closed `ARTIFACT_LINK_ERROR` behavior for missing, cross-workspace, reparse-point, or non-ordinary
+  targets, and prevent partial rewrites or Minecraft-internal artifact-root leakage.
+
+Non-scope:
+
+- Do not add v1 parsing, aliases, compatibility projections, fallback roots, or dual response shapes.
+- Do not change Core artifact storage, truncate durable result files, or discard immutable audit evidence.
+- Do not deploy, restart Minecraft, resume T20, or modify either shader worktree in this task.
+
+Acceptance:
+
+- A fixture matching the demonstrated raw screenshot result produces a bounded compact structured payload no larger
+  than 16 KiB, contains zero `changed_from_default` entries and no raw action/prelude receipts, and exposes exactly
+  one primary screenshot handle plus one manifest handle while retaining IDs, hashes, dimensions, restoration, and
+  required source/config/preset identity.
+- The complete durable result artifact remains available, byte/hash stable, and contains the full provenance and
+  effective-setting evidence omitted from the synchronous response.
+- Every returned artifact, manifest, and log path anywhere in the final tool outcome is absolute beneath
+  `<worktree>\.vibris\artifact`; no `I:\MultiMC\...\.minecraft\vibris\artifacts` or other backing-store path survives.
+- Recursive rewriting covers nested action/prelude receipts, result envelopes, diagnostics, manifests, and case
+  collections, while invalid targets fail before any path is rewritten.
+
+Verification:
+
+- `cmake --build --preset release --target vibris-synchronous-job-runner-tests vibris-workspace-artifact-link-tests`
+- `ctest --preset release -R "StrictV2Result|ScreenshotResult|ArtifactLink|JobProtocol" --output-on-failure`
+- Run focused compact-result and recursive-path fixtures; statically prove the synchronous screenshot projection has
+  no full effective-settings/action-receipt copy and that every user-visible path field traverses the strict rewrite.
+
+Expected commit title: `T19B compact capture results and localize artifact paths`
+
+Blockers:
+
+- None known; execution waits for T19A in the authoritative serial queue.
+
+Evidence:
+
+- `2026-08-11`: returned `load_and_screenshot` request/job
+  `fb578c26-e8a0-47de-9fca-68d470b7e730` was 192,710 characters across 5,083 lines and repeated 692
+  `changed_from_default` setting entries through the raw result/provenance/receipt envelope. It returned five
+  Minecraft-internal artifact paths and zero paths beneath the request worktree `.vibris\artifact` link.
+- The screenshot artifact is 1,888,374 bytes with SHA-256
+  `34D494A164A4E08B0FE2BA2A5C0D50A0F87B03AB4523F1ACD256981CC1ABFFF5`. Source inspection shows
+  `SynchronousJobRunner::run` special-normalizes analysis recipes but passes `load_and_screenshot` through as the raw
+  terminal job envelope. `WorkspaceArtifactLink::collect_paths` only inspects shallow legacy-shaped collections and
+  misses strict-v2 nested `relative_path` fields, despite `McpBackend` invoking the rewriter.
+- No product source, deployment, process, configuration, artifact, or shader worktree was changed during this
+  control-plane insertion.
+
+### T20 — Run live two-worktree 720p acceptance
+
+Status: `PENDING`
+
+Dependencies: T19B
 
 Repository: `I:\code\vibris` and `I:\code\Iris`
 
@@ -1712,8 +1793,8 @@ Expected commit title: `T20 record live v2 acceptance`
 Blockers:
 
 - No external blocker remains. The prior schema-v1 configuration blocker was resolved by the explicitly authorized
-  archival and restart. T20 is intentionally `PENDING` behind T19A so live acceptance is not promoted over the four
-  newly demonstrated strict-v2 bootstrap defects.
+  archival and restart. T20 is intentionally `PENDING` behind T19A and T19B so live acceptance is not promoted over
+  the strict-v2 bootstrap defects, over-expanded capture result, or unlocalized artifact paths.
 
 Evidence:
 
@@ -1840,12 +1921,16 @@ Evidence:
   `load_shader` schema disagrees with its argument policy, and fresh screenshot planning requires a resource catalog
   before its generated load prelude. T20 therefore waits on T19A; no T20 queueing, compile, benchmark, after-pass, or
   restoration gate is claimed complete.
+- A later successful screenshot request exposed T19B: the synchronous response returned a 192,710-character raw
+  result with 692 expanded setting entries and five paths under the Minecraft backing artifact root instead of the
+  request worktree `.vibris\artifact` link. T20 now also waits for compact result projection and recursive path
+  localization; the successful screenshot itself does not satisfy any T20 artifact or response-shape gate.
 
 ### T99 — Final integrated audit
 
 Status: `PENDING`
 
-Dependencies: T01, T02, T02A, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T12A, T13, T14, T15, T16, T17, T18, T19, T19A, T20
+Dependencies: T01, T02, T02A, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T12A, T13, T14, T15, T16, T17, T18, T19, T19A, T19B, T20
 
 Repository: `I:\code\vibris`
 
@@ -1899,7 +1984,7 @@ Evidence:
 ```text
 T00 -> T01 -> T02 -> T02A -> T03 -> T04 -> T05 -> T06 -> T07 -> T08 -> T09
     -> T10 -> T11 -> T12 -> T12A -> T13 -> T14 -> T15 -> T16 -> T17 -> T18
-    -> T19 -> T19A -> T20 -> T99
+    -> T19 -> T19A -> T19B -> T20 -> T99
 ```
 
 Queue order is authoritative and serial even where technical dependencies could allow parallel work.
@@ -1917,6 +2002,9 @@ Queue order is authoritative and serial even where technical dependencies could 
 - [x] Every result contains complete immutable provenance and correct shader-content stale semantics.
 - [x] Benchmark decisions enforce target/sibling/sentinel guardrails, measured noise, confidence, order, drift, compile, visual, provenance, and restoration gates.
 - [x] Artifact v2 supports TTL, hash manifests, request/job grouping, capacity prediction, ownership-safe list/detail/delete, and worktree-local paths.
+- [ ] Synchronous capture recipes return compact task-specific payloads while durable detailed evidence remains
+  available, and every user-visible artifact path is localized beneath the request worktree `.vibris\artifact` link
+  with no internal storage-path leakage.
 - [x] `dump_texture_after_pass` and `dump_buffer_after_pass` capture exact named pass boundaries with correct flip, visibility, bytes, artifacts, and GL-state restoration.
 - [x] Full Vibris native/Gradle and Iris build validation passes.
 - [ ] A fresh schema-2 runtime has the correct fixed-pack root, truthful unavailable unary failures, a usable typed
@@ -1958,6 +2046,7 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T18 - completed the schema-2 hard cutover, removed obsolete pre-v2 integration/probe/fixture and dual-read/write paths, rewrote the operator guide, passed Gradle plus the release CMake build and 79/79 CTest cases, and left protected/runtime/user data untouched - Commit title: T18 complete strict v2 cutover`
 - `2026-08-11 - T19 - passed fresh 163-test JVM, 79-test native, 15-test Iris bridge, and four-test OpenGL runtime acceptance; proved strict-v2 negotiation/restart and recorded hashes for the local MCP/mod delivery outputs without deployment - Commit title: T19 verify offline v2 integration`
 - `2026-08-11 - T19A inserted - live clean-cutover recovery exposed an invalid default shaderpack root, unavailable unary UNIMPLEMENTED responses, a load_shader field mismatch, and pre-load screenshot resource planning; inserted a no-compatibility strict-v2 bootstrap remediation before T20 - Control-plane commit title: roadmap insert T19A strict v2 live bootstrap remediation`
+- `2026-08-11 - T19B inserted - a live load_and_screenshot response returned a 192710-character raw JobResult with 692 expanded setting entries and five Minecraft-internal artifact paths; inserted compact recipe projection and recursive worktree-path localization remediation before T20 - Control-plane commit title: roadmap insert T19B compact screenshot result remediation`
 - `2026-08-11 - T20 blocked - the live instance embeds 335 v1 and zero v2 protocol entries, the configured MCP publishes only the old five-tool surface, and no two shader worktrees were supplied; no compatibility path, deployment, or restart was attempted - Control-plane commit title: roadmap block T20 pending matching live scope`
 - `2026-08-11 - T20 blocker audit 2 - reverified the unchanged pre-v2 runtime/MCP and missing two-worktree scope; this is the second consecutive blocked Goal turn, so the Goal remains active - Control-plane commit title: roadmap recheck T20 live scope blocker`
 - `2026-08-11 - T20 blocker audit 3 - reverified the unchanged pre-v2 runtime/MCP and missing two-worktree scope for the third consecutive blocked Goal turn; the Goal is marked blocked after the ledger-only atomic checkpoint - Control-plane commit title: roadmap confirm T20 blocked awaiting live scope`
