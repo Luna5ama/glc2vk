@@ -231,4 +231,103 @@ inline proto::ServerMessage completed_visual_message() {
     return message;
 }
 
+inline void fill_artifact(proto::ArtifactMetadata* artifact, const std::string_view artifact_id,
+    const proto::ArtifactKind kind, const proto::ArtifactRole role, const std::string_view relative_path,
+    const std::string_view sha256, const std::uint64_t byte_size, const proto::ArtifactFormat format,
+    const std::string_view media_type) {
+    artifact->set_artifact_id(artifact_id);
+    artifact->set_job_id("job-screenshot");
+    artifact->set_request_id("request-screenshot");
+    artifact->set_relative_path(relative_path);
+    artifact->set_kind(kind);
+    artifact->set_format(format);
+    artifact->set_role(role);
+    artifact->set_media_type(media_type);
+    artifact->set_byte_size(byte_size);
+    artifact->set_sha256(sha256);
+    artifact->set_created_at_unix_ms(400);
+    artifact->set_expires_at_unix_ms(500);
+}
+
+inline proto::ServerMessage completed_screenshot_message() {
+    proto::ServerMessage message;
+    message.set_request_id("request-screenshot");
+    auto* completed = message.mutable_job_completed();
+    completed->set_job_id("job-screenshot");
+    completed->set_request_id("request-screenshot");
+    auto* result = completed->mutable_result();
+    fill_result_common(result, "source-uuid");
+    result->set_result_manifest_id("manifest-artifact");
+    auto* provenance = result->mutable_provenance();
+    provenance->set_requested_revision("workspace");
+    provenance->set_resolved_revision("0123456789abcdef");
+    provenance->set_preset_id("night-gi-1-720p");
+    provenance->set_preset_sha256("preset-sha256");
+    provenance->set_config_sha256("config-sha256");
+    provenance->mutable_effective_settings()->set_settings_sha256("settings-sha256");
+    auto* load = add_load_receipt(result, 0, "source-uuid", "source-sha256");
+    load->mutable_runtime_mutation()->mutable_effective_settings()->set_settings_sha256("settings-sha256");
+    for (std::size_t index = 0; index < 346; ++index) {
+        const auto name = "SETTING_" + std::to_string(index);
+        for (auto* settings : {provenance->mutable_effective_settings(),
+                load->mutable_runtime_mutation()->mutable_effective_settings()}) {
+            auto* setting = settings->add_settings();
+            setting->set_name(name);
+            setting->set_value("0");
+            setting->set_default_value("0");
+            setting->set_origin(proto::SHADER_SETTING_ORIGIN_DEFAULT);
+            setting->set_changed_from_default(false);
+        }
+    }
+
+    auto* wait = result->add_action_receipts();
+    wait->set_action_index(0);
+    wait->set_kind(proto::ACTION_KIND_WAIT_FRAMES);
+    wait->set_status(proto::RECEIPT_STATUS_OK);
+    wait->mutable_wait_frames()->set_requested_frames(32);
+    wait->mutable_wait_frames()->set_completed_frames(32);
+    wait->mutable_wait_frames()->set_start_frame(100);
+    wait->mutable_wait_frames()->set_end_frame(132);
+
+    auto* screenshot = result->add_action_receipts();
+    screenshot->set_action_index(1);
+    screenshot->set_kind(proto::ACTION_KIND_TAKE_SCREENSHOT);
+    screenshot->set_status(proto::RECEIPT_STATUS_OK);
+    auto* capture = screenshot->mutable_capture();
+    capture->set_frame_id(133);
+    auto* resource = capture->mutable_resource();
+    resource->set_logical_name("beauty");
+    resource->set_physical_name("beauty");
+    resource->set_kind(proto::RESOURCE_KIND_FINAL_FRAMEBUFFER);
+    resource->set_width(1280);
+    resource->set_height(720);
+    resource->set_depth(1);
+    resource->set_mip_levels(1);
+    resource->set_layers(1);
+    resource->set_internal_format("RGBA8");
+    resource->set_channel_count(4);
+    resource->set_scalar_type(proto::SCALAR_TYPE_UINT8);
+    resource->set_byte_size(3'686'400);
+    resource->set_frame_id(133);
+
+    constexpr std::string_view root =
+        "I:/server/artifacts/workspace-id/job-screenshot/request-screenshot/";
+    auto* screenshot_artifact = result->add_artifacts();
+    fill_artifact(screenshot_artifact, "screenshot-artifact", proto::ARTIFACT_KIND_SCREENSHOT,
+        proto::ARTIFACT_ROLE_PRIMARY, std::string(root) + "screenshot.png", "screenshot-sha256", 1'888'374,
+        proto::ARTIFACT_FORMAT_PNG, "image/png");
+    screenshot_artifact->mutable_resource()->CopyFrom(*resource);
+    capture->add_artifacts()->CopyFrom(*screenshot_artifact);
+    fill_artifact(result->add_artifacts(), "result-artifact", proto::ARTIFACT_KIND_RESULT,
+        proto::ARTIFACT_ROLE_PRIMARY, std::string(root) + "result.json", "result-sha256", 192'710,
+        proto::ARTIFACT_FORMAT_JSON, "application/json");
+    fill_artifact(result->add_artifacts(), "shader-log", proto::ARTIFACT_KIND_SHADER_COMPILE_LOG,
+        proto::ARTIFACT_ROLE_DIAGNOSTIC, std::string(root) + "shader.log", "shader-log-sha256", 25,
+        proto::ARTIFACT_FORMAT_TEXT, "text/plain; charset=utf-8");
+    fill_artifact(result->add_artifacts(), "manifest-artifact", proto::ARTIFACT_KIND_MANIFEST,
+        proto::ARTIFACT_ROLE_METADATA, std::string(root) + "manifest.json", "manifest-sha256", 1'535,
+        proto::ARTIFACT_FORMAT_JSON, "application/json");
+    return message;
+}
+
 }

@@ -193,6 +193,9 @@ if(BUILD_TESTING)
     target_include_directories(vibris-synchronous-job-runner-tests PRIVATE src/test/cpp)
     target_link_libraries(vibris-synchronous-job-runner-tests PRIVATE vibris_mcp_core)
 
+    add_executable(vibris-workspace-artifact-link-tests src/test/cpp/workspace_artifact_link_tests.cpp)
+    target_link_libraries(vibris-workspace-artifact-link-tests PRIVATE vibris_mcp_core)
+
     add_executable(vibris-action-schema-tests src/test/cpp/action_schema_tests.cpp)
     target_link_libraries(vibris-action-schema-tests PRIVATE vibris_mcp_core)
 
@@ -218,6 +221,7 @@ if(BUILD_TESTING)
         target_compile_options(vibris-grpc-accepted-resume-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-job-protocol-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-synchronous-job-runner-tests PRIVATE /W4 /permissive-)
+        target_compile_options(vibris-workspace-artifact-link-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-action-schema-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-durable-workflow-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-paired-benchmark-tests PRIVATE /W4 /permissive-)
@@ -232,6 +236,7 @@ if(BUILD_TESTING)
                 vibris-grpc-source-ownership-tests vibris-grpc-accepted-resume-tests)
     add_dependencies(mcp-tests vibris-job-protocol-tests vibris-action-schema-tests)
     add_dependencies(mcp-tests vibris-synchronous-job-runner-tests)
+    add_dependencies(mcp-tests vibris-workspace-artifact-link-tests)
     add_dependencies(mcp-tests vibris-durable-workflow-tests)
     add_dependencies(mcp-tests vibris-paired-benchmark-tests)
 
@@ -375,8 +380,15 @@ if(BUILD_TESTING)
             StrictV2ResultShape
             ProfileNormalizationStrictV2
             MatrixNormalizationStrictV2
-            VisualNormalizationStrictV2)
+            VisualNormalizationStrictV2
+            ScreenshotResultCompactStrictV2)
         add_test(NAME ${scenario} COMMAND vibris-synchronous-job-runner-tests ${scenario})
+    endforeach()
+    foreach(scenario
+            ArtifactLinkRecursivelyLocalizesStrictV2Paths
+            ArtifactLinkRejectsBeforePartialRewrite
+            ArtifactLinkRejectsUnsafeTargets)
+        add_test(NAME ${scenario} COMMAND vibris-workspace-artifact-link-tests ${scenario})
     endforeach()
     add_test(NAME ActionSchemaPassResourceV2Contract COMMAND vibris-action-schema-tests)
     add_test(NAME DurableMatrixCheckpointResume COMMAND vibris-durable-workflow-tests)

@@ -3,7 +3,11 @@
 #include "synchronous_job_fixture.hpp"
 #include "synchronous_job_runner.hpp"
 
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -30,6 +34,15 @@ Json profile_arguments() {
 	return {{"recipe", "profile"}, {"frames", 32}, {"warmup_frames", 4},
 		{"result_detail", "full"}, {"__vibris_case_id", "candidate--default"},
 		{"__vibris_source_id", "candidate"}, {"__vibris_config_id", "default"}};
+}
+
+std::size_t occurrences(const std::string_view text, const std::string_view token) {
+	std::size_t count = 0;
+	for (std::size_t offset = 0; (offset = text.find(token, offset)) != std::string_view::npos;
+		offset += token.size()) {
+		++count;
+	}
+	return count;
 }
 
 void strict_v2_result_rejects_removed_shape() {
@@ -113,16 +126,75 @@ void visual_normalization_strict_v2() {
 	require(guards.at("passed") == true, "strict-v2 visual receipt failed deterministic guards");
 }
 
+void screenshot_result_compact_strict_v2() {
+	const auto terminal = terminal_json(completed_screenshot_message());
+	const auto durable_bytes = terminal.dump();
+	require(occurrences(durable_bytes, "changed_from_default") == 692,
+		"screenshot fixture does not reproduce the expanded effective-setting payload");
+	const auto durable_path = std::filesystem::temp_directory_path() /
+		("vibris-screenshot-result-" + std::to_string(
+			std::chrono::steady_clock::now().time_since_epoch().count()) + ".json");
+	{
+		std::ofstream output(durable_path, std::ios::binary | std::ios::trunc);
+		output.write(durable_bytes.data(), static_cast<std::streamsize>(durable_bytes.size()));
+	}
+
+	const Json arguments{{"recipe", "load_and_screenshot"}, {"preset_id", "night-gi-1-720p"}};
+	const auto result = vibris::mcp::detail::normalize_load_and_screenshot_result(terminal, arguments);
+	std::ifstream input(durable_path, std::ios::binary);
+	const std::string durable_after{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+	std::error_code cleanup_error;
+	std::filesystem::remove(durable_path, cleanup_error);
+	require(durable_after == durable_bytes && terminal.dump() == durable_bytes,
+		"compact projection changed the complete immutable durable result bytes");
+	require(terminal.at("result").at("artifacts").at(1).at("sha256") == "result-sha256",
+		"compact projection changed the durable result artifact hash identity");
+
+	const auto encoded = result.dump();
+	require(encoded.size() <= 16U * 1024U && encoded.find("changed_from_default") == std::string::npos,
+		"compact screenshot result exceeded 16 KiB or retained effective-setting entries");
+	require(!result.contains("action_receipts") && !result.contains("prelude_receipts") &&
+		!result.contains("artifacts") && !result.contains("provenance"),
+		"compact screenshot result retained raw audit collections");
+	require(result.at("success") == true && result.at("status") == "completed" &&
+		result.at("job_id") == "job-screenshot" && result.at("request_id") == "request-screenshot",
+		"compact screenshot result lost its terminal identity or state");
+	require(result.at("source").at("source_id") == "source" &&
+		result.at("source").at("source_uuid") == "source-uuid" &&
+		result.at("source").at("source_sha256") == "source-sha" &&
+		result.at("config").at("config_id") == "config" &&
+		result.at("config").at("config_sha256") == "config-sha256" &&
+		result.at("preset").at("preset_id") == "night-gi-1-720p",
+		"compact screenshot result lost source, config, or preset identity");
+	require(result.at("screenshot").at("artifact_id") == "screenshot-artifact" &&
+		result.at("screenshot").at("sha256") == "screenshot-sha256" &&
+		result.at("screenshot").at("byte_size") == "1888374" &&
+		result.at("screenshot").at("resource").at("width") == 1280 &&
+		result.at("screenshot").at("resource").at("height") == 720 &&
+		result.at("manifest").at("manifest_id") == "manifest-artifact" &&
+		result.at("manifest").at("sha256") == "manifest-sha256",
+		"compact screenshot result lost its single screenshot or manifest handle");
+	require(result.at("restoration").at("status") == "RECEIPT_STATUS_OK" &&
+		result.at("restoration").at("source_matches") == true &&
+		result.at("restoration").at("settings_match") == true &&
+		result.at("restoration").at("scene_matches") == true &&
+		result.at("restoration").at("temporal_state_reset") == true &&
+		result.at("timings").at("total_ms") == "200",
+		"compact screenshot result lost restoration or timing evidence");
+}
+
 void run(const std::string_view scenario) {
 	if (scenario == "StrictV2ResultShape") return strict_v2_result_rejects_removed_shape();
 	if (scenario == "ProfileNormalizationStrictV2") return profile_normalization_strict_v2();
 	if (scenario == "MatrixNormalizationStrictV2") return matrix_normalization_strict_v2();
 	if (scenario == "VisualNormalizationStrictV2") return visual_normalization_strict_v2();
+	if (scenario == "ScreenshotResultCompactStrictV2") return screenshot_result_compact_strict_v2();
 	if (scenario == "all") {
 		strict_v2_result_rejects_removed_shape();
 		profile_normalization_strict_v2();
 		matrix_normalization_strict_v2();
 		visual_normalization_strict_v2();
+		screenshot_result_compact_strict_v2();
 		return;
 	}
 	throw std::invalid_argument("unknown scenario");

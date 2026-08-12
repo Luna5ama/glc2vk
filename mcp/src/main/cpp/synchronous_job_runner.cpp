@@ -830,6 +830,108 @@ Json normalize_action_sequence_result(const Json& terminal, const std::string_vi
     return result;
 }
 
+Json normalize_load_and_screenshot_result(const Json& terminal, const Json& arguments) {
+    const auto& wire = strict_job_result(terminal);
+    const auto& artifacts = strict_array(wire, "artifacts");
+    const Json* screenshot = nullptr;
+    const Json* manifest = nullptr;
+    for (const auto& artifact : artifacts) {
+        if (!artifact.is_object()) throw std::invalid_argument("ArtifactMetadata is not an object");
+        const auto kind = artifact.value("kind", std::string{});
+        if (kind == "ARTIFACT_KIND_SCREENSHOT" &&
+            artifact.value("role", std::string{}) == "ARTIFACT_ROLE_PRIMARY") {
+            if (screenshot != nullptr) {
+                throw std::invalid_argument("load_and_screenshot returned multiple primary screenshots");
+            }
+            screenshot = &artifact;
+        } else if (kind == "ARTIFACT_KIND_MANIFEST") {
+            if (manifest != nullptr) {
+                throw std::invalid_argument("load_and_screenshot returned multiple manifest artifacts");
+            }
+            manifest = &artifact;
+        }
+    }
+    if (screenshot == nullptr) {
+        throw std::invalid_argument("load_and_screenshot is missing its primary screenshot artifact");
+    }
+    if (manifest == nullptr) {
+        throw std::invalid_argument("load_and_screenshot is missing its manifest artifact");
+    }
+
+    const auto result_manifest_id = wire.value("result_manifest_id", std::string{});
+    if (result_manifest_id.empty() || manifest->value("artifact_id", std::string{}) != result_manifest_id) {
+        throw std::invalid_argument("load_and_screenshot manifest identity does not match JobResult");
+    }
+
+    const auto provenance = wire.value("provenance", Json::object());
+    if (!provenance.is_object()) {
+        throw std::invalid_argument("load_and_screenshot provenance is not an object");
+    }
+    const auto restoration = wire.value("restoration", Json::object());
+    if (!restoration.is_object()) {
+        throw std::invalid_argument("load_and_screenshot restoration is not an object");
+    }
+    bool receipts_ok = true;
+    Json first_error = nullptr;
+    for (const auto* receipt : ordered_receipts(wire)) {
+        if (!receipt_ok(*receipt)) {
+            receipts_ok = false;
+            if (first_error.is_null()) first_error = receipt_error(*receipt);
+        }
+    }
+    const auto matches = [&restoration](const std::string_view expected, const std::string_view actual) {
+        const auto expected_value = restoration.value(expected, std::string{});
+        return !expected_value.empty() && expected_value == restoration.value(actual, std::string{});
+    };
+    const bool restoration_ok = restoration.value("status", std::string{}) == "RECEIPT_STATUS_OK";
+    const bool complete = receipts_ok && restoration_ok;
+
+    Json compact_restoration{
+        {"status", restoration.value("status", std::string{})},
+        {"source_matches", matches("expected_source_uuid", "actual_source_uuid") &&
+            matches("expected_source_sha256", "actual_source_sha256")},
+        {"settings_match", matches("expected_settings_sha256", "actual_settings_sha256")},
+        {"scene_matches", matches("expected_scene_sha256", "actual_scene_sha256")},
+        {"temporal_state_reset", restoration.value("temporal_state_reset", false)},
+        {"verified_at_unix_ms", restoration.value("verified_at_unix_ms", Json(0))},
+    };
+    if (const auto error = restoration.find("error"); error != restoration.end() && error->is_object()) {
+        compact_restoration["error"] = *error;
+    }
+
+    Json manifest_handle{
+        {"manifest_id", manifest->value("artifact_id", std::string{})},
+        {"relative_path", manifest->value("relative_path", std::string{})},
+        {"sha256", manifest->value("sha256", std::string{})},
+        {"byte_size", manifest->value("byte_size", Json(0))},
+        {"created_at_unix_ms", manifest->value("created_at_unix_ms", Json(0))},
+        {"expires_at_unix_ms", manifest->value("expires_at_unix_ms", Json(0))},
+    };
+
+    return {{"success", complete},
+        {"kind", "load_and_screenshot"},
+        {"status", complete ? "completed" : "incomplete"},
+        {"error", std::move(first_error)},
+        {"job_id", terminal.value("job_id", std::string{})},
+        {"request_id", terminal.value("request_id", std::string{})},
+        {"source", {{"source_id", arguments.value("__vibris_source_id", std::string("source"))},
+            {"source_uuid", provenance.value("active_source_uuid", std::string{})},
+            {"source_sha256", provenance.value("source_snapshot_sha256", std::string{})},
+            {"requested_revision", provenance.value("requested_revision", std::string{})},
+            {"resolved_revision", provenance.value("resolved_revision", std::string{})}}},
+        {"config", {{"config_id", arguments.value("__vibris_config_id", std::string("config"))},
+            {"config_sha256", provenance.value("config_sha256", std::string{})},
+            {"settings_sha256", provenance.value("effective_settings", Json::object())
+                .value("settings_sha256", std::string{})}}},
+        {"preset", {{"preset_id", provenance.value("preset_id",
+            arguments.value("preset_id", std::string{}))},
+            {"preset_sha256", provenance.value("preset_sha256", std::string{})}}},
+        {"screenshot", *screenshot},
+        {"manifest", std::move(manifest_handle)},
+        {"restoration", std::move(compact_restoration)},
+        {"timings", wire.value("timings", Json::object())}};
+}
+
 }
 
 SynchronousJobRunner::SynchronousJobRunner(
@@ -1083,6 +1185,10 @@ ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& ar
             }
             result["visual_guards"] = std::move(visual_guards);
             return result;
+        }
+        if (recipe == "load_and_screenshot" && std::holds_alternative<Json>(outcome)) {
+            return detail::normalize_load_and_screenshot_result(
+                std::get<Json>(std::move(outcome)), arguments);
         }
         if (auto* result = std::get_if<Json>(&outcome)) {
             (*result)["kind"] = recipe;

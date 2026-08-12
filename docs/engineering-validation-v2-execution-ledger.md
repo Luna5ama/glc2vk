@@ -102,8 +102,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T18 | P0 | Vibris | Complete strict v2 cutover and documentation | DONE | `T18 complete strict v2 cutover` |
 | T19 | P0 | Vibris | Run offline integrated acceptance | DONE | `T19 verify offline v2 integration` |
 | T19A | P0 | Vibris | Repair strict v2 live bootstrap | DONE | `T19A repair strict v2 live bootstrap` |
-| T19B | P0 | Vibris | Compact capture results and localize artifact paths | READY | `T19B compact capture results and localize artifact paths` |
-| T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | PENDING | `T20 record live v2 acceptance` |
+| T19B | P0 | Vibris | Compact capture results and localize artifact paths | DONE | `T19B compact capture results and localize artifact paths` |
+| T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | READY | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
 
 ## Task details
@@ -1703,7 +1703,7 @@ Evidence:
 
 ### T19B — Compact capture results and localize artifact paths
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T19A
 
@@ -1765,7 +1765,7 @@ Expected commit title: `T19B compact capture results and localize artifact paths
 
 Blockers:
 
-- None known; execution waits for T19A in the authoritative serial queue.
+- None.
 
 Evidence:
 
@@ -1780,10 +1780,36 @@ Evidence:
   misses strict-v2 nested `relative_path` fields, despite `McpBackend` invoking the rewriter.
 - No product source, deployment, process, configuration, artifact, or shader worktree was changed during this
   control-plane insertion.
+- Added a strict `load_and_screenshot` projection that retains terminal job/request state, one primary screenshot
+  handle with complete resource dimensions and hashes, one manifest handle, source/config/preset identities, concise
+  restoration verification, and timings. It omits the raw provenance, effective-setting arrays, action/prelude
+  receipts, generic artifact arrays, result artifact, and shader-log duplication from the synchronous response while
+  leaving the complete raw terminal result and its artifact/hash identities unchanged for job/artifact inspection.
+- Replaced the shallow artifact-path collector with recursive traversal of every strict-v2 `relative_path`,
+  `manifest_path`, and `log_path` in objects and arrays. All paths are validated as absolute, ordinary files beneath
+  the same workspace backing directory before any JSON mutation or link creation; only then is the verified worktree
+  `.vibris\artifact` link created and every field rewritten. Missing, cross-workspace, reparse-point, directory, and
+  nonordinary targets retain fail-closed `ARTIFACT_LINK_ERROR` behavior with no partial rewrite.
+- The screenshot fixture reproduces 692 expanded `changed_from_default` entries, proves the compact payload is at
+  most 16 KiB with zero expanded settings or raw receipts, preserves the immutable full terminal bytes and result
+  artifact hash identity, and retains exactly one screenshot and one manifest handle. Recursive fixtures cover
+  nested results, action/prelude receipts, diagnostics, manifests, and matrix cases and prove zero backing-root
+  leakage plus validation-before-mutation semantics.
+- Visual Studio release builds passed for `vibris-synchronous-job-runner-tests`,
+  `vibris-workspace-artifact-link-tests`, `vibris-job-protocol-tests`, and production `vibris-mcp`. Direct `all`
+  execution passed for both focused executables, and
+  `ctest --preset release -R 'StrictV2Result|ScreenshotResult|ArtifactLink|JobProtocol' --output-on-failure` passed
+  6/6 tests. Static inspection found the screenshot projection contains no full settings/receipt collection and the
+  path rewriter has exactly the three recursively traversed strict-v2 path keys with no old `artifacts[].path`,
+  fallback, legacy, compatibility, or dual-shape branch.
+- No deployment, Minecraft/launcher restart, live T20 request, Core storage change, or shader-worktree edit occurred.
+  Protected Vibris `capture/a.spv`, Iris runtime directories, and every unrelated Alpha-Piscium dirty file remained
+  untouched and unstaged. Commit: this task's commit with subject
+  `T19B compact capture results and localize artifact paths`.
 
 ### T20 — Run live two-worktree 720p acceptance
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T19B
 
@@ -2034,7 +2060,7 @@ Queue order is authoritative and serial even where technical dependencies could 
 - [x] Every result contains complete immutable provenance and correct shader-content stale semantics.
 - [x] Benchmark decisions enforce target/sibling/sentinel guardrails, measured noise, confidence, order, drift, compile, visual, provenance, and restoration gates.
 - [x] Artifact v2 supports TTL, hash manifests, request/job grouping, capacity prediction, ownership-safe list/detail/delete, and worktree-local paths.
-- [ ] Synchronous capture recipes return compact task-specific payloads while durable detailed evidence remains
+- [x] Synchronous capture recipes return compact task-specific payloads while durable detailed evidence remains
   available, and every user-visible artifact path is localized beneath the request worktree `.vibris\artifact` link
   with no internal storage-path leakage.
 - [x] `dump_texture_after_pass` and `dump_buffer_after_pass` capture exact named pass boundaries with correct flip, visibility, bytes, artifacts, and GL-state restoration.
@@ -2080,6 +2106,7 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T19A inserted - live clean-cutover recovery exposed an invalid default shaderpack root, unavailable unary UNIMPLEMENTED responses, a load_shader field mismatch, and pre-load screenshot resource planning; inserted a no-compatibility strict-v2 bootstrap remediation before T20 - Control-plane commit title: roadmap insert T19A strict v2 live bootstrap remediation`
 - `2026-08-11 - T19A - fixed the strict schema-2 shaderpack root, implemented every unavailable unary RPC, aligned load_shader on source_id/config_id only, and moved capture planning/reservation after the single generated load prelude; Core 102/102 and focused native 2/2 passed with no compatibility path - Commit title: T19A repair strict v2 live bootstrap`
 - `2026-08-11 - T19B inserted - a live load_and_screenshot response returned a 192710-character raw JobResult with 692 expanded setting entries and five Minecraft-internal artifact paths; inserted compact recipe projection and recursive worktree-path localization remediation before T20 - Control-plane commit title: roadmap insert T19B compact screenshot result remediation`
+- `2026-08-11 - T19B - projected synchronous screenshots to one bounded screenshot/manifest response, recursively localized all strict-v2 artifact paths after atomic validation, and passed focused release build plus CTest 6/6 - Commit title: T19B compact capture results and localize artifact paths`
 - `2026-08-11 - T20 blocked - the live instance embeds 335 v1 and zero v2 protocol entries, the configured MCP publishes only the old five-tool surface, and no two shader worktrees were supplied; no compatibility path, deployment, or restart was attempted - Control-plane commit title: roadmap block T20 pending matching live scope`
 - `2026-08-11 - T20 blocker audit 2 - reverified the unchanged pre-v2 runtime/MCP and missing two-worktree scope; this is the second consecutive blocked Goal turn, so the Goal remains active - Control-plane commit title: roadmap recheck T20 live scope blocker`
 - `2026-08-11 - T20 blocker audit 3 - reverified the unchanged pre-v2 runtime/MCP and missing two-worktree scope for the third consecutive blocked Goal turn; the Goal is marked blocked after the ledger-only atomic checkpoint - Control-plane commit title: roadmap confirm T20 blocked awaiting live scope`

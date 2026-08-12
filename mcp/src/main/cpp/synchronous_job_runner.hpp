@@ -30,6 +30,8 @@ namespace detail {
 
 [[nodiscard]] Json normalize_action_sequence_result(const Json& terminal, std::string_view kind);
 
+[[nodiscard]] Json normalize_load_and_screenshot_result(const Json& terminal, const Json& arguments);
+
 }
 
 struct SynchronousJobProgress final {
