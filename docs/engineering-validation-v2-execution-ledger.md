@@ -1647,6 +1647,16 @@ Evidence:
   restart, runtime mutation, artifact write, or protected-state change occurred.
 - T20 remains incomplete and T99 remains `PENDING`. Resume T20 only after the user starts a matching strict-v2
   Minecraft/Iris runtime, configures the matching v2 MCP delivery, and supplies the two exact shader worktree paths.
+- `2026-08-11` blocker audit 2: Vibris remained at
+  `8d73da8e211ebc2278088733f2f11ec24446f18e`, Iris remained at
+  `38a7d2eaf88939983e0e01f731ccd4c627fbf6a9`, all auxiliary worktrees and staging areas remained clean, and the
+  ledger checker still reported `READY=0, PENDING=1, BLOCKED=1, DONE=22`. The same PID 63232 continued listening on
+  port 50051 from its original start time; the configured MCP hash remained
+  `AB86DD12A4F2E5B1E07DC3EA77E0C9F36A1232654799D1A4952789B8528D66E9` and again published only the five old
+  tools. The installed mod hash remained `551D72EACE461C72DECCDFF2AB7E946D646765C6CA5457A0E3EFED7165606B7C`
+  with 335 v1 and zero v2 protocol entries. No two shader worktrees were supplied, and no deployment, restart,
+  runtime request, artifact write, or protected-state change occurred. This is the second consecutive Goal turn with
+  the same external blocker; T20 remains `BLOCKED` and the Goal remains active.
 
 ### T99 — Final integrated audit
 
@@ -1763,3 +1773,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T18 - completed the schema-2 hard cutover, removed obsolete pre-v2 integration/probe/fixture and dual-read/write paths, rewrote the operator guide, passed Gradle plus the release CMake build and 79/79 CTest cases, and left protected/runtime/user data untouched - Commit title: T18 complete strict v2 cutover`
 - `2026-08-11 - T19 - passed fresh 163-test JVM, 79-test native, 15-test Iris bridge, and four-test OpenGL runtime acceptance; proved strict-v2 negotiation/restart and recorded hashes for the local MCP/mod delivery outputs without deployment - Commit title: T19 verify offline v2 integration`
 - `2026-08-11 - T20 blocked - the live instance embeds 335 v1 and zero v2 protocol entries, the configured MCP publishes only the old five-tool surface, and no two shader worktrees were supplied; no compatibility path, deployment, or restart was attempted - Control-plane commit title: roadmap block T20 pending matching live scope`
+- `2026-08-11 - T20 blocker audit 2 - reverified the unchanged pre-v2 runtime/MCP and missing two-worktree scope; this is the second consecutive blocked Goal turn, so the Goal remains active - Control-plane commit title: roadmap recheck T20 live scope blocker`
