@@ -1,15 +1,15 @@
 package dev.vibris.testruntime;
 
-import dev.vibris.protocol.v1.ClientHello;
-import dev.vibris.protocol.v1.ClientMessage;
-import dev.vibris.protocol.v1.GetServerInfoRequest;
-import dev.vibris.protocol.v1.GetServerInfoResponse;
-import dev.vibris.protocol.v1.GetStatusRequest;
-import dev.vibris.protocol.v1.ListPresetsRequest;
-import dev.vibris.protocol.v1.Ping;
-import dev.vibris.protocol.v1.ProtocolVersion;
-import dev.vibris.protocol.v1.ServerMessage;
-import dev.vibris.protocol.v1.VibrisControlGrpc;
+import dev.vibris.protocol.v2.ClientHello;
+import dev.vibris.protocol.v2.ClientMessage;
+import dev.vibris.protocol.v2.GetServerInfoRequest;
+import dev.vibris.protocol.v2.GetServerInfoResponse;
+import dev.vibris.protocol.v2.GetStatusRequest;
+import dev.vibris.protocol.v2.ListPresetsRequest;
+import dev.vibris.protocol.v2.Ping;
+import dev.vibris.protocol.v2.ProtocolVersion;
+import dev.vibris.protocol.v2.ServerMessage;
+import dev.vibris.protocol.v2.VibrisControlGrpc;
 import io.grpc.ManagedChannel;
 import io.grpc.Status;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FakeVibrisServerTest {
-    private static final ProtocolVersion V1 = ProtocolVersion.newBuilder().setMajor(1).setMinor(0).build();
+    private static final ProtocolVersion V2 = ProtocolVersion.newBuilder().setMajor(2).setMinor(0).build();
 
     @TempDir
     Path temp;
@@ -42,15 +42,15 @@ class FakeVibrisServerTest {
             GetServerInfoResponse parsed = GetServerInfoResponse.parseFrom(response.toByteArray());
 
             assertTrue(running.server().port() > 0);
-            assertEquals(1, parsed.getServer().getProtocolVersion().getMajor());
-            assertTrue(parsed.getServer().getReady());
+            assertEquals(2, parsed.getProtocolVersion().getMajor());
+            assertTrue(parsed.getServer().getStatus().getReadiness().getCoreOnline());
             assertEquals(
                 temp.resolve("unary/pending-shaders").toAbsolutePath().normalize().toString(),
-                parsed.getServer().getPendingShadersRoot()
+                parsed.getServer().getPendingSourceRoot()
             );
-            assertEquals(15, parsed.getServer().getSupportedJobActionsCount());
+            assertEquals(4, parsed.getServer().getCapabilitiesCount());
             assertEquals(1, client.listPresets(ListPresetsRequest.getDefaultInstance()).getPresetsCount());
-            assertTrue(client.getStatus(GetStatusRequest.getDefaultInstance()).getReady());
+            assertTrue(client.getStatus(GetStatusRequest.getDefaultInstance()).getStatus().getReadiness().getCoreOnline());
         }
     }
 
@@ -64,9 +64,8 @@ class FakeVibrisServerTest {
                 GetServerInfoResponse response = VibrisControlGrpc.newBlockingStub(channel)
                     .getServerInfo(GetServerInfoRequest.getDefaultInstance());
                 assertEquals(pendingRoot.toAbsolutePath().normalize().toString(),
-                    response.getServer().getPendingShadersRoot());
-                assertEquals(artifactRoot.toAbsolutePath().normalize().toString(),
-                    response.getServer().getArtifactRoot());
+                    response.getServer().getPendingSourceRoot());
+                assertTrue(response.getServer().getStatus().getArtifactCapacity().getCapBytes() > 0);
             } finally {
                 channel.shutdownNow();
                 assertTrue(channel.awaitTermination(5, TimeUnit.SECONDS));
@@ -79,15 +78,15 @@ class FakeVibrisServerTest {
         try (RunningServer running = RunningServer.start(temp.resolve("hello"))) {
             Responses responses = new Responses();
             StreamObserver<ClientMessage> requests = VibrisControlGrpc.newStub(running.channel()).control(responses);
-            requests.onNext(hello(V1, "hello-message"));
+            requests.onNext(hello(V2, "hello-message"));
 
             ServerMessage serverHello = responses.next();
             assertTrue(serverHello.hasServerHello());
-            assertEquals(1, serverHello.getServerHello().getProtocolVersion().getMajor());
-            assertEquals(0, serverHello.getServerHello().getProtocolVersion().getMinor());
+            assertEquals(2, serverHello.getProtocolVersion().getMajor());
+            assertEquals(0, serverHello.getProtocolVersion().getMinor());
 
             requests.onNext(ClientMessage.newBuilder()
-                .setProtocolVersion(V1)
+                .setProtocolVersion(V2)
                 .setMessageId("caller-ping")
                 .setRequestId("request-1")
                 .setWorkspaceId("workspace-1")
@@ -110,13 +109,13 @@ class FakeVibrisServerTest {
         try (RunningServer running = RunningServer.start(temp.resolve("mismatch"))) {
             Responses responses = new Responses();
             StreamObserver<ClientMessage> requests = VibrisControlGrpc.newStub(running.channel()).control(responses);
-            ProtocolVersion v2 = ProtocolVersion.newBuilder().setMajor(2).setMinor(0).build();
-            requests.onNext(hello(v2, "hello-v2"));
+            ProtocolVersion v1 = ProtocolVersion.newBuilder().setMajor(1).setMinor(0).build();
+            requests.onNext(hello(v1, "hello-v1"));
 
             Throwable error = responses.awaitError();
             assertTrue(responses.isEmpty());
             assertEquals(Status.Code.FAILED_PRECONDITION, Status.fromThrowable(error).getCode());
-            assertEquals("PROTOCOL_MISMATCH", Status.fromThrowable(error).getDescription());
+            assertEquals("UNSUPPORTED_VERSION", Status.fromThrowable(error).getDescription());
         }
     }
 
@@ -126,7 +125,7 @@ class FakeVibrisServerTest {
             Responses responses = new Responses();
             StreamObserver<ClientMessage> requests = VibrisControlGrpc.newStub(running.channel()).control(responses);
             requests.onNext(ClientMessage.newBuilder()
-                .setProtocolVersion(V1)
+                .setProtocolVersion(V2)
                 .setMessageId("ping-before-hello")
                 .setPing(Ping.newBuilder().setSequence(1))
                 .build());
@@ -155,10 +154,8 @@ class FakeVibrisServerTest {
             .setRequestId("request-1")
             .setWorkspaceId("workspace-1")
             .setClientHello(ClientHello.newBuilder()
-                .setProtocolVersion(version)
-                .setMcpVersion("test")
-                .setWorkspaceId("workspace-1")
-                .setProcessInstanceUuid("58f2e5d8-6587-4d0d-a334-4e259466fb27"))
+                .setClientVersion("test")
+                .setProcessInstanceId("58f2e5d8-6587-4d0d-a334-4e259466fb27"))
             .build();
     }
 

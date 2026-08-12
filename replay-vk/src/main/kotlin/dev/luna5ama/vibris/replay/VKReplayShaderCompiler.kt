@@ -30,7 +30,6 @@ class VKReplayShaderCompiler(
     fun shaderPath(command: Command.PassCommand): Path {
         val shaderIndex = command.passInfo.shaderIndex
         val capturedSpv = captureDir.resolve("shader_$shaderIndex.comp.spv").takeIf { it.exists() }
-            ?: captureDir.resolve("shader.comp.spv").takeIf { it.exists() }
 
         val shaderInfo = shaderInfos.getOrPut(shaderIndex) {
             val shaderMetadata = captureData.metadata.shaderMetadata(shaderIndex)
@@ -89,21 +88,7 @@ class VKReplayShaderCompiler(
             val source = prepared.second
             CompiledGraphicsShader(shaderInfo.stage, compileShader(shaderIndex, shaderInfo.stage, source))
         }
-        val resources = command.graphicsInfo.resources
-        val capturedNames = resources.samplerBindings.mapTo(mutableSetOf()) { it.name }
-        val fallbackSamplers = captureData.metadata.allSamplerBindings().associateBy { it.name }
-        val missingSamplers = infos.asSequence()
-            .flatMap { it.second.uniforms.values.asSequence() }
-            .filter { it.name in fallbackSamplers && it.name !in capturedNames }
-            .distinctBy { it.name }
-            .mapNotNull { uniform ->
-                fallbackSamplers[uniform.name]?.copy(set = uniform.set, binding = uniform.binding)
-            }
-            .toList()
-        return CompiledGraphicsProgram(
-            shaders,
-            resources.copy(samplerBindings = resources.samplerBindings + missingSamplers),
-        )
+        return CompiledGraphicsProgram(shaders, command.graphicsInfo.resources)
     }
 
     private fun compileShader(shaderIndex: Int, stage: String, source: String): Path {

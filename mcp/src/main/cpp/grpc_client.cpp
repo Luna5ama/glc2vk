@@ -23,12 +23,8 @@ bool GrpcClient::Impl::submit(proto::ClientMessage message, GrpcCompletion compl
     if (!started_ || stopping_ || pending_.size() + unary_in_flight_ >= options_.pending_request_limit) {
         return false;
     }
-    if (message.protocol_version().major() == 0) {
-        message.mutable_protocol_version()->set_major(protocol_major);
-        message.mutable_protocol_version()->set_minor(protocol_minor);
-    }
-    if (message.workspace_id().empty()) {
-        message.set_workspace_id(options_.workspace_id);
+    if (message.protocol_version().major() != protocol_major || message.workspace_id() != options_.workspace_id) {
+        return false;
     }
     if (!pending_.add(message, std::move(completion))) {
         return false;

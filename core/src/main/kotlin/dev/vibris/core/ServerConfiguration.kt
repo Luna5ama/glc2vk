@@ -36,7 +36,7 @@ internal data class ServerConfiguration(
         private val REQUIRED_KEYS = setOf(
             "schema_version",
             "listen_address",
-            "pending_shaders_root",
+            "pending_source_root",
             "artifact_root",
             "artifact_quota_bytes",
             "artifact_ttl_hours",
@@ -80,10 +80,10 @@ internal data class ServerConfiguration(
                 }
                 val address = address(text(root, "listen_address"))
                 parsedAddress = address
-                val pending = path(game, text(root, "pending_shaders_root"))
+                val pending = path(game, text(root, "pending_source_root"))
                 val artifacts = path(game, text(root, "artifact_root"))
                 val shaderpack = path(game, text(root, "shaderpack_root"))
-                requireWritableDirectory(pending, "pending_shaders_root")
+                requireWritableDirectory(pending, "pending_source_root")
                 requireWritableDirectory(artifacts, "artifact_root")
                 requireWritableDirectory(shaderpack, "shaderpack_root")
                 val quota = positive(root, "artifact_quota_bytes")
@@ -146,15 +146,7 @@ internal data class ServerConfiguration(
             if (candidate.isAbsolute) {
                 return candidate.normalize()
             }
-            val normalized = value.replace('\\', '/')
-            return if (
-                normalized.startsWith(".minecraft/") &&
-                game.fileName?.toString().equals(".minecraft", ignoreCase = true)
-            ) {
-                game.resolve(normalized.removePrefix(".minecraft/"))
-            } else {
-                game.resolve(candidate)
-            }.toAbsolutePath().normalize()
+            return game.resolve(candidate).toAbsolutePath().normalize()
         }
 
         private fun requireWritableDirectory(path: Path, field: String) {
@@ -186,7 +178,7 @@ internal data class ServerConfiguration(
                     {
                       "schema_version": 2,
                       "listen_address": "127.0.0.1:$DEFAULT_PORT",
-                      "pending_shaders_root": "${escape(pending.toString())}",
+                      "pending_source_root": "${escape(pending.toString())}",
                       "artifact_root": "${escape(artifacts.toString())}",
                       "artifact_quota_bytes": ${ArtifactManager.DEFAULT_QUOTA_BYTES},
                       "artifact_ttl_hours": ${ArtifactManager.DEFAULT_TTL.toHours()},

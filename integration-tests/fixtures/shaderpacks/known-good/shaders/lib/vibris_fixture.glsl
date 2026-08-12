@@ -1,1 +1,0 @@
-const vec4 VIBRIS_FIXTURE_COLOR = vec4(1.0, 1.0, 1.0, 1.0);

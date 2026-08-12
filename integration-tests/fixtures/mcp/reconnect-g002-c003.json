@@ -1,7 +1,0 @@
-{
-    "serverPort": 55063,
-    "reservedCleanupPort": 55064,
-    "registryLimit": 256,
-    "expectedSaveId": "test-save",
-    "expectedDimensionId": "minecraft:overworld"
-}

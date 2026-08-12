@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)] [string] $ServerJar,
     [Parameter(Mandatory)] [string] $Listen,
     [string] $PingId,
-    [uint32] $ProtocolMajor = 1,
+    [uint32] $ProtocolMajor = 2,
     [uint32] $ProtocolMinor = 0,
     [uint32[]] $Capability = @(1),
     [ValidateSet("hello-ping-pong", "reject-major-mismatch")] [string] $Scenario,
@@ -15,7 +15,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ownedProcesses = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
-$tempBase = Join-Path $repoRoot ".omo\tmp"
+$tempBase = Join-Path $repoRoot ".vibris\tmp"
 $tempRoot = $null
 $tempCreated = $false
 $port = $null
@@ -74,7 +74,14 @@ function Wait-ForPort
 
 function Invoke-SmokeClient
 {
-    param([uint32] $Major, [uint32] $Minor, [uint32[]] $Capabilities, [string] $MessageId, [string] $Mode)
+    param(
+        [uint32] $Major,
+        [uint32] $Minor,
+        [uint32[]] $Capabilities,
+        [string] $MessageId,
+        [string] $Mode,
+        [bool] $AllowProtocolRejection = $false
+    )
 
     $index = $ownedProcesses.Count
     $arguments = @(
@@ -111,7 +118,11 @@ function Invoke-SmokeClient
     $errorText = $stderrTask.Result
     if (-not [string]::IsNullOrWhiteSpace($errorText))
     {
-        throw "Native protocol client wrote non-protocol stderr: $errorText"
+        if (-not $AllowProtocolRejection)
+        {
+            throw "Native protocol client wrote non-protocol stderr: $errorText"
+        }
+        $outputText = $outputText + "`n" + $errorText
     }
     if ($process.ExitCode -ne 0)
     {
@@ -125,19 +136,19 @@ function Invoke-SmokeClient
     return @($lines | ForEach-Object { $_ | ConvertFrom-Json })
 }
 
-function Assert-V1HelloPingPong
+function Assert-V2HelloPingPong
 {
     param([object[]] $Messages, [string] $MessageId)
 
     $hello = @($Messages | Where-Object { $_.type -eq "ServerHello" })
-    if ($hello.Count -ne 1 -or $hello[0].protocol_major -ne 1 -or $hello[0].protocol_minor -ne 0)
+    if ($hello.Count -ne 1 -or $hello[0].protocol_major -ne 2 -or $hello[0].protocol_minor -ne 0)
     {
-        throw "V1 client did not observe exactly one negotiated protocol 1.0 ServerHello."
+        throw "V2 client did not observe exactly one negotiated protocol 2.0 ServerHello."
     }
     $pong = @($Messages | Where-Object { $_.type -eq "Pong" -and $_.message_id -eq $MessageId })
     if ($pong.Count -ne 1)
     {
-        throw "V1 client did not observe Pong with caller message ID '$MessageId'."
+        throw "V2 client did not observe Pong with caller message ID '$MessageId'."
     }
     if ([array]::IndexOf($Messages, $hello[0]) -ge [array]::IndexOf($Messages, $pong[0]))
     {
@@ -190,9 +201,9 @@ try
 
     [void] (New-Item -ItemType Directory -Path $tempBase -Force)
     $tempName = if ($port -eq 55051) {
-        "ulw-v1-g001-c001"
+        "vibris-v2-protocol-c001"
     } elseif ($port -eq 55052) {
-        "ulw-v1-g001-c002"
+        "vibris-v2-protocol-c002"
     } else {
         "vibris-protocol-smoke-$port-$([guid]::NewGuid())"
     }
@@ -214,7 +225,7 @@ try
 
     $effectiveScenario = if ($Scenario) {
         $Scenario
-    } elseif ($ProtocolMajor -eq 1) {
+    } elseif ($ProtocolMajor -eq 2) {
         "hello-ping-pong"
     } else {
         "reject-major-mismatch"
@@ -222,21 +233,21 @@ try
     if ($effectiveScenario -eq "reject-major-mismatch")
     {
         $rejected = @(Invoke-SmokeClient -Major $ProtocolMajor -Minor $ProtocolMinor -Capabilities $Capability `
-            -MessageId $PingId -Mode "hello")
+            -MessageId $PingId -Mode "hello" -AllowProtocolRejection $true)
         if ($rejected | Where-Object { $_.type -eq "ServerHello" })
         {
             throw "Major-version mismatch unexpectedly received ServerHello."
         }
         $protocolRejected = @($rejected | Where-Object {
-            $_.type -eq "ProtocolRejected" -and $_.code -eq "PROTOCOL_MISMATCH"
+            $_.type -eq "ProtocolRejected" -and $_.code -eq "UNSUPPORTED_VERSION"
         })
         if ($protocolRejected.Count -ne 1)
         {
-            throw "Major-version mismatch was not rejected exactly once with PROTOCOL_MISMATCH."
+            throw "Major-version mismatch was not rejected exactly once with UNSUPPORTED_VERSION."
         }
         $rejected | ForEach-Object { $_ | ConvertTo-Json -Compress }
         if ($server.HasExited) { throw "Fake server exited after rejecting a major-version mismatch." }
-        $messages = @(Invoke-SmokeClient -Major 1 -Minor 0 -Capabilities @(1) -MessageId $PingId `
+        $messages = @(Invoke-SmokeClient -Major 2 -Minor 0 -Capabilities @(1) -MessageId $PingId `
             -Mode "hello-ping-pong")
     }
     else
@@ -244,9 +255,9 @@ try
         $messages = @(Invoke-SmokeClient -Major $ProtocolMajor -Minor $ProtocolMinor -Capabilities $Capability `
             -MessageId $PingId -Mode "hello-ping-pong")
     }
-    Assert-V1HelloPingPong -Messages $messages -MessageId $PingId
+    Assert-V2HelloPingPong -Messages $messages -MessageId $PingId
     $messages | ForEach-Object { $_ | ConvertTo-Json -Compress }
-    if ($server.HasExited) { throw "Fake server exited before healthy v1 verification completed." }
+    if ($server.HasExited) { throw "Fake server exited before healthy v2 verification completed." }
     Write-Output "PASS scenario=$effectiveScenario listen=$hostName`:$port ping_id=$PingId"
 }
 finally

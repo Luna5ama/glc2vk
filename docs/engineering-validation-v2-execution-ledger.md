@@ -99,8 +99,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T15 | P0 | Vibris | Define named pass resource dump contract | DONE | `T15 define named pass resource dump contract` |
 | T16 | P0 | Iris | Implement named Iris pass boundary hooks | DONE | `T16 capture resources after named Iris passes` |
 | T17 | P0 | Vibris | Integrate after-pass texture and buffer jobs | DONE | `T17 integrate after-pass resource dump jobs` |
-| T18 | P0 | Vibris | Complete strict v2 cutover and documentation | READY | `T18 complete strict v2 cutover` |
-| T19 | P0 | Vibris | Run offline integrated acceptance | PENDING | `T19 verify offline v2 integration` |
+| T18 | P0 | Vibris | Complete strict v2 cutover and documentation | DONE | `T18 complete strict v2 cutover` |
+| T19 | P0 | Vibris | Run offline integrated acceptance | READY | `T19 verify offline v2 integration` |
 | T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | PENDING | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
 
@@ -1394,7 +1394,7 @@ Evidence:
 
 ### T18 — Complete strict v2 cutover and documentation
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T17
 
@@ -1462,10 +1462,33 @@ Evidence:
   `38a7d2eaf88939983e0e01f731ccd4c627fbf6a9`, all auxiliary worktrees clean at their recorded HEADs, empty staging
   areas, and only the recorded protected untracked state. T18 is restored as the sole `READY` task; implementation
   resumes in the next continuation so this permission change remains an atomic ledger-only control-plane commit.
+- `2026-08-11`: resumed at Vibris `main` HEAD `8835de0bbf714972064eb4f56a3c551e585ccdf1` with Iris still at
+  `38a7d2eaf88939983e0e01f731ccd4c627fbf6a9`. Config, workspace identity, build receipts, and delivery transaction
+  manifests now write and accept only schema 2; old persisted documents fail with `UNSUPPORTED_VERSION` and remain
+  unchanged. gRPC submission no longer supplies missing version/workspace identity, and supplied sources require an
+  explicit kind.
+- Removed the obsolete pre-v2 Java integration surface, its orphaned gate scripts and fixtures, the artifact-quota
+  probe, old status/recipe-control probes, unindexed shader dual output, shader/SPIR-V and sampler replay reads,
+  unnamed vertex-location inference, and the `.minecraft`-prefixed path special case. Retained protocol, stdio,
+  security, delivery, and source-package probes are strict v2; native reconnect/source-ownership fixtures now use
+  `ResumeJob` and `JobStateSnapshot` directly.
+- Replaced `docs/capture-control.md` with a strict-v2 clean-cutover guide covering unsupported old data, recovery,
+  durable jobs, compile validation, benchmark gates, managed artifacts, and immediate plus named-pass texture/buffer
+  actions. Maintained delivery/config templates and probes use schema 2 and `pending_source_root`.
+- The required static search has matches only in this append-only ledger's historical task/evidence text; the same
+  search excluding this ledger returned `STRICT_V2_SEARCH_CLEAN_EXCLUDING_LEDGER_HISTORY`. A broader removed-surface
+  search returned `REMOVED_SURFACE_SEARCH_CLEAN`, and all seven retained PowerShell probes parsed successfully.
+- `2026-08-11`: `.\gradlew.bat build --offline --console=plain` passed with 63 actionable tasks. The release CMake
+  build completed successfully and `ctest --preset release --output-on-failure` passed 79/79 in 135.85 seconds,
+  including v1/missing-version negotiation rejection, schema-1 config/identity rejection, durable resume, reconnect,
+  stdio, provenance, benchmark, and security coverage.
+- Protected `capture\a.spv` remained unread, untracked, and unstaged. Iris `.codex\`, `.vibris\`, and `common\logs\`
+  remained untracked and unstaged. No deployment, Minecraft/launcher restart, or old-user-data deletion occurred.
+- Commit: this task's commit with subject `T18 complete strict v2 cutover`.
 
 ### T19 — Run offline integrated acceptance
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T18
 
@@ -1628,7 +1651,7 @@ Queue order is authoritative and serial even where technical dependencies could 
 ## Global acceptance checklist
 
 - [x] MCP publishes exactly the eight typed v2 tools and never duplicates the structured payload.
-- [ ] No affected v1 compatibility parser, alias, adapter, fallback, migration, dual-read, or dual-write remains.
+- [x] No affected v1 compatibility parser, alias, adapter, fallback, migration, dual-read, or dual-write remains.
 - [x] Shared runtime ownership, queue, progress, error history, readiness, waits, cancellation, and recovery are truthful.
 - [ ] Long jobs are durable, queryable, resumable when safe, and never duplicate completed or uncertain side effects.
 - [ ] All state-mutating validation restores source, effective settings, scene, and temporal state with receipts.
@@ -1674,3 +1697,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T17 - grouped exact next-frame after-pass texture/buffer registrations into one artifact-v2 transaction, returned complete physical-view/pass/hash receipts, strengthened GPU visibility barriers, preserved flipped PNG/native BIN semantics, and released timeout/cancel/error registrations; capture 26/26, Core 100/100, real OpenGL 4.6 runtime 1/1, and native protocol/schema 2/2 passed - Commit title: T17 integrate after-pass resource dump jobs`
 - `2026-08-11 - T18 blocked - hard cutover rejects persisted schema-v1 state and removes obsolete v1-only integration suites; execution requires fresh explicit user approval after impact disclosure, while old data remains untouched and no deployment occurs - Control-plane commit title: roadmap block T18 pending hard cutover approval`
 - `2026-08-11 - T18 unblocked - user explicitly approved the disclosed hard cutover; schema-v1 state may be rejected and obsolete v1-only suites removed while old data remains untouched and deployment stays out of scope - Control-plane commit title: roadmap unblock T18 after hard cutover approval`
+- `2026-08-11 - T18 - completed the schema-2 hard cutover, removed obsolete pre-v2 integration/probe/fixture and dual-read/write paths, rewrote the operator guide, passed Gradle plus the release CMake build and 79/79 CTest cases, and left protected/runtime/user data untouched - Commit title: T18 complete strict v2 cutover`

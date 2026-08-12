@@ -20,8 +20,8 @@
 namespace {
 
 using namespace std::chrono_literals;
-using vibris::control::v1::ClientMessage;
-using vibris::control::v1::ServerMessage;
+using vibris::control::v2::ClientMessage;
+using vibris::control::v2::ServerMessage;
 using vibris::mcp::GrpcClient;
 using vibris::mcp::GrpcClientOptions;
 using vibris::mcp::test::ReconnectServer;
@@ -125,7 +125,7 @@ private:
 
 ClientMessage make_ping(std::size_t index) {
     ClientMessage message;
-    message.mutable_protocol_version()->set_major(1);
+    message.mutable_protocol_version()->set_major(2);
     message.mutable_protocol_version()->set_minor(0);
     message.set_message_id("message-" + std::to_string(index));
     message.set_request_id("request-" + std::to_string(index));

@@ -19,7 +19,7 @@ namespace control = ::vibris::control::v2;
 
 void prepare_one(SourcePreparer& preparer, const std::filesystem::path& workspace_root,
     const Json* source, std::list<PreparedSource>& prepared) {
-    const auto kind = source == nullptr ? std::string("workspace") : source->value("kind", std::string("workspace"));
+    const auto kind = source == nullptr ? std::string("workspace") : source->at("kind").get<std::string>();
     if (kind == "workspace") {
         prepared.emplace_back(preparer.prepare_workspace());
         return;

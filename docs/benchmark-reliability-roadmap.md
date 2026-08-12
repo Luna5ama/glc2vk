@@ -350,7 +350,7 @@ Completion evidence (2026-08-09):
 - The updated delivery is published at `I:\code\vibris\build\delivery-benchmark-reliability` with MCP SHA-256
   `806C04F2EB1BEA10E3F25FECA61B414E025A06C67474D787A32E34237EEBFEC2` and Iris SHA-256
   `BAAB2D314AFDEEE3A267F9BFEC64901EB5077A661BC06572074DD41B8918F795`; the on-disk MultiMC mod has the same Iris hash.
-- `integration-tests/scripts/live-benchmark-acceptance.ps1` drives the real release gate against an already running MC:
+- The completed baseline used a pre-v2 live acceptance harness against an already running MC:
   it primes an explicit restorable state, runs `spawn` first, interrupts only its own MCP after receipt 1/2, resumes the
   same job without duplication, completes the other 18 typed presets, verifies exactly 38 program-level receipts and
   the three required program/source mappings, then runs the paired performance and PNG visual gate. The final evidence
@@ -375,7 +375,7 @@ and exact commit title. The Git history is the source of truth for the resulting
   Commit title: docs: add benchmark reliability roadmap.
 - 2026-08-09 - T01 - Added retryable NO_GPU_SAMPLES failures for single profiles; matrix cases with empty,
   null, or missing gpuTimings are incomplete instead of passed; explicit action failures remain failed; summaries
-  report requested/completed/with-metrics/missing/failed/retried counts. Fixed the profile-matrix case-size
+  report requested/completed/with-metrics/missing/failed/retried counts. Fixed the durable matrix case-size
   off-by-one needed for correct attribution. Verified by building vibris-job-protocol-tests and
   vibris-action-schema-tests, then running CTest cases SynchronousRecipeResultMapping and
   ActionSchemaRejectsForbiddenAndDuplicateTools (2/2 passed), including an exact 38-case missing-result

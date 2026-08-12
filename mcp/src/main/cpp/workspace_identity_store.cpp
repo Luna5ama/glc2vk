@@ -25,7 +25,11 @@ namespace {
 using Json = nlohmann::json;
 
 [[noreturn]] void invalid_identity() {
-    throw StateError(kInvalidConfigCode, "Workspace identity is malformed or does not match schema version 1.");
+    throw StateError(kInvalidConfigCode, "Workspace identity is malformed.");
+}
+
+[[noreturn]] void unsupported_identity() {
+    throw StateError(kUnsupportedVersionCode, "UNSUPPORTED_VERSION: workspace identity schema_version must be 2.");
 }
 
 class UniqueHandle final {
@@ -210,8 +214,11 @@ std::string parse_identity(std::string_view text) {
         const auto document = parse_json_without_duplicate_keys(text);
         if (!document.is_object() || document.size() != 2 || !document.contains("schema_version") ||
             !document.contains("workspace_id") || !document.at("schema_version").is_number_unsigned() ||
-            document.at("schema_version").get<std::uint64_t>() != 1 || !document.at("workspace_id").is_string()) {
+            !document.at("workspace_id").is_string()) {
             invalid_identity();
+        }
+        if (document.at("schema_version").get<std::uint64_t>() != 2) {
+            unsupported_identity();
         }
         const auto workspace_id = document.at("workspace_id").get<std::string>();
         if (!detail::is_uuid(workspace_id)) {
@@ -230,7 +237,7 @@ std::string parse_identity(std::string_view text) {
 }
 
 std::string serialize_identity(std::string_view workspace_id) {
-    return Json{{"schema_version", 1}, {"workspace_id", workspace_id}}.dump(2);
+    return Json{{"schema_version", 2}, {"workspace_id", workspace_id}}.dump(2);
 }
 
 void notify_before(detail::WorkspaceIdentityIoHooks* hooks, detail::WorkspaceIdentityIoOperation operation,

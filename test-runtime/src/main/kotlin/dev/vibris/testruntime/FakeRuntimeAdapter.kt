@@ -6,6 +6,7 @@ import dev.vibris.api.CapturePlan
 import dev.vibris.api.CaptureResult
 import dev.vibris.api.CompileCatalog
 import dev.vibris.api.ContextApplyResult
+import dev.vibris.api.EffectiveShaderSettings
 import dev.vibris.api.ReloadResult
 import dev.vibris.api.ResourceCatalog
 import dev.vibris.api.RuntimeStatus
@@ -56,7 +57,7 @@ class FakeRuntimeAdapter : VibrisRuntimeAdapter {
         config: Map<String, String>?,
         cancellation: CancellationToken,
     ): CompletionStage<ReloadResult> =
-        immediate(cancellation) { ReloadResult.success(emptyList()) }
+        immediate(cancellation) { ReloadResult.success(EffectiveShaderSettings.empty(), emptyList()) }
 
     override fun resetTemporalState(
         cancellation: CancellationToken,
@@ -116,6 +117,14 @@ class FakeRuntimeAdapter : VibrisRuntimeAdapter {
             CaptureResult(renderedFrames.get(), emptyList())
         }
 
+    override fun captureAfterPass(
+        request: CapturePlan.AfterPassRequest,
+        sink: ArtifactSink,
+        cancellation: CancellationToken,
+    ): CompletionStage<CapturePlan.AfterPassReceipt> = CompletableFuture.failedFuture(
+        UnsupportedOperationException("After-pass capture is unavailable in the scheduling fixture"),
+    )
+
     override fun capturePatchedShaders(
         artifactName: String,
         sink: ArtifactSink,
@@ -124,10 +133,10 @@ class FakeRuntimeAdapter : VibrisRuntimeAdapter {
         val fileName = "$artifactName.001_fake.vsh"
         val bytes = "void main() {}\n".encodeToByteArray()
         sink.open(fileName).use { it.write(bytes) }
-        val resource = ResourceCatalog.ResourceDescriptor(
+        val resource = ResourceCatalog.ResourceDescriptor.of(
             "patched_shaders",
             ResourceCatalog.ResourceKind.PATCHED_SHADERS,
-            0, 0, 0, 0, 1, "text", 0, ResourceCatalog.ScalarType.UNSPECIFIED,
+            emptyList(), 0, 0, 0, 0, 0, "text", 0, ResourceCatalog.ScalarType.UNSPECIFIED,
             bytes.size.toLong(), renderedFrames.get(), "patched_shaders", "patched_shaders",
             "", "", "", 0, "", "",
         )

@@ -12,12 +12,12 @@ class ProtocolInteropTest {
 
     @Test
     void helloPingPong() throws Exception {
-        assertScenario("hello-ping-pong", 55051, 1, 1, "protocol-c001");
+        assertScenario("hello-ping-pong", 55051, 2, 1, "protocol-c001");
     }
 
     @Test
     void rejectsMajorMismatch() throws Exception {
-        assertScenario("reject-major-mismatch", 55052, 2, 65535, "protocol-c002");
+        assertScenario("reject-major-mismatch", 55052, 1, 65535, "protocol-c002");
     }
 
     private static void assertScenario(String scenario, int port, int protocolMajor, int capability, String pingId)

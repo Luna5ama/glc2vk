@@ -11,7 +11,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ownedProcesses = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
-$tempBase = Join-Path $repoRoot ".omo\tmp"
+$tempBase = Join-Path $repoRoot ".vibris\tmp"
 $tempRoot = Join-Path $tempBase "stdio-v2-tools"
 $tempCreated = $false
 $port = 55061

@@ -186,7 +186,7 @@ const Json& named_value(const Json& values, std::string_view id, std::string_vie
 
 Json freeze_source(SourcePreparer& preparer, std::vector<PreparedSource>& snapshots,
 	const Json& source, const std::string& job_id) {
-	const auto kind = source.value("kind", std::string("workspace"));
+	const auto kind = source.at("kind").get<std::string>();
 	snapshots.emplace_back(kind == "commit"
 		? preparer.prepare_commit(source.at("revision").get<std::string>())
 		: preparer.prepare_workspace());

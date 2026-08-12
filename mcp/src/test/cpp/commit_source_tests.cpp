@@ -291,7 +291,8 @@ void distinct_uuid_without_dedup() {
     auto second = preparer.prepare_commit("HEAD");
 
     // Then: each preparation owns an independent UUID directory without hash reuse or deduplication.
-    require(first.reference().uuid() != second.reference().uuid(), "Identical commits reused a source UUID.");
+    require(first.reference().source_uuid() != second.reference().source_uuid(),
+        "Identical commits reused a source UUID.");
     require(first.reference().requested_revision() == "HEAD" &&
             first.reference().resolved_revision().size() == 40 &&
             first.reference().resolved_revision() == first.reference().origin().commit().revision(),

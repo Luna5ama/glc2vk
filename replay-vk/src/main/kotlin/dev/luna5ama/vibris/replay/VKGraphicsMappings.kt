@@ -177,7 +177,6 @@ internal class GraphicsLocationAllocator(attributes: List<VertexAttribute>) {
     private val namedAttributes = attributes.mapNotNull { attribute ->
         attribute.name?.let { it to attribute.location }
     }.toMap()
-    private val legacyLocations = attributes.sortedBy(VertexAttribute::location).map(VertexAttribute::location).iterator()
     private val usedVertexLocations = attributes.mapTo(mutableSetOf(), VertexAttribute::location)
     private var nextVertexLocation = 0
     private val varyings = mutableMapOf<String, Int>()
@@ -196,8 +195,7 @@ internal class GraphicsLocationAllocator(attributes: List<VertexAttribute>) {
         val location = when {
             stage == "vertex" && storage == "in" -> namedAttributes[name]
                 ?: IRIS_ATTRIBUTE_LOCATIONS[name]?.takeIf(capturedLocations::contains)
-                ?: if (namedAttributes.isEmpty() && legacyLocations.hasNext()) legacyLocations.next()
-                else nextUnusedVertexLocation()
+                ?: nextUnusedVertexLocation()
             stage == "fragment" && storage == "out" -> nextFragmentOutput++
             else -> varyings.getOrPut(name) { nextVarying++ }
         } ?: return@replace match.value

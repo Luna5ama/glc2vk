@@ -1,7 +1,7 @@
 package dev.vibris.testruntime
 
 import dev.vibris.core.CoreProbe
-import dev.vibris.protocol.v1.SceneContext
+import dev.vibris.protocol.v2.SceneContext
 
 class FakeRuntimeProbe internal constructor(
     private val runtime: FakeRuntimeAdapter,

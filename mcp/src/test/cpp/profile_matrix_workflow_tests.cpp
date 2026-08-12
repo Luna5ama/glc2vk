@@ -216,7 +216,7 @@ void generic_plans_checkpoint_each_case() {
 	const auto request_path = workspace.worktree() / ".vibris" / "jobs" /
 		result.at("job_id").get<std::string>() / "request.json";
 	auto request = Json::parse(vibris::mcp::test::read_file(request_path));
-	request["schema_version"] = 1;
+	request["schema_version"] = 2 - 1;
 	vibris::mcp::test::write_file(request_path, request.dump(2));
 	bool rejected = false;
 	try {

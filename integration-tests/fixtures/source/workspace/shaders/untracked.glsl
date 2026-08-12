@@ -1,1 +1,0 @@
-const int UNTRACKED_FIXTURE = 1;

@@ -13,7 +13,7 @@
 namespace {
 
 namespace fs = std::filesystem;
-namespace proto = ::vibris::control::v1;
+namespace proto = ::vibris::control::v2;
 using vibris::mcp::Json;
 using vibris::mcp::SourceHandler;
 using vibris::mcp::test::WorkspaceFixture;
@@ -21,8 +21,8 @@ using vibris::mcp::test::require;
 
 proto::ServerHello server(const WorkspaceFixture& fixture) {
     proto::ServerHello hello;
-    hello.set_ready(true);
-    hello.set_pending_shaders_root(fixture.pending().string());
+    hello.mutable_status()->set_state(proto::SERVER_STATE_AVAILABLE);
+    hello.set_pending_source_root(fixture.pending().string());
     hello.mutable_limits()->set_max_source_bytes(1024 * 1024);
     hello.mutable_limits()->set_max_source_files(128);
     return hello;
@@ -32,7 +32,7 @@ std::vector<fs::path> prepared_paths(
     const std::vector<proto::PreparedSourceRef>& sources, const WorkspaceFixture& fixture) {
     std::vector<fs::path> paths;
     for (const auto& source : sources) {
-        paths.push_back(fixture.pending() / source.uuid());
+        paths.push_back(fixture.pending() / source.source_uuid());
     }
     return paths;
 }
@@ -79,7 +79,7 @@ fs::path prepare_bound(
     return paths.front();
 }
 
-void resume_state_controls_source_ownership() {
+void job_state_controls_source_ownership() {
     // Given: four prepared requests whose acceptance was ambiguous across a stream disconnect.
     WorkspaceFixture fixture;
     SourceHandler handler(fixture.worktree());
@@ -89,29 +89,32 @@ void resume_state_controls_source_ownership() {
     const auto completed = prepare_bound(handler, fixture, hello, "job-completed");
     const auto missing = prepare_bound(handler, fixture, hello, "job-missing");
 
-    // When: ResumeState finds accepted, running, and completed jobs but omits the NOT_FOUND request.
-    proto::ServerMessage resume;
-    auto* state = resume.mutable_resume_state();
-    state->add_jobs()->set_request_id("job-queued");
-    state->mutable_jobs(0)->set_state(proto::JOB_STATE_QUEUED);
-    state->add_jobs()->set_request_id("job-running");
-    state->mutable_jobs(1)->set_state(proto::JOB_STATE_RUNNING);
-    state->add_jobs()->set_request_id("job-completed");
-    state->mutable_jobs(2)->set_state(proto::JOB_STATE_COMPLETED);
-    handler.observe(resume);
+    // When: v2 JobStateSnapshot finds accepted, running, and completed jobs but omits the unknown request.
+    for (const auto& [id, state] : std::array{
+             std::pair{"job-queued", proto::JOB_STATE_QUEUED},
+             std::pair{"job-running", proto::JOB_STATE_RUNNING},
+             std::pair{"job-completed", proto::JOB_STATE_COMPLETED},
+         }) {
+        proto::ServerMessage response;
+        auto* summary = response.mutable_job_state()->mutable_summary();
+        summary->set_job_id(id);
+        summary->set_request_id(id);
+        summary->set_state(state);
+        handler.observe(response);
+    }
     handler.clear();
 
     // Then: server-known jobs retain all sources, while NOT_FOUND remains MCP-owned and is deleted.
     require(fs::is_directory(queued), "Accepted request did not transfer source ownership.");
     require(fs::is_directory(running), "Running request did not transfer source ownership.");
     require(fs::is_directory(completed), "Completed request did not transfer source ownership.");
-    require(!fs::exists(missing), "ResumeState NOT_FOUND did not retain MCP source ownership.");
+    require(!fs::exists(missing), "Unknown job did not retain MCP source ownership.");
 }
 
 using TestCase = std::pair<std::string_view, void (*)()>;
 constexpr std::array<TestCase, 2> test_cases{{
     {"SingleJobAcceptedTransfersAbSourcesOnce", single_job_accepted_transfers_ab_sources_once},
-    {"ResumeStateControlsSourceOwnership", resume_state_controls_source_ownership},
+    {"JobStateControlsSourceOwnership", job_state_controls_source_ownership},
 }};
 
 }

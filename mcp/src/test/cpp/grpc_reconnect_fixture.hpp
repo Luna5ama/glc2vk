@@ -15,7 +15,7 @@
 
 namespace vibris::mcp::test {
 
-class ReconnectService final : public control::v1::VibrisControl::Service {
+class ReconnectService final : public control::v2::VibrisControl::Service {
 public:
     explicit ReconnectService(std::size_t drop_after) : drop_after_(drop_after) {
     }
@@ -47,13 +47,13 @@ public:
 private:
     grpc::Status Control(
         grpc::ServerContext*,
-        grpc::ServerReaderWriter<control::v1::ServerMessage, control::v1::ClientMessage>* stream) override {
+        grpc::ServerReaderWriter<control::v2::ServerMessage, control::v2::ClientMessage>* stream) override {
         const std::size_t connection = connections_.fetch_add(1) + 1;
         bool greeted = false;
-        control::v1::ClientMessage request;
+        control::v2::ClientMessage request;
         while (stream->Read(&request)) {
-            control::v1::ServerMessage response;
-            response.mutable_protocol_version()->set_major(1);
+            control::v2::ServerMessage response;
+            response.mutable_protocol_version()->set_major(2);
             response.mutable_protocol_version()->set_minor(0);
             response.set_message_id(request.message_id());
             response.set_request_id(request.request_id());
@@ -64,12 +64,10 @@ private:
                 }
                 greeted = true;
                 auto* hello = response.mutable_server_hello();
-                hello->mutable_protocol_version()->set_major(1);
-                hello->mutable_protocol_version()->set_minor(0);
                 hello->set_server_version("grpc-reconnect-fixture");
-                hello->add_capabilities(control::v1::CAPABILITY_CONTROL_STREAM);
-                hello->add_capabilities(control::v1::CAPABILITY_RESUME);
-                hello->set_ready(true);
+                hello->add_capabilities(control::v2::CAPABILITY_CONTROL_STREAM);
+                hello->add_capabilities(control::v2::CAPABILITY_DURABLE_JOBS);
+                hello->mutable_status()->set_state(control::v2::SERVER_STATE_AVAILABLE);
                 if (!stream->Write(response)) {
                     return {grpc::StatusCode::UNAVAILABLE, "hello write failed"};
                 }
@@ -85,28 +83,26 @@ private:
                 }
                 return {grpc::StatusCode::UNAVAILABLE, "fixture disconnect after JobAccepted"};
             }
-            if (request.has_resume_request()) {
+            if (request.has_resume_job()) {
                 ++resume_requests_;
-                for (const auto& id : request.resume_request().request_ids()) {
-                    auto* job = response.mutable_resume_state()->add_jobs();
-                    job->set_request_id(id);
-                    job->set_state(control::v1::JOB_STATE_RUNNING);
-                }
+                const auto& id = request.resume_job().job_id();
+                auto* job = response.mutable_job_state()->mutable_summary();
+                job->set_job_id(id);
+                job->set_request_id(id);
+                job->set_state(control::v2::JOB_STATE_RUNNING);
                 if (!stream->Write(response)) {
-                    return {grpc::StatusCode::UNAVAILABLE, "ResumeState write failed"};
+                    return {grpc::StatusCode::UNAVAILABLE, "JobStateSnapshot write failed"};
                 }
-                for (const auto& id : request.resume_request().request_ids()) {
-                    control::v1::ServerMessage completed;
-                    completed.mutable_protocol_version()->set_major(1);
-                    completed.set_request_id(id);
-                    completed.set_workspace_id(request.workspace_id());
-                    auto* terminal = completed.mutable_job_completed();
-                    terminal->set_request_id(id);
-                    terminal->mutable_result()->set_kind(control::v1::JOB_RESULT_KIND_ACTION_SEQUENCE);
-                    terminal->mutable_result()->set_manifest_path("C:\\vibris-test\\manifest.json");
-                    if (!stream->Write(completed)) {
-                        return {grpc::StatusCode::UNAVAILABLE, "JobCompleted write failed"};
-                    }
+                control::v2::ServerMessage completed;
+                completed.mutable_protocol_version()->set_major(2);
+                completed.set_request_id(id);
+                completed.set_workspace_id(request.workspace_id());
+                auto* terminal = completed.mutable_job_completed();
+                terminal->set_job_id(id);
+                terminal->set_request_id(id);
+                terminal->mutable_result()->set_result_manifest_id("manifest-test");
+                if (!stream->Write(completed)) {
+                    return {grpc::StatusCode::UNAVAILABLE, "JobCompleted write failed"};
                 }
                 continue;
             }

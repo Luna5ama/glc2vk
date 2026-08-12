@@ -10,8 +10,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $process = $null
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
-$tempBase = Join-Path $repoRoot ".omo\tmp"
-$tempRoot = Join-Path $tempBase "ulw-v1-g001-c003"
+$tempBase = Join-Path $repoRoot ".vibris\tmp"
+$tempRoot = Join-Path $tempBase "vibris-v2-protocol-descriptor"
 $tempCreated = $false
 
 try

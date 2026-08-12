@@ -168,7 +168,7 @@ class VibrisBootstrapTest {
             assertFalse(response.getStatus().getCanStartJob());
             assertEquals(ErrorCode.ERROR_CODE_SERVER_NOT_AVAILABLE,
                 response.getStatus().getLastError().getCode());
-            assertTrue(response.getStatus().getLastError().getMessage().contains("pending_shaders_root"));
+            assertTrue(response.getStatus().getLastError().getMessage().contains("pending_source_root"));
         } finally {
             channel.shutdownNow().awaitTermination(5, TimeUnit.SECONDS);
             bootstrap.close();
@@ -485,7 +485,7 @@ class VibrisBootstrapTest {
             {
               "schema_version": 2,
               "listen_address": "127.0.0.1:%d",
-              "pending_shaders_root": "%s",
+              "pending_source_root": "%s",
               "artifact_root": "%s",
               "artifact_quota_bytes": 3221225472,
               "artifact_ttl_hours": 168,

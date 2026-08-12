@@ -951,7 +951,7 @@ catch
 {
     throw "Build receipt is malformed: $BuildReceipt"
 }
-if ([int] $receipt.schema_version -ne 1)
+if ([int] $receipt.schema_version -ne 2)
 {
     throw "Build receipt has an unsupported schema: $BuildReceipt"
 }
@@ -1181,7 +1181,7 @@ try
     if (Test-Path -LiteralPath $manifestPath)
     {
         $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
-        if ([int] $manifest.schema_version -ne 1 -or
+        if ([int] $manifest.schema_version -ne 2 -or
             [string] $manifest.target_path -cne $OutputDirectory -or
             [string] $manifest.target_sha256 -cne $targetKey)
         {
@@ -1532,7 +1532,7 @@ try
         }
     }
     $manifest = [ordered] @{
-        schema_version = 1
+        schema_version = 2
         transaction_id = [guid]::NewGuid().ToString()
         target_path = $OutputDirectory
         target_sha256 = $targetKey

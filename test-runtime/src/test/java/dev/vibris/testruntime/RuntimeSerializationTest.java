@@ -1,8 +1,8 @@
 package dev.vibris.testruntime;
 
 import com.google.protobuf.CodedOutputStream;
-import dev.vibris.protocol.v1.Resolution;
-import dev.vibris.protocol.v1.SceneContext;
+import dev.vibris.protocol.v2.Resolution;
+import dev.vibris.protocol.v2.SceneContext;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;

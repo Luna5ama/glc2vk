@@ -30,7 +30,7 @@ and shader-source resolution. Changes affect capture plus both replay backends.
 - Derive storage-buffer bindings from every command's `PassInfo`, not debug labels or ordering guesses.
 - `parseReplayCliOptions` owns the shared grammar: capture directory first, optional numeric frame limit,
   `--shader-path`/`--shader-root` overrides, and repeatable `--shader-pass`.
-- `ShaderSourceResolver` keeps captured, legacy, file/directory override, pass-filter,
+- `ShaderSourceResolver` keeps captured indexed sources, file/directory override, pass-filter,
   and recursive-include behavior consistent across GL and VK.
 
 ## ANTI-PATTERNS

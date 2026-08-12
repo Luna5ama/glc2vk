@@ -14,8 +14,66 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-. (Join-Path $PSScriptRoot "iris-probe-common.ps1")
 . (Join-Path $PSScriptRoot "..\..\tools\git-process.ps1")
+
+function Resolve-IrisArtifact
+{
+    param([Parameter(Mandatory)] [string] $Path, [Parameter(Mandatory)] [string] $Label)
+
+    $items = @(Get-Item -Path $Path -ErrorAction Stop | Where-Object { -not $_.PSIsContainer })
+    if ($items.Count -ne 1)
+    {
+        throw "$Label must resolve to exactly one file; resolved $($items.Count): $Path"
+    }
+    return $items[0].FullName
+}
+
+function Resolve-IrisDirectory
+{
+    param([Parameter(Mandatory)] [string] $Path, [Parameter(Mandatory)] [string] $Label)
+
+    $item = Get-Item -LiteralPath ([System.IO.Path]::GetFullPath($Path)) -ErrorAction Stop
+    if (-not $item.PSIsContainer) { throw "$Label is not a directory: $Path" }
+    return $item.FullName
+}
+
+function Resolve-IrisPatchedJar
+{
+    param([Parameter(Mandatory)] [string] $Path)
+
+    $jar = Resolve-IrisArtifact -Path $Path -Label "PatchedJar"
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($jar)
+    try
+    {
+        $names = @($archive.Entries | ForEach-Object { $_.FullName })
+        $required = [ordered] @{
+            "Vibris API" = '^META-INF/jars/vibris-api.*[.]jar$'
+            "Vibris core" = '^META-INF/jars/vibris-core.*[.]jar$'
+            "Vibris protocol" = '^META-INF/jars/vibris-protocol-java[.]jar$'
+            "gRPC API" = '^META-INF/jars/grpc-api-.*[.]jar$'
+            "gRPC core" = '^META-INF/jars/grpc-core-.*[.]jar$'
+            "gRPC transport" = '^META-INF/jars/grpc-netty-shaded-.*[.]jar$'
+            "gRPC protobuf" = '^META-INF/jars/grpc-protobuf-[0-9].*[.]jar$'
+            "gRPC stub" = '^META-INF/jars/grpc-stub-.*[.]jar$'
+        }
+        foreach ($entry in $required.GetEnumerator())
+        {
+            if (@($names | Where-Object { $_ -match $entry.Value }).Count -ne 1)
+            {
+                throw "PatchedJar must embed exactly one $($entry.Key) JAR: $jar"
+            }
+        }
+        if ($names -notcontains "fabric.mod.json")
+        {
+            throw "PatchedJar does not contain Iris fabric.mod.json: $jar"
+        }
+    }
+    finally
+    {
+        $archive.Dispose()
+    }
+    return $jar
+}
 
 function Assert-AuditPatternAbsent
 {

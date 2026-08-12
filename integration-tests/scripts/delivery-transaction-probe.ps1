@@ -28,7 +28,7 @@ $scope = Join-Path $buildRoot ".verify-delivery-transaction-$runId"
 $inputRoot = Join-Path $scope "inputs"
 $output = Join-Path $scope "delivery"
 $freshnessRoot = Join-Path $scope "freshness"
-$outsideRoot = Join-Path $VibrisRoot ".omo\tmp\verify-delivery-junction-$runId"
+$outsideRoot = Join-Path $VibrisRoot ".vibris\tmp\verify-delivery-junction-$runId"
 $junction = Join-Path $scope "junction"
 $linkInput = Join-Path $scope "link-input"
 $auditLinkDelivery = Join-Path $scope "audit-link-delivery"
@@ -358,7 +358,7 @@ function New-ProbeBuildSession
         $buildStarted = ($phaseStarts | Sort-Object | Select-Object -First 1).AddSeconds(-1)
         $buildCompleted = ($phaseCompletions | Sort-Object | Select-Object -Last 1).AddSeconds(1)
         $receipt = [ordered] @{
-            schema_version = 1
+            schema_version = 2
             session_id = $sessionId
             vibris_root = $script:VibrisRoot
             iris_root = $script:IrisRoot
@@ -610,7 +610,7 @@ try
                 iris = Get-Record -Path (Join-Path $recoveryNext $jarName) -Name $jarName
             }
             $recoveryManifest = [ordered] @{
-                schema_version = 1
+                schema_version = 2
                 transaction_id = [guid]::NewGuid().ToString()
                 target_path = [System.IO.Path]::GetFullPath($recoveryOutput).TrimEnd('\', '/')
                 target_sha256 = $recoveryKey
@@ -1407,7 +1407,7 @@ try
         Copy-Item -LiteralPath (Join-Path $metadataOutput $jarName) `
             -Destination $metadataPublish
         $metadataManifest = [ordered] @{
-            schema_version = 1
+            schema_version = 2
             transaction_id = [guid]::NewGuid().ToString()
             target_path = [System.IO.Path]::GetFullPath($metadataOutput).TrimEnd('\', '/')
             target_sha256 = $metadataKey
@@ -1504,7 +1504,7 @@ try
                 -Destination $abortPrevious
         }
         $abortManifest = [ordered] @{
-            schema_version = 1
+            schema_version = 2
             transaction_id = [guid]::NewGuid().ToString()
             target_path = [System.IO.Path]::GetFullPath($abortOutput).TrimEnd('\', '/')
             target_sha256 = $abortKey
@@ -1605,7 +1605,7 @@ try
         iris = Get-Record -Path (Join-Path $output $jarName) -Name $jarName
     }
     $committedManifest = [ordered] @{
-        schema_version = 1
+        schema_version = 2
         transaction_id = [guid]::NewGuid().ToString()
         target_path = [System.IO.Path]::GetFullPath($output).TrimEnd('\', '/')
         target_sha256 = $targetKey
@@ -1658,7 +1658,7 @@ try
 
     [void] (New-Item -ItemType Directory -Path $transactionRoot -Force)
     $preparingManifest = [ordered] @{
-        schema_version = 1
+        schema_version = 2
         transaction_id = [guid]::NewGuid().ToString()
         target_path = [System.IO.Path]::GetFullPath($output).TrimEnd('\', '/')
         target_sha256 = $targetKey
@@ -1813,7 +1813,7 @@ finally
         }
     }
     Remove-OwnedDirectory -Path $scope -Root $buildRoot
-    Remove-OwnedDirectory -Path $outsideRoot -Root (Join-Path $VibrisRoot ".omo\tmp")
+    Remove-OwnedDirectory -Path $outsideRoot -Root (Join-Path $VibrisRoot ".vibris\tmp")
     Write-Output ("CLEANUP scope=$scope removed=$(-not (Test-Path -LiteralPath $scope)) " +
         "owned_receipts_active=$($activeReceiptSessions.Count) " +
         "delivery_lock_baseline=$deliveryLockExistedBefore " +

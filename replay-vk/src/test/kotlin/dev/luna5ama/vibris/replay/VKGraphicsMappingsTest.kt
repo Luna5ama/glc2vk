@@ -65,9 +65,9 @@ class VKGraphicsMappingsTest {
     fun preservesIrisBindingsForAttributesOptimizedOutOfOpenGlReflection() {
         val attributes = listOf(
             attribute(location = 0, name = "a_Position", size = 2, type = 0x1405, integer = true),
-            attribute(location = 1, name = null, size = 4, type = 0x1401, normalized = true),
-            attribute(location = 2, name = null, size = 2, type = 0x1403, integer = true),
-            attribute(location = 14, name = null, size = 4, type = 0x1400),
+            attribute(location = 1, name = "a_Color", size = 4, type = 0x1401, normalized = true),
+            attribute(location = 2, name = "a_TexCoord", size = 2, type = 0x1403, integer = true),
+            attribute(location = 14, name = "at_tangent", size = 4, type = 0x1400),
         )
         val prepared = prepareVulkanGraphicsSource(
             """
@@ -112,7 +112,7 @@ class VKGraphicsMappingsTest {
             locations = GraphicsLocationAllocator(
                 listOf(
                     attribute(location = 0, name = "Position", size = 3, type = 0x1406),
-                    attribute(location = 1, name = null, size = 2, type = 0x1406),
+                    attribute(location = 1, name = "UV0", size = 2, type = 0x1406),
                 ),
             ),
         )

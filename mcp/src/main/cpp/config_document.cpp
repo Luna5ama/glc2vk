@@ -17,7 +17,11 @@ namespace {
 using Json = nlohmann::json;
 
 [[noreturn]] void invalid_config() {
-    throw StateError(kInvalidConfigCode, "Config JSON is malformed or does not match schema version 1.");
+    throw StateError(kInvalidConfigCode, "Config JSON is malformed.");
+}
+
+[[noreturn]] void unsupported_config() {
+    throw StateError(kUnsupportedVersionCode, "UNSUPPORTED_VERSION: config schema_version must be 2.");
 }
 
 void validate_string(std::string_view value) {
@@ -63,7 +67,10 @@ bool is_uuid(std::string_view value) {
 }
 
 void validate_config(const JobContext& config, bool workspace_required) {
-    if (config.schema_version != 1 || config.shader_directory != "shaders" || !std::isfinite(config.fov) ||
+    if (config.schema_version != 2) {
+        unsupported_config();
+    }
+    if (config.shader_directory != "shaders" || !std::isfinite(config.fov) ||
         config.fov <= 0.0 || config.fov > 180.0 || (workspace_required && config.workspace_id.empty()) ||
         (!config.workspace_id.empty() && !is_uuid(config.workspace_id))) {
         invalid_config();

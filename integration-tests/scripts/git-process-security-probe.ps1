@@ -7,7 +7,18 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "..\..\tools\git-process.ps1")
-. (Join-Path $PSScriptRoot "stdio-job-probe-common.ps1")
+
+function Invoke-G007Git
+{
+    param(
+        [Parameter(Mandatory)] [string] $WorkspaceRoot,
+        [Parameter(Mandatory)] [string[]] $GitArguments
+    )
+
+    $text = Invoke-TrustedGitText -Root $WorkspaceRoot -Arguments $GitArguments `
+        -Label "G007 Git $([string]::Join(' ', $GitArguments))"
+    return @($text -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
 
 $root = [System.IO.Path]::GetFullPath($Repository)
 $fixture = [System.IO.Path]::GetFullPath($NativeSecurityFixture)

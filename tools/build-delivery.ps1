@@ -358,7 +358,7 @@ try
         [System.IO.FileAccess]::ReadWrite,
         [System.IO.FileShare]::None)
     $receipt = [ordered] @{
-        schema_version = 1
+        schema_version = 2
         session_id = $sessionId
         vibris_root = $VibrisRoot
         iris_root = $IrisRoot

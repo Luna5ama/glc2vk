@@ -57,12 +57,8 @@ class ShaderSourceResolver(
     private fun resolveCaptured(metadata: CaptureMetadata, shaderIndex: Int): ResolvedShaderSource {
         val extension = stageExtension(metadata.shaderMetadata(shaderIndex).stage)
         val indexed = captureDir.resolve("shader_$shaderIndex.$extension.glsl")
-        if (indexed.exists()) {
-            return ResolvedShaderSource(indexed.readText(), indexed, false)
-        }
-        val legacy = captureDir.resolve("shader.$extension.glsl")
-        check(legacy.exists()) { "Capture shader source does not exist: $indexed or $legacy" }
-        return ResolvedShaderSource(legacy.readText(), legacy, false)
+        check(indexed.exists()) { "Capture shader source does not exist: $indexed" }
+        return ResolvedShaderSource(indexed.readText(), indexed, false)
     }
 
     private fun resolveDirectoryCandidate(

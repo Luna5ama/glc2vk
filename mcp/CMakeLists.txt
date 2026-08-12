@@ -196,9 +196,9 @@ if(BUILD_TESTING)
     add_executable(vibris-action-schema-tests src/test/cpp/action_schema_tests.cpp)
     target_link_libraries(vibris-action-schema-tests PRIVATE vibris_mcp_core)
 
-    add_executable(vibris-profile-matrix-workflow-tests src/test/cpp/profile_matrix_workflow_tests.cpp)
-    target_include_directories(vibris-profile-matrix-workflow-tests PRIVATE src/test/cpp)
-    target_link_libraries(vibris-profile-matrix-workflow-tests PRIVATE vibris_mcp_core)
+    add_executable(vibris-durable-workflow-tests src/test/cpp/profile_matrix_workflow_tests.cpp)
+    target_include_directories(vibris-durable-workflow-tests PRIVATE src/test/cpp)
+    target_link_libraries(vibris-durable-workflow-tests PRIVATE vibris_mcp_core)
 
     add_executable(vibris-paired-benchmark-tests src/test/cpp/paired_benchmark_tests.cpp)
     target_link_libraries(vibris-paired-benchmark-tests PRIVATE vibris_mcp_core)
@@ -219,7 +219,7 @@ if(BUILD_TESTING)
         target_compile_options(vibris-job-protocol-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-synchronous-job-runner-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-action-schema-tests PRIVATE /W4 /permissive-)
-        target_compile_options(vibris-profile-matrix-workflow-tests PRIVATE /W4 /permissive-)
+        target_compile_options(vibris-durable-workflow-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-paired-benchmark-tests PRIVATE /W4 /permissive-)
     endif()
 
@@ -232,7 +232,7 @@ if(BUILD_TESTING)
                 vibris-grpc-source-ownership-tests vibris-grpc-accepted-resume-tests)
     add_dependencies(mcp-tests vibris-job-protocol-tests vibris-action-schema-tests)
     add_dependencies(mcp-tests vibris-synchronous-job-runner-tests)
-    add_dependencies(mcp-tests vibris-profile-matrix-workflow-tests)
+    add_dependencies(mcp-tests vibris-durable-workflow-tests)
     add_dependencies(mcp-tests vibris-paired-benchmark-tests)
 
     add_test(
@@ -270,8 +270,9 @@ if(BUILD_TESTING)
             WorkspaceIdentityRetriesOnlyPublicationLoser
             WorkspaceIdentityBlocksTempSubstitution
             WorkspaceIdentityPreservesCreateCollision
-            WorkspaceIdentityDoesNotMigrateCodexState
             WorkspaceIdentityRejectsDuplicateKeys
+            WorkspaceIdentityRejectsUnsupportedVersion
+            ConfigRejectsUnsupportedVersion
             WorkspaceIdentityEnforcesJsonDepth
             WorkspaceIdentityClassifiesNonregularState
             WorkspaceIdentityRejectsReparseState
@@ -361,7 +362,7 @@ if(BUILD_TESTING)
 
     foreach(scenario
             SingleJobAcceptedTransfersAbSourcesOnce
-            ResumeStateControlsSourceOwnership)
+            JobStateControlsSourceOwnership)
         add_test(NAME ${scenario} COMMAND vibris-grpc-source-ownership-tests ${scenario})
     endforeach()
 
@@ -378,9 +379,9 @@ if(BUILD_TESTING)
         add_test(NAME ${scenario} COMMAND vibris-synchronous-job-runner-tests ${scenario})
     endforeach()
     add_test(NAME ActionSchemaPassResourceV2Contract COMMAND vibris-action-schema-tests)
-    add_test(NAME ProfileMatrixCheckpointResume COMMAND vibris-profile-matrix-workflow-tests)
-    add_test(NAME CompileValidationCheckpointResume COMMAND vibris-profile-matrix-workflow-tests)
-    set_tests_properties(ProfileMatrixCheckpointResume PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
+    add_test(NAME DurableMatrixCheckpointResume COMMAND vibris-durable-workflow-tests)
+    add_test(NAME CompileValidationCheckpointResume COMMAND vibris-durable-workflow-tests)
+    set_tests_properties(DurableMatrixCheckpointResume PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
     set_tests_properties(CompileValidationCheckpointResume PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
     foreach(scenario
             PairedOrderStrategies
@@ -403,7 +404,7 @@ if(BUILD_TESTING)
                 "${CMAKE_CURRENT_SOURCE_DIR}/../integration-tests/scripts/stdio-mcp-probe.ps1"
                 -Exe "$<TARGET_FILE:vibris-mcp>"
                 -WorkspaceRoot
-                    "${CMAKE_CURRENT_SOURCE_DIR}/../.omo/tmp/stdio-v2-tools/worktree"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/../.vibris/tmp/stdio-v2-tools/worktree"
                 -FakeServerExe "$<TARGET_FILE:vibris-stdio-v2-server>"
                 -Requests
                     "${CMAKE_CURRENT_SOURCE_DIR}/../integration-tests/fixtures/mcp/happy-core-tools.jsonl")

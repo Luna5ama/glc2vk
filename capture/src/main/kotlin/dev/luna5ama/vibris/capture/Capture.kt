@@ -817,8 +817,7 @@ private fun saveShader(
     outputPath: Path,
     shaderInfo: ShaderInfo,
     stage: ShaderStage,
-    shaderIndex: Int,
-    legacyName: Boolean
+    shaderIndex: Int
 ) {
     val extension = "${stage.shortName}.glsl"
     val glslPath = outputPath.resolve("shader_$shaderIndex.$extension")
@@ -826,10 +825,6 @@ private fun saveShader(
     val spvPath = outputPath.resolve("shader_$shaderIndex.${stage.shortName}.spv")
     glslPath.writeText(shaderInfo.originalSource)
     vkGlslPath.writeText(shaderInfo.patchedSource)
-
-    if (legacyName) {
-        outputPath.resolve("shader.$extension").writeText(shaderInfo.originalSource)
-    }
 
     // Graphics captures currently replay through OpenGL. Keep the patched GLSL for future
     // Vulkan support, but do not make a valid OpenGL draw capture depend on Vulkan compilation.
@@ -860,10 +855,6 @@ private fun saveShader(
         .waitFor()
     check(exitCode == 0) { "glslang failed with exit code $exitCode for $vkGlslPath" }
 
-    if (legacyName) {
-        outputPath.resolve("shader.${stage.shortName}.spv").toFile().writeBytes(spvPath.toFile().readBytes())
-        outputPath.resolve("shader.${stage.shortName}.vk.glsl").writeText(shaderInfo.patchedSource)
-    }
 }
 
 @Suppress("LocalVariableName")
@@ -941,8 +932,7 @@ fun endGlCapture(): Thread {
                         "compute" -> ShaderStage.ComputeShader
                         else -> error("Unsupported shader stage ${shaderInfo.stage}")
                     },
-                    shaderIndex = index,
-                    legacyName = index == 0
+                    shaderIndex = index
                 )
             }
     }
