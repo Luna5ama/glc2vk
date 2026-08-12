@@ -105,6 +105,7 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T19 | P0 | Vibris | Run offline integrated acceptance | DONE | `T19 verify offline v2 integration` |
 | T19A | P0 | Vibris | Repair strict v2 live bootstrap | DONE | `T19A repair strict v2 live bootstrap` |
 | T19B | P0 | Vibris | Compact capture results and localize artifact paths | DONE | `T19B compact capture results and localize artifact paths` |
+| T19C | P0 | Iris | Make the main-menu runtime ready for jobs | DONE | `T19C make main menu runtime ready` |
 | T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | READY | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
 
@@ -1809,11 +1810,92 @@ Evidence:
   untouched and unstaged. Commit: this task's commit with subject
   `T19B compact capture results and localize artifact paths`.
 
+### T19C — Make the main-menu runtime ready for jobs
+
+Status: `DONE`
+
+Dependencies: T19B
+
+Repository: `I:\code\Iris`
+
+Worktree: `I:\code\Iris`
+
+Branch: Iris `1.21.11-shaderdev`
+
+Primary files:
+
+- `I:\code\Iris\common\src\main\java\net\irisshaders\iris\vibris\MinecraftVibrisRuntimeHost.java`
+- `I:\code\vibris\docs\engineering-validation-v2-execution-ledger.md`
+
+Scope:
+
+- Report the initialized Iris runtime as connected while Minecraft is at the main menu, independently from whether a
+  singleplayer world is loaded.
+- Preserve the strict-v2 distinction between `minecraft_connected`, `world_loaded`, and `scene_applied`, so a main-menu
+  runtime can start a job whose preset loads the requested world.
+- Rebuild, redeploy, restart the authorized MultiMC instance, and prove live main-menu readiness before resuming T20.
+
+Non-scope:
+
+- Do not add a legacy readiness branch, protocol alias, fallback, or compatibility path.
+- Do not modify shader worktrees or perform the remaining T20 acceptance matrix in this task.
+
+Acceptance:
+
+- A fresh main-menu runtime reports `minecraft_connected=true`, `world_loaded=false`, `scene_applied=false`, and
+  `can_start_job=true`.
+- The Iris compile/build passes.
+- The deployed MCP and Mod hashes match their verified build outputs.
+
+Verification:
+
+- Iris Java compilation and Fabric build.
+- Live strict-v2 `vibris_get_status` from the main menu after authorized restart.
+
+Expected commit title: `T19C make main menu runtime ready`
+
+Blockers:
+
+- None; the user explicitly authorized redeployment and restart of the MultiMC `1.21.11-Iris` instance for this
+  session.
+
+Evidence:
+
+- `2026-08-11`: T20 live probing proved the service port and preset catalog were available at the main menu, while
+  status incorrectly returned `minecraft_connected=false`, `world_loaded=false`, and `can_start_job=false`. Source
+  inspection found `VibrisBootstrap.start(...)` already runs during render-system initialization; the defect was
+  `MinecraftVibrisRuntimeHost.status()` defining runtime connection as the simultaneous presence of level, player,
+  and integrated server. The user requested a hard fix with no compatibility code before continuing T20.
+- Replaced the Iris host's world-gated runtime connection flag with host-lifetime availability: the initialized host
+  reports connected until `close()`, while `currentSaveId` and `currentDimensionId` continue to drive the independent
+  world and scene readiness fields. No legacy branch, alias, fallback, or dual behavior was added.
+- Focused `:vibris-core:test --tests dev.vibris.core.ServerDescriptorTest` passed against the corrected host contract.
+- Iris `:common:compileJava :fabric:build --offline` passed on Java 21. The rebuilt 28,146,244-byte Mod was deployed
+  to the authorized MultiMC instance with matching source/target SHA-256
+  `6950BBE417E098E8657F6A776720ABE69C7E67FD5B5BAAFA1F006551444DE9B8`, then the instance was restarted as Java
+  PID 29756.
+- Before any world load, live strict-v2 status for AP4 workspace
+  `e5e1f8a1-2532-4972-9bad-2dcf6a0c72cc` returned `SERVER_STATE_AVAILABLE`, `core_online=true`,
+  `minecraft_connected=true`, `world_loaded=false`, `scene_applied=false`, `can_accept_job=true`, and
+  `can_start_job=true`; transition 1 was `runtime-available`. The deployed MCP remained the already verified
+  `8CD4AC8B9E93E6E75FD2F294340673A77C518AD833819300C0EB7D54F6F615C6` delivery.
+- Iris external implementation commit: `3f3e458ea9fe904398bb28e4a8e05cb4c22e7afc` with subject
+  `T19C make main menu runtime ready`; its parent is the recorded T16 Iris commit
+  `38a7d2eaf88939983e0e01f731ccd4c627fbf6a9`, it changes only
+  `MinecraftVibrisRuntimeHost.java`, and it is the current `1.21.11-shaderdev` HEAD and an ancestor of that branch.
+  This owner-repository receipt is ledger-only.
+- `2026-08-11` receipt revalidation found the local and installed 28,146,244-byte Mod both at SHA-256
+  `6950BBE417E098E8657F6A776720ABE69C7E67FD5B5BAAFA1F006551444DE9B8`; `config.toml` points to the
+  15,368,192-byte MCP, whose configured delivery and source build both have SHA-256
+  `8CD4AC8B9E93E6E75FD2F294340673A77C518AD833819300C0EB7D54F6F615C6`.
+  Java PID 29756 still owns `127.0.0.1:50051`, and a fresh main-menu status call reproduced the exact available,
+  connected, no-world/no-scene, can-accept/can-start receipt above with no active source, jobs, or queue.
+
 ### T20 — Run live two-worktree 720p acceptance
 
 Status: `READY`
 
-Dependencies: T19B
+Dependencies: T19C
 
 Repository: `I:\code\vibris` and `I:\code\Iris`
 
@@ -2070,7 +2152,7 @@ Evidence:
 
 Status: `PENDING`
 
-Dependencies: T01, T02, T02A, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T12A, T13, T14, T15, T16, T17, T18, T19, T19A, T19B, T20
+Dependencies: T01, T02, T02A, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T12A, T13, T14, T15, T16, T17, T18, T19, T19A, T19B, T19C, T20
 
 Repository: `I:\code\vibris`
 
@@ -2124,7 +2206,7 @@ Evidence:
 ```text
 T00 -> T01 -> T02 -> T02A -> T03 -> T04 -> T05 -> T06 -> T07 -> T08 -> T09
     -> T10 -> T11 -> T12 -> T12A -> T13 -> T14 -> T15 -> T16 -> T17 -> T18
-    -> T19 -> T19A -> T19B -> T20 -> T99
+    -> T19 -> T19A -> T19B -> T19C -> T20 -> T99
 ```
 
 Queue order is authoritative and serial even where technical dependencies could allow parallel work.
@@ -2189,6 +2271,7 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T19A - fixed the strict schema-2 shaderpack root, implemented every unavailable unary RPC, aligned load_shader on source_id/config_id only, and moved capture planning/reservation after the single generated load prelude; Core 102/102 and focused native 2/2 passed with no compatibility path - Commit title: T19A repair strict v2 live bootstrap`
 - `2026-08-11 - T19B inserted - a live load_and_screenshot response returned a 192710-character raw JobResult with 692 expanded setting entries and five Minecraft-internal artifact paths; inserted compact recipe projection and recursive worktree-path localization remediation before T20 - Control-plane commit title: roadmap insert T19B compact screenshot result remediation`
 - `2026-08-11 - T19B - projected synchronous screenshots to one bounded screenshot/manifest response, recursively localized all strict-v2 artifact paths after atomic validation, and passed focused release build plus CTest 6/6 - Commit title: T19B compact capture results and localize artifact paths`
+- `2026-08-11 - T19C - Iris reports the initialized main-menu runtime as connected independently of world/scene state; external commit 3f3e458ea9fe904398bb28e4a8e05cb4c22e7afc, focused Core status tests and Iris build passed, deployed Mod/MCP hashes matched, and live main-menu status was available with can_start_job=true - Owner receipt commit title: T19C record main menu readiness receipt`
 - `2026-08-11 - T20 blocked - the live instance embeds 335 v1 and zero v2 protocol entries, the configured MCP publishes only the old five-tool surface, and no two shader worktrees were supplied; no compatibility path, deployment, or restart was attempted - Control-plane commit title: roadmap block T20 pending matching live scope`
 - `2026-08-11 - T20 blocker audit 2 - reverified the unchanged pre-v2 runtime/MCP and missing two-worktree scope; this is the second consecutive blocked Goal turn, so the Goal remains active - Control-plane commit title: roadmap recheck T20 live scope blocker`
 - `2026-08-11 - T20 blocker audit 3 - reverified the unchanged pre-v2 runtime/MCP and missing two-worktree scope for the third consecutive blocked Goal turn; the Goal is marked blocked after the ledger-only atomic checkpoint - Control-plane commit title: roadmap confirm T20 blocked awaiting live scope`
