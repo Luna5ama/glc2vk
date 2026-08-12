@@ -112,7 +112,7 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T19E | P0 | Vibris | Define strict detached-worktree provenance contract | DONE | `T19E define strict detached provenance contract` |
 | T19F | P0 | Iris | Implement and prove live detached-worktree provenance | DONE | `T19F complete live detached provenance` |
 | T19G | P0 | Vibris | Repair live paired-benchmark finalization | DONE | `T19G repair live paired benchmark finalization` |
-| T19I | P0 | Vibris/Iris | Add a frame-atomic deterministic temporal capture phase | READY | `T19I record deterministic temporal phase proof` |
+| T19I | P0 | Vibris/Iris | Add a frame-atomic deterministic temporal capture phase | BLOCKED | `T19I record deterministic temporal phase proof` |
 | T19H | P0 | Vibris | Make paired visual capture deterministic | BLOCKED | `T19H make paired visual capture deterministic` |
 | T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | BLOCKED | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
@@ -2302,7 +2302,7 @@ Evidence:
 
 ### T19I — Add a frame-atomic deterministic temporal capture phase
 
-Status: `READY`
+Status: `BLOCKED`
 
 Dependencies: T19G
 
@@ -2391,7 +2391,14 @@ Expected commit titles:
 
 Blockers:
 
-- None known.
+- Clean AP4 commit `b793f75bc411b309142305ce062e17bc52b259c3` contains a shader-internal nondeterministic
+  voxel allocator. `VoxelAllocatorMP_Assign.comp.glsl` assigns persistent brick allocation IDs with one
+  `atomicAdd(voxel_bucketCounts[dist], 1u)` per occupied brick across 1,024 workgroups. OpenGL does not define
+  cross-workgroup execution order, so identical occupancy and bucket-prefix inputs produce different allocation-ID
+  maps and downstream radiance-cache state. Iris cannot make that dispatch deterministic without changing the shader
+  algorithm or preserving/reusing one side's GPU state; both are outside T19I scope, as is weakening the visual gate.
+- Unblocking requires an explicit scope decision that authorizes a deterministic AP4 allocator implementation or
+  otherwise changes the current no-shader-change/no-state-reuse acceptance contract. T19H and T20 remain blocked.
 
 Evidence:
 
@@ -2440,6 +2447,26 @@ Evidence:
   commit, followed by direct-executable runtime proof and the Vibris owner-receipt commit. No Mod or MCP was deployed,
   Codex configuration was not changed or restarted, Minecraft was not restarted, the six retained T19H MCP files stay
   unstaged, and `capture\a.spv` remains untouched.
+- `2026-08-12` direct same-clean-commit AP4 job `1bccc8df-a841-4b26-a611-71d3e9890b15` used exact
+  `night-gi-1-720p`, 120 warmup frames, unchanged `max_threshold_pixel_ratio=0.001`, distinct capture frames
+  `2406`/`2657`, matching source/config/scene provenance, and successful restoration. It failed closed at ratio
+  `0.015547960069444445`; maximum error was `0.4549019607843137` and SSIM was `0.9998052931309492`.
+- Temporary client-thread readback diagnostics at those two captures proved the CPU/GPU input set was identical before
+  allocation: scene signatures matched; shader-visible counter/time were exactly `121`/`2.0166655`; SSBO 3 allocation
+  counter SHA-256 was `4ee5ad0c4071781ea6c5b7884fa232c2b1887007ac21a87c39c8ba62ba0cc98b` on both sides;
+  occupancy was `254ce1ce3bb53dfdfd07fd1f02d7297c104cff0a3ca83a58e49c42f8e2801c74` on both; and bucket
+  prefixes were `d931f6f8b4771a7ed4924f5650a12f4054be04ed9c75e39b20b24a723e2f51f0` on both. Only the
+  allocation-ID range diverged (`d54f8eaa69c7ef77c4230b920d0ace5228040765190f736f1fcc4f6b4d7e193d` versus
+  `becc4ee4e9bf6a4debc430baf79757ee708e56bfea0617e8f3dcf80c81a38da4`), followed by divergent
+  SSBO 10/11 radiance-cache hashes. Earlier direct job `7e476935-a0b0-49da-a359-616df770e338` independently failed
+  the same gate at ratio `0.022518446180555554` with matching provenance and restoration.
+- The diagnostic readback/logging and the disproven early deterministic-time experiment were removed. Focused
+  `:common:compileJava`, `:fabric:vibrisBridgeTest`, and `:fabric:remapJar` passed. The clean Mod was deployed with
+  matching source/instance SHA-256 `F46CCC774C9A6AB6BAC085A442AF423C3C2EEAEB6DC242781A97CE58AC0C03D1`.
+  Baseline restore job `9a515896-0e52-4545-8b0d-de6b89dd521a` left active source UUID
+  `b7c0151f-8355-4640-b2d7-5d91b162992f`; final status was available with an empty queue, no active job, and both
+  accept/start true. AP3/AP4 shader files, Codex MCP deployment/configuration, retained T19H files, and `capture\a.spv`
+  were not modified.
 
 ### T19H — Make paired visual capture deterministic
 
