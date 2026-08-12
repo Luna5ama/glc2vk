@@ -56,8 +56,9 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 - Protocol/config/checkpoint/manifest version mismatches fail with an explicit `UNSUPPORTED_VERSION`; old data remains untouched on disk but is never read, indexed, migrated, or deleted automatically.
 - All user-visible outputs continue through the request worktree's `.vibris\artifact` path.
 - Do not restart Minecraft or its launcher. Do not deploy the MCP server or mod unless the user explicitly authorizes that separate action.
-  On `2026-08-11`, the user authorized repeated MCP/Mod deployment and restart of the existing MultiMC
-  `1.21.11-Iris` instance as needed for the remainder of this session. Restarting Codex remains user-owned.
+  On `2026-08-12`, the user refined the session authorization: the existing MultiMC `1.21.11-Iris` instance may be
+  restarted and a task-owned Mod may be redeployed when required, but new MCP validation must invoke the built
+  executable directly without changing the Codex MCP deployment/configuration or restarting Codex.
 - Pass-boundary capture v2 covers only named begin, prepare, deferred, composite, final, and shadow-composite stages; high-frequency gbuffer, terrain, and ordinary shadow draws are out of scope.
 - Artifact TTL defaults to 168 hours.
 - `cmake` and `ctest` are not on `PATH`; ledger commands use the Visual Studio copies under `C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin`.
@@ -69,6 +70,7 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | Repository | Path or state | Owner | Required handling |
 |---|---|---|---|
 | `I:\code\vibris` | `capture\a.spv` untracked | User | Never read as a fixture, modify, delete, stage, or commit. |
+| `I:\code\vibris` | T19H changes in `mcp\src\main\cpp\job_protocol.cpp`, `paired_benchmark.cpp`, and the four matching focused test files | Codex/T19H retained implementation | Preserve unstaged while T19I is implemented. Stage only when T19H itself reaches every acceptance gate. |
 | `I:\code\vibris` | `core\src\main\kotlin\dev\vibris\core\ThreadBoundVibrisRuntimeAdapter.kt` and its test | User change committed as `b7a0931d85042442c0360a38c50e30d811be9486` | Resolved; the files are clean and may be modified by later task-owned work. |
 | `I:\code\vibris` | Detached review worktrees under `I:\code\vibris-review-*` | User/review tooling | Do not modify, remove, or use as implementation targets. |
 | `I:\code\Iris` | `.codex\` untracked | User/Codex runtime | Preserve and never stage. |
@@ -110,7 +112,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T19E | P0 | Vibris | Define strict detached-worktree provenance contract | DONE | `T19E define strict detached provenance contract` |
 | T19F | P0 | Iris | Implement and prove live detached-worktree provenance | DONE | `T19F complete live detached provenance` |
 | T19G | P0 | Vibris | Repair live paired-benchmark finalization | DONE | `T19G repair live paired benchmark finalization` |
-| T19H | P0 | Vibris | Make paired visual capture deterministic | READY | `T19H make paired visual capture deterministic` |
+| T19I | P0 | Vibris/Iris | Add a frame-atomic deterministic temporal capture phase | READY | `T19I record deterministic temporal phase proof` |
+| T19H | P0 | Vibris | Make paired visual capture deterministic | BLOCKED | `T19H make paired visual capture deterministic` |
 | T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | BLOCKED | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
 
@@ -2297,11 +2300,136 @@ Evidence:
   `C8194FD63B7DEAEB1CF871C9534EB39002EE41B2606AE585E82DA24492DBCF00`, and
   `7BB9DF9CB9304E2BE4A94733529345CF0FADEDEE949A1D146838FE9563C67126`.
 
-### T19H — Make paired visual capture deterministic
+### T19I — Add a frame-atomic deterministic temporal capture phase
 
 Status: `READY`
 
 Dependencies: T19G
+
+Repository: `I:\code\vibris` and `I:\code\Iris`
+
+Worktree: `I:\code\vibris`; `I:\code\Iris`
+
+Branch: Vibris `main`; Iris `1.21.11-shaderdev`
+
+Primary files:
+
+- `I:\code\vibris\api\src\main\kotlin\dev\vibris\api\VibrisRuntimeAdapter.kt`
+- `I:\code\vibris\core\src\main\kotlin\dev\vibris\core\ActionJobExecutor.kt`
+- `I:\code\vibris\core\src\main\kotlin\dev\vibris\core\RuntimeJobExecutor.kt`
+- `I:\code\vibris\core\src\main\kotlin\dev\vibris\core\ThreadBoundVibrisRuntimeAdapter.kt`
+- `I:\code\vibris\core\src\main\kotlin\dev\vibris\core\RenderedFrameClock.kt`
+- Focused Vibris API/Core executor, frame-clock, and thread-bound adapter tests
+- `I:\code\Iris\common\src\main\java\net\irisshaders\iris\vibris\MinecraftVibrisRuntimeHost.java`
+- `I:\code\Iris\common\src\main\java\net\irisshaders\iris\uniforms\SystemTimeUniforms.java`
+- Focused Iris host and deterministic-time tests
+- `I:\code\vibris\docs\engineering-validation-v2-execution-ledger.md`
+
+Scope:
+
+- Replace the separate strict-v2 load/reset/wait/capture runtime handoffs used by an adjacent paired visual case with
+  one required hard-cut operation that covers the final context/reload, temporal reset, warmup anchor, and capture
+  target. After Core activates the prepared source, the client-thread operation must finish context application and
+  shader reload, clear/recreate pack temporal GPU state, enter the deterministic phase, record one rendered-frame
+  anchor, and pre-register the capture for exactly `anchor + warmup_frames + 1` before the client thread can advance.
+- Add an absolute-target capture primitive to `RenderedFrameClock`. A missed target, cancellation, or failure must
+  fail closed; it must never fall back to an unanchored wait or a later next-frame capture.
+- Preserve the existing strict-v2 logical load/reset/wait/capture action indices and typed receipts by deriving them
+  from the compound result, including exact start/end/capture frame IDs. Other action sequences retain their existing
+  semantics.
+- During the compound phase, make Iris shader-visible `frameCounter`, `frameTime`, and `frameTimeCounter` advance from
+  one deterministic origin at a fixed logical step. Exit that mode in `finally` on success, failure, or cancellation
+  so ordinary gameplay and restoration use the real clock.
+- Land this one logical task as coordinated, separate repository commits without a compatibility bridge: Vibris
+  contract/Core first (`T19I add frame atomic temporal capture contract`), Iris required implementation second
+  (`T19I implement deterministic temporal capture phase`), then a Vibris owner-receipt commit after direct live proof.
+  T19I remains `READY` between those commits so each Goal continuation still creates at most one atomic commit.
+
+Non-scope:
+
+- Do not weaken or recalibrate any visual threshold, reuse a capture, change a shader source or supplied shader
+  worktree, add a default interface method, preserve the old disjoint path as a fallback, or introduce a v1/legacy
+  adapter.
+- Do not treat a reset completion timestamp as a frame anchor, and do not claim that a later observed
+  `capture_frame=end_frame+1` proves an atomic boundary.
+- Do not stage or commit the retained T19H MCP planner/guard/test files while executing T19I. They may be used only to
+  build the direct live proof and remain owned by T19H until its own acceptance passes.
+- Do not alter Codex MCP configuration or restart Codex. Invoke each newly built MCP executable directly. A task-owned
+  Mod deployment and restart of the authorized MultiMC instance are allowed when the Iris implementation requires it.
+
+Acceptance:
+
+- Focused Core interleaving tests advance frames between the formerly separate operations yet prove warmup begins at
+  the reset anchor and capture occurs at exactly `end_frame + 1`; an already missed absolute target fails closed.
+- Normalized receipts preserve the original load/reset/wait/capture kinds, indices, status, and exact frame range, and
+  cancellation or failure cannot publish a successful capture or leave deterministic mode active.
+- Iris tests feed different real nanosecond sequences but produce identical deterministic `frameCounter`, `frameTime`,
+  and `frameTimeCounter` sequences. Success, cancellation, and failure all restore real-time mode.
+- At least two consecutive direct-executable same-clean-commit AP4 comparisons under `night-gi-1-720p` pass every
+  unchanged threshold, including `max_threshold_pixel_ratio=0.001`, with distinct physical capture frames, matching
+  source/config/scene hashes, verified artifacts, and successful restoration. A deliberately different fixture still
+  fails closed.
+- Final runtime status is available with the entry source restored, no queued or active jobs, and both accept/start
+  true. Codex MCP deployment/configuration remains byte-for-byte untouched.
+
+Verification:
+
+- Focused Vibris API/Core Gradle tests covering the compound operation, thread-bound execution, absolute frame target,
+  receipt normalization, cancellation, and failure.
+- Focused Iris common/Fabric build and deterministic-time/host tests.
+- Focused native T19H protocol/visual/paired-benchmark tests against the coordinated builds.
+- Two consecutive direct live same-commit `night-gi-1-720p` comparisons with artifact SHA-256 verification, followed
+  by status, configuration, process, and protected Git-state audits.
+- `git diff --cached --check`, staged names/stat/full diff, and exact post-commit SHA/subject checks separately in each
+  repository.
+
+Expected commit titles:
+
+- Vibris product: `T19I add frame atomic temporal capture contract`
+- Iris product: `T19I implement deterministic temporal capture phase`
+- Vibris owner receipt: `T19I record deterministic temporal phase proof`
+
+Blockers:
+
+- None known.
+
+Evidence:
+
+- `2026-08-12` T19H's planner correction built successfully and passed all five focused native CTest scenarios plus
+  the complete job-protocol, synchronous-runner, and paired-benchmark test binaries. The direct MCP executable is
+  15,378,432 bytes with SHA-256 `ED0316C991FD0C18C037144A5D3B3D3A4FF7D21EC1782494B58D9DC0CFBDFBDC`.
+- Direct job/request `201000d7-f086-4eaf-a70d-596597be4e93` used clean AP4 commit
+  `b793f75bc411b309142305ce062e17bc52b259c3` on both sides under exact `night-gi-1-720p`. Its action receipts were
+  ordered reset 0, wait 1, capture 2, reset 3, wait 4, capture 5, compare 6. The A range was 204014-204134 with
+  capture 204135; the B range was 204146-204266 with capture 204267. Both reset receipts were successful and all
+  deterministic/provenance guards passed.
+- The comparison still failed the unchanged threshold-pixel-ratio gate at
+  `0.2518901909722222 > 0.001`; SSIM `0.9990051277007846`, MAE `0.0033822252860575574`, RMSE
+  `0.007031817111295989`, P95 `0.011764705882352941`, and maximum error `0.23921568627450981` each passed. An earlier
+  corrected job `0dc85d09-31b9-4854-8809-5ee99ddec6e7` independently failed at ratio `0.150475260`, so the result is
+  not a single-capture anomaly.
+- Iris currently resets CPU counters, then resumes `frameTime`/`frameTimeCounter` from wall-clock deltas; AP4 consumes
+  those uniforms in exposure, GI/DOF, wind, and water paths. Core also completes reset, registers the frame wait, and
+  schedules capture as separate asynchronous operations. A frame may therefore advance temporal buffers outside the
+  counted warmup, and a successful reset timestamp is not a rendered-frame boundary.
+- Manifest `81d06672-94ad-3db8-b846-5f9f837d4fb1` and artifacts are rooted at
+  `I:\code\mcshaders\Alpha-Piscium-4\.vibris\artifact\24e171a5-6210-3cf2-a727-49109206617d\6e1e0814-ed54-3340-b2db-029207ec727d`.
+  A/B PNG SHA-256 values are `5222A79B78D0E8787C8FF8DD124EC67C6ADA7DB7033AABECD27C78C5ED32F174` and
+  `2F8DA7B4E0475B84FE7E56DC14612002CADFC794309929F4AB96177AE408FF10`. Restoration returned exact source UUID
+  `d790f3fd-ca41-4883-b302-70bd958dd5a1`; final status was available with an empty queue and no active job.
+- Vibris entered this continuation at `97e480f0b49c8dd36125ee305569c0068f40f8d4` and Iris at
+  `5c5909726df7e39dcf35e1199d27aacd6ab64cf2`. The six focused T19H product/test files are intentionally retained
+  unstaged, `capture\a.spv` remains untouched, no shader source was changed, and Codex MCP configuration/deployment was
+  not modified.
+- The legacy ledger checker named in older task text is absent from both the user-invoked and current installed skill
+  paths. An equivalent structural audit found 33 unique task rows and 33 matching detail headings with no duplicates
+  or omissions: `READY=1` (`T19I`), `BLOCKED=2`, `PENDING=1`, and `DONE=29`.
+
+### T19H — Make paired visual capture deterministic
+
+Status: `BLOCKED`
+
+Dependencies: T19G, T19I
 
 Repository: `I:\code\vibris`
 
@@ -2353,7 +2481,8 @@ Expected commit title: `T19H make paired visual capture deterministic`
 
 Blockers:
 
-- None known.
+- T19I must provide and prove a frame-atomic deterministic temporal capture phase before this task can satisfy its
+  unchanged live pixel-ratio acceptance gate.
 
 Evidence:
 
@@ -2387,6 +2516,10 @@ Evidence:
   `59b584ca-1698-45a1-9861-c67e3821c19a`. Final status is `SERVER_STATE_AVAILABLE`, the queue/jobs are empty,
   both accept/start are true, and workspace ID is `e5e1f8a1-2532-4972-9bad-2dcf6a0c72cc`. T20 stops before a formal
   benchmark rerun; no threshold, shader source, deployment, or process state was changed.
+- `2026-08-12` the exact requested planner/typed-receipt correction passed focused Release tests, but two direct live
+  same-clean-commit jobs still failed the unchanged pixel-ratio gate after both ordered resets. T19H is therefore not
+  complete and its six task-owned source/test changes remain unstaged. T19I is inserted for the separately proven
+  Core/Iris compound temporal-boundary defect; T19H resumes only after that cross-repository task is complete.
 
 ### T20 — Run live two-worktree 720p acceptance
 
@@ -2413,8 +2546,9 @@ Scope:
 Non-scope:
 
 - Do not switch launchers or choose shader worktrees outside the user-supplied Alpha-Piscium-4 and Alpha-Piscium-3
-  paths. Repeated MCP/Mod deployment and restart of the existing MultiMC `1.21.11-Iris` instance are authorized for
-  this session; restarting Codex remains user-owned.
+  paths. New MCP validation must directly invoke its executable without changing Codex MCP deployment/configuration or
+  restarting Codex. Task-owned Mod deployment and restart of the existing MultiMC `1.21.11-Iris` instance remain
+  authorized for this session.
 
 Acceptance:
 
@@ -2433,8 +2567,9 @@ Expected commit title: `T20 record live v2 acceptance`
 
 Blockers:
 
-- T19H is the sole unmet dependency. The user-authorized repeated MCP/Mod deployment and MultiMC `1.21.11-Iris`
-  restart scope remains active; Codex application restart remains user-owned.
+- T19H is the sole direct unmet dependency and is itself blocked by T19I. Direct new-MCP executable testing plus
+  task-owned Mod deployment/MultiMC restart remain authorized; Codex MCP redeployment/configuration changes and Codex
+  restart are not authorized.
 
 Evidence:
 
@@ -2713,7 +2848,7 @@ Evidence:
 
 Status: `PENDING`
 
-Dependencies: T01, T02, T02A, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T12A, T13, T14, T15, T16, T17, T18, T19, T19A, T19B, T19C, T19D, T19E, T19F, T19G, T19H, T20
+Dependencies: T01, T02, T02A, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T12A, T13, T14, T15, T16, T17, T18, T19, T19A, T19B, T19C, T19D, T19E, T19F, T19G, T19I, T19H, T20
 
 Repository: `I:\code\vibris`
 
@@ -2767,7 +2902,7 @@ Evidence:
 ```text
 T00 -> T01 -> T02 -> T02A -> T03 -> T04 -> T05 -> T06 -> T07 -> T08 -> T09
     -> T10 -> T11 -> T12 -> T12A -> T13 -> T14 -> T15 -> T16 -> T17 -> T18
-    -> T19 -> T19A -> T19B -> T19C -> T19D -> T19E -> T19F -> T19G -> T19H -> T20 -> T99
+    -> T19 -> T19A -> T19B -> T19C -> T19D -> T19E -> T19F -> T19G -> T19I -> T19H -> T20 -> T99
 ```
 
 Queue order is authoritative and serial even where technical dependencies could allow parallel work.
@@ -2851,3 +2986,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-12 - T19G inserted - T20 checkpointed all 17 paired-benchmark steps but final publication hit a protobuf-JSON integer type exception; nested requests omitted preset_id and made every profile provenance-incomplete, while the fully checkpointed non-retryable state could not resume finalization without replay - Control-plane commit title: roadmap insert T19G live benchmark remediation`
 - `2026-08-12 - T19G - preserved exact nested preset identity, normalized strict-v2 protobuf integers at one native boundary, added safe receipt-only finalization resume, passed focused CTest 20/20, and published a fail-closed 17-receipt live AP3/AP4 benchmark with full restoration - Commit title: T19G repair live paired benchmark finalization`
 - `2026-08-12 - T19H inserted - an exact same-clean-commit AP4 comparison under night-gi-1-720p matched source, settings, scene, and all visual guards but failed only threshold-pixel ratio because ab_compare omitted temporal reset before each equal warmup; inserted a no-threshold-change deterministic-phase remediation before T20 - Control-plane commit title: roadmap insert T19H visual determinism remediation`
+- `2026-08-12 - T19I inserted - T19H's ordered planner resets passed focused tests and both typed receipts, but two direct same-clean-commit live jobs still failed the unchanged pixel-ratio gate; Core leaves load/reset/wait/capture as non-atomic handoffs and Iris resumes shader time from wall-clock deltas, so a no-compatibility cross-repository compound temporal-phase remediation is inserted before T19H - Control-plane commit title: roadmap insert T19I frame atomic temporal remediation`
