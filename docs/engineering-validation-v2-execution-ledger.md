@@ -2008,6 +2008,30 @@ Evidence:
   No live job, screenshot, compile, benchmark, after-pass capture, artifact write, deployment, restart, or protected
   source mutation occurred. This is the first blocked Goal turn after T19B; T20 is `BLOCKED`, T99 remains `PENDING`,
   and the Goal remains active.
+- `2026-08-11` post-T19B blocker audit 2: Vibris remained on `main` at
+  `3b68f7ca01448635ca40bf3cc0e25b1945ce2658`, Iris remained on `1.21.11-shaderdev` at
+  `38a7d2eaf88939983e0e01f731ccd4c627fbf6a9`, every declared auxiliary worktree remained at its recorded HEAD, all
+  staging areas were empty, and the checker reported
+  `Ledger valid: 26 task(s); next=none; READY=0, PENDING=1, BLOCKED=1, DONE=24, SUPERSEDED=0.` The exact recorded
+  protected state remains untouched. Alpha-Piscium-6 now additionally has concurrent user-owned tracked changes in
+  `shaders/pass/composite/GIReSTIRPairedSpatialShade.comp.glsl`,
+  `shaders/pass/composite/GIReSTIRTemporalReuse.comp.glsl`, `shaders/techniques/gi/ResampleMaterial.glsl`,
+  `shaders/techniques/gi/Reservoir.glsl`, and `shaders/util/SplitSumSpecular.glsl`, plus untracked `tmp/`; none was
+  read, modified, or staged.
+- `config.toml` still selects the 15,350,272-byte MCP with SHA-256
+  `2BA67FAB3290C0222A4F5CA8FB62D8DF59DBD8C29808BEFEF460033C1922CC26`, while the post-T19B release executable
+  remains 15,368,192 bytes with SHA-256 `8CD4AC8B9E93E6E75FD2F294340673A77C518AD833819300C0EB7D54F6F615C6`.
+  The installed Mod and local Iris build output remain byte-for-byte identical at 28,145,118 bytes with SHA-256
+  `C0E856A3F169E57DBC23283383A77059E82030A847B799EC468A890F02A1E02F`, still predating T19A. The active schema-2
+  configuration and archived schema-v1 file remain unchanged at SHA-256
+  `6607CF94249CE8335CEA7FEAB1DE98A1A8ACA5F96256CECF4003DC3B86F94EFA` and
+  `9CF549579FF4B8E4892504DB25D89A4C6C5F85673BFCDF0878F9A8739065BA70`.
+- The same Java PID 52460 continues listening on `127.0.0.1:50051` from
+  `2026-08-12T02:21:23.6188834Z`. Fresh read-only status calls for both recorded workspace IDs again returned schema-2
+  envelopes with `SERVER_STATE_FAILED`, `core_online=true`, `minecraft_connected=false`, `world_loaded=false`,
+  `can_start_job=false`, and `RUNTIME_PHASE_DISCONNECTED`. No job, artifact write, deployment, restart, configuration
+  mutation, or source mutation occurred. This is the second consecutive blocked Goal turn after T19B; T20 remains
+  `BLOCKED`, T99 remains `PENDING`, and the Goal remains active.
 
 ### T99 — Final integrated audit
 
@@ -2139,3 +2163,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T20 resumed blocker audit 2 - reverified the unchanged schema-v1 server.json rejection, strict-v2 deployment, two workspace identities, and protected worktree state; this is the second blocked Goal turn after resumption, so the Goal remains active - Control-plane commit title: roadmap recheck T20 v2 config blocker`
 - `2026-08-11 - T20 resumed blocker audit 3 - reverified the unchanged schema-v1 server.json rejection for the third consecutive blocked Goal turn after resumption; the Goal is marked blocked after the ledger-only atomic checkpoint - Control-plane commit title: roadmap confirm T20 blocked on v2 config cutover`
 - `2026-08-11 - T20 post-T19B blocker audit - current Mod predates T19A, configured MCP predates T19B, and the runtime bridge is disconnected; no job, deployment, or restart was attempted - Control-plane commit title: roadmap block T20 pending current live deployment`
+- `2026-08-11 - T20 post-T19B blocker audit 2 - reverified the unchanged stale MCP/Mod deployment and disconnected runtime for the second consecutive Goal turn; new Alpha-Piscium-6 dirt was protected as user-owned - Control-plane commit title: roadmap recheck T20 current live deployment blocker`
