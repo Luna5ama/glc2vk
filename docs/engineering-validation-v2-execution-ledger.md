@@ -103,7 +103,7 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T19 | P0 | Vibris | Run offline integrated acceptance | DONE | `T19 verify offline v2 integration` |
 | T19A | P0 | Vibris | Repair strict v2 live bootstrap | DONE | `T19A repair strict v2 live bootstrap` |
 | T19B | P0 | Vibris | Compact capture results and localize artifact paths | DONE | `T19B compact capture results and localize artifact paths` |
-| T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | READY | `T20 record live v2 acceptance` |
+| T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | BLOCKED | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
 
 ## Task details
@@ -1809,7 +1809,7 @@ Evidence:
 
 ### T20 — Run live two-worktree 720p acceptance
 
-Status: `READY`
+Status: `BLOCKED`
 
 Dependencies: T19B
 
@@ -1850,9 +1850,10 @@ Expected commit title: `T20 record live v2 acceptance`
 
 Blockers:
 
-- No external blocker remains. The prior schema-v1 configuration blocker was resolved by the explicitly authorized
-  archival and restart. T20 is intentionally `PENDING` behind T19A and T19B so live acceptance is not promoted over
-  the strict-v2 bootstrap defects, over-expanded capture result, or unlocalized artifact paths.
+- Live acceptance requires a user-started runtime containing the T19A Core changes and a Codex MCP delivery containing
+  the T19B compact-result/path-localization changes. The current installed mod predates T19A, the configured MCP
+  predates T19B, and the runtime bridge is disconnected. Resume only after the user explicitly authorizes deployment
+  of the current Mod/MCP builds and restarts Minecraft/Codex as needed; T20 itself must not deploy or restart them.
 
 Evidence:
 
@@ -1983,6 +1984,30 @@ Evidence:
   result with 692 expanded setting entries and five paths under the Minecraft backing artifact root instead of the
   request worktree `.vibris\artifact` link. T20 now also waits for compact result projection and recursive path
   localization; the successful screenshot itself does not satisfy any T20 artifact or response-shape gate.
+- `2026-08-11` post-T19B blocker audit: entry gates verified Vibris `main` at
+  `4a5c60b29562e682b768b6801abe6bbb35d0ac23`, Iris `1.21.11-shaderdev` at
+  `38a7d2eaf88939983e0e01f731ccd4c627fbf6a9`, all declared auxiliary worktree HEADs, empty staging areas, and the exact
+  protected dirty state. Alpha-Piscium-6 additionally retains the pre-existing untracked `tmp/` first observed after
+  T19B; it was not read or modified. The checker reported
+  `Ledger valid: 26 task(s); next=T20; READY=1, PENDING=1, BLOCKED=0, DONE=24, SUPERSEDED=0.`
+- `C:\Users\Luna5ama\.codex\config.toml` still selects
+  `I:\code\vibris\build\delivery-20260811-strict-v2\vibris-mcp.exe`, 15,350,272 bytes with SHA-256
+  `2BA67FAB3290C0222A4F5CA8FB62D8DF59DBD8C29808BEFEF460033C1922CC26`; the current post-T19B release executable is
+  15,368,192 bytes with SHA-256 `8CD4AC8B9E93E6E75FD2F294340673A77C518AD833819300C0EB7D54F6F615C6`. The selected MCP still exposes the strict-v2
+  eight-tool surface but cannot prove T19B's compact response or recursively localized artifact paths.
+- The installed Mod remains 28,145,118 bytes with SHA-256
+  `C0E856A3F169E57DBC23283383A77059E82030A847B799EC468A890F02A1E02F`; its `2026-08-12T00:45:58.4344196Z` build time
+  predates T19A commit `d0bcfbf355e229abdc24e4a19d2f13bf5ef9f979` at `2026-08-12T03:01:32Z`, whose Core changes are required for
+  correct fixed-pack bootstrap, unavailable unary behavior, and pre-load resource planning. The active schema-2
+  configuration is 486 bytes with SHA-256 `6607CF94249CE8335CEA7FEAB1DE98A1A8ACA5F96256CECF4003DC3B86F94EFA`;
+  the archived schema-v1 file remains intact and unchanged.
+- Java PID 52460 still listens on `127.0.0.1:50051`, but read-only status calls for Alpha-Piscium-4 workspace
+  `e5e1f8a1-2532-4972-9bad-2dcf6a0c72cc` and Alpha-Piscium-3 workspace
+  `90485cf5-12a0-45b9-bb89-7141a9b7ee1e` both returned `SERVER_STATE_FAILED`, `core_online=true`,
+  `minecraft_connected=false`, `world_loaded=false`, `can_start_job=false`, and `RUNTIME_PHASE_DISCONNECTED`.
+  No live job, screenshot, compile, benchmark, after-pass capture, artifact write, deployment, restart, or protected
+  source mutation occurred. This is the first blocked Goal turn after T19B; T20 is `BLOCKED`, T99 remains `PENDING`,
+  and the Goal remains active.
 
 ### T99 — Final integrated audit
 
@@ -2113,3 +2138,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T20 resumed scope audit - verified the deployed strict-v2 eight-tool MCP/mod and the two user-supplied shader worktrees, then found the runtime correctly rejecting the untouched schema-v1 server.json; T20 remains blocked pending user archival and restart - Control-plane commit title: roadmap record T20 v2 config blocker`
 - `2026-08-11 - T20 resumed blocker audit 2 - reverified the unchanged schema-v1 server.json rejection, strict-v2 deployment, two workspace identities, and protected worktree state; this is the second blocked Goal turn after resumption, so the Goal remains active - Control-plane commit title: roadmap recheck T20 v2 config blocker`
 - `2026-08-11 - T20 resumed blocker audit 3 - reverified the unchanged schema-v1 server.json rejection for the third consecutive blocked Goal turn after resumption; the Goal is marked blocked after the ledger-only atomic checkpoint - Control-plane commit title: roadmap confirm T20 blocked on v2 config cutover`
+- `2026-08-11 - T20 post-T19B blocker audit - current Mod predates T19A, configured MCP predates T19B, and the runtime bridge is disconnected; no job, deployment, or restart was attempted - Control-plane commit title: roadmap block T20 pending current live deployment`
