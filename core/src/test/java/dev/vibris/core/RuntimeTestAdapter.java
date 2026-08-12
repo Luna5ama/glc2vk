@@ -11,6 +11,7 @@ import dev.vibris.api.ReloadResult;
 import dev.vibris.api.ResourceCatalog;
 import dev.vibris.api.RuntimeStatus;
 import dev.vibris.api.RuntimeAction;
+import dev.vibris.api.RuntimeEnvironment;
 import dev.vibris.api.SceneContext;
 import dev.vibris.api.ScenePreset;
 import dev.vibris.api.TemporalResetResult;
@@ -56,6 +57,16 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     Runnable beforeCompileCatalogResult = () -> {};
     RuntimeException closeFailure;
     int closeCount;
+
+    RuntimeEnvironment environment = new RuntimeEnvironment(
+        "test-minecraft", "test-iris", "test-vibris", "test-java", "test-os",
+        "test-gpu-vendor", "test-gpu-renderer", "test-opengl", "test-driver"
+    );
+
+    @Override
+    public CompletionStage<RuntimeEnvironment> getRuntimeEnvironment() {
+        return CompletableFuture.completedFuture(environment);
+    }
 
     @Override
     public CompletionStage<RuntimeStatus> getStatus() {

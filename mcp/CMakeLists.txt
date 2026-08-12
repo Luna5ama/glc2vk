@@ -317,6 +317,7 @@ if(BUILD_TESTING)
             ProvenanceTrackedChange
             ProvenanceUntrackedChange
             ProvenanceDeletion
+            DetachedWorkspaceRecordsEmptyBranchAndExactHead
             SourceSoak)
         add_test(NAME ${scenario} COMMAND vibris-workspace-source-tests ${scenario})
     endforeach()
@@ -379,6 +380,7 @@ if(BUILD_TESTING)
     foreach(scenario
             StrictV2ResultShape
             ProfileNormalizationStrictV2
+            ProvenanceCheckoutStateStrict
             MatrixNormalizationStrictV2
             VisualNormalizationStrictV2
             ScreenshotResultCompactStrictV2)

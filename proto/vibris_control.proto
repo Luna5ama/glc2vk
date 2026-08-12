@@ -307,6 +307,12 @@ enum ErrorCode {
     ERROR_CODE_INTERNAL = 30;
 }
 
+enum VcsCheckoutState {
+    VCS_CHECKOUT_STATE_UNSPECIFIED = 0;
+    VCS_CHECKOUT_STATE_ATTACHED = 1;
+    VCS_CHECKOUT_STATE_DETACHED = 2;
+}
+
 message PreparedSourceRef {
     string source_uuid = 1;
     SourceOrigin origin = 2;
@@ -319,6 +325,7 @@ message PreparedSourceRef {
     string start_head = 9;
     string shader_tree_id = 10;
     string dirty_shader_delta_sha256 = 11;
+    VcsCheckoutState vcs_checkout_state = 12;
 }
 
 message SourceOrigin {
@@ -1029,6 +1036,7 @@ message ResultProvenance {
     uint64 shader_loaded_at_unix_ms = 19;
     EnvironmentProvenance environment = 20;
     string pass_mapping_sha256 = 21;
+    VcsCheckoutState vcs_checkout_state = 22;
 }
 
 message EnvironmentProvenance {

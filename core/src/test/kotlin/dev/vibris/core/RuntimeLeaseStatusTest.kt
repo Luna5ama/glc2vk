@@ -180,6 +180,8 @@ class RuntimeLeaseStatusTest {
         val file = Files.writeString(source.resolve("main.glsl"), "fixture")
         return PreparedSourceRef.newBuilder()
             .setSourceUuid(uuid)
+            .setVcsCheckoutState(dev.vibris.protocol.v2.VcsCheckoutState.VCS_CHECKOUT_STATE_ATTACHED)
+            .setBranch("main")
             .setRequestedRevision("workspace")
             .setResolvedRevision("a".repeat(40))
             .setOrigin(SourceOrigin.newBuilder().setWorkspace(

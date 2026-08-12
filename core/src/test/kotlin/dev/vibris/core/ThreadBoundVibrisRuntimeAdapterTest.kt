@@ -9,6 +9,7 @@ import dev.vibris.api.ContextApplyResult
 import dev.vibris.api.ReloadResult
 import dev.vibris.api.ResourceCatalog
 import dev.vibris.api.RuntimeStatus
+import dev.vibris.api.RuntimeEnvironment
 import dev.vibris.api.SceneContext
 import dev.vibris.api.TemporalResetResult
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -63,10 +64,25 @@ class ThreadBoundVibrisRuntimeAdapterTest {
         adapter.close()
     }
 
+    @Test
+    fun queriesRuntimeEnvironmentOnTheClientThread() {
+        val adapter = ThreadBoundVibrisRuntimeAdapter(StubHost(), RenderedFrameClock())
+
+        val environment = adapter.getRuntimeEnvironment().toCompletableFuture().join()
+
+        assertEquals("test-minecraft", environment.minecraftVersion)
+        adapter.close()
+    }
+
     private class StubHost : VibrisRuntimeHost {
         override fun isClientThread(): Boolean = true
 
         override fun executeOnClient(task: Runnable) = task.run()
+
+        override fun runtimeEnvironment(): RuntimeEnvironment = RuntimeEnvironment(
+            "test-minecraft", "test-iris", "test-vibris", "test-java", "test-os",
+            "test-gpu-vendor", "test-gpu-renderer", "test-opengl", "test-driver",
+        )
 
         override fun status(): RuntimeStatus = unsupported()
 

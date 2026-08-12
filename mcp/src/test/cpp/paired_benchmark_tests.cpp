@@ -46,7 +46,8 @@ Json arguments(std::string order = "abba", std::size_t rounds = 2) {
 }
 
 Json strict_provenance(std::string source_id, std::string config_hash, std::string scene_hash) {
-    return {{"workspace_id", "workspace"}, {"worktree_root", "I:/code/worktree"}, {"branch", "main"},
+    return {{"workspace_id", "workspace"}, {"worktree_root", "I:/code/worktree"},
+        {"vcs_checkout_state", "VCS_CHECKOUT_STATE_ATTACHED"}, {"branch", "main"},
         {"requested_revision", "HEAD"}, {"resolved_revision", "0123456789abcdef"},
         {"start_head", "0123456789abcdef"}, {"completion_head", "0123456789abcdef"},
         {"head_changed", false}, {"stale", false}, {"shader_tree_id", "shader-tree"},

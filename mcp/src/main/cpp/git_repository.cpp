@@ -343,8 +343,7 @@ std::string GitRepository::query(const std::vector<std::wstring>& arguments,
 }
 
 std::string GitRepository::current_branch() const {
-    return query({L"git", L"-C", repository_.wstring(), L"symbolic-ref", L"--short", L"-q", L"HEAD"},
-        8192, true);
+    return query({L"git", L"-C", repository_.wstring(), L"branch", L"--show-current"}, 8192);
 }
 
 std::string GitRepository::shader_tree_id(std::string_view revision) const {

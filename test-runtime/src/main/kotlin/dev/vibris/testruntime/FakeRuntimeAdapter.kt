@@ -11,6 +11,7 @@ import dev.vibris.api.ReloadResult
 import dev.vibris.api.ResourceCatalog
 import dev.vibris.api.RuntimeStatus
 import dev.vibris.api.RuntimeAction
+import dev.vibris.api.RuntimeEnvironment
 import dev.vibris.api.SceneContext
 import dev.vibris.api.TemporalResetResult
 import dev.vibris.api.VibrisRuntimeAdapter
@@ -39,6 +40,13 @@ class FakeRuntimeAdapter : VibrisRuntimeAdapter {
 
     @Volatile
     private var closed = false
+
+    override fun getRuntimeEnvironment(): CompletionStage<RuntimeEnvironment> = immediate {
+        RuntimeEnvironment(
+            "test-minecraft", "test-iris", "test-vibris", "test-java", "test-os",
+            "test-gpu-vendor", "test-gpu-renderer", "test-opengl", "test-driver",
+        )
+    }
 
     override fun getStatus(): CompletionStage<RuntimeStatus> =
         immediate { RuntimeStatus(true, currentSaveId, currentDimensionId, "") }

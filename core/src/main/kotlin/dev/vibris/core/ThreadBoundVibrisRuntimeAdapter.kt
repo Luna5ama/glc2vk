@@ -8,6 +8,7 @@ import dev.vibris.api.CompileCatalog
 import dev.vibris.api.ContextApplyResult
 import dev.vibris.api.ContextValidationResult
 import dev.vibris.api.RuntimeAction
+import dev.vibris.api.RuntimeEnvironment
 import dev.vibris.api.ReloadResult
 import dev.vibris.api.ResourceCatalog
 import dev.vibris.api.RuntimeStatus
@@ -40,10 +41,12 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
 
     fun isIdle(): Boolean = pendingOperations.get() == 0
 
+    override fun getRuntimeEnvironment(): CompletionStage<RuntimeEnvironment> =
+        trackActivity { onClient(Supplier(host::runtimeEnvironment), CancellationToken.none()) }
+
     override fun getStatus(): CompletionStage<RuntimeStatus> = trackActivity {
         onClient(
             Supplier {
-                BenchmarkProvenance.captureRuntimeEnvironment()
                 val status = host.status()
                 catalog = try {
                     host.resourceCatalog(frames.currentFrame())
@@ -78,7 +81,6 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
         trackActivity {
             onClient(
                 Supplier {
-                    BenchmarkProvenance.captureRuntimeEnvironment()
                     val result = host.reload(config, cancellation)
                     if (result.successful) {
                         catalog = host.resourceCatalog(frames.currentFrame())
@@ -92,10 +94,7 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
     override fun getCompileCatalog(cancellation: CancellationToken): CompletionStage<CompileCatalog> =
         trackActivity {
             onClient(
-                Supplier {
-                    BenchmarkProvenance.captureRuntimeEnvironment()
-                    host.compileCatalog(cancellation)
-                },
+                Supplier { host.compileCatalog(cancellation) },
                 cancellation,
             )
         }

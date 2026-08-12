@@ -36,6 +36,13 @@ void prepare_one(SourcePreparer& preparer, const std::filesystem::path& workspac
         provenance.set_requested_revision(source->at("requested_revision").get<std::string>());
         provenance.set_resolved_revision(source->at("resolved_revision").get<std::string>());
         provenance.set_snapshot_sha256(source->at("snapshot_sha256").get<std::string>());
+        control::VcsCheckoutState checkout_state;
+        if (!control::VcsCheckoutState_Parse(
+                source->at("vcs_checkout_state").get<std::string>(), &checkout_state) ||
+            checkout_state == control::VCS_CHECKOUT_STATE_UNSPECIFIED) {
+            throw StateError("JOB_CHECKPOINT_ERROR", "Queued source checkout state is invalid.", false);
+        }
+        provenance.set_vcs_checkout_state(checkout_state);
         provenance.set_branch(source->at("branch").get<std::string>());
         provenance.set_start_head(source->at("start_head").get<std::string>());
         provenance.set_shader_tree_id(source->at("shader_tree_id").get<std::string>());

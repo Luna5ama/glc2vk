@@ -632,7 +632,7 @@ namespace detail {
 bool complete_result_provenance(const Json& provenance) {
     if (!provenance.is_object() || provenance.value("stale", true)) return false;
     constexpr std::array text_fields{
-        "workspace_id", "worktree_root", "branch", "requested_revision", "resolved_revision", "start_head",
+        "workspace_id", "worktree_root", "requested_revision", "resolved_revision", "start_head",
         "completion_head", "shader_tree_id", "source_snapshot_sha256", "active_source_uuid", "config_sha256",
         "preset_id", "preset_sha256", "scene_sha256", "pass_mapping_sha256",
     };
@@ -641,6 +641,19 @@ bool complete_result_provenance(const Json& provenance) {
         if (found == provenance.end() || !found->is_string() || found->get_ref<const std::string&>().empty()) {
             return false;
         }
+    }
+    const auto checkout_state = provenance.find("vcs_checkout_state");
+    const auto branch = provenance.find("branch");
+    if (checkout_state == provenance.end() || !checkout_state->is_string() ||
+        branch == provenance.end() || !branch->is_string()) {
+        return false;
+    }
+    const auto& state = checkout_state->get_ref<const std::string&>();
+    const auto& branch_name = branch->get_ref<const std::string&>();
+    if ((state == "VCS_CHECKOUT_STATE_ATTACHED" && branch_name.empty()) ||
+        (state == "VCS_CHECKOUT_STATE_DETACHED" && !branch_name.empty()) ||
+        (state != "VCS_CHECKOUT_STATE_ATTACHED" && state != "VCS_CHECKOUT_STATE_DETACHED")) {
+        return false;
     }
     const auto loaded = provenance.find("shader_loaded_at_unix_ms");
     if (loaded == provenance.end() || wire_uint64(*loaded) == 0) return false;

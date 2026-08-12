@@ -107,8 +107,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T19B | P0 | Vibris | Compact capture results and localize artifact paths | DONE | `T19B compact capture results and localize artifact paths` |
 | T19C | P0 | Iris | Make the main-menu runtime ready for jobs | DONE | `T19C make main menu runtime ready` |
 | T19D | P0 | Vibris | Return typed live GPU metric receipts | DONE | `T19D return typed GPU metric receipts` |
-| T19E | P0 | Vibris | Define strict detached-worktree provenance contract | READY | `T19E define strict detached provenance contract` |
-| T19F | P0 | Iris | Implement and prove live detached-worktree provenance | PENDING | `T19F complete live detached provenance` |
+| T19E | P0 | Vibris | Define strict detached-worktree provenance contract | DONE | `T19E define strict detached provenance contract` |
+| T19F | P0 | Iris | Implement and prove live detached-worktree provenance | READY | `T19F complete live detached provenance` |
 | T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | BLOCKED | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
 
@@ -1995,7 +1995,7 @@ Evidence:
 
 ### T19E — Define strict detached-worktree provenance contract
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T19D
 
@@ -2064,10 +2064,23 @@ Evidence:
   direct Iris implementation plus deployment/live proof are split into external task T19F so each repository can land
   one atomic commit. No product source, deployment, process, configuration, or shader worktree was changed during this
   control-plane insertion.
+- `2026-08-11`: added the required non-empty `RuntimeEnvironment` host/adapter contract and made every normal runtime
+  job capture exactly those host-supplied values before provenance construction. Core no longer contains reflective
+  Minecraft/Iris/OpenGL probing, system-property version inputs, implementation-version fallback, or placeholders.
+- Added canonical `VcsCheckoutState` to prepared-source and result provenance. Native preparation now distinguishes
+  attached versus detached directly from `git branch --show-current`; detached references retain an empty branch and
+  exact 40-hex HEAD through queued snapshot projection, while Core rejects unspecified state, attached empty branches,
+  detached non-empty branches, and detached non-exact HEADs. Strict native completeness accepts that detached shape and
+  rejects the previous branch-only shape.
+- Verification passed: API `9/9`, Core `108/108`, test-runtime compilation, focused native source/provenance/profile/
+  JobProtocol/durable/commit/paired CTest `30/30`, and a final changed-path confirmation `5/5`. Static scans found zero
+  affected production-path matches for reflection, property/version fallback, symbolic-ref branch fallback, checkout
+  aliases, or compatibility parsing. No Iris/shader file, deployment, process, configuration, or live runtime changed.
+- Commit: this task's commit with subject `T19E define strict detached provenance contract`.
 
 ### T19F — Implement and prove live detached-worktree provenance
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T19E
 
@@ -2121,7 +2134,7 @@ Expected commit title: `T19F complete live detached provenance`
 
 Blockers:
 
-- Waiting for T19E to land the required Vibris contract.
+- None.
 
 Evidence:
 
@@ -2563,3 +2576,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T19D inserted - live get_gpu_metrics completed OK but Core discarded the runtime JSON and emitted EmptyReceipt, preventing profile and paired-benchmark statistics; inserted a no-compatibility typed metric-receipt remediation before T20 - Control-plane commit title: roadmap insert T19D typed GPU metric remediation`
 - `2026-08-11 - T19D - preserved canonical live GPU timing JSON as filtered strict-v2 typed receipts with real samples and explicit empty/malformed failures; Capture 26/26, Core 105/105, native 13/13, Iris build, deployed hashes, and a one-attempt filtered live AP4 profile passed; inserted T19E for the separately exposed detached provenance blocker - Commit title: T19D return typed GPU metric receipts`
 - `2026-08-11 - T19E/T19F split - contract auditing proved truthful Minecraft/GPU environment identity requires a direct Iris host implementation while detached VCS state belongs to Vibris protocol/Core/native code; split the work so Vibris T19E lands the strict contract before external Iris T19F implements and proves it live - Control-plane commit title: roadmap split T19E cross repository provenance`
+- `2026-08-11 - T19E - required exact host-supplied runtime environment identity, added canonical attached/detached checkout provenance through source checkpoints and results, rejected branch-only and malformed detached shapes, and passed API 9/9, Core 108/108, test-runtime compilation, native 30/30, and zero-match no-fallback scans - Commit title: T19E define strict detached provenance contract`

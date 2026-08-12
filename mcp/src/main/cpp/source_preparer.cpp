@@ -144,6 +144,7 @@ std::string provenance_delta_sha256(std::string_view domain, std::string_view fi
 }
 
 struct GitSnapshot final {
+    control::v2::VcsCheckoutState vcs_checkout_state;
     std::string branch;
     std::string head;
     std::string shader_tree_id;
@@ -155,7 +156,11 @@ struct GitSnapshot final {
 GitSnapshot git_snapshot(const fs::path& workspace_root) {
     GitRepository repository(workspace_root);
     const auto head = repository.resolve_commit("HEAD");
-    return {repository.current_branch(), head, repository.shader_tree_id(head),
+    auto branch = repository.current_branch();
+    const auto state = branch.empty()
+        ? control::v2::VCS_CHECKOUT_STATE_DETACHED
+        : control::v2::VCS_CHECKOUT_STATE_ATTACHED;
+    return {state, std::move(branch), head, repository.shader_tree_id(head),
         repository.shader_worktree_dirty()};
 }
 
@@ -248,6 +253,7 @@ control::v2::PreparedSourceRef workspace_reference(
     reference.set_requested_revision("workspace");
     reference.set_resolved_revision(provenance.head);
     reference.set_snapshot_sha256(provenance.source_snapshot_sha256);
+    reference.set_vcs_checkout_state(provenance.vcs_checkout_state);
     reference.set_branch(provenance.branch);
     reference.set_start_head(provenance.head);
     reference.set_shader_tree_id(provenance.shader_tree_id);
@@ -272,6 +278,7 @@ control::v2::PreparedSourceRef commit_reference(
     reference.set_requested_revision(resolved_revision);
     reference.set_resolved_revision(resolved_revision);
     reference.set_snapshot_sha256(snapshot_sha256);
+    reference.set_vcs_checkout_state(workspace.vcs_checkout_state);
     reference.set_branch(workspace.branch);
     reference.set_start_head(workspace.head);
     reference.set_shader_tree_id(GitRepository(worktree).shader_tree_id(resolved_revision));
@@ -287,7 +294,7 @@ WorkspaceProvenance capture_workspace_provenance(
         const auto snapshot = source_tree_sha256(workspace_root / "shaders", limits);
         const auto after = git_snapshot(workspace_root);
         if (before == after) {
-            return {before.branch, before.head, before.shader_tree_id, snapshot,
+            return {before.vcs_checkout_state, before.branch, before.head, before.shader_tree_id, snapshot,
                 before.dirty ? provenance_delta_sha256(
                     "vibris-dirty-shader-delta-v1", before.shader_tree_id, snapshot) : std::string{}};
         }
@@ -340,6 +347,7 @@ PreparedSource SourcePreparer::prepare_workspace() const {
             }
             const auto snapshot = source_tree_sha256(destination.staging.path(), limits_);
             const WorkspaceProvenance provenance{
+                git_after.vcs_checkout_state,
                 git_after.branch,
                 git_after.head,
                 git_after.shader_tree_id,

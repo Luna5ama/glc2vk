@@ -18,6 +18,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RuntimeAdapterContractTest {
     @Test
+    void runtimeEnvironmentRejectsBlankIdentityValues() {
+        assertThrows(IllegalArgumentException.class, () -> new RuntimeEnvironment(
+            "", "iris", "vibris", "java", "os", "vendor", "renderer", "opengl", "driver"
+        ));
+    }
+
+    @Test
     void adapterUsesTypedAsynchronousOperations() {
         SceneContext context = new SceneContext(
             "test-save",
@@ -32,6 +39,7 @@ class RuntimeAdapterContractTest {
         CancellationToken.Source cancellation = CancellationToken.source();
         TestAdapter adapter = new TestAdapter();
 
+        assertEquals("test-minecraft", adapter.getRuntimeEnvironment().toCompletableFuture().join().minecraftVersion());
         assertTrue(adapter.getStatus().toCompletableFuture().join().ready());
         assertEquals(context, adapter.ensureWorldAndContext(context, cancellation.token())
             .toCompletableFuture().join().context());
@@ -300,6 +308,8 @@ class RuntimeAdapterContractTest {
         assertRecord(EffectiveShaderSettings.Setting.class, "name", "value", "defaultValue", "origin");
         assertRecord(ReloadResult.class, "successful", "activeStatePreserved", "effectiveSettings", "diagnostics");
         assertRecord(ResourceCatalog.class, "resources", "passes", "mappingSha256");
+        assertRecord(RuntimeEnvironment.class, "minecraftVersion", "irisVersion", "vibrisVersion", "javaVersion",
+            "operatingSystem", "gpuVendor", "gpuRenderer", "openglVersion", "driverVersion");
         assertRecord(ResourceCatalog.PassDescriptor.class,
             "passId", "stage", "programId", "order", "readableResources");
         assertRecord(ResourceCatalog.ResourceDescriptor.class,
@@ -317,6 +327,14 @@ class RuntimeAdapterContractTest {
     }
 
     private static final class TestAdapter implements VibrisRuntimeAdapter {
+        @Override
+        public CompletionStage<RuntimeEnvironment> getRuntimeEnvironment() {
+            return CompletableFuture.completedFuture(new RuntimeEnvironment(
+                "test-minecraft", "test-iris", "test-vibris", "test-java", "test-os",
+                "test-gpu-vendor", "test-gpu-renderer", "test-opengl", "test-driver"
+            ));
+        }
+
         @Override
         public CompletionStage<RuntimeStatus> getStatus() {
             return CompletableFuture.completedFuture(new RuntimeStatus(true, "test-save", "minecraft:overworld", ""));

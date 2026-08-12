@@ -58,6 +58,9 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         if (job.submission.hasRecoverRuntime()) {
             return executeRecovery(job, progress, startedAtUnixMs, startedNanos)
         }
+        BenchmarkProvenance.captureRuntimeEnvironment(
+            await(runtime.getRuntimeEnvironment(), job, deadline),
+        )
         val isolation = BenchmarkCaseIsolation.begin(
             job,
             activator,

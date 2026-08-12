@@ -4,6 +4,7 @@ import dev.vibris.core.source.SourceRecord
 import dev.vibris.core.source.SourceState
 import dev.vibris.protocol.v2.ErrorCode
 import dev.vibris.protocol.v2.PreparedSourceRef
+import dev.vibris.protocol.v2.VcsCheckoutState
 import java.nio.file.Path
 import java.util.ArrayList
 import java.util.HashMap
@@ -35,6 +36,7 @@ internal class SourceRegistry @JvmOverloads constructor(
         val unique = HashSet<String>()
         val candidates = ArrayList<Candidate>(references.size)
         for (reference in references) {
+            validateCheckout(reference)
             val uuid = requireUuid(reference.sourceUuid)
             if (!unique.add(uuid)) {
                 throw Failure(ErrorCode.ERROR_CODE_INVALID_SOURCE, "Source UUID is repeated.")
@@ -55,6 +57,29 @@ internal class SourceRegistry @JvmOverloads constructor(
             ))
         }
         return candidates
+    }
+
+    private fun validateCheckout(reference: PreparedSourceRef) {
+        when (reference.vcsCheckoutState) {
+            VcsCheckoutState.VCS_CHECKOUT_STATE_ATTACHED -> {
+                if (reference.branch.isBlank()) {
+                    throw Failure(ErrorCode.ERROR_CODE_INVALID_SOURCE, "Attached source branch is required.")
+                }
+            }
+            VcsCheckoutState.VCS_CHECKOUT_STATE_DETACHED -> {
+                if (reference.branch.isNotEmpty()) {
+                    throw Failure(ErrorCode.ERROR_CODE_INVALID_SOURCE, "Detached source branch must be empty.")
+                }
+                if (!isFullCommit(reference.startHead)) {
+                    throw Failure(ErrorCode.ERROR_CODE_INVALID_SOURCE, "Detached source HEAD must be an exact commit.")
+                }
+            }
+            else -> throw Failure(ErrorCode.ERROR_CODE_INVALID_SOURCE, "Source checkout state is required.")
+        }
+    }
+
+    private fun isFullCommit(value: String): Boolean = value.length == 40 && value.all { character ->
+        character in '0'..'9' || character in 'a'..'f' || character in 'A'..'F'
     }
 
     @Synchronized

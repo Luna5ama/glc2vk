@@ -16,6 +16,7 @@ namespace vibris::mcp {
 using WorkspaceCopier = std::function<void(std::filesystem::path, std::filesystem::path)>;
 
 struct WorkspaceProvenance final {
+    control::v2::VcsCheckoutState vcs_checkout_state;
     std::string branch;
     std::string head;
     std::string shader_tree_id;

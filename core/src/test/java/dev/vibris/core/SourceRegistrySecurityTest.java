@@ -2,6 +2,7 @@ package dev.vibris.core;
 
 import dev.vibris.protocol.v2.ErrorCode;
 import dev.vibris.protocol.v2.PreparedSourceRef;
+import dev.vibris.protocol.v2.VcsCheckoutState;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -42,6 +43,43 @@ class SourceRegistrySecurityTest {
     }
 
     @Test
+    void checkoutStateRequiresExactBranchShape() throws Exception {
+        Path pending = Files.createDirectory(temp.resolve("pending-checkout-state"));
+        SourceRegistry registry = new SourceRegistry(pending, new CoreProbe());
+        PreparedSourceRef attached = source(pending);
+
+        assertEquals(1, registry.validate(List.of(attached)).size());
+        assertEquals(1, registry.validate(List.of(attached.toBuilder()
+            .setVcsCheckoutState(VcsCheckoutState.VCS_CHECKOUT_STATE_DETACHED)
+            .clearBranch()
+            .setStartHead("a".repeat(40))
+            .build())).size());
+
+        SourceRegistry.Failure unspecified = assertThrows(SourceRegistry.Failure.class, () ->
+            registry.validate(List.of(attached.toBuilder()
+                .setVcsCheckoutState(VcsCheckoutState.VCS_CHECKOUT_STATE_UNSPECIFIED)
+                .build())));
+        SourceRegistry.Failure attachedWithoutBranch = assertThrows(SourceRegistry.Failure.class, () ->
+            registry.validate(List.of(attached.toBuilder().clearBranch().build())));
+        SourceRegistry.Failure detachedWithBranch = assertThrows(SourceRegistry.Failure.class, () ->
+            registry.validate(List.of(attached.toBuilder()
+                .setVcsCheckoutState(VcsCheckoutState.VCS_CHECKOUT_STATE_DETACHED)
+                .setStartHead("a".repeat(40))
+                .build())));
+        SourceRegistry.Failure detachedWithoutExactHead = assertThrows(SourceRegistry.Failure.class, () ->
+            registry.validate(List.of(attached.toBuilder()
+                .setVcsCheckoutState(VcsCheckoutState.VCS_CHECKOUT_STATE_DETACHED)
+                .clearBranch()
+                .setStartHead("HEAD")
+                .build())));
+
+        assertEquals(ErrorCode.ERROR_CODE_INVALID_SOURCE, unspecified.code);
+        assertEquals(ErrorCode.ERROR_CODE_INVALID_SOURCE, attachedWithoutBranch.code);
+        assertEquals(ErrorCode.ERROR_CODE_INVALID_SOURCE, detachedWithBranch.code);
+        assertEquals(ErrorCode.ERROR_CODE_INVALID_SOURCE, detachedWithoutExactHead.code);
+    }
+
+    @Test
     void reparsePendingRootIsRejectedBeforeTraversal() throws Exception {
         Path outside = Files.createDirectory(temp.resolve("outside"));
         String uuid = UUID.randomUUID().toString();
@@ -52,6 +90,8 @@ class SourceRegistrySecurityTest {
         SourceRegistry registry = new SourceRegistry(pending, new CoreProbe());
         PreparedSourceRef reference = PreparedSourceRef.newBuilder()
             .setSourceUuid(uuid)
+            .setVcsCheckoutState(dev.vibris.protocol.v2.VcsCheckoutState.VCS_CHECKOUT_STATE_ATTACHED)
+            .setBranch("main")
             .setFileCount(1)
             .setTotalBytes(content.length)
             .build();
@@ -70,6 +110,8 @@ class SourceRegistrySecurityTest {
         Files.write(source.resolve("main.glsl"), content);
         PreparedSourceRef reference = PreparedSourceRef.newBuilder()
             .setSourceUuid(uuid)
+            .setVcsCheckoutState(dev.vibris.protocol.v2.VcsCheckoutState.VCS_CHECKOUT_STATE_ATTACHED)
+            .setBranch("main")
             .setFileCount(1)
             .setTotalBytes(content.length)
             .build();
@@ -106,6 +148,8 @@ class SourceRegistrySecurityTest {
         Files.write(source.resolve("main.glsl"), content);
         PreparedSourceRef reference = PreparedSourceRef.newBuilder()
             .setSourceUuid(uuid)
+            .setVcsCheckoutState(dev.vibris.protocol.v2.VcsCheckoutState.VCS_CHECKOUT_STATE_ATTACHED)
+            .setBranch("main")
             .setFileCount(1)
             .setTotalBytes(content.length)
             .build();
@@ -169,6 +213,8 @@ class SourceRegistrySecurityTest {
         Path file = Files.writeString(source.resolve("main.glsl"), uuid);
         return PreparedSourceRef.newBuilder()
             .setSourceUuid(uuid)
+            .setVcsCheckoutState(dev.vibris.protocol.v2.VcsCheckoutState.VCS_CHECKOUT_STATE_ATTACHED)
+            .setBranch("main")
             .setFileCount(1)
             .setTotalBytes(Files.size(file))
             .build();

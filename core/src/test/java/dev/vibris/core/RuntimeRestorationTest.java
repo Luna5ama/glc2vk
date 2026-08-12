@@ -226,6 +226,8 @@ class RuntimeRestorationTest {
             Path file = Files.writeString(directory.resolve("main.glsl"), marker);
             PreparedSourceRef reference = PreparedSourceRef.newBuilder()
                 .setSourceUuid(uuid)
+                .setVcsCheckoutState(dev.vibris.protocol.v2.VcsCheckoutState.VCS_CHECKOUT_STATE_ATTACHED)
+                .setBranch("main")
                 .setFileCount(1)
                 .setTotalBytes(Files.size(file))
                 .build();

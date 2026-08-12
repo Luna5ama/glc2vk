@@ -85,6 +85,27 @@ void profile_normalization_strict_v2() {
 		"profile normalization synthesized legacy receipt or provenance fields");
 }
 
+void provenance_checkout_state_is_strict() {
+	const auto attached = terminal_json(completed_profile_message()).at("result").at("provenance");
+	require(vibris::mcp::detail::complete_result_provenance(attached),
+		"complete attached provenance was rejected");
+
+	auto detached = attached;
+	detached["vcs_checkout_state"] = "VCS_CHECKOUT_STATE_DETACHED";
+	detached["branch"] = "";
+	require(vibris::mcp::detail::complete_result_provenance(detached),
+		"complete detached provenance was rejected");
+
+	auto branch_only = attached;
+	branch_only.erase("vcs_checkout_state");
+	require(!vibris::mcp::detail::complete_result_provenance(branch_only),
+		"branch-only provenance was accepted");
+
+	detached["branch"] = "synthetic";
+	require(!vibris::mcp::detail::complete_result_provenance(detached),
+		"detached provenance with a synthetic branch was accepted");
+}
+
 void matrix_normalization_strict_v2() {
 	const Json arguments{{"frames", 32}, {"warmup_frames", 4}, {"result_detail", "full"},
 		{"matrix", {{"sources", Json::array({"baseline", "candidate"})},
@@ -186,12 +207,14 @@ void screenshot_result_compact_strict_v2() {
 void run(const std::string_view scenario) {
 	if (scenario == "StrictV2ResultShape") return strict_v2_result_rejects_removed_shape();
 	if (scenario == "ProfileNormalizationStrictV2") return profile_normalization_strict_v2();
+	if (scenario == "ProvenanceCheckoutStateStrict") return provenance_checkout_state_is_strict();
 	if (scenario == "MatrixNormalizationStrictV2") return matrix_normalization_strict_v2();
 	if (scenario == "VisualNormalizationStrictV2") return visual_normalization_strict_v2();
 	if (scenario == "ScreenshotResultCompactStrictV2") return screenshot_result_compact_strict_v2();
 	if (scenario == "all") {
 		strict_v2_result_rejects_removed_shape();
 		profile_normalization_strict_v2();
+		provenance_checkout_state_is_strict();
 		matrix_normalization_strict_v2();
 		visual_normalization_strict_v2();
 		screenshot_result_compact_strict_v2();

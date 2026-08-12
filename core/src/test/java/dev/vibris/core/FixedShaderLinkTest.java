@@ -163,6 +163,8 @@ class FixedShaderLinkTest {
         Files.write(directory.resolve("main.glsl"), content);
         var reference = dev.vibris.protocol.v2.PreparedSourceRef.newBuilder()
             .setSourceUuid(uuid)
+            .setVcsCheckoutState(dev.vibris.protocol.v2.VcsCheckoutState.VCS_CHECKOUT_STATE_ATTACHED)
+            .setBranch("main")
             .setFileCount(1)
             .setTotalBytes(content.length)
             .build();

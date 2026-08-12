@@ -15,6 +15,7 @@ inline void fill_provenance(proto::ResultProvenance* provenance, const std::stri
     const std::string_view scene_sha256 = "scene-sha") {
     provenance->set_workspace_id("workspace");
     provenance->set_worktree_root("I:/code/worktree");
+    provenance->set_vcs_checkout_state(proto::VCS_CHECKOUT_STATE_ATTACHED);
     provenance->set_branch("main");
     provenance->set_requested_revision("HEAD");
     provenance->set_resolved_revision("0123456789abcdef");

@@ -42,6 +42,8 @@ proto::SceneContext scene() {
 proto::PreparedSourceRef source() {
 	proto::PreparedSourceRef result;
 	result.set_source_uuid("bbbbbbbb-cccc-4ddd-8eee-ffffffffffff");
+	result.set_vcs_checkout_state(proto::VCS_CHECKOUT_STATE_ATTACHED);
+	result.set_branch("main");
 	result.set_requested_revision("workspace");
 	result.set_resolved_revision("0123456789abcdef");
 	result.set_file_count(1);

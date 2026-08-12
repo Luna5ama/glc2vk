@@ -8,6 +8,7 @@ import dev.vibris.api.CompileCatalog
 import dev.vibris.api.ContextApplyResult
 import dev.vibris.api.ContextValidationResult
 import dev.vibris.api.RuntimeAction
+import dev.vibris.api.RuntimeEnvironment
 import dev.vibris.api.ReloadResult
 import dev.vibris.api.ResourceCatalog
 import dev.vibris.api.RuntimeStatus
@@ -20,6 +21,8 @@ interface VibrisRuntimeHost : AutoCloseable {
     fun isClientThread(): Boolean
 
     fun executeOnClient(task: Runnable)
+
+    fun runtimeEnvironment(): RuntimeEnvironment
 
     fun status(): RuntimeStatus
 

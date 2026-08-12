@@ -99,7 +99,35 @@ class RuntimeJobExecutorTest {
         assertFalse(provenance.getSceneSha256().isBlank());
         assertEquals(fixture.runtime.compileCatalog.mappingSha256(), provenance.getPassMappingSha256());
         assertTrue(provenance.getShaderLoadedAtUnixMs() > 0);
-        assertFalse(provenance.getEnvironment().getJavaVersion().isBlank());
+        assertEquals("test-minecraft", provenance.getEnvironment().getMinecraftVersion());
+        assertEquals("test-iris", provenance.getEnvironment().getIrisVersion());
+        assertEquals("test-vibris", provenance.getEnvironment().getVibrisVersion());
+        assertEquals("test-java", provenance.getEnvironment().getJavaVersion());
+        assertEquals("test-os", provenance.getEnvironment().getOperatingSystem());
+        assertEquals("test-gpu-vendor", provenance.getEnvironment().getGpuVendor());
+        assertEquals("test-gpu-renderer", provenance.getEnvironment().getGpuRenderer());
+        assertEquals("test-opengl", provenance.getEnvironment().getOpenglVersion());
+        assertEquals("test-driver", provenance.getEnvironment().getDriverVersion());
+        assertEquals(dev.vibris.protocol.v2.VcsCheckoutState.VCS_CHECKOUT_STATE_ATTACHED,
+            provenance.getVcsCheckoutState());
+    }
+
+    @Test
+    void detachedCheckoutStateAndExactHeadFlowToResultProvenance() throws Exception {
+        Fixture fixture = new Fixture();
+        Source source = fixture.source(
+            "detached",
+            dev.vibris.protocol.v2.VcsCheckoutState.VCS_CHECKOUT_STATE_DETACHED,
+            ""
+        );
+
+        TerminalResult terminal = fixture.executor.execute(fixture.loadJob(source), ignored -> {});
+        var provenance = terminal.completed().getResult().getProvenance();
+
+        assertEquals(dev.vibris.protocol.v2.VcsCheckoutState.VCS_CHECKOUT_STATE_DETACHED,
+            provenance.getVcsCheckoutState());
+        assertEquals("", provenance.getBranch());
+        assertEquals("a".repeat(40), provenance.getStartHead());
     }
 
     @Test
@@ -447,13 +475,28 @@ class RuntimeJobExecutorTest {
         final RuntimeJobExecutor executor = new RuntimeJobExecutor(runtime, new CoreProbe(), activator, artifacts);
 
         Source source(String marker) throws Exception {
+            return source(
+                marker,
+                dev.vibris.protocol.v2.VcsCheckoutState.VCS_CHECKOUT_STATE_ATTACHED,
+                "main"
+            );
+        }
+
+        Source source(
+            String marker,
+            dev.vibris.protocol.v2.VcsCheckoutState checkoutState,
+            String branch
+        ) throws Exception {
             String uuid = UUID.randomUUID().toString();
             Path path = Files.createDirectory(pending.resolve(uuid));
             Path file = Files.writeString(path.resolve("main.glsl"), marker);
             PreparedSourceRef reference = PreparedSourceRef.newBuilder()
                 .setSourceUuid(uuid)
+                .setVcsCheckoutState(checkoutState)
+                .setBranch(branch)
                 .setRequestedRevision("workspace")
                 .setResolvedRevision("a".repeat(40))
+                .setStartHead("a".repeat(40))
                 .setOrigin(dev.vibris.protocol.v2.SourceOrigin.newBuilder()
                     .setWorkspace(dev.vibris.protocol.v2.WorkspaceOrigin.newBuilder().setDisplayName("fixture")))
                 .setFileCount(1)

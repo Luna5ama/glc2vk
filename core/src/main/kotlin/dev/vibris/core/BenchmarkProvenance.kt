@@ -1,6 +1,7 @@
 package dev.vibris.core
 
 import dev.vibris.api.EffectiveShaderSettings
+import dev.vibris.api.RuntimeEnvironment
 import dev.vibris.api.SceneContext
 import dev.vibris.protocol.v2.EffectiveShaderSetting
 import dev.vibris.protocol.v2.EnvironmentProvenance
@@ -14,19 +15,20 @@ import kotlinx.serialization.json.put
 
 internal object BenchmarkProvenance {
     @Volatile
-    private var runtimeEnvironment: EnvironmentProvenance = environment()
+    private var runtimeEnvironment: EnvironmentProvenance? = null
 
-    fun captureRuntimeEnvironment() {
-        val builder = environment().toBuilder()
-        reflectedStatic("net.irisshaders.iris.Iris", "getVersion")?.let(builder::setIrisVersion)
-        reflectedMinecraftVersion()?.let(builder::setMinecraftVersion)
-        reflectedGlString(0x1F00)?.let(builder::setGpuVendor)
-        reflectedGlString(0x1F01)?.let(builder::setGpuRenderer)
-        reflectedGlString(0x1F02)?.let { version ->
-            builder.openglVersion = version
-            builder.driverVersion = version
-        }
-        runtimeEnvironment = builder.build()
+    fun captureRuntimeEnvironment(environment: RuntimeEnvironment) {
+        runtimeEnvironment = EnvironmentProvenance.newBuilder()
+            .setMinecraftVersion(environment.minecraftVersion)
+            .setIrisVersion(environment.irisVersion)
+            .setVibrisVersion(environment.vibrisVersion)
+            .setJavaVersion(environment.javaVersion)
+            .setOperatingSystem(environment.operatingSystem)
+            .setGpuVendor(environment.gpuVendor)
+            .setGpuRenderer(environment.gpuRenderer)
+            .setOpenglVersion(environment.openglVersion)
+            .setDriverVersion(environment.driverVersion)
+            .build()
     }
 
     fun result(
@@ -41,6 +43,7 @@ internal object BenchmarkProvenance {
         val builder = ResultProvenance.newBuilder()
             .setWorkspaceId(job.workspaceId)
             .setBranch(reference.branch)
+            .setVcsCheckoutState(reference.vcsCheckoutState)
             .setRequestedRevision(reference.requestedRevision)
             .setResolvedRevision(reference.resolvedRevision)
             .setStartHead(reference.startHead)
@@ -54,7 +57,7 @@ internal object BenchmarkProvenance {
             .setPresetId(job.submission.presetId)
             .setPresetSha256(job.submission.presetSha256)
             .setShaderLoadedAtUnixMs(shaderLoadedAtUnixMs)
-            .setEnvironment(runtimeEnvironment)
+            .setEnvironment(requireNotNull(runtimeEnvironment) { "Runtime environment was not captured." })
             .setPassMappingSha256(passMappingSha256)
         builder.worktreeRoot = if (reference.origin.hasWorkspace()) {
             reference.origin.workspace.worktreeRoot
@@ -115,44 +118,6 @@ internal object BenchmarkProvenance {
             ShaderSettingOrigin.SHADER_SETTING_ORIGIN_REQUEST_OVERRIDE
         EffectiveShaderSettings.Origin.PRESET -> ShaderSettingOrigin.SHADER_SETTING_ORIGIN_PRESET
     }
-
-    private fun environment(): EnvironmentProvenance = EnvironmentProvenance.newBuilder()
-        .setMinecraftVersion(System.getProperty("vibris.minecraft.version", ""))
-        .setIrisVersion(System.getProperty("vibris.iris.version", ""))
-        .setVibrisVersion(
-            BenchmarkProvenance::class.java.`package`?.implementationVersion
-                ?: System.getProperty("vibris.version", "development"),
-        )
-        .setJavaVersion(System.getProperty("java.version", ""))
-        .setOperatingSystem(
-            listOf(
-                System.getProperty("os.name", ""),
-                System.getProperty("os.version", ""),
-                System.getProperty("os.arch", ""),
-            ).filter(String::isNotBlank).joinToString(" "),
-        )
-        .setGpuVendor(System.getProperty("vibris.gpu.vendor", ""))
-        .setGpuRenderer(System.getProperty("vibris.gpu.renderer", ""))
-        .setOpenglVersion(System.getProperty("vibris.opengl.version", ""))
-        .setDriverVersion(System.getProperty("vibris.driver.version", ""))
-        .build()
-
-    private fun reflectedStatic(className: String, methodName: String): String? = runCatching {
-        Class.forName(className).getMethod(methodName).invoke(null)?.toString()?.takeIf(String::isNotBlank)
-    }.getOrNull()
-
-    private fun reflectedMinecraftVersion(): String? = runCatching {
-        val version = Class.forName("net.minecraft.SharedConstants").getMethod("getCurrentVersion").invoke(null)
-        version.javaClass.getMethod("name").invoke(version)?.toString()?.takeIf(String::isNotBlank)
-    }.getOrNull()
-
-    private fun reflectedGlString(name: Int): String? = runCatching {
-        Class.forName("org.lwjgl.opengl.GL11C")
-            .getMethod("glGetString", Int::class.javaPrimitiveType)
-            .invoke(null, name)
-            ?.toString()
-            ?.takeIf(String::isNotBlank)
-    }.getOrNull()
 
     private fun sha256(value: JsonElement): String = MessageDigest.getInstance("SHA-256")
         .digest(value.toString().toByteArray(Charsets.UTF_8))

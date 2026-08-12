@@ -203,6 +203,7 @@ Json freeze_source(SourcePreparer& preparer, std::vector<PreparedSource>& snapsh
 		{"requested_revision", reference.requested_revision()},
 		{"resolved_revision", reference.resolved_revision()},
 		{"snapshot_sha256", reference.snapshot_sha256()},
+		{"vcs_checkout_state", ::vibris::control::v2::VcsCheckoutState_Name(reference.vcs_checkout_state())},
 		{"branch", reference.branch()},
 		{"start_head", reference.start_head()},
 		{"shader_tree_id", reference.shader_tree_id()},

@@ -53,7 +53,9 @@ void workspace_snapshot_tracked_untracked_ignored_and_retry() {
         require(reference.origin().has_workspace(), "Prepared source did not record workspace origin.");
         require(reference.requested_revision() == "workspace" && reference.resolved_revision().size() == 40,
             "PreparedSourceRef omitted the requested workspace revision or resolved full commit.");
-        require(reference.snapshot_sha256().size() == 64 && !reference.branch().empty() &&
+        require(reference.snapshot_sha256().size() == 64 &&
+                reference.vcs_checkout_state() == vibris::control::v2::VCS_CHECKOUT_STATE_ATTACHED &&
+                !reference.branch().empty() &&
                 reference.start_head() == reference.resolved_revision() &&
                 !reference.shader_tree_id().empty() && reference.dirty_shader_delta_sha256().size() == 64,
             "PreparedSourceRef omitted immutable workspace provenance.");
@@ -187,6 +189,30 @@ void queued_snapshot_materializes_with_stable_provenance() {
         "Queued snapshot materialization reread the mutable workspace.");
 }
 
+void detached_workspace_records_empty_branch_and_exact_head() {
+    WorkspaceFixture fixture;
+    run_git(fixture.worktree(), "checkout --detach --quiet");
+    SourcePreparer preparer(fixture.worktree(), fixture.pending(), generous_limits());
+
+    auto prepared = preparer.prepare_workspace();
+    const auto& reference = prepared.reference();
+
+    require(reference.vcs_checkout_state() == vibris::control::v2::VCS_CHECKOUT_STATE_DETACHED,
+        "Detached workspace did not record detached checkout state.");
+    require(reference.branch().empty(), "Detached workspace synthesized a branch name.");
+    require(reference.start_head().size() == 40 && reference.start_head() == reference.resolved_revision(),
+        "Detached workspace did not retain its exact HEAD.");
+
+    vibris::mcp::test::TempDirectory server_pending("detached-snapshot-server");
+    SourcePreparer materializer(fixture.worktree(), server_pending.path(), generous_limits());
+    auto materialized = materializer.prepare_snapshot(prepared.directory(), reference);
+    require(materialized.reference().vcs_checkout_state() ==
+            vibris::control::v2::VCS_CHECKOUT_STATE_DETACHED &&
+            materialized.reference().branch().empty() &&
+            materialized.reference().start_head() == reference.start_head(),
+        "Detached queued snapshot did not preserve checkout state, empty branch, and exact HEAD.");
+}
+
 void make_clean(WorkspaceFixture& fixture) {
     run_git(fixture.worktree(), "add -f shaders");
     run_git(fixture.worktree(), "commit --quiet -m provenance-clean");
@@ -196,6 +222,7 @@ Json receipt(const vibris::control::v2::PreparedSourceRef& source) {
     return {{"result", {{"provenance", {
         {"workspace_id", "fixture-workspace"},
         {"worktree_root", source.origin().workspace().worktree_root()},
+        {"vcs_checkout_state", vibris::control::v2::VcsCheckoutState_Name(source.vcs_checkout_state())},
         {"branch", source.branch()},
         {"requested_revision", source.requested_revision()},
         {"resolved_revision", source.resolved_revision()},
@@ -278,7 +305,7 @@ void provenance_deletion() {
 }
 
 using TestCase = std::pair<std::string_view, void (*)()>;
-constexpr std::array<TestCase, 12> test_cases {{
+constexpr std::array<TestCase, 13> test_cases {{
     {"WorkspaceSnapshotTrackedUntrackedIgnoredAndRetry", workspace_snapshot_tracked_untracked_ignored_and_retry},
     {"StagingPromotion", staging_promotion},
     {"MutationTwiceFails", mutation_twice_fails},
@@ -286,6 +313,7 @@ constexpr std::array<TestCase, 12> test_cases {{
     {"CheckedFileSwapDoesNotReadReparseTarget", checked_file_swap_does_not_read_reparse_target},
     {"SourceSoak", source_soak},
     {"QueuedSnapshotMaterializesWithStableProvenance", queued_snapshot_materializes_with_stable_provenance},
+    {"DetachedWorkspaceRecordsEmptyBranchAndExactHead", detached_workspace_records_empty_branch_and_exact_head},
     {"ProvenanceClean", provenance_clean},
     {"ProvenanceMetadataOnly", provenance_metadata_only},
     {"ProvenanceTrackedChange", provenance_tracked_change},

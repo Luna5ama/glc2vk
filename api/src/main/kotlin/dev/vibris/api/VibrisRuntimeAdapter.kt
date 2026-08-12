@@ -4,6 +4,8 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 
 interface VibrisRuntimeAdapter : AutoCloseable {
+    fun getRuntimeEnvironment(): CompletionStage<RuntimeEnvironment>
+
     fun listPresets(): CompletionStage<List<ScenePreset>> {
         val context = SceneContext(
             "test-save",
