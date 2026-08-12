@@ -1657,6 +1657,20 @@ Evidence:
   with 335 v1 and zero v2 protocol entries. No two shader worktrees were supplied, and no deployment, restart,
   runtime request, artifact write, or protected-state change occurred. This is the second consecutive Goal turn with
   the same external blocker; T20 remains `BLOCKED` and the Goal remains active.
+- `2026-08-11` blocker audit 3: Vibris entered at
+  `3654e963195ce02b69a07cd625114f5c32b327ea`, Iris remained at
+  `38a7d2eaf88939983e0e01f731ccd4c627fbf6a9`, every auxiliary worktree remained at its recorded clean HEAD, all
+  staging areas were empty, and the ledger checker reported
+  `Ledger valid: 24 task(s); next=none; READY=0, PENDING=1, BLOCKED=1, DONE=22, SUPERSEDED=0.` The same Java PID
+  63232 still listened on `127.0.0.1:50051` from its original `2026-08-11T19:26:38.4366820Z` process start. The
+  configured MCP remained the 15,038,464-byte executable with SHA-256
+  `AB86DD12A4F2E5B1E07DC3EA77E0C9F36A1232654799D1A4952789B8528D66E9`; an isolated read-only stdio probe again
+  negotiated MCP `2024-11-05` and listed only the same five old tools. The installed mod remained 27,279,850 bytes
+  with SHA-256 `551D72EACE461C72DECCDFF2AB7E946D646765C6CA5457A0E3EFED7165606B7C`, 335 nested protocol-v1 entries, and
+  zero v2 entries. The user supplied no two shader worktrees. No live status/action request, deployment, restart,
+  runtime mutation, artifact write, or protected-state change occurred. This is the third consecutive Goal turn with
+  the same external blocker; after this ledger-only atomic checkpoint the Goal is marked `blocked`, while T20 stays
+  `BLOCKED` and T99 stays `PENDING`.
 
 ### T99 — Final integrated audit
 
@@ -1774,3 +1788,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T19 - passed fresh 163-test JVM, 79-test native, 15-test Iris bridge, and four-test OpenGL runtime acceptance; proved strict-v2 negotiation/restart and recorded hashes for the local MCP/mod delivery outputs without deployment - Commit title: T19 verify offline v2 integration`
 - `2026-08-11 - T20 blocked - the live instance embeds 335 v1 and zero v2 protocol entries, the configured MCP publishes only the old five-tool surface, and no two shader worktrees were supplied; no compatibility path, deployment, or restart was attempted - Control-plane commit title: roadmap block T20 pending matching live scope`
 - `2026-08-11 - T20 blocker audit 2 - reverified the unchanged pre-v2 runtime/MCP and missing two-worktree scope; this is the second consecutive blocked Goal turn, so the Goal remains active - Control-plane commit title: roadmap recheck T20 live scope blocker`
+- `2026-08-11 - T20 blocker audit 3 - reverified the unchanged pre-v2 runtime/MCP and missing two-worktree scope for the third consecutive blocked Goal turn; the Goal is marked blocked after the ledger-only atomic checkpoint - Control-plane commit title: roadmap confirm T20 blocked awaiting live scope`
