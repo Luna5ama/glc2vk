@@ -100,8 +100,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T16 | P0 | Iris | Implement named Iris pass boundary hooks | DONE | `T16 capture resources after named Iris passes` |
 | T17 | P0 | Vibris | Integrate after-pass texture and buffer jobs | DONE | `T17 integrate after-pass resource dump jobs` |
 | T18 | P0 | Vibris | Complete strict v2 cutover and documentation | DONE | `T18 complete strict v2 cutover` |
-| T19 | P0 | Vibris | Run offline integrated acceptance | READY | `T19 verify offline v2 integration` |
-| T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | PENDING | `T20 record live v2 acceptance` |
+| T19 | P0 | Vibris | Run offline integrated acceptance | DONE | `T19 verify offline v2 integration` |
+| T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | READY | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
 
 ## Task details
@@ -1488,7 +1488,7 @@ Evidence:
 
 ### T19 — Run offline integrated acceptance
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T18
 
@@ -1534,11 +1534,52 @@ Blockers:
 
 Evidence:
 
-- Pending.
+- `2026-08-11`: entry gates verified Vibris `main` at
+  `f0456e099c2d946c90f4db57fbabb3667611baf0`, Iris `1.21.11-shaderdev` at
+  `38a7d2eaf88939983e0e01f731ccd4c627fbf6a9`, every declared auxiliary worktree at its recorded clean HEAD, empty
+  staging areas, and only the protected untracked `capture/a.spv`, Iris `.codex/`, `.vibris/`, and `common/logs/`.
+  The ledger checker reported `Ledger valid: 24 task(s); next=T19; READY=1, PENDING=2, BLOCKED=0, DONE=21,
+  SUPERSEDED=0.`
+- `.\gradlew.bat build --offline --console=plain` passed with 63 actionable tasks. A fresh
+  `.\gradlew.bat test --offline --rerun-tasks --console=plain` passed with 56 executed tasks; the resulting module
+  XML reports 163 tests, zero failures/errors/skips: API 8, common 2, capture 26, Core 100, protocol Java 5,
+  integration 3, test runtime 7, OpenGL replay 5, and Vulkan replay 7. The integration cases include strict-v2
+  descriptor parity plus v2 hello/ping and major-version rejection.
+- `cmake --build --preset release`, using the Visual Studio executable recorded in the global constraints, passed for
+  the complete native target graph.
+  `ctest --preset release --output-on-failure` passed 79/79 in 124.34 seconds, including strict v1/missing-version
+  rejection, durable matrix and compile-validation restart, accepted-request resume, cross-worktree routing,
+  provenance mutations, managed artifact/state rejection, benchmark gates, and stdio lifecycle. A focused rerun of
+  the two version-negative plus four stdio/restart fixtures passed 6/6 in 6.69 seconds; the direct built-executable
+  probe reported `PASS tools=8 schema_version=2 ... request_scoped=true` and cleaned all owned processes/temp state.
+- Cross-worktree scheduler, artifact-v2 lifecycle, after-pass resource execution, and transactional restoration Core
+  fixtures passed 1/1, 5/5, 10/10, and 8/8 respectively. The hardware-enabled
+  `.\gradlew.bat ':vibris-capture:test' '-Pvibris.runtimeTest=true' --offline --rerun-tasks --console=plain` run
+  passed the 26/26 capture suite and actually executed all four OpenGL runtime fixtures (4/4, zero failures/errors/
+  skips), including flip-correct framebuffer/image texture capture, compute-written SSBO bytes, unsupported-texture
+  handling, GPU timing, and complete pixel-pack restoration.
+- In Iris, `.\gradlew.bat :common:compileJava :fabric:build --offline --console=plain` passed with 41 actionable
+  tasks and regenerated the remapped local mod. The forced
+  `.\gradlew.bat :fabric:vibrisBridgeTest --offline --rerun-tasks --console=plain` run passed 15/15 tests with 36
+  executed tasks, covering effective settings, compile catalogs, runtime adaptation, and named-pass texture/buffer
+  boundaries.
+- The C++/Java/proto descriptor probe passed with canonical descriptor SHA-256
+  `EC0A1A6995BF93C13BBD4185832A75BF0B9E6F7BCEE0A97ACF5FB208B4B9C796`. The remapped Iris JAR contains 536
+  `dev/vibris/protocol/v2` entries and zero v1 entries. Local, non-deployed delivery outputs are:
+  `mcp/out/build/Release/vibris-mcp.exe` (15,350,272 bytes, SHA-256
+  `2BA67FAB3290C0222A4F5CA8FB62D8DF59DBD8C29808BEFEF460033C1922CC26`) and
+  `I:\code\Iris\build\libs\iris-fabric-1.10.6-snapshot+mc1.21.11-local.jar` (28,145,118 bytes, SHA-256
+  `C0E856A3F169E57DBC23283383A77059E82030A847B799EC468A890F02A1E02F`). The Java protocol JAR is 1,581,411
+  bytes with SHA-256 `2F7509DA2DB0A1A1A0C449CF96F16465254702143B31E6920BF6A939282043F9`.
+- Limitation: this acceptance is deliberately offline. The artifacts were verified and hashed in their local build
+  locations without packaging into or deploying a live delivery; no live Minecraft acceptance, deployment,
+  Minecraft/launcher restart, or user-data mutation occurred. Those live receipts remain exclusively assigned to
+  T20. Protected and user-owned untracked state remained unchanged and unstaged.
+- Commit: this task's commit with subject `T19 verify offline v2 integration`.
 
 ### T20 — Run live two-worktree 720p acceptance
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T19
 
@@ -1653,19 +1694,19 @@ Queue order is authoritative and serial even where technical dependencies could 
 - [x] MCP publishes exactly the eight typed v2 tools and never duplicates the structured payload.
 - [x] No affected v1 compatibility parser, alias, adapter, fallback, migration, dual-read, or dual-write remains.
 - [x] Shared runtime ownership, queue, progress, error history, readiness, waits, cancellation, and recovery are truthful.
-- [ ] Long jobs are durable, queryable, resumable when safe, and never duplicate completed or uncertain side effects.
-- [ ] All state-mutating validation restores source, effective settings, scene, and temporal state with receipts.
+- [x] Long jobs are durable, queryable, resumable when safe, and never duplicate completed or uncertain side effects.
+- [x] All state-mutating validation restores source, effective settings, scene, and temporal state with receipts.
 - [x] Preserve returns complete effective settings, origins, diff, and stable hash.
 - [x] Every input action produces exactly one ordered receipt.
 - [x] Compile validation reports every intended program/pass and baseline diagnostic changes without GPU warmup.
-- [ ] Every result contains complete immutable provenance and correct shader-content stale semantics.
+- [x] Every result contains complete immutable provenance and correct shader-content stale semantics.
 - [x] Benchmark decisions enforce target/sibling/sentinel guardrails, measured noise, confidence, order, drift, compile, visual, provenance, and restoration gates.
-- [ ] Artifact v2 supports TTL, hash manifests, request/job grouping, capacity prediction, ownership-safe list/detail/delete, and worktree-local paths.
+- [x] Artifact v2 supports TTL, hash manifests, request/job grouping, capacity prediction, ownership-safe list/detail/delete, and worktree-local paths.
 - [x] `dump_texture_after_pass` and `dump_buffer_after_pass` capture exact named pass boundaries with correct flip, visibility, bytes, artifacts, and GL-state restoration.
-- [ ] Full Vibris native/Gradle and Iris build validation passes.
+- [x] Full Vibris native/Gradle and Iris build validation passes.
 - [ ] Live two-worktree 720p acceptance passes without autonomous deployment or process restart.
 - [ ] Every expected commit is present in the intended repository and branch.
-- [ ] Protected and pre-existing user state remains untouched.
+- [x] Protected and pre-existing user state remains untouched.
 - [ ] Final worktree, branch, ledger, and Goal audits pass.
 
 ## Completion evidence
@@ -1698,3 +1739,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T18 blocked - hard cutover rejects persisted schema-v1 state and removes obsolete v1-only integration suites; execution requires fresh explicit user approval after impact disclosure, while old data remains untouched and no deployment occurs - Control-plane commit title: roadmap block T18 pending hard cutover approval`
 - `2026-08-11 - T18 unblocked - user explicitly approved the disclosed hard cutover; schema-v1 state may be rejected and obsolete v1-only suites removed while old data remains untouched and deployment stays out of scope - Control-plane commit title: roadmap unblock T18 after hard cutover approval`
 - `2026-08-11 - T18 - completed the schema-2 hard cutover, removed obsolete pre-v2 integration/probe/fixture and dual-read/write paths, rewrote the operator guide, passed Gradle plus the release CMake build and 79/79 CTest cases, and left protected/runtime/user data untouched - Commit title: T18 complete strict v2 cutover`
+- `2026-08-11 - T19 - passed fresh 163-test JVM, 79-test native, 15-test Iris bridge, and four-test OpenGL runtime acceptance; proved strict-v2 negotiation/restart and recorded hashes for the local MCP/mod delivery outputs without deployment - Commit title: T19 verify offline v2 integration`
