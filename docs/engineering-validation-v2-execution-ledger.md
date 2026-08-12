@@ -101,7 +101,7 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T17 | P0 | Vibris | Integrate after-pass texture and buffer jobs | DONE | `T17 integrate after-pass resource dump jobs` |
 | T18 | P0 | Vibris | Complete strict v2 cutover and documentation | DONE | `T18 complete strict v2 cutover` |
 | T19 | P0 | Vibris | Run offline integrated acceptance | DONE | `T19 verify offline v2 integration` |
-| T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | READY | `T20 record live v2 acceptance` |
+| T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | BLOCKED | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
 
 ## Task details
@@ -1579,7 +1579,7 @@ Evidence:
 
 ### T20 — Run live two-worktree 720p acceptance
 
-Status: `READY`
+Status: `BLOCKED`
 
 Dependencies: T19
 
@@ -1620,11 +1620,33 @@ Expected commit title: `T20 record live v2 acceptance`
 
 Blockers:
 
-- Requires a user-started matching v2 Minecraft/Iris runtime and two explicit shader worktrees; never satisfy this by autonomously restarting or deploying.
+- Requires the user to separately deploy and start the matching strict-v2 MCP/Iris build and to provide two explicit
+  shader worktrees. The currently running Minecraft instance and configured MCP are pre-v2 and cannot be used through
+  a compatibility path. Never satisfy this blocker by autonomously deploying, restarting, or choosing worktrees.
 
 Evidence:
 
-- Pending.
+- `2026-08-11`: entry gates verified Vibris `main` at
+  `4fe98606bb879f589ea706e6f11f76981d8fec76`, Iris `1.21.11-shaderdev` at
+  `38a7d2eaf88939983e0e01f731ccd4c627fbf6a9`, every declared auxiliary worktree at its recorded clean HEAD, empty
+  staging areas, and only the protected untracked state. The ledger checker reported
+  `Ledger valid: 24 task(s); next=T20; READY=1, PENDING=1, BLOCKED=0, DONE=22, SUPERSEDED=0.`
+- A pre-existing Java runtime is listening on `127.0.0.1:50051` as PID 63232 from the
+  `I:\MultiMC\instances\1.21.11-Iris` instance. Read-only inspection proved that its installed
+  `iris-fabric-1.10.6-snapshot+mc1.21.11-local.jar` is 27,279,850 bytes with SHA-256
+  `551D72EACE461C72DECCDFF2AB7E946D646765C6CA5457A0E3EFED7165606B7C`; its nested protocol JAR contains 335
+  `dev/vibris/protocol/v1` entries and zero v2 entries. It therefore cannot negotiate the strict-v2 T20 contract.
+- `C:\Users\Luna5ama\.codex\config.toml` points Vibris at
+  `I:\code\vibris\build\delivery-20260810-png-flip\vibris-mcp.exe` (15,038,464 bytes, SHA-256
+  `AB86DD12A4F2E5B1E07DC3EA77E0C9F36A1232654799D1A4952789B8528D66E9`), not T19's verified v2 executable
+  (SHA-256 `2BA67FAB3290C0222A4F5CA8FB62D8DF59DBD8C29808BEFEF460033C1922CC26`). A read-only stdio `tools/list`
+  probe returned only the old five-tool surface (`vibris_list_presets`, `vibris_get_status`, `vibris_run_recipe`,
+  `vibris_run_actions`, and `vibris_run_matrix`) with no schema-v2 metadata, rather than the required eight tools.
+- No two shader worktrees were explicitly supplied for this live acceptance. No worktree was inferred, and no live
+  status/action request was issued against an arbitrarily chosen repository. No deployment, Minecraft/launcher
+  restart, runtime mutation, artifact write, or protected-state change occurred.
+- T20 remains incomplete and T99 remains `PENDING`. Resume T20 only after the user starts a matching strict-v2
+  Minecraft/Iris runtime, configures the matching v2 MCP delivery, and supplies the two exact shader worktree paths.
 
 ### T99 — Final integrated audit
 
@@ -1740,3 +1762,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T18 unblocked - user explicitly approved the disclosed hard cutover; schema-v1 state may be rejected and obsolete v1-only suites removed while old data remains untouched and deployment stays out of scope - Control-plane commit title: roadmap unblock T18 after hard cutover approval`
 - `2026-08-11 - T18 - completed the schema-2 hard cutover, removed obsolete pre-v2 integration/probe/fixture and dual-read/write paths, rewrote the operator guide, passed Gradle plus the release CMake build and 79/79 CTest cases, and left protected/runtime/user data untouched - Commit title: T18 complete strict v2 cutover`
 - `2026-08-11 - T19 - passed fresh 163-test JVM, 79-test native, 15-test Iris bridge, and four-test OpenGL runtime acceptance; proved strict-v2 negotiation/restart and recorded hashes for the local MCP/mod delivery outputs without deployment - Commit title: T19 verify offline v2 integration`
+- `2026-08-11 - T20 blocked - the live instance embeds 335 v1 and zero v2 protocol entries, the configured MCP publishes only the old five-tool surface, and no two shader worktrees were supplied; no compatibility path, deployment, or restart was attempted - Control-plane commit title: roadmap block T20 pending matching live scope`
