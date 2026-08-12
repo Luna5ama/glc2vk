@@ -2467,6 +2467,12 @@ Evidence:
   `b7c0151f-8355-4640-b2d7-5d91b162992f`; final status was available with an empty queue, no active job, and both
   accept/start true. AP3/AP4 shader files, Codex MCP deployment/configuration, retained T19H files, and `capture\a.spv`
   were not modified.
+- `2026-08-12` blocker audit 2 re-read the complete ledger and reverified every repository/worktree identity, HEAD,
+  branch, and protected dirty boundary. AP4 still assigns persistent brick allocation IDs through the same
+  cross-workgroup `atomicAdd(voxel_bucketCounts[dist], 1u)` at clean detached HEAD
+  `b793f75bc411b309142305ce062e17bc52b259c3`; no authorization has changed the no-shader-change/no-state-reuse
+  acceptance contract. The queue therefore still has no `READY` task, and no product code, deployment, process, or
+  runtime job was changed.
 
 ### T19H — Make paired visual capture deterministic
 
@@ -3030,3 +3036,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-12 - T19G - preserved exact nested preset identity, normalized strict-v2 protobuf integers at one native boundary, added safe receipt-only finalization resume, passed focused CTest 20/20, and published a fail-closed 17-receipt live AP3/AP4 benchmark with full restoration - Commit title: T19G repair live paired benchmark finalization`
 - `2026-08-12 - T19H inserted - an exact same-clean-commit AP4 comparison under night-gi-1-720p matched source, settings, scene, and all visual guards but failed only threshold-pixel ratio because ab_compare omitted temporal reset before each equal warmup; inserted a no-threshold-change deterministic-phase remediation before T20 - Control-plane commit title: roadmap insert T19H visual determinism remediation`
 - `2026-08-12 - T19I inserted - T19H's ordered planner resets passed focused tests and both typed receipts, but two direct same-clean-commit live jobs still failed the unchanged pixel-ratio gate; Core leaves load/reset/wait/capture as non-atomic handoffs and Iris resumes shader time from wall-clock deltas, so a no-compatibility cross-repository compound temporal-phase remediation is inserted before T19H - Control-plane commit title: roadmap insert T19I frame atomic temporal remediation`
+- `2026-08-12 - T19I blocker audit 2 - reverified the unchanged AP4 cross-workgroup allocation-ID nondeterminism, exact repository/worktree identities, and protected state for the second consecutive blocked Goal turn; no READY task exists and the Goal remains active - Control-plane commit title: roadmap recheck T19I allocator blocker`
