@@ -244,17 +244,27 @@ internal class ActionJobExecutor(
                             )
                         }
                         CaptureProgramBuilder.ActionType.RUNTIME -> {
-                            owner.await(
+                            val response = owner.await(
                                 runtime.executeAction(RuntimeActionProtocol.toApi(step.runtimeAction!!)),
                                 job,
                                 deadline,
                             )
-                            receiptBook.put(
-                                step.actionIndex,
-                                receiptBook.success(step.actionIndex)
-                                    .setEmpty(EmptyReceipt.getDefaultInstance())
-                                    .build(),
-                            )
+                            val receipt = receiptBook.success(step.actionIndex)
+                            if (step.runtimeAction.hasGetGpuMetrics()) {
+                                try {
+                                    receipt.setGpuMetrics(
+                                        RuntimeActionProtocol.gpuMetricsReceipt(step.runtimeAction, response),
+                                    )
+                                } catch (exception: IllegalArgumentException) {
+                                    throw RuntimeJobExecutor.Failure(
+                                        ErrorCode.ERROR_CODE_NO_GPU_SAMPLES,
+                                        exception.message ?: "GPU timing response is invalid.",
+                                    )
+                                }
+                            } else {
+                                receipt.setEmpty(EmptyReceipt.getDefaultInstance())
+                            }
+                            receiptBook.put(step.actionIndex, receipt.build())
                         }
                     }
                     activeIndices = emptyList()

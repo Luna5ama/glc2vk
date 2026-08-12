@@ -59,7 +59,7 @@ internal class GpuTimingMetrics {
         if (current.frames > 0) return
         harvest(true)
         capture = null
-        current.result.complete(histories.snapshot())
+        current.result.complete(histories.snapshot(current.sampledFrames))
     }
 
     private fun harvest(wait: Boolean) {
@@ -83,7 +83,9 @@ internal class GpuTimingMetrics {
     private data class Capture(
         var frames: Int,
         val result: CompletableFuture<GpuTimingSnapshot>,
-    )
+    ) {
+        val sampledFrames = frames
+    }
 }
 
 internal sealed interface GpuTimingTarget {
@@ -110,7 +112,8 @@ internal class GpuTimingHistories {
         }
     }
 
-    fun snapshot(): GpuTimingSnapshot = GpuTimingSnapshot(
+    fun snapshot(sampledFrames: Int = 1): GpuTimingSnapshot = GpuTimingSnapshot(
+        sampledFrames = sampledFrames,
         aggregateTimings = aggregateHistories.mapValues { (_, history) -> history.stats() },
         aggregateScopes = aggregateScopes.values.toList(),
         programTimings = programHistories.map { (key, history) ->
@@ -165,6 +168,7 @@ internal class TimingHistory {
             percentile(sorted, 0.05),
             percentile(sorted, 0.95),
             percentile(sorted, 0.50),
+            samples.toList(),
         )
     }
 

@@ -35,6 +35,7 @@ data class GpuTimingStats(
     val p5: Long,
     val p95: Long,
     val p50: Long,
+    val samples: List<Long>,
 )
 
 data class GpuTimingProgram @JvmOverloads constructor(
@@ -77,6 +78,7 @@ internal data class GpuProgramTimingStats(
 )
 
 internal data class GpuTimingSnapshot(
+    val sampledFrames: Int,
     val aggregateTimings: Map<String, GpuTimingStats>,
     val aggregateScopes: List<GpuTimingScope>,
     val programTimings: List<GpuProgramTimingStats>,

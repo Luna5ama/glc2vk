@@ -88,6 +88,8 @@ class ShaderDebugControl constructor(
         metrics.capture(frames).thenApply(::metricsJson)
 
     internal fun metricsJson(values: GpuTimingSnapshot): JsonObject = buildJsonObject {
+        put("timingUnit", "ns")
+        put("sampledFrames", values.sampledFrames)
         put("gpuTimings", buildJsonObject {
             values.aggregateTimings.forEach { (name, stats) ->
                 put(name, timingStatistics(stats))
@@ -131,6 +133,9 @@ class ShaderDebugControl constructor(
         put("p5", stats.p5)
         put("p95", stats.p95)
         put("p50", stats.p50)
+        put("samples", buildJsonArray {
+            stats.samples.forEach { add(JsonPrimitive(it)) }
+        })
     }
 
     fun buffersJson(): JsonObject = buildJsonObject {

@@ -40,6 +40,7 @@ class ShaderDebugStateTest {
         assertEquals(6, stats.p5)
         assertEquals(95, stats.p95)
         assertEquals(51, stats.p50)
+        assertEquals((1L..100L).toList(), stats.samples)
     }
 
     @Test
@@ -52,7 +53,10 @@ class ShaderDebugStateTest {
         control.tickFrame()
 
         assertTrue(result.isDone)
-        assertEquals(emptySet(), result.join()["gpuTimings"]!!.jsonObject.keys)
+        val json = result.join()
+        assertEquals("ns", json.getValue("timingUnit").jsonPrimitive.content)
+        assertEquals(2, json.getValue("sampledFrames").jsonPrimitive.content.toInt())
+        assertEquals(emptySet(), json["gpuTimings"]!!.jsonObject.keys)
     }
 
     @Test
@@ -101,6 +105,7 @@ class ShaderDebugStateTest {
         assertEquals("direct:120x68x1", programs.getValue("begin3_a").program.dispatch)
         assertEquals(300, programs.getValue("begin3_a").statistics.average)
         assertEquals("begin3_compute", programs.getValue("begin3_a").compatibilityMetric)
+        assertEquals(listOf(300L), programs.getValue("begin3_a").statistics.samples)
 
         val json = ShaderDebugControl(EmptyHost(Path.of("."))).metricsJson(snapshot)
         val skyView = json.getValue("gpuProgramTimings").jsonArray
@@ -117,6 +122,11 @@ class ShaderDebugStateTest {
         assertEquals("begin3", skyView.getValue("framework_pass").jsonPrimitive.content)
         assertEquals("begin3_compute", skyView.getValue("compatibility_metric").jsonPrimitive.content)
         assertEquals(300, skyView.getValue("statistics").jsonObject.getValue("avg").jsonPrimitive.content.toLong())
+        assertEquals(
+            listOf("300"),
+            skyView.getValue("statistics").jsonObject.getValue("samples").jsonArray
+                .map { it.jsonPrimitive.content },
+        )
     }
 
     @Test

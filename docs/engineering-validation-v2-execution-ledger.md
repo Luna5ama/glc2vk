@@ -106,7 +106,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T19A | P0 | Vibris | Repair strict v2 live bootstrap | DONE | `T19A repair strict v2 live bootstrap` |
 | T19B | P0 | Vibris | Compact capture results and localize artifact paths | DONE | `T19B compact capture results and localize artifact paths` |
 | T19C | P0 | Iris | Make the main-menu runtime ready for jobs | DONE | `T19C make main menu runtime ready` |
-| T19D | P0 | Vibris | Return typed live GPU metric receipts | READY | `T19D return typed GPU metric receipts` |
+| T19D | P0 | Vibris | Return typed live GPU metric receipts | DONE | `T19D return typed GPU metric receipts` |
+| T19E | P0 | Vibris | Complete live detached-worktree provenance | READY | `T19E complete live detached provenance` |
 | T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | BLOCKED | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
 
@@ -1894,7 +1895,7 @@ Evidence:
 
 ### T19D — Return typed live GPU metric receipts
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T19C
 
@@ -1963,12 +1964,96 @@ Evidence:
   compile catalogs, settings provenance/restoration, an upright 720p screenshot, and exact texture/buffer boundaries;
   those partial receipts remain evidence only and T20 is not promoted until this remediation and its benchmark gate
   pass.
+- The capture runtime now emits one canonical timing document with explicit `timingUnit=ns`, the exact requested
+  sampled-frame count, real per-query samples on every aggregate and program statistic, aggregate scopes, and complete
+  program identity metadata. Core preserves that returned document, validates the strict shape and scope/aggregate
+  identity, converts aggregate and program entries to `GpuTimingMetric`, and applies only the request's explicit metric
+  IDs. Empty samples, malformed fields, frame-count disagreement, duplicate typed identities, or an omitted requested
+  metric fail the action with `ERROR_CODE_NO_GPU_SAMPLES`; no empty success, fallback metric, old field, alias, or
+  second response shape remains.
+- `2026-08-11`: `:vibris-capture:test :vibris-core:test --offline --console=plain` passed with Capture 26/26 and
+  Core 105/105 tests, zero failures/errors/skips. Focused conversion/executor coverage proves the typed receipt,
+  aggregate scope and program metadata, original samples, filtering, and explicit malformed/empty/omitted failures.
+  Release native profile/matrix/paired-benchmark/JobProtocol targets built, and CTest filter
+  `StrictV2Result|Profile|Matrix|Paired|Benchmark|JobProtocol` passed 13/13.
+- The production MCP rebuilt to 15,368,192 bytes and matches the configured delivery at SHA-256
+  `8CD4AC8B9E93E6E75FD2F294340673A77C518AD833819300C0EB7D54F6F615C6`. The Java-21 Iris build passed with 41
+  actionable tasks; the rebuilt and installed 28,158,449-byte Mod both have SHA-256
+  `A3916EFC7F66198A5D6ADC7A8BB7CAAF5AA0783F7F632FBD66C751DBEA14264B`. The authorized MultiMC instance restarted
+  as Java PID 51628 and returned available main-menu status before the live load.
+- Non-restoring AP4 baseline job `4a4ab94e-f0d0-4d81-982b-5d84d30a3cc3` loaded
+  `night-gi-1-720p` and established active source UUID `119400cf-b6fd-4060-8b45-24390f319c5a`. Live profile
+  job/request `67149367-c986-4988-a7bf-4ba7e33a8b67` selected only `composite_total` and returned one typed receipt
+  with 10 real samples, `average_ns=11232563`, `p50_ns=11128832`, and `p95_ns=12398387`. It used exactly one attempt
+  with no empty-result retry. Its localized 200-byte result artifact has SHA-256
+  `8D8C15EB7CE80B4CB6CF4CB859AEE57F53ABE143E52ED4EB6D10E346A3FF04DF`; the 1,157-byte manifest has SHA-256
+  `8205CA30ED40A92C227B2984E86709F60CD42B8FAF4E38B3DE9C52D5C81948B6`.
+- Final live status is available with an empty queue, `can_accept_job=true`, `can_start_job=true`, and the same AP4
+  source active. The profile independently exposed incomplete provenance because the detached worktree's branch and
+  live Minecraft version are empty; T19E is inserted before T20 rather than hiding that separate acceptance blocker.
+
+### T19E — Complete live detached-worktree provenance
+
+Status: `READY`
+
+Dependencies: T19D
+
+Repository: `I:\code\vibris`
+
+Worktree: `I:\code\vibris`
+
+Branch: `main`
+
+Primary files:
+
+- `I:\code\vibris\core\src\main\kotlin\dev\vibris\core\BenchmarkProvenance.kt`
+- `I:\code\vibris\mcp\src\main\cpp\source_preparer.cpp`
+- `I:\code\vibris\mcp\src\main\cpp\synchronous_job_runner.cpp`
+- Focused Core/source/provenance/profile tests
+
+Scope:
+
+- Record the current Minecraft version through one maintained runtime contract and make detached Git worktrees carry
+  an explicit truthful VCS state rather than an empty required branch string.
+- Keep strict-v2 provenance complete for user-supplied detached worktrees without claiming a named branch, then prove
+  the live AP4 profile passes the provenance and restoration gates with its typed T19D metrics.
+- Rebuild, redeploy, and restart the already authorized MultiMC instance for the live proof.
+
+Non-scope:
+
+- Do not add reflective method probing, version fallbacks, placeholder versions, a synthetic named branch, aliases,
+  legacy provenance fields, compatibility parsing, or modify either shader worktree.
+- Do not execute the remaining paired benchmark or claim T20 acceptance.
+
+Acceptance:
+
+- Runtime provenance contains the exact non-empty Minecraft version from the maintained host contract.
+- Detached AP4/AP3 sources retain their exact HEAD and an explicit detached state without masquerading as a branch.
+- A live filtered AP4 profile has complete provenance, successful restoration, one attempt, and selectable typed GPU
+  samples; no provenance gate is bypassed or weakened.
+
+Verification:
+
+- Focused Core and native source/provenance/profile tests.
+- Iris Fabric build, authorized deployment/restart, and a live AP4 `night-gi-1-720p` filtered profile.
+
+Expected commit title: `T19E complete live detached provenance`
+
+Blockers:
+
+- None known.
+
+Evidence:
+
+- T19D live profile `67149367-c986-4988-a7bf-4ba7e33a8b67` returned valid filtered typed metrics and restoration but
+  `complete_result_provenance(...)` rejected the result. The terminal provenance shows `branch=""` for detached AP4
+  and `environment.minecraft_version=""`; both fields are mandatory and T20 uses the same detached AP4/AP3 scope.
 
 ### T20 — Run live two-worktree 720p acceptance
 
 Status: `BLOCKED`
 
-Dependencies: T19D
+Dependencies: T19E
 
 Repository: `I:\code\vibris` and `I:\code\Iris`
 
@@ -2009,8 +2094,8 @@ Expected commit title: `T20 record live v2 acceptance`
 
 Blockers:
 
-- Live strict-v2 GPU metric actions currently return successful `EmptyReceipt` values because Core discards the
-  runtime timing JSON. T19D must return typed metrics before the required paired-benchmark/statistical gate can run.
+- Live typed GPU metrics now pass, but detached AP4/AP3 provenance remains incomplete because its required branch and
+  Minecraft-version fields are empty. T19E must make those fields truthful before the paired benchmark can run.
 - On `2026-08-11`, the user explicitly authorized this session to rebuild and redeploy the current MCP and Mod
   repeatedly and to restart the existing MultiMC `1.21.11-Iris` instance as needed. If the Codex application itself
   must restart to adopt a changed MCP command, stop after deployment and hand that restart to the user.
@@ -2265,7 +2350,7 @@ Evidence:
 
 Status: `PENDING`
 
-Dependencies: T01, T02, T02A, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T12A, T13, T14, T15, T16, T17, T18, T19, T19A, T19B, T19C, T19D, T20
+Dependencies: T01, T02, T02A, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T12A, T13, T14, T15, T16, T17, T18, T19, T19A, T19B, T19C, T19D, T19E, T20
 
 Repository: `I:\code\vibris`
 
@@ -2319,7 +2404,7 @@ Evidence:
 ```text
 T00 -> T01 -> T02 -> T02A -> T03 -> T04 -> T05 -> T06 -> T07 -> T08 -> T09
     -> T10 -> T11 -> T12 -> T12A -> T13 -> T14 -> T15 -> T16 -> T17 -> T18
-    -> T19 -> T19A -> T19B -> T19C -> T19D -> T20 -> T99
+    -> T19 -> T19A -> T19B -> T19C -> T19D -> T19E -> T20 -> T99
 ```
 
 Queue order is authoritative and serial even where technical dependencies could allow parallel work.
@@ -2396,3 +2481,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T20 post-T19B blocker audit 3 - reverified the unchanged stale MCP/Mod deployment and disconnected runtime for the third consecutive Goal turn; the Goal is marked blocked after the ledger-only checkpoint - Control-plane commit title: roadmap confirm T20 blocked on current live deployment`
 - `2026-08-11 - T20 unblocked after T19B - user authorized repeated current MCP/Mod deployments and MultiMC 1.21.11-Iris restarts for this session; Codex restart remains user-owned - Control-plane commit title: roadmap unblock T20 for authorized live deployment`
 - `2026-08-11 - T19D inserted - live get_gpu_metrics completed OK but Core discarded the runtime JSON and emitted EmptyReceipt, preventing profile and paired-benchmark statistics; inserted a no-compatibility typed metric-receipt remediation before T20 - Control-plane commit title: roadmap insert T19D typed GPU metric remediation`
+- `2026-08-11 - T19D - preserved canonical live GPU timing JSON as filtered strict-v2 typed receipts with real samples and explicit empty/malformed failures; Capture 26/26, Core 105/105, native 13/13, Iris build, deployed hashes, and a one-attempt filtered live AP4 profile passed; inserted T19E for the separately exposed detached provenance blocker - Commit title: T19D return typed GPU metric receipts`

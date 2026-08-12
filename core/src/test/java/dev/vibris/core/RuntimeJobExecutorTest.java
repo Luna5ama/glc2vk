@@ -13,6 +13,7 @@ import dev.vibris.protocol.v2.CompileValidationCase;
 import dev.vibris.protocol.v2.CompileValidationRequest;
 import dev.vibris.protocol.v2.JobSpec;
 import dev.vibris.protocol.v2.InspectShader;
+import dev.vibris.protocol.v2.GetGpuMetrics;
 import dev.vibris.protocol.v2.LoadShader;
 import dev.vibris.protocol.v2.PreparedSourceRef;
 import dev.vibris.protocol.v2.ReceiptStatus;
@@ -229,6 +230,43 @@ class RuntimeJobExecutorTest {
     }
 
     @Test
+    void gpuMetricsReturnsTypedReceiptAndFailsMalformedOutput() throws Exception {
+        Fixture fixture = new Fixture();
+        Source source = fixture.source("A");
+        fixture.runtime.actionResponses.add(canonicalGpuMetrics());
+        CoreJob job = fixture.job(source, ActionSequence.newBuilder()
+            .addActions(Action.newBuilder().setGetGpuMetrics(
+                GetGpuMetrics.newBuilder().setFrames(3).addMetricIds("begin3_total")))
+            .build());
+
+        TerminalResult terminal = fixture.executor.execute(job, ignored -> {});
+        var receipt = terminal.completed().getResult().getActionReceipts(0);
+
+        assertTrue(receipt.hasGpuMetrics());
+        assertFalse(receipt.hasEmpty());
+        assertEquals(3, receipt.getGpuMetrics().getSampledFrames());
+        assertEquals(1, receipt.getGpuMetrics().getMetricsCount());
+        assertEquals("begin3_total", receipt.getGpuMetrics().getMetrics(0).getMetricId());
+        assertEquals(List.of(800L, 900L, 1000L),
+            receipt.getGpuMetrics().getMetrics(0).getSamplesNsList());
+
+        Fixture malformed = new Fixture();
+        Source malformedSource = malformed.source("B");
+        malformed.runtime.actionResponses.add("{}");
+        CoreJob malformedJob = malformed.job(malformedSource, ActionSequence.newBuilder()
+            .addActions(Action.newBuilder().setGetGpuMetrics(GetGpuMetrics.newBuilder().setFrames(3)))
+            .build());
+
+        RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
+            () -> malformed.executor.execute(malformedJob, ignored -> {}));
+
+        assertEquals(ErrorCode.ERROR_CODE_NO_GPU_SAMPLES, failure.code);
+        assertEquals(ReceiptStatus.RECEIPT_STATUS_FAILED, failure.actionReceipts.getFirst().getStatus());
+        assertEquals(ErrorCode.ERROR_CODE_NO_GPU_SAMPLES,
+            failure.actionReceipts.getFirst().getError().getCode());
+    }
+
+    @Test
     void compileValidationReturnsCompleteCatalogDiffAndRestoresWithoutRendering() throws Exception {
         Fixture fixture = new Fixture();
         Source baseline = fixture.source("baseline");
@@ -369,6 +407,35 @@ class RuntimeJobExecutorTest {
             failed ? CompileCatalog.CompileState.FAILED : CompileCatalog.CompileState.SUCCEEDED,
             failed ? CompileCatalog.CompileState.NOT_APPLICABLE : CompileCatalog.CompileState.SUCCEEDED,
             "a".repeat(64), diagnostics)), 8);
+    }
+
+    private static String canonicalGpuMetrics() {
+        return """
+            {
+              "timingUnit":"ns",
+              "sampledFrames":3,
+              "gpuTimings":{
+                "begin3_total":{"avg":900,"p5":810,"p95":990,"p50":900,"samples":[800,900,1000]},
+                "begin3_compute":{"avg":300,"p5":250,"p95":350,"p50":300,"samples":[250,300,350]}
+              },
+              "gpuTimingScopes":[
+                {"metric":"begin3_total","kind":"framework_total","framework_pass":"begin3","stage":null},
+                {"metric":"begin3_compute","kind":"compatibility_aggregate","framework_pass":"begin3","stage":"compute"}
+              ],
+              "gpuProgramTimings":[{
+                "metric":"begin3_a_compute",
+                "kind":"program",
+                "program":"begin3_a",
+                "stage":"compute",
+                "source":"GenerateSkyViewLUT.comp.glsl",
+                "defines":{"SKY_VIEW_SAMPLES":"32"},
+                "dispatch":"direct:120x68x1",
+                "framework_pass":"begin3",
+                "compatibility_metric":"begin3_compute",
+                "statistics":{"avg":300,"p5":250,"p95":350,"p50":300,"samples":[250,300,350]}
+              }]
+            }
+            """;
     }
 
     private final class Fixture {
