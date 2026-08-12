@@ -4,10 +4,15 @@
 
 #include <nlohmann/json_fwd.hpp>
 
+namespace google::protobuf {
+class Message;
+}
+
 namespace vibris::mcp {
 
 class ResultMapper final {
 public:
+    [[nodiscard]] static nlohmann::json message(const google::protobuf::Message& value);
     [[nodiscard]] static nlohmann::json list_presets(
         const ::vibris::control::v2::ListPresetsResponse& response);
     [[nodiscard]] static nlohmann::json list_resources(

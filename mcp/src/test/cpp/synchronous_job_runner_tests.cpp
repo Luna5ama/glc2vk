@@ -106,6 +106,40 @@ void provenance_checkout_state_is_strict() {
 		"detached provenance with a synthetic branch was accepted");
 }
 
+void profile_retry_preserves_exact_preset_id() {
+	auto arguments = profile_arguments();
+	arguments["preset_id"] = "night-gi-1-720p";
+	arguments["source"] = {{"kind", "workspace"}};
+	arguments["config"] = {{"QUALITY", 2}};
+	arguments["max_retries"] = 1;
+	arguments["__vibris_workflow_id"] = "workflow-id";
+	arguments["__vibris_preset"] = {{"preset_id", "night-gi-1-720p"},
+		{"preset_sha256", "preset-sha"}};
+	std::size_t calls = 0;
+	Json retry = nullptr;
+	const auto result = vibris::mcp::detail::retry_profile(arguments, false, 8,
+		[&](const Json& attempt, const bool matrix) -> vibris::mcp::ToolOutcome {
+			++calls;
+			require(!matrix, "single profile retry was changed into a matrix request");
+			if (calls == 1) {
+				return vibris::mcp::ToolFailure{"NO_GPU_SAMPLES", "fixture retry", true};
+			}
+			retry = attempt;
+			return Json{{"success", true}, {"status", "completed"},
+				{"cases", Json::array({{{"case_id", "candidate--default"},
+					{"source_id", "candidate"}, {"config_id", "default"},
+					{"status", "passed"}, {"error", nullptr}, {"metrics", Json::object()}}})},
+				{"artifacts", Json::array()}};
+		});
+	require(calls == 2 && result.at("success") == true && result.at("retried_cases") == 1 &&
+		retry.at("preset_id") == "night-gi-1-720p" &&
+		retry.at("__vibris_preset") == arguments.at("__vibris_preset") &&
+		retry.at("__vibris_workflow_id") == "workflow-id" &&
+		retry.at("source") == arguments.at("source") && retry.at("config") == arguments.at("config") &&
+		retry.at("__vibris_attempt") == 2 && retry.at("__vibris_previous_attempts").size() == 1,
+		"automatic profile retry changed preset identity or lost immutable retry context");
+}
+
 void matrix_normalization_strict_v2() {
 	const Json arguments{{"frames", 32}, {"warmup_frames", 4}, {"result_detail", "full"},
 		{"matrix", {{"sources", Json::array({"baseline", "candidate"})},
@@ -189,7 +223,7 @@ void screenshot_result_compact_strict_v2() {
 		"compact screenshot result lost source, config, or preset identity");
 	require(result.at("screenshot").at("artifact_id") == "screenshot-artifact" &&
 		result.at("screenshot").at("sha256") == "screenshot-sha256" &&
-		result.at("screenshot").at("byte_size") == "1888374" &&
+		result.at("screenshot").at("byte_size") == 1888374 &&
 		result.at("screenshot").at("resource").at("width") == 1280 &&
 		result.at("screenshot").at("resource").at("height") == 720 &&
 		result.at("manifest").at("manifest_id") == "manifest-artifact" &&
@@ -200,7 +234,7 @@ void screenshot_result_compact_strict_v2() {
 		result.at("restoration").at("settings_match") == true &&
 		result.at("restoration").at("scene_matches") == true &&
 		result.at("restoration").at("temporal_state_reset") == true &&
-		result.at("timings").at("total_ms") == "200",
+		result.at("timings").at("total_ms") == 200,
 		"compact screenshot result lost restoration or timing evidence");
 }
 
@@ -208,6 +242,7 @@ void run(const std::string_view scenario) {
 	if (scenario == "StrictV2ResultShape") return strict_v2_result_rejects_removed_shape();
 	if (scenario == "ProfileNormalizationStrictV2") return profile_normalization_strict_v2();
 	if (scenario == "ProvenanceCheckoutStateStrict") return provenance_checkout_state_is_strict();
+	if (scenario == "ProfileRetryPresetIdentity") return profile_retry_preserves_exact_preset_id();
 	if (scenario == "MatrixNormalizationStrictV2") return matrix_normalization_strict_v2();
 	if (scenario == "VisualNormalizationStrictV2") return visual_normalization_strict_v2();
 	if (scenario == "ScreenshotResultCompactStrictV2") return screenshot_result_compact_strict_v2();
@@ -215,6 +250,7 @@ void run(const std::string_view scenario) {
 		strict_v2_result_rejects_removed_shape();
 		profile_normalization_strict_v2();
 		provenance_checkout_state_is_strict();
+		profile_retry_preserves_exact_preset_id();
 		matrix_normalization_strict_v2();
 		visual_normalization_strict_v2();
 		screenshot_result_compact_strict_v2();

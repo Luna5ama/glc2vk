@@ -1,6 +1,8 @@
 #include "job_protocol.hpp"
 #include "pending_request_registry.hpp"
 
+#include <google/protobuf/util/json_util.h>
+
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -191,7 +193,7 @@ void after_pass_terminal_mapping_preserves_complete_artifact_receipt() {
 	const auto& mapped_result = mapped->at("result");
 	const auto& mapped_capture = mapped_result.at("action_receipts").at(0).at("capture");
 	require(mapped_result.at("result_manifest_id") == "manifest-after-pass" &&
-		mapped_capture.at("frame_id") == "91" &&
+		mapped_capture.at("frame_id") == 91 && mapped_capture.at("frame_id").is_number_unsigned() &&
 		mapped_capture.at("pass_id") == "composite/composite21" &&
 		mapped_capture.at("pass_occurrence") == 2 &&
 		mapped_capture.at("resource").at("logical_name") == "colortex0" &&
@@ -202,6 +204,55 @@ void after_pass_terminal_mapping_preserves_complete_artifact_receipt() {
 		mapped_capture.at("artifacts").at(0).at("sha256") == std::string(64, 'a') &&
 		mapped_result.at("artifacts").at(0).at("sha256") == std::string(64, 'b'),
 		"after-pass terminal mapping dropped pass, view, GL metadata, artifact path, manifest, or hashes");
+}
+
+void terminal_integer_scalars_are_canonical_native_numbers() {
+	proto::ServerMessage completed;
+	auto* terminal = completed.mutable_job_completed();
+	terminal->set_job_id(std::string(request_id));
+	terminal->set_request_id(std::string(request_id));
+	auto* result = terminal->mutable_result();
+	auto* inspection = result->add_action_receipts();
+	inspection->set_action_index(0);
+	inspection->set_kind(proto::ACTION_KIND_INSPECT_SHADER);
+	inspection->set_status(proto::RECEIPT_STATUS_OK);
+	inspection->mutable_shader_inspection()->mutable_catalog()->set_mapping_sha256("mapping-sha");
+	inspection->mutable_shader_inspection()->mutable_catalog()->set_shader_generation(35);
+	auto* metrics = result->add_action_receipts();
+	metrics->set_action_index(1);
+	metrics->set_kind(proto::ACTION_KIND_GET_GPU_METRICS);
+	metrics->set_status(proto::RECEIPT_STATUS_OK);
+	auto* timing = metrics->mutable_gpu_metrics()->add_metrics();
+	timing->set_metric_id("composite_total");
+	timing->set_average_ns(1200);
+	timing->set_p50_ns(1100);
+	timing->set_p95_ns(1300);
+	timing->add_samples_ns(1100);
+	timing->add_samples_ns(1300);
+
+	std::string raw_encoded;
+	google::protobuf::util::JsonPrintOptions options;
+	options.preserve_proto_field_names = true;
+	options.always_print_fields_with_no_presence = true;
+	const auto raw_status = google::protobuf::util::MessageToJsonString(*result, &raw_encoded, options);
+	require(raw_status.ok(), "protobuf fixture could not produce its live wire JSON shape");
+	const auto raw = Json::parse(raw_encoded);
+	require(raw.at("action_receipts").at(0).at("shader_inspection").at("catalog")
+		.at("shader_generation") == "35",
+		"fixture did not reproduce protobuf JSON's quoted uint64 wire scalar");
+
+	const auto outcome = JobProtocol::terminal(completed);
+	const auto* mapped = std::get_if<Json>(&outcome);
+	require(mapped != nullptr, "integer-bearing completion did not map to native JSON");
+	const auto& receipts = mapped->at("result").at("action_receipts");
+	const auto& generation = receipts.at(0).at("shader_inspection").at("catalog")
+		.at("shader_generation");
+	const auto& mapped_timing = receipts.at(1).at("gpu_metrics").at("metrics").at(0);
+	require(generation.is_number_unsigned() && generation == 35 &&
+		mapped_timing.at("average_ns").is_number_unsigned() && mapped_timing.at("average_ns") == 1200 &&
+		mapped_timing.at("p50_ns") == 1100 && mapped_timing.at("p95_ns") == 1300 &&
+		mapped_timing.at("samples_ns") == Json::array({1100, 1300}),
+		"strict-v2 terminal mapping retained quoted or inconsistent uint64 scalars");
 }
 
 void matrix_auto_load_is_a_prelude_receipt_action() {
@@ -378,6 +429,7 @@ int main() {
 		load_and_screenshot_emits_one_post_load_capture_sequence();
 		after_pass_actions_preserve_exact_pass_and_resource_selectors();
 		after_pass_terminal_mapping_preserves_complete_artifact_receipt();
+		terminal_integer_scalars_are_canonical_native_numbers();
 		matrix_auto_load_is_a_prelude_receipt_action();
 		compile_validation_uses_typed_uuid_cases_without_render_actions();
 		recovery_request_has_no_scene_or_source_dependency();

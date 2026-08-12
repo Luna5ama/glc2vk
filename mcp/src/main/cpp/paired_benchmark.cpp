@@ -105,6 +105,7 @@ std::vector<PlannedMeasurement> plan(const Json& arguments) {
 Json profile_arguments(const Json& arguments, const PlannedMeasurement& measurement,
     std::string_view workflow_id, std::size_t default_warmup_frames) {
     Json result{{"recipe", "profile"},
+                {"preset_id", arguments.at("preset_id")},
                 {"source", arguments.at(measurement.physical_source)},
                 {"frames", arguments.at("frames")},
                 {"warmup_frames", arguments.value("warmup_frames", default_warmup_frames)},
@@ -142,6 +143,7 @@ Json visual_arguments(const Json& arguments, std::size_t default_warmup_frames) 
         "warmup_frames", arguments.value("warmup_frames", default_warmup_frames));
     thresholds.erase("warmup_frames");
     Json result{{"recipe", "ab_compare"},
+                {"preset_id", arguments.at("preset_id")},
                 {"a", {{"label", "baseline"}, {"source", arguments.at("baseline")}}},
                 {"b", {{"label", "candidate"}, {"source", arguments.at("candidate")}}},
                 {"warmup_frames", warmup},

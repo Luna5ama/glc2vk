@@ -139,8 +139,7 @@ std::uint64_t wire_uint64(const Json& value) {
         if (signed_value < 0) throw std::invalid_argument("negative uint64 protobuf JSON value");
         return static_cast<std::uint64_t>(signed_value);
     }
-    if (value.is_string()) return std::stoull(value.get<std::string>());
-    throw std::invalid_argument("invalid uint64 protobuf JSON value");
+    throw std::invalid_argument("invalid native uint64 JSON value");
 }
 
 Json normalized_gpu_metrics(const Json& receipt) {
@@ -465,7 +464,8 @@ Json job_attempt_record(std::size_t attempt, const Json& case_ids, std::string s
 Json retry_arguments(const Json& arguments, const ProfileCaseState& state, std::size_t attempt) {
     Json result{{"recipe", "profile"}, {"frames", arguments.at("frames")}};
     constexpr std::array copied_fields{
-        "warmup_frames", "result_detail", "metric_filter", "statistics", "converted_units", "result_csv",
+        "preset_id", "warmup_frames", "result_detail", "metric_filter", "statistics", "converted_units",
+        "result_csv",
     };
     for (const auto* field : copied_fields) {
         if (arguments.contains(field)) result[field] = arguments.at(field);
@@ -491,10 +491,8 @@ bool case_has_metrics(const Json& profile_case) {
     return metrics != profile_case.end() && has_gpu_samples(*metrics);
 }
 
-using ProfileAttempt = std::function<ToolOutcome(const Json&, bool)>;
-
-Json retry_profile(
-    const Json& arguments, bool matrix, std::size_t default_warmup, const ProfileAttempt& submit) {
+Json retry_profile_impl(
+    const Json& arguments, bool matrix, std::size_t default_warmup, const detail::ProfileAttempt& submit) {
     auto states = profile_cases(arguments, matrix);
     if (!matrix && arguments.contains("__vibris_previous_attempts")) {
         states.front().attempts = arguments.at("__vibris_previous_attempts");
@@ -628,6 +626,11 @@ Json retry_profile(
 }
 
 namespace detail {
+
+Json retry_profile(const Json& arguments, const bool matrix, const std::size_t default_warmup_frames,
+    const ProfileAttempt& submit) {
+    return retry_profile_impl(arguments, matrix, default_warmup_frames, submit);
+}
 
 bool complete_result_provenance(const Json& provenance) {
     if (!provenance.is_object() || provenance.value("stale", true)) return false;
@@ -1123,7 +1126,7 @@ ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& ar
         const auto recipe = arguments.at("recipe").get<std::string>();
         if (recipe == "profile" || recipe == "profile_matrix") {
             bool first_attempt = true;
-            return retry_profile(arguments, recipe == "profile_matrix", config_.default_warmup_frames,
+            return retry_profile_impl(arguments, recipe == "profile_matrix", config_.default_warmup_frames,
                 [this, &server, &context, &control, &first_attempt](const Json& attempt, bool matrix) -> ToolOutcome {
                     ToolOutcome outcome;
                     if (first_attempt && control.resume_request_id) {
@@ -1148,7 +1151,7 @@ ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& ar
             const auto workflow_id = detail::generate_uuid();
             return run_paired_benchmark(arguments, workflow_id, config_.default_warmup_frames,
                 [this, &server, &context, &control](const Json& profile_arguments) -> ToolOutcome {
-                    return retry_profile(profile_arguments, false, config_.default_warmup_frames,
+                    return retry_profile_impl(profile_arguments, false, config_.default_warmup_frames,
                         [this, &server, &context, &control](const Json& attempt, bool) -> ToolOutcome {
                             auto outcome = submit_once("vibris_run_recipe", attempt, server, context, control);
                             if (!std::holds_alternative<Json>(outcome)) return outcome;

@@ -65,6 +65,7 @@ private:
     [[nodiscard]] std::optional<Json> load_receipt(std::string_view job_id, std::size_t index) const;
     void publish_receipt(std::string_view job_id, std::size_t index, const Json& receipt) const;
     void publish_result(std::string_view job_id, const Json& result) const;
+    [[nodiscard]] bool finalization_resume_safe(const Record& record) const;
     [[nodiscard]] Json snapshot(const Record& record, std::uint64_t event_cursor, bool include_result) const;
     [[nodiscard]] Json final_result(const Record& record) const;
     [[nodiscard]] ToolOutcome begin(std::string job_id, bool asynchronous);

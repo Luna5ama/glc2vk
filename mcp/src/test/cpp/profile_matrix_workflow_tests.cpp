@@ -199,6 +199,73 @@ void cancellation_is_truthful_and_resumable() {
 		"resume blindly resubmitted instead of resuming the accepted request");
 }
 
+void finalization_only_resume_reuses_immutable_receipts() {
+	WorkspaceFixture workspace;
+	std::string job_id;
+	std::filesystem::path root;
+	{
+		std::size_t first_executor_calls = 0;
+		DurableJobWorkflow first(workspace.worktree(), std::string(workspace_id),
+			[&](DurableJobStepExecution execution) -> ToolOutcome {
+				++first_executor_calls;
+				const auto id = execution.arguments.at("__vibris_workflow_id").get<std::string>();
+				vibris::mcp::test::write_file(
+					workspace.worktree() / ".vibris" / "jobs" / id / "result.json", "{}");
+				return profile_success(execution);
+			});
+		const auto paused = std::get<Json>(first.start("vibris_run_recipe", matrix(1), config()));
+		job_id = paused.at("job_id").get<std::string>();
+		root = workspace.worktree() / ".vibris" / "jobs" / job_id;
+		bool completed_before_failure = false;
+		for (const auto& event : paused.at("events")) {
+			completed_before_failure = completed_before_failure || event.at("type") == "completed";
+		}
+		require(paused.at("workflow_state") == "paused" && paused.at("resumable") == false &&
+			paused.at("progress").at("completed_steps") == 1 && paused.at("progress").at("total_steps") == 1 &&
+			paused.at("progress").at("current_step").is_null() &&
+			paused.at("last_error").at("retryable") == false && first_executor_calls == 1 &&
+			std::filesystem::is_regular_file(root / "receipts" / "00000000.json") &&
+			!completed_before_failure,
+			"finalization failure did not leave one immutable receipt without a false completion event");
+	}
+	require(std::filesystem::remove(root / "result.json"),
+		"fixture could not remove the mismatched publication obstacle");
+	std::size_t replay_executor_calls = 0;
+	DurableJobWorkflow restarted(workspace.worktree(), std::string(workspace_id),
+		[&](DurableJobStepExecution) -> ToolOutcome {
+			++replay_executor_calls;
+			return ToolFailure{"UNEXPECTED_REPLAY", "finalization resume replayed a child step", false};
+		});
+	const auto resumable = std::get<Json>(restarted.control(
+		{{"operation", "query"}, {"job_id", job_id}, {"event_cursor", 0}}));
+	require(resumable.at("resumable") == true,
+		"fully checkpointed finalization failure was not advertised as safely resumable");
+	static_cast<void>(restarted.control({{"operation", "resume"}, {"job_id", job_id}}));
+	const auto completed = wait_terminal(restarted, job_id);
+	require(completed.at("workflow_state") == "completed" && replay_executor_calls == 0 &&
+		std::filesystem::is_regular_file(root / "result.json"),
+		"finalization-only resume reran an executor step or failed to publish the result");
+}
+
+void nonretryable_step_failure_remains_nonresumable() {
+	WorkspaceFixture workspace;
+	std::size_t executor_calls = 0;
+	DurableJobWorkflow workflow(workspace.worktree(), std::string(workspace_id),
+		[&](DurableJobStepExecution) -> ToolOutcome {
+			++executor_calls;
+			return ToolFailure{"INVALID_TEST_STEP", "fixture nonretryable step failure", false};
+		});
+	const auto paused = std::get<Json>(workflow.start("vibris_run_recipe", matrix(1), config()));
+	require(paused.at("workflow_state") == "paused" && paused.at("resumable") == false &&
+		paused.at("progress").at("completed_steps") == 0 && executor_calls == 1,
+		"nonretryable step failure was advertised as resumable");
+	const auto resumed = workflow.control(
+		{{"operation", "resume"}, {"job_id", paused.at("job_id")}});
+	const auto* failure = std::get_if<ToolFailure>(&resumed);
+	require(failure != nullptr && failure->code == "JOB_NOT_RESUMABLE" && executor_calls == 1,
+		"unsafe nonretryable step failure resumed or re-executed the step");
+}
+
 void generic_plans_checkpoint_each_case() {
 	WorkspaceFixture workspace;
 	std::size_t calls = 0;
@@ -294,12 +361,15 @@ void matrix_and_benchmark_use_step_plans() {
 	std::mutex mutex;
 	bool entered = false;
 	bool carried_scene = false;
+	bool carried_preset = false;
 	DurableJobWorkflow benchmark_workflow(workspace.worktree(), std::string(workspace_id),
 		[&](DurableJobStepExecution execution) -> ToolOutcome {
 			{
 				std::scoped_lock lock(mutex);
 				entered = true;
 				carried_scene = execution.arguments.contains("__vibris_scene_context");
+				carried_preset = execution.arguments.value("preset_id", std::string{}) ==
+					"night-gi-1-720p";
 			}
 			while (!execution.stop.stop_requested()) std::this_thread::sleep_for(1ms);
 			return ToolFailure{"CANCELLED", "fixture cancellation", false};
@@ -308,6 +378,8 @@ void matrix_and_benchmark_use_step_plans() {
 		{"candidate", {{"kind", "workspace"}}}, {"frames", 4}, {"rounds", 2},
 		{"control_rounds", 2}, {"visual", {{"pixel_error_threshold", 0.0}}},
 		{"metrics", Json::array({{{"metric_id", "composite_total"}, {"role", "target"}}})},
+		{"preset_id", "night-gi-1-720p"},
+		{"__vibris_preset", {{"preset_id", "night-gi-1-720p"}, {"version", "2"}}},
 		{"__vibris_scene_context", scene()}, {"execution", "async"}};
 	const auto started = std::get<Json>(
 		benchmark_workflow.start("vibris_run_recipe", benchmark, config()));
@@ -320,9 +392,17 @@ void matrix_and_benchmark_use_step_plans() {
 	}
 	const auto query = std::get<Json>(benchmark_workflow.control(
 		{{"operation", "query"}, {"job_id", started.at("job_id")}}));
+	const auto request_root = workspace.worktree() / ".vibris" / "jobs" /
+		started.at("job_id").get<std::string>() / "request.json";
+	const auto durable_request = Json::parse(vibris::mcp::test::read_file(request_root));
+	bool all_steps_preserved_preset = true;
+	for (const auto& step : durable_request.at("steps")) {
+		all_steps_preserved_preset = all_steps_preserved_preset &&
+			step.at("arguments").at("preset_id") == "night-gi-1-720p";
+	}
 	require(query.at("progress").at("total_steps") == 17 &&
 		query.at("progress").at("completed_steps") == 0 && query.at("progress").at("eta_ms").is_null() &&
-		carried_scene,
+		carried_scene && carried_preset && all_steps_preserved_preset,
 		"paired benchmark did not expose 16 measurement/control plus one visual checkpoint");
 	static_cast<void>(benchmark_workflow.control(
 		{{"operation", "cancel"}, {"job_id", started.at("job_id")}}));
@@ -355,6 +435,8 @@ int main() {
 	try {
 		interruption_after_17_resumes_at_18();
 		cancellation_is_truthful_and_resumable();
+		finalization_only_resume_reuses_immutable_receipts();
+		nonretryable_step_failure_remains_nonresumable();
 		generic_plans_checkpoint_each_case();
 		compile_matrix_checkpoints_and_aggregates_every_case();
 		matrix_and_benchmark_use_step_plans();

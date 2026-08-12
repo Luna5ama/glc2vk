@@ -109,8 +109,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T19D | P0 | Vibris | Return typed live GPU metric receipts | DONE | `T19D return typed GPU metric receipts` |
 | T19E | P0 | Vibris | Define strict detached-worktree provenance contract | DONE | `T19E define strict detached provenance contract` |
 | T19F | P0 | Iris | Implement and prove live detached-worktree provenance | DONE | `T19F complete live detached provenance` |
-| T19G | P0 | Vibris | Repair live paired-benchmark finalization | READY | `T19G repair live paired benchmark finalization` |
-| T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | PENDING | `T20 record live v2 acceptance` |
+| T19G | P0 | Vibris | Repair live paired-benchmark finalization | DONE | `T19G repair live paired benchmark finalization` |
+| T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | READY | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
 
 ## Task details
@@ -2177,7 +2177,7 @@ Evidence:
 
 ### T19G — Repair live paired-benchmark finalization
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T19F
 
@@ -2268,10 +2268,37 @@ Evidence:
 - Final live status is `SERVER_STATE_AVAILABLE` with empty queue, both accept/start true, and AP4 source UUID
   `59b584ca-1698-45a1-9861-c67e3821c19a`, proving the finalization defect did not strand runtime ownership or prevent
   restoration. No shader source was modified or staged.
+- Paired profile, visual, matrix, and retry plans now copy the required outer `preset_id` exactly. JobProtocol and all
+  result mappers share one reflection-based strict-v2 protobuf boundary that converts every signed/unsigned 64-bit JSON
+  scalar to the canonical native number shape; downstream benchmark readers no longer accept the string form.
+- Durable workflow tests prove a fully checkpointed finalization-only state publishes from its 17 immutable receipts
+  after restart with zero executor calls, while an unsafe non-retryable step failure remains non-resumable. The recorded
+  SSIM `0.8143305138814317` and threshold-pixel ratio `0.9270258246527778` fixture still returns `GATE_FAILED`.
+- Release builds passed for the paired-benchmark, durable-workflow, synchronous-runner, JobProtocol, and production MCP
+  targets. Focused CTest passed 20/20 scenarios, covering nested preset identity, retry preservation, native integer
+  normalization, finalization-only resume, unsafe failure rejection, and fail-closed visual thresholds.
+- Deployed MCP `I:\code\vibris\build\delivery-t19g-51748267-68027918\vibris-mcp.exe` is 15,376,896 bytes with
+  SHA-256 `5174826772A93B6169E81BDFDC2F85AD30235B14DA48A2EB224969BDA060FCEE`; the installed Iris Mod remained the
+  already-current 28,166,451-byte artifact with SHA-256
+  `68027918BD4F9A04D56937C765A111CA541BB5577AB8E074F247ADF033A93858`.
+- Live durable job `52d66814-4469-4090-ac5f-5482c370fc94` published `result.json` after 17/17 immutable successful
+  receipts. All request steps and returned provenance use `night-gi-1-720p` with preset SHA-256
+  `d3d37c2f3d751464214223d06ddd8b8924a54ac28be978608fd7eff5ea16dece`; all 16 profile cases passed, every
+  restoration receipt is `RECEIPT_STATUS_OK`, and no `INCOMPLETE_PROVENANCE` or quoted `shader_generation` remains.
+  The receipt-set SHA-256 is `C4C93E203701E1E958CA4E095F96C4C107D4F316483061E52AB055A1E7FD5445`.
+- The live visual comparison remained fail-closed at SSIM `0.868573744827144` and threshold-pixel ratio
+  `0.9129741753472222`, producing `VISUAL_GATE_FAILED` and terminal `GATE_FAILED`; configuration/provenance guards also
+  truthfully rejected the different AP3/AP4 effective settings. The workflow emitted `finalizing` before `completed`,
+  then live status proved `SERVER_STATE_AVAILABLE`, an empty queue, both accept/start true, and exact AP4 source UUID
+  `59b584ca-1698-45a1-9861-c67e3821c19a` restored. Request/state/result/events SHA-256 values are
+  `E097B083D05CABBF2A35DDD46F686671D6561535750B73EA4D6A629989F21084`,
+  `0EC71E09DAF4D655BA1D36D8DB496DE92D4DA0F899BF218C962052698A1B3AB6`,
+  `C8194FD63B7DEAEB1CF871C9534EB39002EE41B2606AE585E82DA24492DBCF00`, and
+  `7BB9DF9CB9304E2BE4A94733529345CF0FADEDEE949A1D146838FE9563C67126`.
 
 ### T20 — Run live two-worktree 720p acceptance
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T19G
 
@@ -2726,3 +2753,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T19E - required exact host-supplied runtime environment identity, added canonical attached/detached checkout provenance through source checkpoints and results, rejected branch-only and malformed detached shapes, and passed API 9/9, Core 108/108, test-runtime compilation, native 30/30, and zero-match no-fallback scans - Commit title: T19E define strict detached provenance contract`
 - `2026-08-12 - T19F - Iris external commit 5c5909726df7e39dcf35e1199d27aacd6ab64cf2 supplied exact client-thread runtime identity; bridge tests passed 17/17, deployed MCP/Mod hashes matched, AP3/AP4 retained exact detached HEADs, and AP4 night-gi-1-720p profile 0f8d20d6-4a98-4472-8b91-9006aecff159 passed one attempt with typed samples and restoration - Owner receipt commit title: T19F record live detached provenance receipt`
 - `2026-08-12 - T19G inserted - T20 checkpointed all 17 paired-benchmark steps but final publication hit a protobuf-JSON integer type exception; nested requests omitted preset_id and made every profile provenance-incomplete, while the fully checkpointed non-retryable state could not resume finalization without replay - Control-plane commit title: roadmap insert T19G live benchmark remediation`
+- `2026-08-12 - T19G - preserved exact nested preset identity, normalized strict-v2 protobuf integers at one native boundary, added safe receipt-only finalization resume, passed focused CTest 20/20, and published a fail-closed 17-receipt live AP3/AP4 benchmark with full restoration - Commit title: T19G repair live paired benchmark finalization`

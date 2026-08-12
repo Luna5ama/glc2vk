@@ -256,7 +256,8 @@ Json profile_matrix_steps(const Json& arguments, std::string_view job_id) {
 				{"__vibris_config_id", config_id}, {"__vibris_workflow_id", job_id},
 				{"__vibris_result_kind", "profile_matrix"}};
 			for (const auto* field : {"warmup_frames", "result_detail", "metric_filter", "statistics",
-				"converted_units", "max_retries", "result_csv", "__vibris_scene_context", "__vibris_preset"}) {
+				"converted_units", "max_retries", "result_csv", "preset_id", "__vibris_scene_context",
+				"__vibris_preset"}) {
 				if (arguments.contains(field)) nested[field] = arguments.at(field);
 			}
 			if (config.contains("values")) nested["config"] = config.at("values");
@@ -283,7 +284,7 @@ Json compile_validation_steps(const Json& arguments, std::string_view job_id) {
 				{"__vibris_config_id", config_id}, {"__vibris_workflow_id", job_id},
 				{"__vibris_result_kind", "compile_validate"}};
 			for (const auto* field : {"baseline", "baseline_config", "result_csv", "converted_units",
-				"__vibris_scene_context", "__vibris_preset"}) {
+				"preset_id", "__vibris_scene_context", "__vibris_preset"}) {
 				if (arguments.contains(field)) nested[field] = arguments.at(field);
 			}
 			if (config.contains("values")) nested["config"] = config.at("values");
@@ -547,6 +548,36 @@ void DurableJobWorkflow::publish_result(std::string_view job_id, const Json& res
 	atomic_write(path, std::move(text), false);
 }
 
+bool DurableJobWorkflow::finalization_resume_safe(const Record& record) const {
+	try {
+		const auto& state = record.state;
+		const auto& steps = record.request.at("steps");
+		const auto total = steps.size();
+		if (state.at("workflow_state") != "paused" ||
+			state.at("next_step").get<std::size_t>() != total ||
+			state.at("completed_steps").get<std::size_t>() != total ||
+			state.at("total_steps").get<std::size_t>() != total ||
+			!state.at("current_step").is_null() || !state.at("current_request_id").is_null() ||
+			state.at("current_request_accepted").get<bool>()) return false;
+
+		const auto job_id = record.request.at("job_id").get<std::string>();
+		std::error_code result_error;
+		if (fs::exists(state_directory_ / job_id / "result.json", result_error) || result_error) return false;
+		for (std::size_t index = 0; index < total; ++index) {
+			const auto receipt = load_receipt(job_id, index);
+			if (!receipt || !receipt->is_object() || receipt->value("schema_version", 0) != 2 ||
+				receipt->value("job_id", std::string{}) != job_id ||
+				receipt->value("step_index", total) != index ||
+				receipt->value("step_id", std::string{}) != steps.at(index).at("id").get<std::string>() ||
+				!receipt->contains("success") || !receipt->at("success").is_boolean() ||
+				!receipt->at("success").get<bool>() || !receipt->contains("result")) return false;
+		}
+		return true;
+	} catch (...) {
+		return false;
+	}
+}
+
 Json DurableJobWorkflow::final_result(const Record& record) const {
 	const auto& request = record.request;
 	const auto& state = record.state;
@@ -649,9 +680,10 @@ Json DurableJobWorkflow::snapshot(
 	const bool retryable_pause = workflow_state == "paused" &&
 		(state.at("current_request_accepted").get<bool>() ||
 			(state.at("last_error").is_object() && state.at("last_error").value("retryable", false)));
+	const bool finalization_resume = workflow_state == "paused" && finalization_resume_safe(record);
 	Json result{{"schema_version", 2}, {"job_id", state.at("job_id")}, {"kind", state.at("kind")},
 		{"workflow_state", workflow_state}, {"stage", state.at("stage")},
-		{"resumable", retryable_pause || workflow_state == "cancelled"},
+		{"resumable", retryable_pause || finalization_resume || workflow_state == "cancelled"},
 		{"cancelable", (workflow_state == "queued" || workflow_state == "running") &&
 			state.value("execution_mode", std::string("sync")) == "async"},
 		{"progress", {{"completed_steps", state.at("completed_steps")}, {"total_steps", state.at("total_steps")},
@@ -749,6 +781,7 @@ ToolOutcome DurableJobWorkflow::control(const Json& arguments) {
 			{{"job_id", job_id}, {"workflow_state", state}}};
 	}
 	const bool retryable = state == "cancelled" || record.state.at("current_request_accepted").get<bool>() ||
+		finalization_resume_safe(record) ||
 		(record.state.at("last_error").is_object() && record.state.at("last_error").value("retryable", false));
 	if (!retryable) {
 		return ToolFailure{"JOB_NOT_RESUMABLE", "The durable job has no safe retry or accepted request to resume.",
@@ -903,12 +936,15 @@ void DurableJobWorkflow::execute(std::string job_id, const std::stop_token stop)
 			append_event(state, "step_checkpointed", "checkpointed", step);
 			save_state(state);
 		}
+		state["stage"] = "finalizing";
+		append_event(state, "finalizing", "finalizing");
+		save_state(state);
+		const auto result = final_result(record);
+		publish_result(job_id, result);
 		state["workflow_state"] = "completed";
 		state["stage"] = "completed";
 		state["eta_ms"] = 0;
 		append_event(state, "completed", "completed");
-		const auto result = final_result(record);
-		publish_result(job_id, result);
 		save_state(state);
 	} catch (const StateError& error) {
 		try {

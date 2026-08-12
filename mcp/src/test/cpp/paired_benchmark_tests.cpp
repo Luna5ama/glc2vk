@@ -25,6 +25,7 @@ void require(bool condition, std::string_view message) {
 
 Json arguments(std::string order = "abba", std::size_t rounds = 2) {
     return {{"recipe", "benchmark_ab"},
+            {"preset_id", "spawn"},
             {"baseline", {{"kind", "commit"}, {"revision", "HEAD"}}},
             {"candidate", {{"kind", "workspace"}}},
             {"config", {{"QUALITY", 2}}},
@@ -128,8 +129,10 @@ Json visual_result(bool passed, std::string candidate_config_hash = "visual-conf
                 {"comparison", {{"baseline_label", "baseline"},
                     {"candidate_label", "candidate"}, {"mean_absolute_error", 0.02},
                     {"root_mean_square_error", 0.03}, {"p95_absolute_error", 0.04},
-                    {"max_absolute_error", 0.2}, {"threshold_pixel_ratio", 0.01},
-                    {"ssim", 0.98}, {"sample_count", 300}, {"pixel_count", 100},
+                    {"max_absolute_error", 0.2},
+                    {"threshold_pixel_ratio", passed ? 0.01 : 0.9270258246527778},
+                    {"ssim", passed ? 0.98 : 0.8143305138814317},
+                    {"sample_count", 300}, {"pixel_count", 100},
                     {"pixel_error_threshold", 0.01}, {"passed", passed},
                     {"verdict", passed ? "passed" : "failed"},
                     {"violations", passed ? Json::array() :
@@ -206,6 +209,8 @@ void order_strategies_are_balanced_and_reproducible() {
     for (const auto& request : abba_requests) {
         require(request.at("__vibris_workflow_id") == std::string(workflow_id),
             "A nested profile omitted the isolation workflow identity.");
+        require(request.at("preset_id") == "spawn",
+            "A nested profile changed the explicit preset identity.");
         require(request.at("__vibris_preset") == arguments().at("__vibris_preset"),
             "A nested profile omitted the request-scoped scene-preset provenance.");
         require(request.at("__vibris_compile_gate") == true &&
@@ -355,6 +360,7 @@ void visual_gate_returns_combined_performance_and_visual_verdicts() {
     require(visual_request.at("recipe") == "ab_compare" &&
             visual_request.at("a").at("source") == request_arguments.at("baseline") &&
             visual_request.at("b").at("source") == request_arguments.at("candidate") &&
+            visual_request.at("preset_id") == request_arguments.at("preset_id") &&
             visual_request.at("__vibris_preset") == request_arguments.at("__vibris_preset") &&
             visual_request.at("warmup_frames") == 6 &&
             visual_request.at("captures").at(0).at("type") == "screenshot" &&
@@ -363,7 +369,8 @@ void visual_gate_returns_combined_performance_and_visual_verdicts() {
     require(result.at("success") == false && result.at("status") == "completed_with_failures" &&
             result.at("performance_verdict") == "ACCEPTED" && result.at("visual_verdict") == "failed" &&
             result.at("verdict") == "GATE_FAILED" && result.at("visual").at("status") == "failed" &&
-            result.at("visual").at("comparison").at("ssim") == 0.98 &&
+            result.at("visual").at("comparison").at("ssim") == 0.8143305138814317 &&
+            result.at("visual").at("comparison").at("threshold_pixel_ratio") == 0.9270258246527778 &&
             result.at("visual").at("guards").at("passed") == true &&
             result.at("artifacts").back().at("benchmark_phase") == "visual",
         "A failed visual gate did not fail the benchmark while preserving the performance verdict and diff artifact.");

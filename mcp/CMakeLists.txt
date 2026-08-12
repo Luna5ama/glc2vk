@@ -381,6 +381,7 @@ if(BUILD_TESTING)
             StrictV2ResultShape
             ProfileNormalizationStrictV2
             ProvenanceCheckoutStateStrict
+            ProfileRetryPresetIdentity
             MatrixNormalizationStrictV2
             VisualNormalizationStrictV2
             ScreenshotResultCompactStrictV2)

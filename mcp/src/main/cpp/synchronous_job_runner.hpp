@@ -32,6 +32,14 @@ namespace detail {
 
 [[nodiscard]] Json normalize_load_and_screenshot_result(const Json& terminal, const Json& arguments);
 
+using ProfileAttempt = std::function<ToolOutcome(const Json&, bool)>;
+
+[[nodiscard]] Json retry_profile(
+    const Json& arguments,
+    bool matrix,
+    std::size_t default_warmup_frames,
+    const ProfileAttempt& submit);
+
 }
 
 struct SynchronousJobProgress final {

@@ -1,6 +1,5 @@
 #include "job_protocol.hpp"
-
-#include <google/protobuf/util/json_util.h>
+#include "result_mapper.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -485,16 +484,6 @@ void scale_timeouts(proto::JobSpec& job) {
             : execution + queue_timeout_ms);
 }
 
-Json protobuf_json(const google::protobuf::Message& value) {
-    std::string encoded;
-    google::protobuf::util::JsonPrintOptions options;
-    options.preserve_proto_field_names = true;
-    options.always_print_fields_with_no_presence = true;
-    const auto status = google::protobuf::util::MessageToJsonString(value, &encoded, options);
-    if (!status.ok()) throw std::runtime_error("protobuf JSON mapping failed: " + status.ToString());
-    return Json::parse(encoded);
-}
-
 } // namespace
 
 proto::ClientMessage JobProtocol::request(const std::string_view tool_name, const Json& arguments,
@@ -547,11 +536,11 @@ ToolOutcome JobProtocol::terminal(const proto::ServerMessage& message) {
     if (message.has_job_completed()) {
         return Json{{"success", true}, {"job_id", message.job_completed().job_id()},
             {"request_id", message.job_completed().request_id()},
-            {"result", protobuf_json(message.job_completed().result())}};
+            {"result", ResultMapper::message(message.job_completed().result())}};
     }
     if (message.has_job_failed()) {
         const auto& failed = message.job_failed();
-        const auto mapped = protobuf_json(failed);
+        const auto mapped = ResultMapper::message(failed);
         Json details{{"job_id", failed.job_id()}, {"request_id", failed.request_id()},
             {"artifacts", mapped.value("artifacts", Json::array())},
             {"action_receipts", mapped.value("action_receipts", Json::array())},
