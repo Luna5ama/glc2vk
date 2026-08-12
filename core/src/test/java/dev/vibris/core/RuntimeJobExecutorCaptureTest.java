@@ -372,7 +372,7 @@ class RuntimeJobExecutorCaptureTest {
     }
 
     @Test
-    void unknownResourceFailsBeforeOpeningArtifactJob() throws Exception {
+    void unknownResourceAfterActivationAbortsArtifactJob() throws Exception {
         Fixture fixture = new Fixture();
         fixture.runtime.catalog = ResourceCatalog.of(List.of(
             resource("final", ResourceCatalog.ResourceKind.FINAL_FRAMEBUFFER, 1, 16)), List.of());
@@ -388,9 +388,7 @@ class RuntimeJobExecutorCaptureTest {
 
         assertEquals(ErrorCode.ERROR_CODE_RESOURCE_NOT_FOUND, failure.code);
         assertFalse(fixture.runtime.events.contains("capture"));
-        try (var files = Files.walk(fixture.artifactRoot)) {
-            assertEquals(1, files.count());
-        }
+        assertNoTemporaryOrManifest(fixture.artifactRoot);
     }
 
     @Test

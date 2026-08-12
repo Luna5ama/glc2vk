@@ -2,8 +2,12 @@ package dev.vibris.core
 
 import dev.vibris.api.CapturePlan
 import dev.vibris.api.CaptureResult
-import dev.vibris.api.EffectiveShaderSettings
+import dev.vibris.api.DeterministicTemporalCaptureOutcome
+import dev.vibris.api.DeterministicTemporalCapturePlanner
+import dev.vibris.api.DeterministicTemporalCapturePlanning
+import dev.vibris.api.DeterministicTemporalCaptureReloaded
 import dev.vibris.api.ReloadResult
+import dev.vibris.api.ResourceCatalog
 import dev.vibris.api.RuntimeAction
 import dev.vibris.api.SceneContext
 import dev.vibris.api.VibrisRuntimeAdapter
@@ -33,24 +37,6 @@ internal class ActionJobExecutor(
         var activeIndices: List<Int> = emptyList()
         try {
             val diagnostics = ArrayList<ReloadResult.Diagnostic>()
-            var preloadedActionIndex: Int? = null
-            val wireActions = job.submission.actionSequence.actionsList
-            if (wireActions.size > 1 && wireActions.first().hasLoadShader()) {
-                activeIndices = listOf(0)
-                val execution = load(job, wireActions.first().loadShader, progress, deadline)
-                diagnostics.addAll(execution.reload.diagnostics)
-                owner.observeCatalog(
-                    owner.await(runtime.getCompileCatalog(job.cancellation.token()), job, deadline),
-                )
-                receiptBook.put(
-                    0,
-                    receiptBook.success(0)
-                        .setRuntimeMutation(mutation(execution))
-                        .build(),
-                )
-                activeIndices = emptyList()
-                preloadedActionIndex = 0
-            }
             val action = captures.prepareActions(job, runtime.getResourceCatalog(), diagnostics)
             val prepared = action.prepared
             val captured = ArrayList<CaptureResult>()
@@ -60,16 +46,270 @@ internal class ActionJobExecutor(
             val patchedExecutions = ArrayList<PatchedExecution>()
             var comparison: dev.vibris.protocol.v2.CompareReceipt? = null
 
-            fun executeSteps() {
-                for (step in action.program.steps) {
-                    if (step.actionIndex == preloadedActionIndex) {
-                        check(step.type == CaptureProgramBuilder.ActionType.LOAD) {
-                            "The post-load capture plan did not retain its load prelude."
-                        }
-                        continue
+            fun resolveDeferredCapture(
+                step: CaptureProgramBuilder.ActionStep,
+            ): CaptureProgramBuilder.ResolvedCaptureGroup {
+                if (prepared == null) throw captureUnavailable()
+                return try {
+                    action.program.planningSession.resolveDeferredCapture(
+                        step,
+                        runtime.getResourceCatalog(),
+                        prepared::addPlan,
+                    )
+                } catch (failure: RuntimeJobExecutor.Failure) {
+                    throw failure
+                } catch (failure: Exception) {
+                    throw CaptureJobExecutor.failure(failure)
+                }
+            }
+
+            fun resolveDeferredAfterPass(
+                step: CaptureProgramBuilder.ActionStep,
+            ): CaptureProgramBuilder.ResolvedAfterPassGroup {
+                if (prepared == null) throw captureUnavailable()
+                return try {
+                    action.program.planningSession.resolveDeferredAfterPass(
+                        step,
+                        runtime.getResourceCatalog(),
+                        prepared::addPlan,
+                    )
+                } catch (failure: RuntimeJobExecutor.Failure) {
+                    throw failure
+                } catch (failure: Exception) {
+                    throw CaptureJobExecutor.failure(failure)
+                }
+            }
+
+            fun executeCaptureGroup(
+                plan: CapturePlan,
+                actions: List<CaptureProgramBuilder.CaptureAction>,
+            ) {
+                if (prepared == null) throw captureUnavailable()
+                val waits = HashMap<Int, WaitFramesReceipt>()
+                actions.forEach { capture ->
+                    if (capture.beforeFrames > 0) {
+                        activeIndices = listOf(capture.actionIndex)
+                        val endFrame = owner.waitFrames(job, progress, deadline, capture.beforeFrames)
+                        waits[capture.actionIndex] = waitReceipt(capture.beforeFrames, endFrame)
                     }
+                    val placeholder = dev.vibris.protocol.v2.CaptureReceipt.newBuilder()
+                    waits[capture.actionIndex]?.let(placeholder::setInternalWait)
+                    receiptBook.put(
+                        capture.actionIndex,
+                        receiptBook.success(capture.actionIndex).setCapture(placeholder).build(),
+                    )
+                }
+                activeIndices = actions.map(CaptureProgramBuilder.CaptureAction::actionIndex)
+                val result = owner.capture(job, progress, deadline, prepared, plan)
+                captured.add(result)
+                completedCapturePlans.add(plan)
+                actions.forEach { capture ->
+                    receiptBook.replace(
+                        capture.actionIndex,
+                        receiptBook.success(capture.actionIndex)
+                            .setCapture(
+                                captures.captureReceipt(
+                                    plan,
+                                    result,
+                                    capture,
+                                    JobResult.getDefaultInstance(),
+                                    waits[capture.actionIndex],
+                                ),
+                            )
+                            .build(),
+                    )
+                    pendingCaptureIndices.add(capture.actionIndex)
+                }
+                captureExecutions.add(CaptureExecution(plan, result, actions, waits))
+            }
+
+            fun executeAfterPassGroup(actions: List<CaptureProgramBuilder.AfterPassAction>) {
+                if (prepared == null) throw captureUnavailable()
+                val receipts = owner.captureAfterPass(job, progress, deadline, prepared, actions)
+                check(receipts.size == actions.size) {
+                    "Runtime after-pass receipt count did not match its requests."
+                }
+                receipts.zip(actions).forEach { (receipt, capture) ->
+                    val plan = CapturePlan(listOf(capture.request.target))
+                    captured.add(receipt.capture)
+                    completedCapturePlans.add(plan)
+                    receiptBook.put(
+                        capture.actionIndex,
+                        receiptBook.success(capture.actionIndex)
+                            .setCapture(captures.afterPassReceipt(receipt, JobResult.getDefaultInstance()))
+                            .build(),
+                    )
+                    pendingCaptureIndices.add(capture.actionIndex)
+                    afterPassExecutions.add(AfterPassExecution(capture.actionIndex, receipt))
+                }
+            }
+
+            fun executeDeterministic(step: CaptureProgramBuilder.ActionStep) {
+                if (prepared == null) throw captureUnavailable()
+                val block = checkNotNull(step.deterministic) { "A deterministic action step must contain its block." }
+                activeIndices = listOf(block.loadActionIndex)
+                val source = source(
+                    job,
+                    block.loadShader.sourceUuid,
+                    "Load action references an unprepared source.",
+                )
+                var resolved: CaptureProgramBuilder.ResolvedCaptureGroup? = null
+                val planner = DeterministicTemporalCapturePlanner { resourceCatalog, _ ->
+                    try {
+                        captures.resolveDeferred(prepared, action.program, step, resourceCatalog).let { group ->
+                            resolved = group
+                            DeterministicTemporalCapturePlanning.Planned(group.capture)
+                        }
+                    } catch (failure: RuntimeJobExecutor.Failure) {
+                        DeterministicTemporalCapturePlanning.Rejected(owner.deterministicPlanningFailure(failure))
+                    }
+                }
+                val outcome = try {
+                    owner.captureDeterministicTemporalPhase(
+                        job,
+                        source,
+                        block.loadShader.config,
+                        planner,
+                        progress,
+                        deadline,
+                        prepared,
+                        block.warmupFrames,
+                    )
+                } catch (phaseFailure: RuntimeJobExecutor.DeterministicPhaseFailure) {
+                    activeIndices = when (phaseFailure.phase) {
+                        RuntimeJobExecutor.DeterministicFailurePhase.LOAD -> listOf(block.loadActionIndex)
+                        RuntimeJobExecutor.DeterministicFailurePhase.RESET -> listOf(block.resetActionIndex)
+                        RuntimeJobExecutor.DeterministicFailurePhase.WAIT ->
+                            listOf(checkNotNull(block.waitActionIndex))
+                        RuntimeJobExecutor.DeterministicFailurePhase.CAPTURE ->
+                            block.captures.map(CaptureProgramBuilder.DirectCapture::actionIndex)
+                    }
+                    throw phaseFailure.failure
+                }
+                when (outcome) {
+                    is DeterministicTemporalCaptureOutcome.ContextRejected -> {
+                        activeIndices = listOf(block.loadActionIndex)
+                        throw deterministicContextFailure(outcome)
+                    }
+                    is DeterministicTemporalCaptureOutcome.ReloadRejected -> {
+                        diagnostics.addAll(outcome.reload.diagnostics)
+                        prepared.addDiagnostics(outcome.reload.diagnostics)
+                        activeIndices = listOf(block.loadActionIndex)
+                        throw deterministicReloadFailure(job, outcome)
+                    }
+                    is DeterministicTemporalCaptureOutcome.PlanningRejected -> {
+                        activeIndices = listOf(block.captures.first().actionIndex)
+                        publishDeterministicDiagnostics(diagnostics, prepared, outcome.reloaded)
+                        publishDeterministicLoad(receiptBook, block, source, outcome.reloaded)
+                        throw owner.deterministicPhaseFailure(outcome.failure)
+                    }
+                    is DeterministicTemporalCaptureOutcome.ResetRejected -> {
+                        activeIndices = listOf(block.resetActionIndex)
+                        verifyDeterministicPlan(resolved, outcome.plan)
+                        publishDeterministicDiagnostics(diagnostics, prepared, outcome.reloaded)
+                        publishDeterministicLoad(receiptBook, block, source, outcome.reloaded)
+                        throw owner.deterministicPhaseFailure(outcome.failure)
+                    }
+                    is DeterministicTemporalCaptureOutcome.WarmupRejected -> {
+                        activeIndices = listOf(checkNotNull(block.waitActionIndex))
+                        verifyDeterministicPlan(resolved, outcome.plan)
+                        publishDeterministicDiagnostics(diagnostics, prepared, outcome.reloaded)
+                        publishDeterministicLoadAndReset(
+                            receiptBook,
+                            block,
+                            source,
+                            outcome.reloaded,
+                            outcome.resetCompletedAtUnixMs,
+                        )
+                        val waitActionIndex = checkNotNull(block.waitActionIndex)
+                        receiptBook.put(
+                            waitActionIndex,
+                            receiptBook.success(waitActionIndex)
+                                .setWaitFrames(
+                                    partialWaitReceipt(
+                                        block.warmupFrames,
+                                        outcome.anchorFrame,
+                                        outcome.currentFrame,
+                                        outcome.completedFrames,
+                                    ),
+                                )
+                                .build(),
+                        )
+                        activeIndices = listOf(waitActionIndex)
+                        throw owner.deterministicPhaseFailure(outcome.failure)
+                    }
+                    is DeterministicTemporalCaptureOutcome.CaptureRejected -> {
+                        activeIndices = block.captures.map(CaptureProgramBuilder.DirectCapture::actionIndex)
+                        val captureGroup = verifyDeterministicPlan(resolved, outcome.plan)
+                        publishDeterministicDiagnostics(diagnostics, prepared, outcome.reloaded)
+                        publishDeterministicLoadAndReset(
+                            receiptBook,
+                            block,
+                            source,
+                            outcome.reloaded,
+                            outcome.resetCompletedAtUnixMs,
+                        )
+                        publishDeterministicWait(
+                            receiptBook,
+                            block,
+                            outcome.anchorFrame,
+                            outcome.warmupEndFrame,
+                        )
+                        publishDeterministicCapturePlaceholders(
+                            receiptBook,
+                            captureGroup,
+                            outcome.terminalFrame,
+                            outcome.reloaded.resourceCatalog,
+                        )
+                        activeIndices = captureGroup.captureActions
+                            .map(CaptureProgramBuilder.CaptureAction::actionIndex)
+                        throw owner.deterministicPhaseFailure(outcome.failure)
+                    }
+                    is DeterministicTemporalCaptureOutcome.Captured -> {
+                        activeIndices = block.captures.map(CaptureProgramBuilder.DirectCapture::actionIndex)
+                        val captureGroup = verifyDeterministicPlan(resolved, outcome.plan)
+                        publishDeterministicDiagnostics(diagnostics, prepared, outcome.reloaded)
+                        publishDeterministicLoadAndReset(
+                            receiptBook,
+                            block,
+                            source,
+                            outcome.reloaded,
+                            outcome.resetCompletedAtUnixMs,
+                        )
+                        publishDeterministicWait(
+                            receiptBook,
+                            block,
+                            outcome.anchorFrame,
+                            outcome.warmupEndFrame,
+                        )
+                        publishDeterministicCapturedPlaceholders(
+                            receiptBook,
+                            captureGroup,
+                            outcome,
+                        )
+                        captureGroup.captureActions.forEach { capture ->
+                            pendingCaptureIndices.add(capture.actionIndex)
+                        }
+                        captured.add(outcome.capture)
+                        completedCapturePlans.add(outcome.plan)
+                        captureExecutions.add(
+                            CaptureExecution(
+                                outcome.plan,
+                                outcome.capture,
+                                captureGroup.captureActions,
+                                emptyMap(),
+                            ),
+                        )
+                        activeIndices = emptyList()
+                    }
+                }
+            }
+
+            fun executeSteps() {
+                action.program.steps.forEach { step ->
                     activeIndices = step.actionIndices()
                     when (step.type) {
+                        CaptureProgramBuilder.ActionType.DETERMINISTIC -> executeDeterministic(step)
                         CaptureProgramBuilder.ActionType.LOAD -> {
                             val load = step.loadShader!!
                             val execution = load(job, load, progress, deadline)
@@ -118,81 +358,17 @@ internal class ActionJobExecutor(
                             )
                         }
                         CaptureProgramBuilder.ActionType.CAPTURE -> {
-                            if (prepared == null) throw captureUnavailable()
-                            val waits = HashMap<Int, WaitFramesReceipt>()
-                            step.captureActions.forEach { capture ->
-                                if (capture.beforeFrames > 0) {
-                                    activeIndices = listOf(capture.actionIndex)
-                                    val endFrame = owner.waitFrames(
-                                        job,
-                                        progress,
-                                        deadline,
-                                        capture.beforeFrames,
-                                    )
-                                    waits[capture.actionIndex] = waitReceipt(capture.beforeFrames, endFrame)
-                                }
-                                val placeholder = dev.vibris.protocol.v2.CaptureReceipt.newBuilder()
-                                waits[capture.actionIndex]?.let(placeholder::setInternalWait)
-                                receiptBook.put(
-                                    capture.actionIndex,
-                                    receiptBook.success(capture.actionIndex).setCapture(placeholder).build(),
-                                )
-                            }
-                            activeIndices = step.captureActions.map(CaptureProgramBuilder.CaptureAction::actionIndex)
-                            val result = owner.capture(job, progress, deadline, prepared, step.capture!!)
-                            captured.add(result)
-                            completedCapturePlans.add(step.capture)
-                            step.captureActions.forEach { capture ->
-                                receiptBook.replace(
-                                    capture.actionIndex,
-                                    receiptBook.success(capture.actionIndex)
-                                        .setCapture(
-                                            captures.captureReceipt(
-                                                step.capture,
-                                                result,
-                                                capture,
-                                                JobResult.getDefaultInstance(),
-                                                waits[capture.actionIndex],
-                                            ),
-                                        )
-                                        .build(),
-                                )
-                                pendingCaptureIndices.add(capture.actionIndex)
-                            }
-                            captureExecutions.add(CaptureExecution(step.capture, result, step.captureActions, waits))
+                            executeCaptureGroup(step.capture!!, step.captureActions)
+                        }
+                        CaptureProgramBuilder.ActionType.DEFERRED_CAPTURE -> {
+                            val resolved = resolveDeferredCapture(step)
+                            executeCaptureGroup(resolved.capture, resolved.captureActions)
                         }
                         CaptureProgramBuilder.ActionType.AFTER_PASS -> {
-                            if (prepared == null) throw captureUnavailable()
-                            val receipts = owner.captureAfterPass(
-                                job,
-                                progress,
-                                deadline,
-                                prepared,
-                                step.afterPassActions,
-                            )
-                            check(receipts.size == step.afterPassActions.size) {
-                                "Runtime after-pass receipt count did not match its requests."
-                            }
-                            receipts.zip(step.afterPassActions).forEach { (receipt, capture) ->
-                                val plan = CapturePlan(listOf(capture.request.target))
-                                captured.add(receipt.capture)
-                                completedCapturePlans.add(plan)
-                                receiptBook.put(
-                                    capture.actionIndex,
-                                    receiptBook.success(capture.actionIndex)
-                                        .setCapture(
-                                            captures.afterPassReceipt(
-                                                receipt,
-                                                JobResult.getDefaultInstance(),
-                                            ),
-                                        )
-                                        .build(),
-                                )
-                                pendingCaptureIndices.add(capture.actionIndex)
-                                afterPassExecutions.add(
-                                    AfterPassExecution(capture.actionIndex, receipt),
-                                )
-                            }
+                            executeAfterPassGroup(step.afterPassActions)
+                        }
+                        CaptureProgramBuilder.ActionType.DEFERRED_AFTER_PASS -> {
+                            executeAfterPassGroup(resolveDeferredAfterPass(step).afterPassActions)
                         }
                         CaptureProgramBuilder.ActionType.PATCHED_SHADERS -> {
                             if (prepared == null) throw captureUnavailable()
@@ -220,7 +396,10 @@ internal class ActionJobExecutor(
                             if (prepared == null) throw captureUnavailable()
                             progress.accept(JobStage.JOB_STAGE_COMPARING)
                             probe.event(job.requestId, "COMPARING")
-                            comparison = captures.compare(prepared, step.comparison!!)
+                            comparison = captures.compare(
+                                prepared,
+                                action.program.planningSession.materializeComparison(step.comparison!!),
+                            )
                             receiptBook.put(
                                 step.actionIndex,
                                 receiptBook.success(step.actionIndex).setComparison(comparison).build(),
@@ -382,28 +561,218 @@ internal class ActionJobExecutor(
         job.sources.firstOrNull { it.uuid().equals(uuid, ignoreCase = true) }
             ?: throw RuntimeJobExecutor.Failure(ErrorCode.ERROR_CODE_INVALID_SOURCE, message)
 
-    private fun mutation(result: MutationResult): RuntimeMutationReceipt = RuntimeMutationReceipt.newBuilder()
+    private fun mutation(
+        result: MutationResult,
+        completedAtUnixMs: Long = System.currentTimeMillis(),
+    ): RuntimeMutationReceipt = RuntimeMutationReceipt.newBuilder()
         .setSourceUuid(result.source.uuid)
         .setSourceSha256(result.source.snapshotSha256)
         .setEffectiveSettings(BenchmarkProvenance.effectiveSettings(result.reload.effectiveSettings))
         .setSceneSha256(BenchmarkProvenance.sceneHash(result.context))
-        .setCompletedAtUnixMs(System.currentTimeMillis())
+        .setCompletedAtUnixMs(completedAtUnixMs)
         .build()
 
-    private fun waitReceipt(frames: Int, endFrame: Long): WaitFramesReceipt {
+    private fun waitReceipt(frames: Int, endFrame: Long): WaitFramesReceipt =
+        waitReceipt(frames, endFrame - frames, endFrame)
+
+    private fun waitReceipt(frames: Int, startFrame: Long, endFrame: Long): WaitFramesReceipt {
+        check(startFrame >= 0) { "Runtime returned a negative frame anchor." }
+        check(endFrame == Math.addExact(startFrame, frames.toLong())) {
+            "Runtime returned an inexact frame wait."
+        }
         check(endFrame >= frames.toLong()) { "Runtime returned an incomplete frame wait." }
         return WaitFramesReceipt.newBuilder()
             .setRequestedFrames(frames)
-            .setStartFrame(endFrame - frames)
+            .setStartFrame(startFrame)
             .setEndFrame(endFrame)
             .setCompletedFrames(frames)
             .build()
     }
 
+    private fun partialWaitReceipt(
+        frames: Int,
+        startFrame: Long,
+        currentFrame: Long,
+        completedFrames: Int,
+    ): WaitFramesReceipt {
+        check(completedFrames in 0 until frames) { "Runtime returned an invalid partial frame wait." }
+        check(currentFrame == Math.addExact(startFrame, completedFrames.toLong())) {
+            "Runtime returned an inexact partial frame wait."
+        }
+        return WaitFramesReceipt.newBuilder()
+            .setRequestedFrames(frames)
+            .setStartFrame(startFrame)
+            .setEndFrame(currentFrame)
+            .setCompletedFrames(completedFrames)
+            .build()
+    }
+
+    private fun publishDeterministicLoadAndReset(
+        receiptBook: ActionReceiptBook,
+        block: CaptureProgramBuilder.DeterministicBlock,
+        source: SourceRegistry.Lease,
+        reloaded: DeterministicTemporalCaptureReloaded,
+        resetCompletedAtUnixMs: Long,
+    ) {
+        publishDeterministicLoad(receiptBook, block, source, reloaded)
+        receiptBook.put(
+            block.resetActionIndex,
+            receiptBook.success(block.resetActionIndex)
+                .setResetTemporal(
+                    ResetTemporalReceipt.newBuilder().setCompletedAtUnixMs(resetCompletedAtUnixMs),
+                )
+                .build(),
+        )
+    }
+
+    private fun publishDeterministicLoad(
+        receiptBook: ActionReceiptBook,
+        block: CaptureProgramBuilder.DeterministicBlock,
+        source: SourceRegistry.Lease,
+        reloaded: DeterministicTemporalCaptureReloaded,
+    ) {
+        receiptBook.put(
+            block.loadActionIndex,
+            receiptBook.success(block.loadActionIndex)
+                .setRuntimeMutation(
+                    mutation(
+                        MutationResult(source, reloaded.reload, reloaded.context.context),
+                        reloaded.reloadCompletedAtUnixMs,
+                    ),
+                )
+                .build(),
+        )
+    }
+
+    private fun publishDeterministicDiagnostics(
+        diagnostics: MutableList<ReloadResult.Diagnostic>,
+        prepared: CaptureJobExecutor.Prepared,
+        reloaded: DeterministicTemporalCaptureReloaded,
+    ) {
+        diagnostics.addAll(reloaded.reload.diagnostics)
+        prepared.addDiagnostics(reloaded.reload.diagnostics)
+    }
+
+    private fun publishDeterministicWait(
+        receiptBook: ActionReceiptBook,
+        block: CaptureProgramBuilder.DeterministicBlock,
+        anchorFrame: Long,
+        warmupEndFrame: Long,
+    ): WaitFramesReceipt? {
+        val waitActionIndex = block.waitActionIndex
+        if (waitActionIndex == null) {
+            check(block.warmupFrames == 0 && warmupEndFrame == anchorFrame) {
+                "A deterministic block without a wait must have zero warmup frames."
+            }
+            return null
+        }
+        val receipt = waitReceipt(block.warmupFrames, anchorFrame, warmupEndFrame)
+        receiptBook.put(
+            waitActionIndex,
+            receiptBook.success(waitActionIndex).setWaitFrames(receipt).build(),
+        )
+        return receipt
+    }
+
+    private fun publishDeterministicCapturePlaceholders(
+        receiptBook: ActionReceiptBook,
+        group: CaptureProgramBuilder.ResolvedCaptureGroup,
+        targetFrame: Long,
+        catalog: ResourceCatalog,
+    ) {
+        group.captureActions.forEach { capture ->
+            receiptBook.put(
+                capture.actionIndex,
+                receiptBook.success(capture.actionIndex)
+                    .setCapture(
+                        captures.failureCaptureReceipt(
+                            group.capture,
+                            capture.targetIndex,
+                            targetFrame,
+                            catalog,
+                            null,
+                        ),
+                    )
+                    .build(),
+            )
+        }
+    }
+
+    private fun publishDeterministicCapturedPlaceholders(
+        receiptBook: ActionReceiptBook,
+        group: CaptureProgramBuilder.ResolvedCaptureGroup,
+        outcome: DeterministicTemporalCaptureOutcome.Captured,
+    ) {
+        group.captureActions.forEach { capture ->
+            receiptBook.put(
+                capture.actionIndex,
+                receiptBook.success(capture.actionIndex)
+                    .setCapture(
+                        captures.captureReceipt(
+                            outcome.plan,
+                            outcome.capture,
+                            capture,
+                            JobResult.getDefaultInstance(),
+                            null,
+                        ),
+                    )
+                    .build(),
+            )
+        }
+    }
+
+    private fun verifyDeterministicPlan(
+        resolved: CaptureProgramBuilder.ResolvedCaptureGroup?,
+        outcomePlan: CapturePlan,
+    ): CaptureProgramBuilder.ResolvedCaptureGroup {
+        val group = resolved ?: throw RuntimeJobExecutor.Failure(
+            ErrorCode.ERROR_CODE_CAPTURE_FAILED,
+            "Runtime completed deterministic planning without returning the resolved capture group.",
+        )
+        if (group.capture != outcomePlan) {
+            throw RuntimeJobExecutor.Failure(
+                ErrorCode.ERROR_CODE_CAPTURE_FAILED,
+                "Runtime deterministic capture plan did not match the authoritative resolved plan.",
+            )
+        }
+        return group
+    }
+
+    private fun deterministicContextFailure(
+        outcome: DeterministicTemporalCaptureOutcome.ContextRejected,
+    ): RuntimeJobExecutor.Failure = if (
+        outcome.failure.kind == DeterministicTemporalCaptureOutcome.FailureKind.CANCELLED
+    ) {
+        owner.deterministicPhaseFailure(outcome.failure)
+    } else {
+        RuntimeJobExecutor.Failure(ErrorCode.ERROR_CODE_WORLD_LOAD_FAILED, outcome.failure.message)
+    }
+
+    private fun deterministicReloadFailure(
+        job: CoreJob,
+        outcome: DeterministicTemporalCaptureOutcome.ReloadRejected,
+    ): RuntimeJobExecutor.Failure = if (
+        outcome.failure.kind == DeterministicTemporalCaptureOutcome.FailureKind.CANCELLED
+    ) {
+        owner.deterministicPhaseFailure(outcome.failure)
+    } else {
+        owner.deterministicReloadFailure(job, outcome.reload)
+    }
+
     private fun CaptureProgramBuilder.ActionStep.actionIndices(): List<Int> =
         when (type) {
+            CaptureProgramBuilder.ActionType.DETERMINISTIC -> buildList {
+                val block = checkNotNull(deterministic)
+                add(block.loadActionIndex)
+                add(block.resetActionIndex)
+                block.waitActionIndex?.let(::add)
+                addAll(block.captures.map(CaptureProgramBuilder.DirectCapture::actionIndex))
+            }
             CaptureProgramBuilder.ActionType.CAPTURE ->
                 captureActions.map(CaptureProgramBuilder.CaptureAction::actionIndex)
+            CaptureProgramBuilder.ActionType.DEFERRED_CAPTURE,
+            CaptureProgramBuilder.ActionType.DEFERRED_AFTER_PASS,
+            -> deferredActions.map(CaptureProgramBuilder.DirectCapture::actionIndex)
             CaptureProgramBuilder.ActionType.AFTER_PASS ->
                 afterPassActions.map(CaptureProgramBuilder.AfterPassAction::actionIndex)
             else -> listOf(actionIndex)
@@ -437,4 +806,5 @@ internal class ActionJobExecutor(
         val actionIndex: Int,
         val receipt: CapturePlan.AfterPassReceipt,
     )
+
 }

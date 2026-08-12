@@ -65,6 +65,7 @@ internal class RuntimeAwaiter(private val probe: CoreProbe) {
             Thread.currentThread().interrupt()
             throw RuntimeJobExecutor.Failure(ErrorCode.ERROR_CODE_CANCELLED, "Job execution was interrupted.")
         } catch (_: CancellationException) {
+            awaitCancellation(future)
             throw RuntimeJobExecutor.Failure(ErrorCode.ERROR_CODE_CANCELLED, "Job execution was cancelled.")
         } catch (exception: ExecutionException) {
             throw operationFailure(exception.cause, job, operationFailureCode)

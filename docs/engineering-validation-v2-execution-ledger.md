@@ -2424,6 +2424,22 @@ Evidence:
 - The legacy ledger checker named in older task text is absent from both the user-invoked and current installed skill
   paths. An equivalent structural audit found 33 unique task rows and 33 matching detail headings with no duplicates
   or omissions: `READY=1` (`T19I`), `BLOCKED=2`, `PENDING=1`, and `DONE=29`.
+- `2026-08-12` the Vibris product phase hard-cut the strict load/reset/wait/capture block to one required compound API.
+  Final context and reload now precede one synchronous planner call against the authoritative resource and compile
+  catalogs; the same client task then resets temporal state and atomically registers capture at
+  `anchor + warmup_frames + 1`. There is no old overload, default method, granular fallback, or compatibility bridge.
+- Core now JIT-plans every catalog-dependent capture after `LOAD`, `ACTIVATE`, or another compound block. Reservation
+  growth, global output-name checks, comparisons, after-pass captures, rollback, exact logical action indices, typed
+  partial receipts, and zero-artifact failure receipts all use the post-mutation catalog and fail closed.
+- Absolute scheduling, cancellation, close, missed-target, restoration, activation-commit attribution, multi-block,
+  zero-warmup, source-attribution, terminal-frame, exact resource-descriptor, and fake-runtime concurrency tests passed.
+  Full API/Core/test-runtime tests passed with the complete Core suite, and the offline Gradle `build` passed after
+  rebuilding only the existing native descriptor-dump target required by the descriptor-parity integration test.
+- This Vibris product continuation entered at `4bccda4c148e37892ae563046e7a14c502398ff8`.
+- T19I remains `READY`: the required Iris host and deterministic shader-time implementation is the next coordinated
+  commit, followed by direct-executable runtime proof and the Vibris owner-receipt commit. No Mod or MCP was deployed,
+  Codex configuration was not changed or restarted, Minecraft was not restarted, the six retained T19H MCP files stay
+  unstaged, and `capture\a.spv` remains untouched.
 
 ### T19H — Make paired visual capture deterministic
 

@@ -7,6 +7,9 @@ import dev.vibris.api.CaptureResult
 import dev.vibris.api.CompileCatalog
 import dev.vibris.api.ContextApplyResult
 import dev.vibris.api.ContextValidationResult
+import dev.vibris.api.DeterministicTemporalCaptureOutcome
+import dev.vibris.api.DeterministicTemporalCapturePlanner
+import dev.vibris.api.DeterministicTemporalCaptureRequest
 import dev.vibris.api.RuntimeAction
 import dev.vibris.api.RuntimeEnvironment
 import dev.vibris.api.ReloadResult
@@ -137,6 +140,32 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
         }
     }
 
+    override fun captureDeterministicTemporalPhase(
+        request: DeterministicTemporalCaptureRequest,
+        planner: DeterministicTemporalCapturePlanner,
+        sink: ArtifactSink,
+        cancellation: CancellationToken,
+    ): CompletionStage<DeterministicTemporalCaptureOutcome> {
+        if (closed.get()) {
+            return CompletableFuture.failedFuture(IllegalStateException("Vibris runtime is closed"))
+        }
+        return trackActivity {
+            val scheduler = scheduler()
+            onClientStage(
+                Supplier {
+                    host.captureDeterministicTemporalPhase(
+                        request,
+                        planner,
+                        sink,
+                        scheduler,
+                        cancellation,
+                    )
+                },
+                cancellation,
+            ).thenCompose(::postprocessDeterministicOutcome)
+        }
+    }
+
     override fun captureAfterPass(
         request: CapturePlan.AfterPassRequest,
         sink: ArtifactSink,
@@ -194,6 +223,9 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
         val result = CompletableFuture<T>()
         val task = Runnable {
             try {
+                if (closed.get()) {
+                    throw IllegalStateException("Vibris runtime is closed")
+                }
                 cancellation.throwIfCancellationRequested()
                 result.complete(action.get())
             } catch (throwable: Throwable) {
@@ -212,6 +244,58 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
         action: Supplier<CompletionStage<T>>,
         cancellation: CancellationToken,
     ): CompletionStage<T> = onClient(action, cancellation).thenCompose { stage -> stage }
+
+    private fun postprocessDeterministicOutcome(
+        outcome: DeterministicTemporalCaptureOutcome,
+    ): CompletionStage<DeterministicTemporalCaptureOutcome> {
+        if (!closed.get()) {
+            runCatching { observeDeterministicOutcome(outcome) }
+        }
+        return CompletableFuture.completedFuture(outcome)
+    }
+
+    private fun observeDeterministicOutcome(
+        outcome: DeterministicTemporalCaptureOutcome,
+    ) {
+        val observedFrames = when (outcome) {
+            is DeterministicTemporalCaptureOutcome.ContextRejected,
+            is DeterministicTemporalCaptureOutcome.ReloadRejected,
+            is DeterministicTemporalCaptureOutcome.PlanningRejected,
+            is DeterministicTemporalCaptureOutcome.ResetRejected,
+            -> null
+            is DeterministicTemporalCaptureOutcome.WarmupRejected ->
+                outcome.anchorFrame to outcome.currentFrame
+            is DeterministicTemporalCaptureOutcome.CaptureRejected ->
+                outcome.anchorFrame to outcome.warmupEndFrame
+            is DeterministicTemporalCaptureOutcome.Captured ->
+                outcome.anchorFrame to outcome.warmupEndFrame
+        }
+        observedFrames?.let { (start, end) ->
+            runCatching { frameWaitObserver?.accept(start, end) }
+        }
+        catalog = when (outcome) {
+            is DeterministicTemporalCaptureOutcome.ContextRejected,
+            is DeterministicTemporalCaptureOutcome.ReloadRejected,
+            -> catalog
+            is DeterministicTemporalCaptureOutcome.PlanningRejected -> outcome.reloaded.resourceCatalog
+            is DeterministicTemporalCaptureOutcome.ResetRejected -> outcome.reloaded.resourceCatalog
+            is DeterministicTemporalCaptureOutcome.WarmupRejected -> outcome.reloaded.resourceCatalog
+            is DeterministicTemporalCaptureOutcome.CaptureRejected -> outcome.reloaded.resourceCatalog
+            is DeterministicTemporalCaptureOutcome.Captured -> outcome.reloaded.resourceCatalog
+        }
+    }
+
+    private fun scheduler(): DeterministicTemporalCaptureScheduler =
+        object : DeterministicTemporalCaptureScheduler {
+            override fun schedule(
+                warmupFrames: Int,
+                cancellation: CancellationToken,
+                capture: java.util.function.LongFunction<CaptureResult>,
+            ): DeterministicTemporalCaptureScheduler.ScheduledCapture =
+                frames.scheduleDeterministicTemporalCapture(warmupFrames, cancellation, capture)
+
+            override fun currentFrame(): Long = frames.currentFrame()
+        }
 
     private fun <T> trackActivity(action: Supplier<CompletionStage<T>>): CompletionStage<T> {
         val becameActive = pendingOperations.getAndIncrement() == 0
@@ -232,4 +316,5 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
             activityObserver?.accept(false)
         }
     }
+
 }

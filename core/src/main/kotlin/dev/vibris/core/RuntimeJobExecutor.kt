@@ -5,6 +5,10 @@ import dev.vibris.api.CapturePlan
 import dev.vibris.api.CaptureResult
 import dev.vibris.api.ContextApplyResult
 import dev.vibris.api.CompileCatalog
+import dev.vibris.api.DeterministicTemporalCaptureOutcome
+import dev.vibris.api.DeterministicTemporalCapturePlanner
+import dev.vibris.api.DeterministicTemporalCaptureReloaded
+import dev.vibris.api.DeterministicTemporalCaptureRequest
 import dev.vibris.api.EffectiveShaderSettings
 import dev.vibris.api.ReloadResult
 import dev.vibris.api.SceneContext
@@ -359,6 +363,383 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     }
 
     @Throws(Failure::class)
+    fun captureDeterministicTemporalPhase(
+        job: CoreJob,
+        source: SourceRegistry.Lease,
+        config: dev.vibris.protocol.v2.ShaderConfig,
+        planner: DeterministicTemporalCapturePlanner,
+        progress: Consumer<JobStage>,
+        deadline: Long,
+        prepared: CaptureJobExecutor.Prepared,
+        warmupFrames: Int,
+    ): DeterministicTemporalCaptureOutcome {
+        val previous = try {
+            deterministicSnapshot()
+        } catch (failure: Failure) {
+            throw DeterministicPhaseFailure(DeterministicFailurePhase.LOAD, failure)
+        }
+        val checkpoint = prepared.checkpoint()
+        val activation = try {
+            if (activator.isActive(source)) {
+                null
+            } else {
+                progress.accept(JobStage.JOB_STAGE_ACTIVATING_SOURCE)
+                probe.event(job.requestId, "ACTIVATING_SOURCE")
+                try {
+                    activator.begin(source)
+                } catch (failure: SourceActivator.Failure) {
+                    throw Failure(failure.code, failure.message)
+                }
+            }
+        } catch (failure: Failure) {
+            throw DeterministicPhaseFailure(DeterministicFailurePhase.LOAD, failure)
+        }
+        var phaseAttempted = false
+        var activationFinished = false
+        var checkpointFinished = false
+        var failurePhase = DeterministicFailurePhase.LOAD
+        try {
+            progress.accept(JobStage.JOB_STAGE_CAPTURING)
+            probe.event(job.requestId, "CAPTURING_DETERMINISTIC_TEMPORAL_PHASE")
+            val request = DeterministicTemporalCaptureRequest(
+                RuntimeJobContext.toApi(job.submission.context),
+                config.preserveCurrent,
+                if (config.preserveCurrent) emptyMap() else config.valuesMap,
+                warmupFrames,
+            )
+            failurePhase = DeterministicFailurePhase.CAPTURE
+            phaseAttempted = true
+            val outcome = awaitCapture(
+                runtime.captureDeterministicTemporalPhase(
+                    request,
+                    planner,
+                    prepared.sink(),
+                    job.cancellation.token(),
+                ),
+                job,
+                deadline,
+            )
+            val reloaded = when (outcome) {
+                is DeterministicTemporalCaptureOutcome.ContextRejected,
+                is DeterministicTemporalCaptureOutcome.ReloadRejected,
+                -> null
+                is DeterministicTemporalCaptureOutcome.PlanningRejected -> outcome.reloaded
+                is DeterministicTemporalCaptureOutcome.ResetRejected -> outcome.reloaded
+                is DeterministicTemporalCaptureOutcome.WarmupRejected -> outcome.reloaded
+                is DeterministicTemporalCaptureOutcome.CaptureRejected -> outcome.reloaded
+                is DeterministicTemporalCaptureOutcome.Captured -> outcome.reloaded
+            }
+            if (reloaded != null) {
+                failurePhase = DeterministicFailurePhase.LOAD
+                observeDeterministicLoad(reloaded)
+                commitDeterministicActivation(activation)
+                activationFinished = true
+            }
+            val rejection = when (outcome) {
+                is DeterministicTemporalCaptureOutcome.ContextRejected -> {
+                    failurePhase = DeterministicFailurePhase.LOAD
+                    activationFinished = true
+                    rollbackRejectedContext(previous, activation)
+                    outcome.failure
+                }
+                is DeterministicTemporalCaptureOutcome.ReloadRejected -> {
+                    failurePhase = DeterministicFailurePhase.LOAD
+                    activationFinished = true
+                    rollbackRejectedReload(previous, activation, outcome)
+                    outcome.failure
+                }
+                is DeterministicTemporalCaptureOutcome.PlanningRejected -> {
+                    failurePhase = DeterministicFailurePhase.CAPTURE
+                    outcome.failure
+                }
+                is DeterministicTemporalCaptureOutcome.ResetRejected -> {
+                    failurePhase = DeterministicFailurePhase.RESET
+                    outcome.failure
+                }
+                is DeterministicTemporalCaptureOutcome.WarmupRejected -> {
+                    failurePhase = DeterministicFailurePhase.WAIT
+                    outcome.failure
+                }
+                is DeterministicTemporalCaptureOutcome.CaptureRejected -> {
+                    failurePhase = DeterministicFailurePhase.CAPTURE
+                    outcome.failure
+                }
+                is DeterministicTemporalCaptureOutcome.Captured -> {
+                    failurePhase = DeterministicFailurePhase.CAPTURE
+                    return outcome
+                }
+            }
+            checkpointFinished = true
+            rollbackDeterministicCapture(
+                prepared,
+                checkpoint,
+                rejection,
+            )
+            return outcome
+        } catch (failure: Failure) {
+            var terminal = failure
+            if (!activationFinished) {
+                if (phaseAttempted) {
+                    terminal = restoreDeterministicSnapshot(previous, activation, failure) ?: failure
+                } else if (activation != null && !rollbackActivation(activation)) {
+                    terminal = restorationFailure("The previous shader source link could not be restored.")
+                    terminal.addSuppressed(failure)
+                }
+            }
+            val terminalPhase = failurePhase
+            if (!checkpointFinished) {
+                try {
+                    rollbackCapture(prepared, checkpoint, terminal)
+                } catch (cleanup: Failure) {
+                    throw DeterministicPhaseFailure(terminalPhase, cleanup)
+                }
+            }
+            throw DeterministicPhaseFailure(
+                deterministicFailurePhase(phaseAttempted, activationFinished, terminalPhase),
+                terminal,
+            )
+        } catch (failure: RuntimeException) {
+            val mapped = CaptureJobExecutor.failure(failure)
+            var terminal = mapped
+            if (!activationFinished) {
+                if (phaseAttempted) {
+                    terminal = restoreDeterministicSnapshot(previous, activation, mapped) ?: mapped
+                } else if (activation != null && !rollbackActivation(activation)) {
+                    terminal = restorationFailure("The previous shader source link could not be restored.")
+                    terminal.addSuppressed(mapped)
+                }
+            }
+            val terminalPhase = failurePhase
+            if (!checkpointFinished) {
+                try {
+                    rollbackCapture(prepared, checkpoint, terminal)
+                } catch (cleanup: Failure) {
+                    throw DeterministicPhaseFailure(terminalPhase, cleanup)
+                }
+            }
+            throw DeterministicPhaseFailure(
+                deterministicFailurePhase(phaseAttempted, activationFinished, terminalPhase),
+                terminal,
+            )
+        }
+    }
+
+    private fun deterministicFailurePhase(
+        phaseAttempted: Boolean,
+        activationFinished: Boolean,
+        failurePhase: DeterministicFailurePhase,
+    ): DeterministicFailurePhase {
+        check(phaseAttempted || failurePhase == DeterministicFailurePhase.LOAD)
+        if (!activationFinished && failurePhase != DeterministicFailurePhase.LOAD) {
+            check(failurePhase == DeterministicFailurePhase.CAPTURE)
+        }
+        return failurePhase
+    }
+
+    fun deterministicReloadFailure(job: CoreJob, reload: ReloadResult): Failure =
+        ShaderReloadFailure.create(shaderLogs, job, reload)
+
+    fun deterministicPhaseFailure(
+        failure: DeterministicTemporalCaptureOutcome.Failure,
+    ): Failure = Failure(
+        when (failure.kind) {
+            DeterministicTemporalCaptureOutcome.FailureKind.CANCELLED -> ErrorCode.ERROR_CODE_CANCELLED
+            DeterministicTemporalCaptureOutcome.FailureKind.RESOURCE_NOT_FOUND ->
+                ErrorCode.ERROR_CODE_RESOURCE_NOT_FOUND
+            DeterministicTemporalCaptureOutcome.FailureKind.ARTIFACT_TOO_LARGE ->
+                ErrorCode.ERROR_CODE_ARTIFACT_TOO_LARGE
+            DeterministicTemporalCaptureOutcome.FailureKind.ARTIFACT_QUOTA_EXCEEDED ->
+                ErrorCode.ERROR_CODE_ARTIFACT_QUOTA_EXCEEDED
+            DeterministicTemporalCaptureOutcome.FailureKind.INVALID_CAPTURE,
+            DeterministicTemporalCaptureOutcome.FailureKind.MISSED_TARGET,
+            DeterministicTemporalCaptureOutcome.FailureKind.OPERATION_FAILED,
+            DeterministicTemporalCaptureOutcome.FailureKind.CLEANUP_FAILED,
+            -> ErrorCode.ERROR_CODE_CAPTURE_FAILED
+        },
+        failure.message,
+    )
+
+    fun deterministicPlanningFailure(failure: Failure): DeterministicTemporalCaptureOutcome.Failure =
+        DeterministicTemporalCaptureOutcome.Failure(
+            when (failure.code) {
+                ErrorCode.ERROR_CODE_CANCELLED -> DeterministicTemporalCaptureOutcome.FailureKind.CANCELLED
+                ErrorCode.ERROR_CODE_RESOURCE_NOT_FOUND ->
+                    DeterministicTemporalCaptureOutcome.FailureKind.RESOURCE_NOT_FOUND
+                ErrorCode.ERROR_CODE_ARTIFACT_TOO_LARGE ->
+                    DeterministicTemporalCaptureOutcome.FailureKind.ARTIFACT_TOO_LARGE
+                ErrorCode.ERROR_CODE_ARTIFACT_QUOTA_EXCEEDED ->
+                    DeterministicTemporalCaptureOutcome.FailureKind.ARTIFACT_QUOTA_EXCEEDED
+                else -> DeterministicTemporalCaptureOutcome.FailureKind.OPERATION_FAILED
+            },
+            failure.message ?: "Deterministic capture planning failed.",
+        )
+
+    private fun observeDeterministicLoad(reloaded: DeterministicTemporalCaptureReloaded) {
+        activeContext = reloaded.context.context
+        activeShaderSettings = reloaded.reload.effectiveSettings
+        activeShaderLoadedAtUnixMs = reloaded.reloadCompletedAtUnixMs
+        activePassMappingSha256 = reloaded.compileCatalog.mappingSha256
+    }
+
+    @Throws(Failure::class)
+    private fun commitDeterministicActivation(activation: SourceActivator.Activation?) {
+        if (activation == null) return
+        try {
+            activator.commit(activation)
+        } catch (failure: SourceActivator.Failure) {
+            throw Failure(failure.code, failure.message)
+        }
+    }
+
+    @Throws(Failure::class)
+    private fun rollbackRejectedContext(
+        previous: DeterministicRuntimeSnapshot,
+        activation: SourceActivator.Activation?,
+    ) {
+        if (activation != null && !rollbackActivation(activation)) {
+            throw restorationFailure("The previous shader source link could not be restored after context rejection.")
+        }
+        if (!restorePreviousContext(previous)) {
+            throw restorationFailure("The previous scene context could not be restored after context rejection.")
+        }
+        adoptPreviousShaderState(previous)
+    }
+
+    @Throws(Failure::class)
+    private fun rollbackRejectedReload(
+        previous: DeterministicRuntimeSnapshot,
+        activation: SourceActivator.Activation?,
+        outcome: DeterministicTemporalCaptureOutcome.ReloadRejected,
+    ) {
+        if (activation != null && !rollbackActivation(activation)) {
+            throw restorationFailure("The previous shader source link could not be restored after reload rejection.")
+        }
+        if (outcome.reload.activeStatePreserved) {
+            val settings = previous.settings
+            if (
+                previous.source == null || settings == null ||
+                !settings.hasSameResolvedState(outcome.reload.effectiveSettings)
+            ) {
+                throw restorationFailure(
+                    "The preserved shader state does not match the previous effective settings.",
+                )
+            }
+            adoptPreviousShaderState(previous)
+        } else if (!restorePreviousShader(previous)) {
+            throw restorationFailure(
+                "The previous shader source and settings could not be restored after reload rejection.",
+            )
+        }
+        if (!restorePreviousContext(previous)) {
+            throw restorationFailure("The previous scene context could not be restored after reload rejection.")
+        }
+    }
+
+    private fun rollbackActivation(activation: SourceActivator.Activation): Boolean {
+        val restored = try {
+            activator.rollback(activation)
+        } catch (_: Exception) {
+            false
+        }
+        if (!restored) {
+            runCatching { activator.fail(activation) }
+            activator.markNotReady()
+        }
+        return restored
+    }
+
+    private fun restoreDeterministicSnapshot(
+        previous: DeterministicRuntimeSnapshot,
+        activation: SourceActivator.Activation?,
+        original: Failure,
+    ): Failure? {
+        val linkRestored = activation == null || rollbackActivation(activation)
+        val shaderRestored = linkRestored && restorePreviousShader(previous)
+        val contextRestored = linkRestored && restorePreviousContext(previous)
+        if (linkRestored && shaderRestored && contextRestored) return null
+        val failure = restorationFailure(
+            "The exact runtime state before deterministic capture could not be restored.",
+        )
+        failure.addSuppressed(original)
+        return failure
+    }
+
+    private fun restorePreviousShader(previous: DeterministicRuntimeSnapshot): Boolean {
+        if (previous.source == null) {
+            return false
+        }
+        val settings = previous.settings ?: return false
+        return try {
+            val reload = restoreAwait(
+                runtime.reloadVibrisShaderpack(settings.values(), CancellationToken.none()),
+            )
+            if (!reload.successful || !settings.hasSameResolvedState(reload.effectiveSettings)) return false
+            val reloadedAtUnixMs = System.currentTimeMillis()
+            val catalog = restoreAwait(runtime.getCompileCatalog(CancellationToken.none()))
+            activeShaderSettings = reload.effectiveSettings
+            activeShaderLoadedAtUnixMs = reloadedAtUnixMs
+            activePassMappingSha256 = catalog.mappingSha256
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun restorePreviousContext(previous: DeterministicRuntimeSnapshot): Boolean {
+        val context = previous.context ?: return false
+        return try {
+            val applied = restoreAwait(runtime.ensureWorldAndContext(context, CancellationToken.none()))
+            if (!applied.successful || applied.context != context) return false
+            activeContext = applied.context
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun adoptPreviousShaderState(previous: DeterministicRuntimeSnapshot) {
+        activeShaderSettings = previous.settings
+        activeShaderLoadedAtUnixMs = previous.loadedAtUnixMs
+        activePassMappingSha256 = previous.passMappingSha256
+    }
+
+    private fun restorationFailure(message: String): Failure {
+        activator.markNotReady()
+        return Failure(ErrorCode.ERROR_CODE_RESTORE_FAILED, message)
+    }
+
+    @Throws(Failure::class)
+    private fun deterministicSnapshot(): DeterministicRuntimeSnapshot {
+        val source = try {
+            activator.activeSnapshot()
+        } catch (failure: SourceActivator.Failure) {
+            throw Failure(failure.code, failure.message)
+        }
+        return DeterministicRuntimeSnapshot(
+            source,
+            activeShaderSettings,
+            activeContext,
+            activeShaderLoadedAtUnixMs,
+            activePassMappingSha256,
+        )
+    }
+
+    @Throws(Failure::class)
+    private fun rollbackDeterministicCapture(
+        prepared: CaptureJobExecutor.Prepared,
+        checkpoint: CaptureJobExecutor.PreparedCheckpoint,
+        original: DeterministicTemporalCaptureOutcome.Failure,
+    ) {
+        try {
+            prepared.rollback(checkpoint)
+        } catch (failure: IOException) {
+            val cleanup = CaptureJobExecutor.failure(failure)
+            cleanup.addSuppressed(deterministicPhaseFailure(original))
+            throw cleanup
+        }
+    }
+
+    @Throws(Failure::class)
     fun captureAfterPass(
         job: CoreJob,
         progress: Consumer<JobStage>,
@@ -438,14 +819,15 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     @Throws(Failure::class)
     private fun rollbackCapture(
         prepared: CaptureJobExecutor.Prepared,
-        checkpoint: ArtifactJobTransaction.Checkpoint,
+        checkpoint: CaptureJobExecutor.PreparedCheckpoint,
         failure: Failure,
     ) {
         try {
             prepared.rollback(checkpoint)
         } catch (rollbackFailure: IOException) {
-            rollbackFailure.addSuppressed(failure)
-            throw CaptureJobExecutor.failure(rollbackFailure)
+            val cleanup = CaptureJobExecutor.failure(rollbackFailure)
+            cleanup.addSuppressed(failure)
+            throw cleanup
         }
     }
 
@@ -601,7 +983,9 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         }
         expected.scene?.let { scene ->
             val context = restoreAwait(runtime.ensureWorldAndContext(scene, CancellationToken.none()))
-            check(context.successful && context.context == scene) { "The safe scene context could not be restored exactly." }
+            check(context.successful && context.context == scene) {
+                "The safe scene context could not be restored exactly."
+            }
             activeContext = context.context
         }
         val reset = restoreAwait(runtime.resetTemporalState(CancellationToken.none()))
@@ -742,10 +1126,30 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         ).also { replacement -> suppressed.forEach(replacement::addSuppressed) }
     }
 
+    enum class DeterministicFailurePhase {
+        LOAD,
+        RESET,
+        WAIT,
+        CAPTURE,
+    }
+
+    class DeterministicPhaseFailure(
+        val phase: DeterministicFailurePhase,
+        val failure: Failure,
+    ) : Exception(failure.message, failure)
+
     private data class PendingRecovery(
         val isolation: BenchmarkCaseIsolation,
         val heldSources: List<SourceRegistry.Lease>,
         @Volatile var lastReceipt: RestorationReceipt,
+    )
+
+    private data class DeterministicRuntimeSnapshot(
+        val source: SourceRegistry.Lease?,
+        val settings: EffectiveShaderSettings?,
+        val context: SceneContext?,
+        val loadedAtUnixMs: Long,
+        val passMappingSha256: String,
     )
 
     private companion object {

@@ -3,11 +3,13 @@ package dev.vibris.api;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -51,6 +53,14 @@ class RuntimeAdapterContractTest {
         assertEquals(9, adapter.capture(
             CapturePlan.empty(), name -> new ByteArrayOutputStream(), cancellation.token()
         ).toCompletableFuture().join().frameId());
+        var deterministic = adapter.captureDeterministicTemporalPhase(
+            new DeterministicTemporalCaptureRequest(context, true, Map.of(), 7),
+            (resources, compile) -> new DeterministicTemporalCapturePlanning.Planned(testCapturePlan()),
+            name -> new ByteArrayOutputStream(),
+            cancellation.token()
+        ).toCompletableFuture().join();
+        assertTrue(deterministic instanceof DeterministicTemporalCaptureOutcome.Captured);
+        assertEquals(9, ((DeterministicTemporalCaptureOutcome.Captured) deterministic).capture().frameId());
     }
 
     @Test
@@ -113,6 +123,401 @@ class RuntimeAdapterContractTest {
         resources.clear();
         assertEquals(List.of(descriptor), catalog.resources());
         assertThrows(UnsupportedOperationException.class, () -> catalog.resources().clear());
+
+        var settings = new LinkedHashMap<String, String>();
+        settings.put("QUALITY", "high");
+        var request = new DeterministicTemporalCaptureRequest(
+            testContext(), false, settings, 7
+        );
+        settings.clear();
+        assertEquals(Map.of("QUALITY", "high"), request.settings());
+        assertThrows(UnsupportedOperationException.class, () -> request.settings().clear());
+    }
+
+    @Test
+    void deterministicTemporalCaptureRequestIsStrictAndUnambiguous() {
+        SceneContext context = testContext();
+
+        assertEquals(Map.of(), new DeterministicTemporalCaptureRequest(
+            context, true, Map.of(), 0
+        ).settings());
+        assertEquals(Map.of(), new DeterministicTemporalCaptureRequest(
+            context, false, Map.of(), 0
+        ).settings());
+        assertThrows(IllegalArgumentException.class, () -> new DeterministicTemporalCaptureRequest(
+            context, true, Map.of("QUALITY", "high"), 0
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new DeterministicTemporalCaptureRequest(
+            context, false, Map.of(), -1
+        ));
+        assertThrows(NullPointerException.class, () -> new DeterministicTemporalCaptureRequest(
+            null, false, Map.of(), 0
+        ));
+        assertThrows(NullPointerException.class, () -> new DeterministicTemporalCaptureRequest(
+            context, false, null, 0
+        ));
+    }
+
+    @Test
+    void deterministicTemporalCapturePlanningIsDeferredAndTyped() {
+        ResourceCatalog resources = ResourceCatalog.empty();
+        CompileCatalog compile = CompileCatalog.empty(17);
+        CapturePlan plan = testCapturePlan();
+        int[] callCount = {0};
+        DeterministicTemporalCapturePlanner planner = (actualResources, actualCompile) -> {
+            callCount[0]++;
+            assertEquals(resources, actualResources);
+            assertEquals(compile, actualCompile);
+            return new DeterministicTemporalCapturePlanning.Planned(plan);
+        };
+
+        var planned = planner.plan(resources, compile);
+
+        assertEquals(1, callCount[0]);
+        assertEquals(plan, ((DeterministicTemporalCapturePlanning.Planned) planned).plan());
+        var missing = failure(DeterministicTemporalCaptureOutcome.FailureKind.RESOURCE_NOT_FOUND);
+        assertEquals(missing, new DeterministicTemporalCapturePlanning.Rejected(missing).failure());
+        assertThrows(IllegalArgumentException.class,
+            () -> new DeterministicTemporalCapturePlanning.Planned(CapturePlan.empty()));
+        assertThrows(NullPointerException.class, () -> new DeterministicTemporalCapturePlanning.Planned(null));
+        assertThrows(NullPointerException.class, () -> new DeterministicTemporalCapturePlanning.Rejected(null));
+        assertTrue(DeterministicTemporalCapturePlanner.class.isInterface());
+        assertTrue(DeterministicTemporalCapturePlanning.class.isSealed());
+        assertEquals(Set.of(
+            DeterministicTemporalCapturePlanning.Planned.class,
+            DeterministicTemporalCapturePlanning.Rejected.class
+        ), Set.of(DeterministicTemporalCapturePlanning.class.getPermittedSubclasses()));
+    }
+
+    @Test
+    void deterministicTemporalCaptureReloadedIsAuthoritative() {
+        SceneContext requested = testContext();
+        ContextApplyResult applied = ContextApplyResult.success(requested);
+        ContextApplyResult rejected = ContextApplyResult.failure(requested, "rejected");
+        ReloadResult reload = ReloadResult.success(EffectiveShaderSettings.empty(), List.of());
+        ReloadResult reloadRejected = ReloadResult.failure(List.of());
+        ResourceCatalog resources = ResourceCatalog.empty();
+        CompileCatalog compile = CompileCatalog.empty(17);
+        var reloaded = new DeterministicTemporalCaptureReloaded(applied, reload, 23, resources, compile);
+
+        assertEquals(applied, reloaded.context());
+        assertEquals(reload, reloaded.reload());
+        assertEquals(23, reloaded.reloadCompletedAtUnixMs());
+        assertEquals(resources, reloaded.resourceCatalog());
+        assertEquals(compile, reloaded.compileCatalog());
+        assertThrows(IllegalArgumentException.class, () -> new DeterministicTemporalCaptureReloaded(
+            rejected, reload, 23, resources, compile
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new DeterministicTemporalCaptureReloaded(
+            applied, reloadRejected, 23, resources, compile
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new DeterministicTemporalCaptureReloaded(
+            applied, reload, 0, resources, compile
+        ));
+        assertThrows(NullPointerException.class, () -> new DeterministicTemporalCaptureReloaded(
+            null, reload, 23, resources, compile
+        ));
+        assertThrows(NullPointerException.class, () -> new DeterministicTemporalCaptureReloaded(
+            applied, null, 23, resources, compile
+        ));
+        assertThrows(NullPointerException.class, () -> new DeterministicTemporalCaptureReloaded(
+            applied, reload, 23, null, compile
+        ));
+        assertThrows(NullPointerException.class, () -> new DeterministicTemporalCaptureReloaded(
+            applied, reload, 23, resources, null
+        ));
+    }
+
+    @Test
+    void deterministicTemporalCaptureOutcomesAreMutuallyExclusiveAndFrameExact() {
+        SceneContext requested = testContext();
+        ContextApplyResult applied = ContextApplyResult.success(requested);
+        ContextApplyResult rejected = ContextApplyResult.failure(requested, "rejected");
+        ReloadResult reload = ReloadResult.success(EffectiveShaderSettings.empty(), List.of());
+        ReloadResult reloadRejected = ReloadResult.failure(List.of());
+        DeterministicTemporalCaptureReloaded reloaded = reloaded(applied, reload);
+        CapturePlan plan = testCapturePlan();
+        TemporalResetResult reset = new TemporalResetResult(true);
+        TemporalResetResult resetRejected = new TemporalResetResult(false);
+        CaptureResult capturedAtNine = captured(plan, 9);
+        var cancelled = failure(DeterministicTemporalCaptureOutcome.FailureKind.CANCELLED);
+        var missedTarget = failure(DeterministicTemporalCaptureOutcome.FailureKind.MISSED_TARGET);
+
+        assertEquals(rejected, new DeterministicTemporalCaptureOutcome.ContextRejected(
+            rejected, cancelled
+        ).context());
+        assertEquals(reloadRejected, new DeterministicTemporalCaptureOutcome.ReloadRejected(
+            applied, reloadRejected, cancelled
+        ).reload());
+        assertEquals(reloaded, new DeterministicTemporalCaptureOutcome.PlanningRejected(
+            reloaded, missedTarget
+        ).reloaded());
+        assertEquals(resetRejected, new DeterministicTemporalCaptureOutcome.ResetRejected(
+            reloaded, plan, resetRejected, cancelled
+        ).reset());
+        var warmupRejected = new DeterministicTemporalCaptureOutcome.WarmupRejected(
+            reloaded, plan, reset, 1, 7, 1, 3, 4, cancelled
+        );
+        assertEquals(plan, warmupRejected.plan());
+        assertEquals(3, warmupRejected.completedFrames());
+        assertEquals(4, warmupRejected.currentFrame());
+        var captureRejected = new DeterministicTemporalCaptureOutcome.CaptureRejected(
+            reloaded, plan, reset, 1, 7, 1, 8, 9, 10, missedTarget
+        );
+        assertEquals(8, captureRejected.warmupEndFrame());
+        assertEquals(9, captureRejected.targetFrame());
+        assertEquals(10, captureRejected.terminalFrame());
+        assertEquals(missedTarget, captureRejected.failure());
+        assertEquals(1, new DeterministicTemporalCaptureOutcome.CaptureRejected(
+            reloaded, plan, reset, 1, 0, 1, 1, 2, 1, cancelled
+        ).warmupEndFrame());
+        var captured = new DeterministicTemporalCaptureOutcome.Captured(
+            reloaded, plan, reset, 1, 7, 1, 8, capturedAtNine
+        );
+        assertEquals(plan, captured.plan());
+        assertEquals(1, captured.anchorFrame());
+        assertEquals(8, captured.warmupEndFrame());
+        assertEquals(9, captured.capture().frameId());
+
+        assertThrows(NullPointerException.class,
+            () -> new DeterministicTemporalCaptureOutcome.ContextRejected(null, cancelled));
+        assertThrows(IllegalArgumentException.class,
+            () -> new DeterministicTemporalCaptureOutcome.ContextRejected(applied, cancelled));
+        assertThrows(NullPointerException.class,
+            () -> new DeterministicTemporalCaptureOutcome.ReloadRejected(null, reloadRejected, cancelled));
+        assertThrows(NullPointerException.class,
+            () -> new DeterministicTemporalCaptureOutcome.ReloadRejected(applied, null, cancelled));
+        assertThrows(IllegalArgumentException.class,
+            () -> new DeterministicTemporalCaptureOutcome.ReloadRejected(rejected, reloadRejected, cancelled));
+        assertThrows(IllegalArgumentException.class,
+            () -> new DeterministicTemporalCaptureOutcome.ReloadRejected(applied, reload, cancelled));
+        assertThrows(NullPointerException.class,
+            () -> new DeterministicTemporalCaptureOutcome.ContextRejected(rejected, null));
+        assertThrows(NullPointerException.class,
+            () -> new DeterministicTemporalCaptureOutcome.ReloadRejected(applied, reloadRejected, null));
+        assertThrows(NullPointerException.class,
+            () -> new DeterministicTemporalCaptureOutcome.PlanningRejected(null, cancelled));
+        assertThrows(NullPointerException.class,
+            () -> new DeterministicTemporalCaptureOutcome.PlanningRejected(reloaded, null));
+        assertThrows(IllegalArgumentException.class,
+            () -> new DeterministicTemporalCaptureOutcome.ResetRejected(reloaded, plan, reset, cancelled));
+        assertThrows(NullPointerException.class,
+            () -> new DeterministicTemporalCaptureOutcome.ResetRejected(null, plan, resetRejected, cancelled));
+        assertThrows(NullPointerException.class,
+            () -> new DeterministicTemporalCaptureOutcome.ResetRejected(reloaded, null, resetRejected, cancelled));
+        assertThrows(NullPointerException.class,
+            () -> new DeterministicTemporalCaptureOutcome.ResetRejected(reloaded, plan, null, cancelled));
+        assertThrows(NullPointerException.class,
+            () -> new DeterministicTemporalCaptureOutcome.ResetRejected(reloaded, plan, resetRejected, null));
+        assertThrows(IllegalArgumentException.class, () -> new DeterministicTemporalCaptureOutcome.ResetRejected(
+            reloaded, CapturePlan.empty(), resetRejected, cancelled
+        ));
+        assertThrows(IllegalArgumentException.class,
+            () -> new DeterministicTemporalCaptureOutcome.Failure(
+                DeterministicTemporalCaptureOutcome.FailureKind.OPERATION_FAILED, " "
+            ));
+        assertThrows(NullPointerException.class,
+            () -> new DeterministicTemporalCaptureOutcome.Failure(null, "failed"));
+        assertThrows(NullPointerException.class,
+            () -> new DeterministicTemporalCaptureOutcome.Failure(
+                DeterministicTemporalCaptureOutcome.FailureKind.CLEANUP_FAILED, null
+            ));
+        assertInvalidWarmupRejected(reloaded, plan, resetRejected, 1, 7, 1, 3, 4, cancelled);
+        assertInvalidWarmupRejected(reloaded, plan, reset, 0, 7, 1, 3, 4, cancelled);
+        assertInvalidWarmupRejected(reloaded, plan, reset, 1, 0, 1, 0, 1, cancelled);
+        assertInvalidWarmupRejected(reloaded, plan, reset, 1, 7, -1, 0, -1, cancelled);
+        assertInvalidWarmupRejected(reloaded, plan, reset, 1, 7, 1, -1, 0, cancelled);
+        assertInvalidWarmupRejected(reloaded, plan, reset, 1, 7, 1, 7, 8, cancelled);
+        assertInvalidWarmupRejected(reloaded, plan, reset, 1, 7, 1, 3, 5, cancelled);
+        assertThrows(NullPointerException.class, () -> new DeterministicTemporalCaptureOutcome.WarmupRejected(
+            null, plan, reset, 1, 7, 1, 0, 1, cancelled
+        ));
+        assertThrows(NullPointerException.class, () -> new DeterministicTemporalCaptureOutcome.WarmupRejected(
+            reloaded, null, reset, 1, 7, 1, 0, 1, cancelled
+        ));
+        assertThrows(NullPointerException.class, () -> new DeterministicTemporalCaptureOutcome.WarmupRejected(
+            reloaded, plan, null, 1, 7, 1, 0, 1, cancelled
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new DeterministicTemporalCaptureOutcome.WarmupRejected(
+            reloaded, CapturePlan.empty(), reset, 1, 7, 1, 0, 1, cancelled
+        ));
+        assertThrows(NullPointerException.class, () -> new DeterministicTemporalCaptureOutcome.WarmupRejected(
+            reloaded, plan, reset, 1, 7, 1, 0, 1, null
+        ));
+        assertThrows(ArithmeticException.class, () -> new DeterministicTemporalCaptureOutcome.WarmupRejected(
+            reloaded, plan, reset, 1, 2, Long.MAX_VALUE, 1, Long.MAX_VALUE, cancelled
+        ));
+        assertInvalidCaptureRejected(reloaded, plan, resetRejected, 1, 7, 1, 8, 9, 9, missedTarget);
+        assertInvalidCaptureRejected(reloaded, plan, reset, 0, 7, 1, 8, 9, 9, missedTarget);
+        assertInvalidCaptureRejected(reloaded, plan, reset, 1, -1, 1, 1, 2, 2, missedTarget);
+        assertInvalidCaptureRejected(reloaded, plan, reset, 1, 7, -1, 6, 7, 7, missedTarget);
+        assertInvalidCaptureRejected(reloaded, plan, reset, 1, 7, 1, 7, 8, 8, missedTarget);
+        assertInvalidCaptureRejected(reloaded, plan, reset, 1, 7, 1, 8, 8, 8, missedTarget);
+        assertInvalidCaptureRejected(reloaded, plan, reset, 1, 7, 1, 8, 9, 7, missedTarget);
+        assertThrows(NullPointerException.class, () -> new DeterministicTemporalCaptureOutcome.CaptureRejected(
+            null, plan, reset, 1, 7, 1, 8, 9, 9, missedTarget
+        ));
+        assertThrows(NullPointerException.class, () -> new DeterministicTemporalCaptureOutcome.CaptureRejected(
+            reloaded, null, reset, 1, 7, 1, 8, 9, 9, missedTarget
+        ));
+        assertThrows(NullPointerException.class, () -> new DeterministicTemporalCaptureOutcome.CaptureRejected(
+            reloaded, plan, null, 1, 7, 1, 8, 9, 9, missedTarget
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new DeterministicTemporalCaptureOutcome.CaptureRejected(
+            reloaded, CapturePlan.empty(), reset, 1, 7, 1, 8, 9, 9, missedTarget
+        ));
+        assertThrows(NullPointerException.class, () -> new DeterministicTemporalCaptureOutcome.CaptureRejected(
+            reloaded, plan, reset, 1, 7, 1, 8, 9, 9, null
+        ));
+        assertThrows(ArithmeticException.class, () -> new DeterministicTemporalCaptureOutcome.CaptureRejected(
+            reloaded, plan, reset, 1, 1, Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE,
+            missedTarget
+        ));
+        assertInvalidCaptured(reloaded, plan, resetRejected, 1, 7, 1, 8, capturedAtNine);
+        assertInvalidCaptured(reloaded, plan, reset, 0, 7, 1, 8, capturedAtNine);
+        assertInvalidCaptured(reloaded, plan, reset, 1, -1, 1, 8, capturedAtNine);
+        assertInvalidCaptured(reloaded, plan, reset, 1, 7, -1, 6, new CaptureResult(7, List.of()));
+        assertInvalidCaptured(reloaded, plan, reset, 1, 7, 1, 7, new CaptureResult(8, List.of()));
+        assertInvalidCaptured(reloaded, plan, reset, 1, 7, 1, 8, new CaptureResult(10, List.of()));
+        assertThrows(NullPointerException.class, () -> new DeterministicTemporalCaptureOutcome.Captured(
+            null, plan, reset, 1, 7, 1, 8, capturedAtNine
+        ));
+        assertThrows(NullPointerException.class, () -> new DeterministicTemporalCaptureOutcome.Captured(
+            reloaded, plan, null, 1, 7, 1, 8, capturedAtNine
+        ));
+        assertThrows(NullPointerException.class, () -> new DeterministicTemporalCaptureOutcome.Captured(
+            reloaded, plan, reset, 1, 7, 1, 8, null
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new DeterministicTemporalCaptureOutcome.Captured(
+            reloaded, CapturePlan.empty(), reset, 1, 7, 1, 8, new CaptureResult(9, List.of())
+        ));
+        assertInvalidCaptured(reloaded, plan, reset, 1, 7, 1, 8, new CaptureResult(9, List.of()));
+        assertInvalidCaptured(reloaded, plan, reset, 1, 7, 1, 8, capturedWithIdentity(
+            9, "wrong-name", "colortex0", ResourceCatalog.ResourceKind.TEXTURE
+        ));
+        assertInvalidCaptured(reloaded, plan, reset, 1, 7, 1, 8, capturedWithIdentity(
+            9, "colortex0", "colortex1", ResourceCatalog.ResourceKind.TEXTURE
+        ));
+        assertInvalidCaptured(reloaded, plan, reset, 1, 7, 1, 8, capturedWithIdentity(
+            9, "colortex0", "colortex0", ResourceCatalog.ResourceKind.BUFFER
+        ));
+        assertThrows(ArithmeticException.class, () -> new DeterministicTemporalCaptureOutcome.Captured(
+            reloaded, plan, reset, 1, 1, Long.MAX_VALUE, Long.MAX_VALUE, capturedAtNine
+        ));
+        assertThrows(ArithmeticException.class, () -> new DeterministicTemporalCaptureOutcome.Captured(
+            reloaded, plan, reset, 1, 0, Long.MAX_VALUE, Long.MAX_VALUE,
+            new CaptureResult(Long.MAX_VALUE, List.of())
+        ));
+        assertThrows(NullPointerException.class, () -> new DeterministicTemporalCaptureOutcome.Captured(
+            reloaded, null, reset, 1, 7, 1, 8, capturedAtNine
+        ));
+    }
+
+    @Test
+    void deterministicTemporalCapturedRequiresExactResourceFramesAndOutputs() {
+        DeterministicTemporalCaptureReloaded reloaded = reloaded(
+            ContextApplyResult.success(testContext()),
+            ReloadResult.success(EffectiveShaderSettings.empty(), List.of())
+        );
+        CapturePlan plan = capturePlanWithOutputs();
+        TemporalResetResult reset = new TemporalResetResult(true);
+        List<CapturePlan.ArtifactOutputSpec> outputs = plan.targets().get(0).outputs();
+        List<CaptureResult.CapturedArtifact> exact = outputs.stream()
+            .map(RuntimeAdapterContractTest::capturedArtifact)
+            .toList();
+        CaptureResult exactCapture = capturedWithArtifacts(plan, 9, 9, exact);
+
+        var captured = new DeterministicTemporalCaptureOutcome.Captured(
+            reloaded, plan, reset, 1, 7, 1, 8, exactCapture
+        );
+        assertEquals(exact, captured.capture().groups().get(0).artifacts());
+
+        assertInvalidCaptured(reloaded, plan, reset, 1, 7, 1, 8,
+            capturedWithArtifacts(plan, 9, 8, exact));
+        assertInvalidCaptured(reloaded, plan, reset, 1, 7, 1, 8,
+            capturedWithArtifacts(plan, 9, 9, exact.subList(0, 2)));
+        assertInvalidCaptured(reloaded, plan, reset, 1, 7, 1, 8,
+            capturedWithArtifacts(plan, 9, 9, List.of(exact.get(1), exact.get(0), exact.get(2))));
+
+        CapturePlan.ArtifactOutputSpec primary = outputs.get(0);
+        assertInvalidCaptured(reloaded, plan, reset, 1, 7, 1, 8, capturedWithArtifacts(plan, 9, 9, List.of(
+            new CaptureResult.CapturedArtifact(
+                "wrong.png", primary.format(), primary.role(), primary.subresourceIndex()
+            ),
+            exact.get(1),
+            exact.get(2)
+        )));
+        assertInvalidCaptured(reloaded, plan, reset, 1, 7, 1, 8, capturedWithArtifacts(plan, 9, 9, List.of(
+            new CaptureResult.CapturedArtifact(
+                primary.fileName(), CapturePlan.ArtifactFormat.EXR, primary.role(), primary.subresourceIndex()
+            ),
+            exact.get(1),
+            exact.get(2)
+        )));
+        assertInvalidCaptured(reloaded, plan, reset, 1, 7, 1, 8, capturedWithArtifacts(plan, 9, 9, List.of(
+            new CaptureResult.CapturedArtifact(
+                primary.fileName(), primary.format(), CapturePlan.ArtifactRole.METADATA, primary.subresourceIndex()
+            ),
+            exact.get(1),
+            exact.get(2)
+        )));
+
+        CapturePlan.ArtifactOutputSpec subresource = outputs.get(1);
+        assertInvalidCaptured(reloaded, plan, reset, 1, 7, 1, 8, capturedWithArtifacts(plan, 9, 9, List.of(
+            exact.get(0),
+            new CaptureResult.CapturedArtifact(
+                subresource.fileName(), subresource.format(), subresource.role(), 1
+            ),
+            exact.get(2)
+        )));
+
+        CapturePlan emptyOutputs = testCapturePlan();
+        assertInvalidCaptured(reloaded, emptyOutputs, reset, 1, 7, 1, 8,
+            capturedWithArtifacts(emptyOutputs, 9, 9, List.of(exact.get(0))));
+    }
+
+    @Test
+    void deterministicTemporalCaptureMethodIsARequiredHardCut() throws NoSuchMethodException {
+        var method = VibrisRuntimeAdapter.class.getMethod(
+            "captureDeterministicTemporalPhase",
+            DeterministicTemporalCaptureRequest.class,
+            DeterministicTemporalCapturePlanner.class,
+            ArtifactSink.class,
+            CancellationToken.class
+        );
+
+        assertTrue(Modifier.isAbstract(method.getModifiers()));
+        assertTrue(!method.isDefault());
+        assertEquals(CompletionStage.class, method.getReturnType());
+        assertEquals(1, Arrays.stream(VibrisRuntimeAdapter.class.getDeclaredMethods())
+            .filter(candidate -> candidate.getName().equals("captureDeterministicTemporalPhase"))
+            .count());
+        var plannerMethod = DeterministicTemporalCapturePlanner.class.getMethod(
+            "plan", ResourceCatalog.class, CompileCatalog.class
+        );
+        assertTrue(Modifier.isAbstract(plannerMethod.getModifiers()));
+        assertTrue(!plannerMethod.isDefault());
+        assertEquals(DeterministicTemporalCapturePlanning.class, plannerMethod.getReturnType());
+        assertTrue(DeterministicTemporalCaptureOutcome.class.isSealed());
+        assertEquals(List.of(
+            DeterministicTemporalCaptureOutcome.FailureKind.CANCELLED,
+            DeterministicTemporalCaptureOutcome.FailureKind.RESOURCE_NOT_FOUND,
+            DeterministicTemporalCaptureOutcome.FailureKind.ARTIFACT_TOO_LARGE,
+            DeterministicTemporalCaptureOutcome.FailureKind.ARTIFACT_QUOTA_EXCEEDED,
+            DeterministicTemporalCaptureOutcome.FailureKind.INVALID_CAPTURE,
+            DeterministicTemporalCaptureOutcome.FailureKind.MISSED_TARGET,
+            DeterministicTemporalCaptureOutcome.FailureKind.OPERATION_FAILED,
+            DeterministicTemporalCaptureOutcome.FailureKind.CLEANUP_FAILED
+        ), List.of(DeterministicTemporalCaptureOutcome.FailureKind.values()));
+        assertEquals(Set.of(
+            DeterministicTemporalCaptureOutcome.ContextRejected.class,
+            DeterministicTemporalCaptureOutcome.ReloadRejected.class,
+            DeterministicTemporalCaptureOutcome.PlanningRejected.class,
+            DeterministicTemporalCaptureOutcome.ResetRejected.class,
+            DeterministicTemporalCaptureOutcome.WarmupRejected.class,
+            DeterministicTemporalCaptureOutcome.CaptureRejected.class,
+            DeterministicTemporalCaptureOutcome.Captured.class
+        ), Set.of(DeterministicTemporalCaptureOutcome.class.getPermittedSubclasses()));
     }
 
     @Test
@@ -292,6 +697,28 @@ class RuntimeAdapterContractTest {
 
     @Test
     void kotlinDataCarriersPreserveJavaRecordAbi() {
+        assertRecord(DeterministicTemporalCaptureRequest.class,
+            "context", "preserveCurrentSettings", "settings", "warmupFrames");
+        assertRecord(DeterministicTemporalCapturePlanning.Planned.class, "plan");
+        assertRecord(DeterministicTemporalCapturePlanning.Rejected.class, "failure");
+        assertRecord(DeterministicTemporalCaptureReloaded.class,
+            "context", "reload", "reloadCompletedAtUnixMs", "resourceCatalog", "compileCatalog");
+        assertRecord(DeterministicTemporalCaptureOutcome.ContextRejected.class, "context", "failure");
+        assertRecord(DeterministicTemporalCaptureOutcome.ReloadRejected.class,
+            "context", "reload", "failure");
+        assertRecord(DeterministicTemporalCaptureOutcome.PlanningRejected.class, "reloaded", "failure");
+        assertRecord(DeterministicTemporalCaptureOutcome.ResetRejected.class,
+            "reloaded", "plan", "reset", "failure");
+        assertRecord(DeterministicTemporalCaptureOutcome.Failure.class, "kind", "message");
+        assertRecord(DeterministicTemporalCaptureOutcome.WarmupRejected.class,
+            "reloaded", "plan", "reset", "resetCompletedAtUnixMs", "warmupFrames", "anchorFrame",
+            "completedFrames", "currentFrame", "failure");
+        assertRecord(DeterministicTemporalCaptureOutcome.CaptureRejected.class,
+            "reloaded", "plan", "reset", "resetCompletedAtUnixMs", "warmupFrames", "anchorFrame",
+            "warmupEndFrame", "targetFrame", "terminalFrame", "failure");
+        assertRecord(DeterministicTemporalCaptureOutcome.Captured.class,
+            "reloaded", "plan", "reset", "resetCompletedAtUnixMs", "warmupFrames", "anchorFrame",
+            "warmupEndFrame", "capture");
         assertRecord(CapturePlan.class, "targets");
         assertRecord(CapturePlan.ResourceSelector.class, "kind", "logicalName", "textureView", "mipLevel", "layer");
         assertRecord(CapturePlan.Target.class, "resource", "format", "artifactName", "outputs");
@@ -385,6 +812,41 @@ class RuntimeAdapterContractTest {
         }
 
         @Override
+        public CompletionStage<DeterministicTemporalCaptureOutcome> captureDeterministicTemporalPhase(
+            DeterministicTemporalCaptureRequest request,
+            DeterministicTemporalCapturePlanner planner,
+            ArtifactSink sink,
+            CancellationToken cancellation
+        ) {
+            ResourceCatalog resources = ResourceCatalog.of(List.of(textureDescriptor("colortex0", 9)), List.of());
+            CompileCatalog compile = CompileCatalog.empty(1);
+            var reloaded = new DeterministicTemporalCaptureReloaded(
+                ContextApplyResult.success(request.context()),
+                ReloadResult.success(EffectiveShaderSettings.empty(), List.of()),
+                1,
+                resources,
+                compile
+            );
+            var planning = planner.plan(resources, compile);
+            if (planning instanceof DeterministicTemporalCapturePlanning.Rejected rejected) {
+                return CompletableFuture.completedFuture(new DeterministicTemporalCaptureOutcome.PlanningRejected(
+                    reloaded, rejected.failure()
+                ));
+            }
+            CapturePlan plan = ((DeterministicTemporalCapturePlanning.Planned) planning).plan();
+            return CompletableFuture.completedFuture(new DeterministicTemporalCaptureOutcome.Captured(
+                reloaded,
+                plan,
+                new TemporalResetResult(true),
+                1,
+                request.warmupFrames(),
+                1,
+                1 + request.warmupFrames(),
+                captured(plan, 2L + request.warmupFrames())
+            ));
+        }
+
+        @Override
         public CompletionStage<CapturePlan.AfterPassReceipt> captureAfterPass(
             CapturePlan.AfterPassRequest request,
             ArtifactSink sink,
@@ -406,5 +868,163 @@ class RuntimeAdapterContractTest {
             1, 1, 1, 1, 1, "RGBA8", 4, ResourceCatalog.ScalarType.UINT8,
             4, frameId, name, "render_target", "TEXTURE_2D", "RGBA", "unorm", 8, "RGBA", "UNSIGNED_BYTE"
         );
+    }
+
+    private static SceneContext testContext() {
+        return new SceneContext(
+            "test-save", "minecraft:overworld", "noon", "clear", "origin", 70.0,
+            new SceneContext.Resolution(640, 360), "default"
+        );
+    }
+
+    private static CapturePlan testCapturePlan() {
+        return new CapturePlan(List.of(new CapturePlan.Target(
+            new CapturePlan.ResourceSelector(
+                ResourceCatalog.ResourceKind.TEXTURE,
+                "colortex0",
+                ResourceCatalog.TextureView.CURRENT,
+                0,
+                0
+            ),
+            CapturePlan.ArtifactFormat.PNG,
+            "colortex0",
+            List.of()
+        )));
+    }
+
+    private static CapturePlan capturePlanWithOutputs() {
+        return new CapturePlan(List.of(new CapturePlan.Target(
+            new CapturePlan.ResourceSelector(
+                ResourceCatalog.ResourceKind.TEXTURE,
+                "colortex0",
+                ResourceCatalog.TextureView.CURRENT,
+                0,
+                0
+            ),
+            CapturePlan.ArtifactFormat.PNG,
+            "colortex0",
+            List.of(
+                new CapturePlan.ArtifactOutputSpec(
+                    "colortex0.png", CapturePlan.ArtifactFormat.PNG, CapturePlan.ArtifactRole.PRIMARY, null
+                ),
+                new CapturePlan.ArtifactOutputSpec(
+                    "colortex0-layer-0.png", CapturePlan.ArtifactFormat.PNG,
+                    CapturePlan.ArtifactRole.SUBRESOURCE, 0
+                ),
+                new CapturePlan.ArtifactOutputSpec(
+                    "colortex0.json", CapturePlan.ArtifactFormat.JSON, CapturePlan.ArtifactRole.METADATA, null
+                )
+            )
+        )));
+    }
+
+    private static CaptureResult.CapturedArtifact capturedArtifact(CapturePlan.ArtifactOutputSpec output) {
+        return new CaptureResult.CapturedArtifact(
+            output.fileName(), output.format(), output.role(), output.subresourceIndex()
+        );
+    }
+
+    private static CaptureResult capturedWithArtifacts(
+        CapturePlan plan,
+        long frameId,
+        long resourceFrameId,
+        List<CaptureResult.CapturedArtifact> artifacts
+    ) {
+        CapturePlan.Target target = plan.targets().get(0);
+        return new CaptureResult(frameId, List.of(new CaptureResult.ArtifactGroup(
+            target.artifactName(),
+            textureDescriptor(target.resource().logicalName(), resourceFrameId),
+            artifacts
+        )));
+    }
+
+    private static CaptureResult captured(CapturePlan plan, long frameId) {
+        return new CaptureResult(frameId, plan.targets().stream().map(target -> new CaptureResult.ArtifactGroup(
+            target.artifactName(),
+            textureDescriptor(target.resource().logicalName(), frameId),
+            List.of()
+        )).toList());
+    }
+
+    private static CaptureResult capturedWithIdentity(
+        long frameId,
+        String artifactName,
+        String logicalName,
+        ResourceCatalog.ResourceKind kind
+    ) {
+        ResourceCatalog.ResourceDescriptor resource = kind == ResourceCatalog.ResourceKind.TEXTURE
+            ? textureDescriptor(logicalName, frameId)
+            : new ResourceCatalog.ResourceDescriptor(
+                logicalName, kind, List.of(), 0, 0, 0, 0, 0, "", 0,
+                ResourceCatalog.ScalarType.UNSPECIFIED, 0, frameId, "", "", "", "", "", 0, "", ""
+            );
+        return new CaptureResult(frameId, List.of(new CaptureResult.ArtifactGroup(
+            artifactName, resource, List.of()
+        )));
+    }
+
+    private static DeterministicTemporalCaptureReloaded reloaded(
+        ContextApplyResult context,
+        ReloadResult reload
+    ) {
+        return new DeterministicTemporalCaptureReloaded(
+            context, reload, 1, ResourceCatalog.empty(), CompileCatalog.empty(1)
+        );
+    }
+
+    private static DeterministicTemporalCaptureOutcome.Failure failure(
+        DeterministicTemporalCaptureOutcome.FailureKind kind
+    ) {
+        return new DeterministicTemporalCaptureOutcome.Failure(kind, kind.name());
+    }
+
+    private static void assertInvalidCaptured(
+        DeterministicTemporalCaptureReloaded reloaded,
+        CapturePlan plan,
+        TemporalResetResult reset,
+        long resetCompletedAtUnixMs,
+        int warmupFrames,
+        long anchorFrame,
+        long warmupEndFrame,
+        CaptureResult capture
+    ) {
+        assertThrows(IllegalArgumentException.class, () -> new DeterministicTemporalCaptureOutcome.Captured(
+            reloaded, plan, reset, resetCompletedAtUnixMs, warmupFrames, anchorFrame, warmupEndFrame, capture
+        ));
+    }
+
+    private static void assertInvalidWarmupRejected(
+        DeterministicTemporalCaptureReloaded reloaded,
+        CapturePlan plan,
+        TemporalResetResult reset,
+        long resetCompletedAtUnixMs,
+        int warmupFrames,
+        long anchorFrame,
+        int completedFrames,
+        long currentFrame,
+        DeterministicTemporalCaptureOutcome.Failure failure
+    ) {
+        assertThrows(IllegalArgumentException.class, () -> new DeterministicTemporalCaptureOutcome.WarmupRejected(
+            reloaded, plan, reset, resetCompletedAtUnixMs, warmupFrames, anchorFrame, completedFrames, currentFrame,
+            failure
+        ));
+    }
+
+    private static void assertInvalidCaptureRejected(
+        DeterministicTemporalCaptureReloaded reloaded,
+        CapturePlan plan,
+        TemporalResetResult reset,
+        long resetCompletedAtUnixMs,
+        int warmupFrames,
+        long anchorFrame,
+        long warmupEndFrame,
+        long targetFrame,
+        long terminalFrame,
+        DeterministicTemporalCaptureOutcome.Failure failure
+    ) {
+        assertThrows(IllegalArgumentException.class, () -> new DeterministicTemporalCaptureOutcome.CaptureRejected(
+            reloaded, plan, reset, resetCompletedAtUnixMs, warmupFrames, anchorFrame, warmupEndFrame, targetFrame,
+            terminalFrame, failure
+        ));
     }
 }

@@ -56,6 +56,13 @@ interface VibrisRuntimeAdapter : AutoCloseable {
         cancellation: CancellationToken,
     ): CompletionStage<CaptureResult>
 
+    fun captureDeterministicTemporalPhase(
+        request: DeterministicTemporalCaptureRequest,
+        planner: DeterministicTemporalCapturePlanner,
+        sink: ArtifactSink,
+        cancellation: CancellationToken,
+    ): CompletionStage<DeterministicTemporalCaptureOutcome>
+
     fun captureAfterPass(
         request: CapturePlan.AfterPassRequest,
         sink: ArtifactSink,

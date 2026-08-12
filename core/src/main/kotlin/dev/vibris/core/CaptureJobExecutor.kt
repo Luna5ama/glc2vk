@@ -13,6 +13,7 @@ import dev.vibris.protocol.v2.PatchedShadersReceipt
 import dev.vibris.protocol.v2.WaitFramesReceipt
 import java.io.IOException
 import java.nio.charset.StandardCharsets
+import java.util.Locale
 
 internal class CaptureJobExecutor(
     private val artifacts: ArtifactManager?,
@@ -40,12 +41,63 @@ internal class CaptureJobExecutor(
                 else -> emptyList()
             }
         }
-        val prepared = if (captures.isEmpty() && !ProfileResultArtifacts.requested(job.submission)) {
+        val prepared = if (
+            captures.isEmpty() && !program.planningSession.hasDeferredCaptures &&
+            !ProfileResultArtifacts.requested(job.submission)
+        ) {
             null
         } else {
             prepare(job, captures, program.estimatedBytes, diagnostics)
         }
         return ActionPrepared(program, prepared)
+    }
+
+    @Throws(RuntimeJobExecutor.Failure::class)
+    fun resolveDeferred(
+        prepared: Prepared,
+        program: CaptureProgramBuilder.ActionProgram,
+        step: CaptureProgramBuilder.ActionStep,
+        catalog: ResourceCatalog,
+    ): CaptureProgramBuilder.ResolvedCaptureGroup = try {
+        program.planningSession.resolveDeferred(step, catalog, prepared::addPlan)
+    } catch (exception: Exception) {
+        throw failure(exception)
+    }
+
+    @Throws(RuntimeJobExecutor.Failure::class)
+    fun failureCaptureReceipt(
+        plan: CapturePlan,
+        targetIndex: Int,
+        targetFrame: Long,
+        catalog: ResourceCatalog,
+        internalWait: WaitFramesReceipt?,
+    ): CaptureReceipt = try {
+        val target = plan.targets.getOrNull(targetIndex)
+            ?: throw IllegalArgumentException("Capture target index is out of bounds.")
+        val selector = target.resource
+        val resource = catalog.resources.singleOrNull {
+            it.kind == selector.kind && it.logicalName == selector.logicalName
+        } ?: throw CaptureResourceNotFoundException(selector.logicalName)
+        if (
+            selector.mipLevel >= maxOf(1, resource.mipLevels) ||
+            selector.layer >= maxOf(1, resource.layers) ||
+            (selector.kind == ResourceCatalog.ResourceKind.TEXTURE && selector.textureView !in resource.availableViews)
+        ) {
+            throw CaptureResourceNotFoundException(selector.logicalName)
+        }
+        val captured = CaptureResult(
+            targetFrame,
+            listOf(
+                CaptureResult.ArtifactGroup(
+                    target.artifactName,
+                    resource.copy(frameId = targetFrame),
+                    emptyList(),
+                ),
+            ),
+        )
+        protocol.captureReceipt(plan, captured, targetIndex, JobResult.getDefaultInstance(), internalWait)
+    } catch (exception: Exception) {
+        throw failure(exception)
     }
 
     @Throws(RuntimeJobExecutor.Failure::class)
@@ -60,20 +112,15 @@ internal class CaptureJobExecutor(
         val shaderLog = shaderLog(diagnostics)
         var transaction: ArtifactManager.JobTransaction? = null
         try {
-            val manifestFileCount = capturePlans.sumOf { plan ->
-                plan.targets.sumOf { target -> target.outputs.size }
-            } + 9
+            val outputFileCount = outputFileCount(capturePlans)
             transaction = manager.beginJob(
                 job.workspaceId,
                 job.submission.jobId,
                 job.requestId,
                 job.submission.workloadCase.name.removeSuffix("_WORKLOAD").lowercase(),
-                Math.addExact(
-                    Math.addExact(estimate, shaderLog.size.toLong()),
-                    ArtifactManifest.reservationBytes(manifestFileCount),
-                ),
+                reservationBytes(estimate, shaderLog.size.toLong(), outputFileCount),
             )
-            return Prepared(transaction, capturePlans, diagnostics)
+            return Prepared(transaction, capturePlans, diagnostics, shaderLog.size.toLong(), estimate)
         } catch (exception: Exception) {
             closeAfterFailure(transaction, exception)
             throw failure(exception)
@@ -167,25 +214,92 @@ internal class CaptureJobExecutor(
         internal val transaction: ArtifactManager.JobTransaction,
         capturePlans: List<CapturePlan>,
         diagnostics: List<ReloadResult.Diagnostic>,
+        private val shaderLogBytes: Long,
+        estimatedBytes: Long,
     ) : AutoCloseable {
-        internal val plans: List<CapturePlan> = java.util.List.copyOf(capturePlans)
+        private val mutablePlans = ArrayList(capturePlans)
+        private val initialArtifactNames = capturePlans
+            .flatMap { plan -> plan.targets.flatMap(CapturePlan.Target::outputs) }
+            .map { output -> output.fileName.lowercase(Locale.ROOT) }
+        private val artifactNames = HashSet(initialArtifactNames)
+        private var estimatedCaptureBytes = estimatedBytes
+        private var outputFileCount = outputFileCount(capturePlans)
+        private var requestedReservationBytes = reservationBytes(
+            estimatedCaptureBytes,
+            shaderLogBytes,
+            outputFileCount,
+        )
+        internal val plans: List<CapturePlan>
+            get() = java.util.List.copyOf(mutablePlans)
         internal val diagnostics = ArrayList(diagnostics)
         private var shaderLogWritten = false
+
+        init {
+            require(estimatedBytes >= 0) { "Capture estimate must not be negative." }
+            if (initialArtifactNames.size != artifactNames.size) {
+                throw IOException("Capture artifact names are repeated.")
+            }
+        }
 
         fun plan(): CapturePlan = plans.first()
 
         fun sink(): ArtifactManager.JobTransaction = transaction
 
-        fun checkpoint(): ArtifactJobTransaction.Checkpoint = transaction.checkpoint()
+        @Synchronized
+        fun checkpoint(): PreparedCheckpoint = PreparedCheckpoint(
+            transaction.checkpoint(),
+            mutablePlans.size,
+            java.util.Set.copyOf(artifactNames),
+            estimatedCaptureBytes,
+            outputFileCount,
+            requestedReservationBytes,
+        )
 
+        @Synchronized
         @Throws(IOException::class)
-        fun rollback(checkpoint: ArtifactJobTransaction.Checkpoint) {
-            transaction.rollback(checkpoint)
+        fun rollback(checkpoint: PreparedCheckpoint) {
+            var rollbackFailure: IOException? = null
+            try {
+                transaction.rollback(checkpoint.transaction)
+            } catch (exception: IOException) {
+                rollbackFailure = exception
+            } finally {
+                while (mutablePlans.size > checkpoint.planCount) mutablePlans.removeLast()
+                artifactNames.clear()
+                artifactNames.addAll(checkpoint.artifactNames)
+                estimatedCaptureBytes = checkpoint.estimatedCaptureBytes
+                outputFileCount = checkpoint.outputFileCount
+                requestedReservationBytes = checkpoint.requestedReservationBytes
+            }
+            rollbackFailure?.let { throw it }
         }
 
         fun addDiagnostics(additional: List<ReloadResult.Diagnostic>) {
             check(!shaderLogWritten) { "Shader log has already been finalized." }
             diagnostics.addAll(additional)
+        }
+
+        @Throws(IOException::class)
+        @Synchronized
+        fun addPlan(plan: CapturePlan, estimatedBytes: Long) {
+            require(estimatedBytes >= 0) { "Capture estimate must not be negative." }
+            val newNames = plan.targets.flatMap(CapturePlan.Target::outputs)
+                .map { output -> output.fileName.lowercase(Locale.ROOT) }
+            if (newNames.size != newNames.toSet().size || newNames.any(artifactNames::contains)) {
+                throw IOException("Capture artifact names are repeated.")
+            }
+            val newEstimate = Math.addExact(estimatedCaptureBytes, estimatedBytes)
+            val newFileCount = Math.addExact(
+                outputFileCount,
+                outputFileCount(listOf(plan)),
+            )
+            val reservation = reservationBytes(newEstimate, shaderLogBytes, newFileCount)
+            checkNotNull(artifacts).reserve(transaction, reservation)
+            mutablePlans.add(plan)
+            artifactNames.addAll(newNames)
+            estimatedCaptureBytes = newEstimate
+            outputFileCount = newFileCount
+            requestedReservationBytes = reservation
         }
 
         @Throws(IOException::class)
@@ -207,6 +321,15 @@ internal class CaptureJobExecutor(
     data class ActionPrepared(
         val program: CaptureProgramBuilder.ActionProgram,
         val prepared: Prepared?,
+    )
+
+    data class PreparedCheckpoint internal constructor(
+        internal val transaction: ArtifactJobTransaction.Checkpoint,
+        internal val planCount: Int,
+        internal val artifactNames: Set<String>,
+        internal val estimatedCaptureBytes: Long,
+        internal val outputFileCount: Int,
+        internal val requestedReservationBytes: Long,
     )
 
     companion object {
@@ -249,6 +372,16 @@ internal class CaptureJobExecutor(
                 original.addSuppressed(closeFailure)
             }
         }
+
+        private fun outputFileCount(plans: List<CapturePlan>): Int = plans.fold(0) { total, plan ->
+            plan.targets.fold(total) { count, target -> Math.addExact(count, target.outputs.size) }
+        }
+
+        private fun reservationBytes(estimate: Long, shaderLogBytes: Long, outputFileCount: Int): Long =
+            Math.addExact(
+                Math.addExact(estimate, shaderLogBytes),
+                ArtifactManifest.reservationBytes(Math.addExact(outputFileCount, 9)),
+            )
 
         private fun shaderLog(diagnostics: List<ReloadResult.Diagnostic>): ByteArray {
             if (diagnostics.isEmpty()) {

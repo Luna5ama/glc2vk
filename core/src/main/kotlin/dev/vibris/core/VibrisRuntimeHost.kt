@@ -7,6 +7,9 @@ import dev.vibris.api.CaptureResult
 import dev.vibris.api.CompileCatalog
 import dev.vibris.api.ContextApplyResult
 import dev.vibris.api.ContextValidationResult
+import dev.vibris.api.DeterministicTemporalCaptureOutcome
+import dev.vibris.api.DeterministicTemporalCapturePlanner
+import dev.vibris.api.DeterministicTemporalCaptureRequest
 import dev.vibris.api.RuntimeAction
 import dev.vibris.api.RuntimeEnvironment
 import dev.vibris.api.ReloadResult
@@ -42,6 +45,14 @@ interface VibrisRuntimeHost : AutoCloseable {
     fun compileCatalog(cancellation: CancellationToken): CompileCatalog
 
     fun resetTemporal(cancellation: CancellationToken): TemporalResetResult
+
+    fun captureDeterministicTemporalPhase(
+        request: DeterministicTemporalCaptureRequest,
+        planner: DeterministicTemporalCapturePlanner,
+        sink: ArtifactSink,
+        scheduler: DeterministicTemporalCaptureScheduler,
+        cancellation: CancellationToken,
+    ): CompletionStage<DeterministicTemporalCaptureOutcome>
 
     fun resourceCatalog(frameId: Long): ResourceCatalog
 
