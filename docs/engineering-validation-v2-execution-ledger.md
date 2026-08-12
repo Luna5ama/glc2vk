@@ -1620,9 +1620,12 @@ Expected commit title: `T20 record live v2 acceptance`
 
 Blockers:
 
-- Requires the user to separately deploy and start the matching strict-v2 MCP/Iris build and to provide two explicit
-  shader worktrees. The currently running Minecraft instance and configured MCP are pre-v2 and cannot be used through
-  a compatibility path. Never satisfy this blocker by autonomously deploying, restarting, or choosing worktrees.
+- The matching strict-v2 MCP/Iris build is deployed and running, and the user supplied the two exact shader worktrees.
+  The runtime now fails closed on the existing schema-v1
+  `I:\MultiMC\instances\1.21.11-Iris\.minecraft\config\vibris\server.json`. The user must stop Minecraft and move
+  that old configuration aside, or explicitly authorize that exact archival operation while Minecraft is stopped,
+  then start Minecraft again so strict-v2 defaults can be created. Never migrate, overwrite, delete, or consume the
+  old configuration, and never restart Minecraft autonomously.
 
 Evidence:
 
@@ -1671,6 +1674,30 @@ Evidence:
   runtime mutation, artifact write, or protected-state change occurred. This is the third consecutive Goal turn with
   the same external blocker; after this ledger-only atomic checkpoint the Goal is marked `blocked`, while T20 stays
   `BLOCKED` and T99 stays `PENDING`.
+- `2026-08-11` resumed-scope audit: Vibris entered at
+  `ba416b5db117ba5e985387b097e1d84c3fc21ef7`, Iris remained at
+  `38a7d2eaf88939983e0e01f731ccd4c627fbf6a9`, every declared auxiliary worktree and staging area remained clean, and
+  only the recorded protected untracked state remained. The user-authorized side-by-side deployment is now active:
+  `config.toml` selects the 15,350,272-byte MCP with SHA-256
+  `2BA67FAB3290C0222A4F5CA8FB62D8DF59DBD8C29808BEFEF460033C1922CC26`, direct stdio inspection returned exactly
+  eight schema-2 tools with concrete input/output schemas, and Java PID 8612 is the new listener on
+  `127.0.0.1:50051`. The installed 28,145,118-byte Iris mod has SHA-256
+  `C0E856A3F169E57DBC23283383A77059E82030A847B799EC468A890F02A1E02F`, zero nested protocol-v1 entries, and 536
+  protocol-v2 entries.
+- The user explicitly supplied `I:\code\mcshaders\Alpha-Piscium-4` and
+  `I:\code\mcshaders\Alpha-Piscium-3` for T20. Both are detached worktrees with empty staging areas at
+  `b793f75bc411b309142305ce062e17bc52b259c3` and `9325c7a091647a3d8243720d06802bdc2640292e` respectively.
+  Alpha-Piscium-3 is clean. Alpha-Piscium-4 has pre-existing user-owned tracked changes in `scripts/shadesmith.jar`,
+  `scripts/voxel-trace-contract.main.kts`, `shaders/techniques/voxel/BlockModels.glsl`,
+  `shaders/textures/block_model_quads.bin`, and `shaders/textures/pbr_lut_2.bin`, plus untracked
+  `scripts/block_model_aabbs.json`; T20 must preserve them and may only observe them as part of that supplied source.
+- Read-only `vibris_get_status` calls resolved independent workspace IDs
+  `e5e1f8a1-2532-4972-9bad-2dcf6a0c72cc` and `90485cf5-12a0-45b9-bb89-7141a9b7ee1e`, but both returned
+  `SERVER_STATE_FAILED`, `core_online=false`, and
+  `UNSUPPORTED_VERSION: server.json schema_version must be 2`. The exact old config is 366 bytes with SHA-256
+  `9CF549579FF4B8E4892504DB25D89A4C6C5F85673BFCDF0878F9A8739065BA70`; it was not read, migrated, overwritten,
+  moved, or deleted. No live job/action, artifact capture, source mutation, or process restart occurred. This is the
+  first blocked Goal turn after resumption; T20 remains `BLOCKED`, T99 remains `PENDING`, and the Goal remains active.
 
 ### T99 — Final integrated audit
 
@@ -1789,3 +1816,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T20 blocked - the live instance embeds 335 v1 and zero v2 protocol entries, the configured MCP publishes only the old five-tool surface, and no two shader worktrees were supplied; no compatibility path, deployment, or restart was attempted - Control-plane commit title: roadmap block T20 pending matching live scope`
 - `2026-08-11 - T20 blocker audit 2 - reverified the unchanged pre-v2 runtime/MCP and missing two-worktree scope; this is the second consecutive blocked Goal turn, so the Goal remains active - Control-plane commit title: roadmap recheck T20 live scope blocker`
 - `2026-08-11 - T20 blocker audit 3 - reverified the unchanged pre-v2 runtime/MCP and missing two-worktree scope for the third consecutive blocked Goal turn; the Goal is marked blocked after the ledger-only atomic checkpoint - Control-plane commit title: roadmap confirm T20 blocked awaiting live scope`
+- `2026-08-11 - T20 resumed scope audit - verified the deployed strict-v2 eight-tool MCP/mod and the two user-supplied shader worktrees, then found the runtime correctly rejecting the untouched schema-v1 server.json; T20 remains blocked pending user archival and restart - Control-plane commit title: roadmap record T20 v2 config blocker`
