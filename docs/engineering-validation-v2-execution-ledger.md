@@ -106,7 +106,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T19A | P0 | Vibris | Repair strict v2 live bootstrap | DONE | `T19A repair strict v2 live bootstrap` |
 | T19B | P0 | Vibris | Compact capture results and localize artifact paths | DONE | `T19B compact capture results and localize artifact paths` |
 | T19C | P0 | Iris | Make the main-menu runtime ready for jobs | DONE | `T19C make main menu runtime ready` |
-| T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | READY | `T20 record live v2 acceptance` |
+| T19D | P0 | Vibris | Return typed live GPU metric receipts | READY | `T19D return typed GPU metric receipts` |
+| T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | BLOCKED | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
 
 ## Task details
@@ -1891,11 +1892,83 @@ Evidence:
   Java PID 29756 still owns `127.0.0.1:50051`, and a fresh main-menu status call reproduced the exact available,
   connected, no-world/no-scene, can-accept/can-start receipt above with no active source, jobs, or queue.
 
-### T20 — Run live two-worktree 720p acceptance
+### T19D — Return typed live GPU metric receipts
 
 Status: `READY`
 
 Dependencies: T19C
+
+Repository: `I:\code\vibris`
+
+Worktree: `I:\code\vibris`
+
+Branch: `main`
+
+Primary files:
+
+- `I:\code\vibris\core\src\main\kotlin\dev\vibris\core\ActionJobExecutor.kt`
+- `I:\code\vibris\core\src\main\kotlin\dev\vibris\core\RuntimeActionProtocol.kt`
+- Focused Core action-receipt, profile, matrix, and paired-benchmark tests
+
+Scope:
+
+- Preserve the actual JSON returned by `VibrisRuntimeAdapter.executeAction(...)` for `GET_GPU_METRICS` and convert it
+  directly into the strict-v2 typed `GpuMetricsReceipt`, including sampled-frame count, timing unit, aggregate metric
+  identities/statistics/samples, scopes, and program metadata required by profile and benchmark normalization.
+- Apply the request's explicit metric-ID filter to the typed receipt and fail the action explicitly when live timing
+  output is empty, malformed, or omits a requested metric; never report a successful empty receipt.
+- Keep profile, profile-matrix, and paired-benchmark consumers on the one strict-v2 typed receipt path, then rebuild,
+  redeploy, restart the authorized MultiMC instance, and prove one live AP4 profile exposes selectable metrics before
+  T20 resumes.
+
+Non-scope:
+
+- Do not add legacy JSON fields, compatibility parsing, aliases, fallback metric names, synthetic timings, or a second
+  result shape.
+- Do not modify either shader worktree or claim the remaining T20 benchmark/statistical gate in this remediation.
+
+Acceptance:
+
+- A successful live `get_gpu_metrics` action contains a non-empty typed `gpu_metrics` receipt rather than `empty {}`.
+- Missing/malformed/filtered-out live timing data produces an explicit failed receipt and structured error.
+- Profile normalization returns the selected metrics and samples without retrying an OK-but-empty receipt.
+- Focused Core and native profile/benchmark tests pass, and the deployed MCP/Mod hashes match their build outputs.
+
+Verification:
+
+- `.\gradlew.bat :vibris-core:test --offline --console=plain`
+- Build and run the focused native strict-v2 profile, matrix, and paired-benchmark tests.
+- In Iris, rebuild the Fabric Mod, redeploy both authorized artifacts, restart the existing instance, and run a live
+  AP4 profile with the `night-gi-1-720p` preset.
+
+Expected commit title: `T19D return typed GPU metric receipts`
+
+Blockers:
+
+- None known.
+
+Evidence:
+
+- `2026-08-11`: T20 live job `dd650914-eb9f-4abb-9c08-b5ae0953b7bf` completed a one-frame
+  `get_gpu_metrics` action with `RECEIPT_STATUS_OK`, but its durable 146-byte result at
+  `I:\code\mcshaders\Alpha-Piscium-4\.vibris\artifact\940cbe24-fd7d-39a8-86b9-a44595c282e5\437aceb1-4f22-39b7-b766-6e196c1ace0a\result.json`
+  has SHA-256 `271294709FD6E37B253B9D03F68E4E8859857B630E8FF077D59540977219EF91` and contains only
+  action index, kind, and status: there is no typed `gpu_metrics` payload. Longer 60/120-frame direct requests and
+  profile retries reproduced the same OK-but-empty receipt.
+- `CaptureActionExecutor.execute(...)` returns the real asynchronous `ShaderDebugControl.captureMetrics(...)` JSON,
+  while `ActionJobExecutor` awaits and discards that returned string and unconditionally writes `EmptyReceipt` for
+  every runtime action. The strict-v2 synchronous profile normalizer only consumes `receipt.gpu_metrics`, so it
+  correctly cannot construct benchmark inputs from this live result. No compatibility path is permitted.
+- Before discovering this defect, T20 live checks had already proved main-menu startup, shared fair queueing, both
+  compile catalogs, settings provenance/restoration, an upright 720p screenshot, and exact texture/buffer boundaries;
+  those partial receipts remain evidence only and T20 is not promoted until this remediation and its benchmark gate
+  pass.
+
+### T20 — Run live two-worktree 720p acceptance
+
+Status: `BLOCKED`
+
+Dependencies: T19D
 
 Repository: `I:\code\vibris` and `I:\code\Iris`
 
@@ -1936,11 +2009,51 @@ Expected commit title: `T20 record live v2 acceptance`
 
 Blockers:
 
-- None. On `2026-08-11`, the user explicitly authorized this session to rebuild and redeploy the current MCP and Mod
+- Live strict-v2 GPU metric actions currently return successful `EmptyReceipt` values because Core discards the
+  runtime timing JSON. T19D must return typed metrics before the required paired-benchmark/statistical gate can run.
+- On `2026-08-11`, the user explicitly authorized this session to rebuild and redeploy the current MCP and Mod
   repeatedly and to restart the existing MultiMC `1.21.11-Iris` instance as needed. If the Codex application itself
   must restart to adopt a changed MCP command, stop after deployment and hand that restart to the user.
 
 Evidence:
+
+- `2026-08-11` live acceptance attempt after T19C: entry gates verified Vibris `main` at
+  `bca6169184b906b79ccec9352731f28a860e99dd`, Iris `1.21.11-shaderdev` at
+  `3f3e458ea9fe904398bb28e4a8e05cb4c22e7afc`, every declared auxiliary worktree/head, empty staging areas, and the
+  exact recorded protected/user-owned dirty state. The checker reported
+  `Ledger valid: 27 task(s); next=T20; READY=1, PENDING=1, BLOCKED=0, DONE=25, SUPERSEDED=0.` Source/deployed MCP
+  hashes matched at `8CD4AC8B9E93E6E75FD2F294340673A77C518AD833819300C0EB7D54F6F615C6`; source/installed Mod hashes matched at
+  `6950BBE417E098E8657F6A776720ABE69C7E67FD5B5BAAFA1F006551444DE9B8`.
+- Fresh main-menu status returned `SERVER_STATE_AVAILABLE`, `minecraft_connected=true`, `world_loaded=false`,
+  `scene_applied=false`, and both accept/start true. Baseline AP4 job `73ed671d-13f1-44db-bd84-9c7f3d871284`
+  loaded `night-gi-1-720p` and established source/settings/scene SHA-256 values
+  `d3ca7a48b7589b9b185ab3c9357364f3817776de138c163851a170d338153e65`,
+  `8313635afeae14ac96a2c3262474154f0942daf2a4315c20d878761b26d99944`, and
+  `6541ce12e1e9e7ecbea47971c0a7eec90fde0d50407b547377791b8c099fa674`.
+- Shared-runtime queueing exposed AP4 lease `ddad7b5b-7866-38a5-be6a-92afaa53b3f2` for job
+  `a78decbc-6c69-4e45-bb71-be42ce24f373` while AP3 job `8f583eef-1883-47c2-a327-1484e55d7a56` occupied queue
+  position 1. Both completed in order; AP3 recorded `queue_ms=49826`, and both restored the three AP4 baseline hashes.
+- AP4 compile-validation job `25482275-6656-4c48-b580-319ba5361ebc` passed its complete intended catalog with no
+  diagnostics. AP3 job `cf1f8111-e90d-4417-8700-0c7d577dd094` passed 182/182 programs for clean revision
+  `9325c7a091647a3d8243720d06802bdc2640292e` and source SHA-256
+  `3a68d7ba4c2e30b139affee23fd3b42e5f4e4cdd57d379df1c53afd568e4b61b`; final active source returned to AP4.
+- Transaction `4bfac181-9790-45da-b520-4d358445c289` proved `SETTING_DEBUG_WHITE_WORLD=false` with origin
+  `SHADER_SETTING_ORIGIN_PRESERVED_CURRENT`, then `true` with origin `SHADER_SETTING_ORIGIN_REQUEST_OVERRIDE`, and
+  restored the exact AP4 source/settings/scene hashes. Screenshot job `86b51a39-ebb9-4669-8207-1ccc7c31c955`
+  produced an upright 1280x720 image at the worktree-local artifact path, 1,813,283 bytes with SHA-256
+  `93C57BAEE9923C0E70B86F3426AD853C5E6BC723A5B35174FD21E79BA20945B9`; its 1,535-byte manifest has SHA-256
+  `380ACCFB0CA0AB633EA2B82FD5DD244138CD79112343CDC315814C5E9BB3E4C4` and restoration matched all three axes.
+- Grouped exact-boundary job `01424583-1c8b-4c2f-9abf-f1f89e38d31c` captured `colortex0.main` and
+  `colortex0.alt` after `final/final` in frame 8473. Their upright current and dark alternate PNGs differ at SHA-256
+  `6098C0B5211D8B395DD157947E0FF2389473DAC17E4AB2EE942B765AAED09AED` and
+  `2D726ADAF5DC3FA1002583CC7E34B893653EEBBE742252F9452A9B484B52714B`. The same frame's 16,384-byte
+  `iris_ssbo_0` captures after `composite/composite14` and `composite/composite15` differ at SHA-256
+  `9B020A0288853532827D9C799CE58802BEB589F606844119D6B03CE7636FC218` and
+  `120031CEB7288F460B3D71E26D2989220EA99CA9E81E2B2FB6BFE971386676AA`, proving the RC clear/touch boundary; the
+  result and manifest hashes are `8476B6E322A67C91D739DCE1A59E816EC89CD3DB8D032481EF3AC9422EA03BCB` and
+  `C07EEE84D7638C863F10A1D237EC1D9560D8837E0298484EB6F3DDFA0811EE49`. Restoration again matched all three axes.
+- The subsequent live metric failure is recorded under T19D. T20 stops before benchmark completion and remains
+  `BLOCKED`; no shader source was modified or staged.
 
 - `2026-08-11`: entry gates verified Vibris `main` at
   `4fe98606bb879f589ea706e6f11f76981d8fec76`, Iris `1.21.11-shaderdev` at
@@ -2152,7 +2265,7 @@ Evidence:
 
 Status: `PENDING`
 
-Dependencies: T01, T02, T02A, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T12A, T13, T14, T15, T16, T17, T18, T19, T19A, T19B, T19C, T20
+Dependencies: T01, T02, T02A, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T12A, T13, T14, T15, T16, T17, T18, T19, T19A, T19B, T19C, T19D, T20
 
 Repository: `I:\code\vibris`
 
@@ -2206,7 +2319,7 @@ Evidence:
 ```text
 T00 -> T01 -> T02 -> T02A -> T03 -> T04 -> T05 -> T06 -> T07 -> T08 -> T09
     -> T10 -> T11 -> T12 -> T12A -> T13 -> T14 -> T15 -> T16 -> T17 -> T18
-    -> T19 -> T19A -> T19B -> T19C -> T20 -> T99
+    -> T19 -> T19A -> T19B -> T19C -> T19D -> T20 -> T99
 ```
 
 Queue order is authoritative and serial even where technical dependencies could allow parallel work.
@@ -2282,3 +2395,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T20 post-T19B blocker audit 2 - reverified the unchanged stale MCP/Mod deployment and disconnected runtime for the second consecutive Goal turn; new Alpha-Piscium-6 dirt was protected as user-owned - Control-plane commit title: roadmap recheck T20 current live deployment blocker`
 - `2026-08-11 - T20 post-T19B blocker audit 3 - reverified the unchanged stale MCP/Mod deployment and disconnected runtime for the third consecutive Goal turn; the Goal is marked blocked after the ledger-only checkpoint - Control-plane commit title: roadmap confirm T20 blocked on current live deployment`
 - `2026-08-11 - T20 unblocked after T19B - user authorized repeated current MCP/Mod deployments and MultiMC 1.21.11-Iris restarts for this session; Codex restart remains user-owned - Control-plane commit title: roadmap unblock T20 for authorized live deployment`
+- `2026-08-11 - T19D inserted - live get_gpu_metrics completed OK but Core discarded the runtime JSON and emitted EmptyReceipt, preventing profile and paired-benchmark statistics; inserted a no-compatibility typed metric-receipt remediation before T20 - Control-plane commit title: roadmap insert T19D typed GPU metric remediation`
