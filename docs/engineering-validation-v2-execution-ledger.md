@@ -2473,6 +2473,15 @@ Evidence:
   `b793f75bc411b309142305ce062e17bc52b259c3`; no authorization has changed the no-shader-change/no-state-reuse
   acceptance contract. The queue therefore still has no `READY` task, and no product code, deployment, process, or
   runtime job was changed.
+- `2026-08-12` blocker audit 3 re-read the complete ledger and reverified Vibris `main` at
+  `253b93563af036ab1fef61d641f0cec9a54f3014`, Iris `1.21.11-shaderdev` at
+  `bf5055039e134d3bcca8d4801e0091c3eb33d9ca`, all declared review/runtime/shader worktrees, empty staging areas, and
+  every protected dirty boundary. AP4 remains detached at the supplied immutable commit
+  `b793f75bc411b309142305ce062e17bc52b259c3`, and its allocator still assigns IDs through the unchanged
+  cross-workgroup `atomicAdd(voxel_bucketCounts[dist], 1u)`. No scope authorization permits changing that shader or
+  reusing GPU state, so `T19I`, `T19H`, and `T20` remain `BLOCKED`, `T99` remains `PENDING`, and the queue has no
+  `READY` task. No product code, shader, deployment, process, configuration, artifact, or runtime job was changed;
+  after this ledger-only atomic checkpoint the Goal is marked `blocked` on its third consecutive identical audit.
 
 ### T19H — Make paired visual capture deterministic
 
@@ -3037,3 +3046,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-12 - T19H inserted - an exact same-clean-commit AP4 comparison under night-gi-1-720p matched source, settings, scene, and all visual guards but failed only threshold-pixel ratio because ab_compare omitted temporal reset before each equal warmup; inserted a no-threshold-change deterministic-phase remediation before T20 - Control-plane commit title: roadmap insert T19H visual determinism remediation`
 - `2026-08-12 - T19I inserted - T19H's ordered planner resets passed focused tests and both typed receipts, but two direct same-clean-commit live jobs still failed the unchanged pixel-ratio gate; Core leaves load/reset/wait/capture as non-atomic handoffs and Iris resumes shader time from wall-clock deltas, so a no-compatibility cross-repository compound temporal-phase remediation is inserted before T19H - Control-plane commit title: roadmap insert T19I frame atomic temporal remediation`
 - `2026-08-12 - T19I blocker audit 2 - reverified the unchanged AP4 cross-workgroup allocation-ID nondeterminism, exact repository/worktree identities, and protected state for the second consecutive blocked Goal turn; no READY task exists and the Goal remains active - Control-plane commit title: roadmap recheck T19I allocator blocker`
+- `2026-08-12 - T19I blocker audit 3 - reverified the unchanged AP4 cross-workgroup allocation-ID nondeterminism, exact repository/worktree identities, and protected state for the third consecutive blocked Goal turn; after the ledger-only checkpoint the Goal is marked blocked - Control-plane commit title: roadmap confirm T19I blocked on shader allocator`
