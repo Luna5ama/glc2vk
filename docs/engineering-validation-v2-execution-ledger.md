@@ -1698,6 +1698,22 @@ Evidence:
   `9CF549579FF4B8E4892504DB25D89A4C6C5F85673BFCDF0878F9A8739065BA70`; it was not read, migrated, overwritten,
   moved, or deleted. No live job/action, artifact capture, source mutation, or process restart occurred. This is the
   first blocked Goal turn after resumption; T20 remains `BLOCKED`, T99 remains `PENDING`, and the Goal remains active.
+- `2026-08-11` resumed blocker audit 2: Vibris remained on `main` at
+  `2b8e9e5589568af05a5260479135ecb69dd0d96c`, Iris remained on `1.21.11-shaderdev` at
+  `38a7d2eaf88939983e0e01f731ccd4c627fbf6a9`, all declared auxiliary worktrees, staging areas, and protected state
+  remained exact, and the ledger checker still reported `READY=0, PENDING=1, BLOCKED=1, DONE=22`. The supplied
+  Alpha-Piscium-4 and Alpha-Piscium-3 worktrees remained at their recorded detached HEADs with the exact recorded
+  user-owned dirty/clean states and empty staging areas. The same Java PID 8612 continued listening from its original
+  start time, while the deployed MCP and mod hashes remained
+  `2BA67FAB3290C0222A4F5CA8FB62D8DF59DBD8C29808BEFEF460033C1922CC26` and
+  `C0E856A3F169E57DBC23283383A77059E82030A847B799EC468A890F02A1E02F`.
+- The old `server.json` remained byte-for-byte unchanged at 366 bytes with SHA-256
+  `9CF549579FF4B8E4892504DB25D89A4C6C5F85673BFCDF0878F9A8739065BA70`. Fresh read-only status calls for both
+  recorded workspace IDs again returned schema 2 envelopes with `SERVER_STATE_FAILED`, `can_accept_job=false`,
+  `can_start_job=false`, `core_online=false`, and the identical `UNSUPPORTED_VERSION` detail. No configuration
+  content was read, and no migration, overwrite, move, deletion, live job/action, artifact capture, source mutation,
+  deployment, or process restart occurred. This is the second consecutive blocked Goal turn after resumption; T20
+  remains `BLOCKED`, T99 remains `PENDING`, and the Goal remains active.
 
 ### T99 — Final integrated audit
 
@@ -1817,3 +1833,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-11 - T20 blocker audit 2 - reverified the unchanged pre-v2 runtime/MCP and missing two-worktree scope; this is the second consecutive blocked Goal turn, so the Goal remains active - Control-plane commit title: roadmap recheck T20 live scope blocker`
 - `2026-08-11 - T20 blocker audit 3 - reverified the unchanged pre-v2 runtime/MCP and missing two-worktree scope for the third consecutive blocked Goal turn; the Goal is marked blocked after the ledger-only atomic checkpoint - Control-plane commit title: roadmap confirm T20 blocked awaiting live scope`
 - `2026-08-11 - T20 resumed scope audit - verified the deployed strict-v2 eight-tool MCP/mod and the two user-supplied shader worktrees, then found the runtime correctly rejecting the untouched schema-v1 server.json; T20 remains blocked pending user archival and restart - Control-plane commit title: roadmap record T20 v2 config blocker`
+- `2026-08-11 - T20 resumed blocker audit 2 - reverified the unchanged schema-v1 server.json rejection, strict-v2 deployment, two workspace identities, and protected worktree state; this is the second blocked Goal turn after resumption, so the Goal remains active - Control-plane commit title: roadmap recheck T20 v2 config blocker`
