@@ -2640,6 +2640,13 @@ Evidence:
   true. T19I live proof remains inadmissible without an external recovery-state change; no cancellation, override,
   deployment, process restart, or protected-file mutation was performed. This is the third identical blocker audit;
   the Goal is marked blocked after this ledger-only checkpoint.
+- `2026-08-13` the user resumed the blocked Goal for a fresh audit. The direct executable still reports the same
+  `Alpha-Piscium-5` recovery lease and `SERVER_STATE_RECOVERING` through `06:40:02`; querying its durable job
+  `cdf1d956-0863-41ed-a093-20451bb3d86e` confirms it remains `paused` with `ERROR_CODE_RESTORE_FAILED` and the
+  explicit instruction to keep the runtime open, repair the link/bridge, and submit `recover_runtime`. The live
+  shader link still targets synthetic pending source `6fd993d2-40fd-46eb-aa02-f7e25ca2e674`. Because that lease is
+  owned by another authorized task, T19I does not cancel, override, recover, deploy, or restart it; this resumed
+  continuation records the blocker and leaves the Goal active for a future recheck.
 
 ### T19H — Make paired visual capture deterministic
 
