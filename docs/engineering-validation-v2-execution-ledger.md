@@ -2583,6 +2583,12 @@ Evidence:
   (`881d9500-3332-4d8e-ace4-79b6af20829f`, `768d176e-a54f-334b-a4b7-b34927ff053d`); status reported
   `can_accept_job=false`, `can_start_job=false`, and `SERVER_STATE_RECOVERING`. Minecraft was restarted only under
   the user's authorization; Codex was not restarted, and no other repository or protected T19H file was touched.
+- `2026-08-13` direct polling of the newly built MCP executable rechecked the same shared-runtime lease six times
+  over 30 seconds. The lease remained `881d9500-3332-4d8e-ace4-79b6af20829f` at
+  `JOB_STAGE_RECOVERING` with `can_accept_job=false`, `can_start_job=false`, and artifact usage
+  `3198825605/3221225472` bytes. No T19I compile or live comparison could be admitted; the external recovery was
+  not cancelled or overridden, Minecraft and Codex were not restarted, and all protected repositories remained
+  untouched.
 
 ### T19H — Make paired visual capture deterministic
 
