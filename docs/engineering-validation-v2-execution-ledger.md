@@ -2575,14 +2575,18 @@ Evidence:
   quiescence gate (`requested=65104`, `finalized=0`). The fixture was amended to commit
   `7c2fea6ba692c6bff14c2f2dcab9f4f9ce9ea2e5`, adding only no-op shadow entrypoints alongside the deterministic
   compute/final display path; its six-file snapshot is `342b3ebef4f4dee4b9c201754b9df69314af22d883214b5348da25b2689ba2e8`.
-- Direct load job `ad665900-bea3-4974-b42b-c908d35c0114` used the amended clean commit and exact preset, but still
-  failed closed at the prelude with `world_load_failed`: shadow render-list generation remained pending
-  (`requested=65126`, `finalized=0`). Its restoration receipt preserved the exact synthetic source/config/scene hashes
-  and no artifact was published. A follow-up compile-validation job `ff86d26e-fc59-4011-a8e1-e02c69925ab1` could not
-  start because the shared runtime was held by an external `Alpha-Piscium-4b` recovery lease
-  (`881d9500-3332-4d8e-ace4-79b6af20829f`, `768d176e-a54f-334b-a4b7-b34927ff053d`); status reported
-  `can_accept_job=false`, `can_start_job=false`, and `SERVER_STATE_RECOVERING`. Minecraft was restarted only under
-  the user's authorization; Codex was not restarted, and no other repository or protected T19H file was touched.
+- Direct load job `ad665900-bea3-4974-b42b-c908d35c0114` used the original four-file commit
+  `5923247281d4892c96984c27365f138bebcb82ba` (snapshot
+  `6b3edcedcccdeed2aa50033f4ad0f23198a0cef9c9fe45a4a6aa1e062824076e`) under the exact preset, and failed closed at
+  the prelude with `world_load_failed`: shadow render-list generation remained pending
+  (`requested=65126`, `finalized=0`). Its restoration receipt preserved the original synthetic source/config/scene
+  hashes and no artifact was published. The amended six-file commit has only been submitted to compile-validation:
+  job `8257916b-b022-4c0a-b9c2-51dede7b4d8c` was cancelled before admission and
+  `ff86d26e-fc59-4011-a8e1-e02c69925ab1` could not start because the shared runtime was held by an external
+  `Alpha-Piscium-4b` recovery lease (`881d9500-3332-4d8e-ace4-79b6af20829f`,
+  `768d176e-a54f-334b-a4b7-b34927ff053d`); status reported `can_accept_job=false`, `can_start_job=false`, and
+  `SERVER_STATE_RECOVERING`. Minecraft was restarted only under the user's authorization; Codex was not restarted,
+  and no other repository or protected T19H file was touched.
 - `2026-08-13` direct polling of the newly built MCP executable rechecked the same shared-runtime lease six times
   over 30 seconds. The lease remained `881d9500-3332-4d8e-ace4-79b6af20829f` at
   `JOB_STAGE_RECOVERING` with `can_accept_job=false`, `can_start_job=false`, and artifact usage
