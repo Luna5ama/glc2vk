@@ -2530,6 +2530,12 @@ Evidence:
   only inside the fixed `envProbeTemp` atlas region. This localizes the divergence to the unchanged AP8 scatter
   shader rather than source, preset, scene, restoration, or Iris window/process state. No shader or Codex MCP file was
   modified, and no Minecraft/MultiMC window was brought to the foreground.
+- `2026-08-13` read-only audit of the user-authorized 1.9 alternative `I:\code\mcshaders\Alpha-Piscium` at branch
+  `1.9/dev`, exact HEAD `8a15b72cc242a3ee1ac1a8c5e329c30aa06df073`, found no tracked voxel path but the same
+  `EnvProbeUpdate1ReprojectScatter.comp.glsl` 512x2x3 dispatch, plain `persistent_envProbeTemp_store`, and active
+  `composite2.csh` inclusion. Its pre-existing untracked changelog/property files were not read or modified. The
+  currently available authorized 1.9 and 1.10 lines therefore share the same shader-internal race; no clean alternate
+  target is available without a new user-supplied scope decision.
 
 ### T19H — Make paired visual capture deterministic
 
@@ -3099,3 +3105,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-12 - T19I scope unblocked - user authorized the clean 1.10/1.9 line for deterministic validation and made AP4 voxel-specific divergence non-gating; existing clean Alpha-Piscium-8 1.10/fsr3 at 0c4112620b15dfd3b7684221714f58bda4fb6439 has no voxel paths or allocator, so T19I is READY and dependents return to PENDING - Control-plane commit title: roadmap unblock T19I with 1.10 validation target`
 - `2026-08-12 - T19I Vibris hardening - deterministic cleanup is fail-closed, recovery waits for unresolved cleanup, and queued ordinary jobs cannot enter a recovering runtime; API/Core/test-runtime 216/216 and offline build passed - Commit title: T19I fail closed deterministic cleanup and recovery`
 - `2026-08-13 - T19I blocked - Iris product commit a58f107f3a7e77d8447ba04998e9ae49f39e12a0 and repeated direct Alpha-Piscium-8 same-source proofs passed all focused/runtime/provenance/restoration checks but failed the unchanged threshold-pixel-ratio gate; AP8 EnvProbe scatter has an in-dispatch imageStore race that cannot be fixed within the no-shader-change/no-threshold-change/no-compatibility scope - Control-plane commit title: roadmap block T19I on AP8 shader scatter nondeterminism`
+- `2026-08-13 - T19I blocker audit 2 - reverified every declared repository/worktree/protected boundary and found the authorized clean 1.9 line has the same EnvProbe scatter race as AP8; no alternate target or in-scope runtime fix exists, and no later task was started - Control-plane commit title: roadmap recheck T19I authorized branches remain blocked`
