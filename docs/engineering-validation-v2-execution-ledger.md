@@ -2593,6 +2593,20 @@ Evidence:
   `3198825605/3221225472` bytes. No T19I compile or live comparison could be admitted; the external recovery was
   not cancelled or overridden, Minecraft and Codex were not restarted, and all protected repositories remained
   untouched.
+- `2026-08-13` a direct `vibris_run_actions` probe exposed and fixed the durable action routing defect: the native
+  durable runner had persisted `tool_name=vibris_run_actions` but dispatched every step to the recipe runner, which
+  dereferenced a missing `recipe` key. The strict fix passes the persisted step's exact tool name through to
+  `SynchronousJobRunner`; no alias or compatibility branch was added. Product commit `3b0be19` is
+  `T19I route durable action sequences correctly`. Release targets `vibris-job-protocol-tests` and
+  `vibris-synchronous-job-runner-tests` built, and CTest `JobProtocol|StrictV2Result|ScreenshotResult` passed 3/3.
+  With the rebuilt direct executable `mcp/out/build/Release/vibris-mcp.exe` (15,378,432 bytes,
+  SHA-256 `67659200785AAEE528881C4A01A2249D2A76BDBAFC3E25B1BE79AB19EEA14D24`), the same action reached the real
+  Iris load path and failed closed at `world_load_failed`: request `fcbee31c-4c9d-4c65-ac18-09bd7e6f521b` from job
+  `163e93e3-8248-4762-80e5-e913bc644c05` recorded amended source snapshot
+  `342b3ebef4f4dee4b9c201754b9df69314af22d883214b5348da25b2689ba2e8`, with shadow render-list
+  `requested=65231`, `finalized=0`; restoration remained `RECEIPT_STATUS_OK` and no artifact was published. The
+  shared runtime was then held by external recovery job `7b77b5e1-aff7-40c9-9cc0-f00d4d9c9c15` / lease
+  `80a17359-5773-3f58-aacb-687d81192989`, so no compile or comparison was admitted afterward.
 
 ### T19H — Make paired visual capture deterministic
 
