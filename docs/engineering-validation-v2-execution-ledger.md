@@ -64,6 +64,11 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
   existing clean `I:\code\mcshaders\Alpha-Piscium-8` worktree at branch `1.10/fsr3`, exact HEAD
   `0c4112620b15dfd3b7684221714f58bda4fb6439`, for the remaining same-source temporal/visual proof. Do not weaken a
   threshold, modify a shader, or reinterpret a failed comparison; AP4's allocator output is simply outside that proof.
+- On `2026-08-13`, after the unchanged EnvProbe scatter race was reproduced on both authorized 1.10 and 1.9 lines, the
+  user authorized a fresh synthetic validation target under `I:\code\mcshader`. The target must be a clean local Git
+  worktree with one recorded commit containing only a minimal compute-shader test package whose compute shader writes a
+  deterministic color pattern directly. Use that exact clean commit for both sides of the temporal/visual proof; do
+  not modify the supplied Alpha-Piscium worktrees, weaken thresholds, or add a compatibility/state-reuse bypass.
 - Pass-boundary capture v2 covers only named begin, prepare, deferred, composite, final, and shadow-composite stages; high-frequency gbuffer, terrain, and ordinary shadow draws are out of scope.
 - Artifact TTL defaults to 168 hours.
 - `cmake` and `ctest` are not on `PATH`; ledger commands use the Visual Studio copies under `C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin`.
@@ -118,7 +123,7 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T19E | P0 | Vibris | Define strict detached-worktree provenance contract | DONE | `T19E define strict detached provenance contract` |
 | T19F | P0 | Iris | Implement and prove live detached-worktree provenance | DONE | `T19F complete live detached provenance` |
 | T19G | P0 | Vibris | Repair live paired-benchmark finalization | DONE | `T19G repair live paired benchmark finalization` |
-| T19I | P0 | Vibris/Iris | Add a frame-atomic deterministic temporal capture phase | BLOCKED | `T19I record deterministic temporal phase proof` |
+| T19I | P0 | Vibris/Iris | Add a frame-atomic deterministic temporal capture phase | READY | `T19I record deterministic temporal phase proof` |
 | T19H | P0 | Vibris | Make paired visual capture deterministic | PENDING | `T19H make paired visual capture deterministic` |
 | T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | PENDING | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
@@ -2308,7 +2313,7 @@ Evidence:
 
 ### T19I — Add a frame-atomic deterministic temporal capture phase
 
-Status: `BLOCKED`
+Status: `READY`
 
 Dependencies: T19G
 
@@ -2371,11 +2376,13 @@ Acceptance:
   cancellation or failure cannot publish a successful capture or leave deterministic mode active.
 - Iris tests feed different real nanosecond sequences but produce identical deterministic `frameCounter`, `frameTime`,
   and `frameTimeCounter` sequences. Success, cancellation, and failure all restore real-time mode.
-- At least two consecutive direct-executable same-clean-commit comparisons of clean `Alpha-Piscium-8` branch
-  `1.10/fsr3` at exact HEAD `0c4112620b15dfd3b7684221714f58bda4fb6439` under `night-gi-1-720p` pass every
-  unchanged threshold, including `max_threshold_pixel_ratio=0.001`, with distinct physical capture frames, matching
-  source/config/scene hashes, verified artifacts, and successful restoration. A deliberately different fixture still
-  fails closed.
+- At least two consecutive direct-executable same-clean-commit comparisons of the authorized deterministic target under
+  `night-gi-1-720p` pass every unchanged threshold, including `max_threshold_pixel_ratio=0.001`, with distinct
+  physical capture frames, matching source/config/scene hashes, verified artifacts, and successful restoration. The
+  default target remains clean `Alpha-Piscium-8` branch `1.10/fsr3` at exact HEAD
+  `0c4112620b15dfd3b7684221714f58bda4fb6439`; when its unchanged shader-internal race prevents the gate, use the
+  user-authorized clean `I:\code\mcshader` commit containing only the minimal compute shader that writes the fixed
+  color pattern directly. A deliberately different fixture still fails closed.
 - Final runtime status is available with the entry source restored, no queued or active jobs, and both accept/start
   true. Codex MCP deployment/configuration remains byte-for-byte untouched.
 
@@ -2399,13 +2406,13 @@ Expected commit titles:
 
 Blockers:
 
-- The required direct visual gate remains unachievable on the authorized clean Alpha-Piscium-8 1.10 target without
-  violating T19I's no-shader-change, no-threshold-change, and no-compatibility-bypass constraints. Its unchanged
-  `shaders/pass/composite/EnvProbeUpdate1ReprojectScatter.comp.glsl` dispatches 512x2x3 workgroups and performs a
-  plain `imageStore` through `persistent_envProbeTemp` at line 51; multiple invocations can target one texel, and
-  GL barriers cannot impose an order inside that dispatch. The Iris phase now makes the CPU-visible temporal inputs
-  deterministic, but cannot serialize this shader-internal collision. A user-authorized shader fix, a different clean
-  validation target without this race, or an explicit acceptance-scope change is required before T19I can complete.
+- The supplied Alpha-Piscium 1.10/1.9 lines remain unsuitable for the unchanged visual gate because their unchanged
+  `EnvProbeUpdate1ReprojectScatter.comp.glsl` dispatches 512x2x3 workgroups and performs a plain `imageStore`
+  through `persistent_envProbeTemp`; multiple invocations can target one texel, and GL barriers cannot impose an order
+  inside that dispatch. This blocker is resolved for T19I by the user's `2026-08-13` acceptance-scope change: create a
+  separate clean `I:\code\mcshader` Git worktree containing only a minimal compute shader that writes deterministic
+  colors directly, then use its exact commit for the same-source proof. Existing shader worktrees, thresholds, and
+  compatibility boundaries remain unchanged.
 
 Evidence:
 
@@ -2536,6 +2543,30 @@ Evidence:
   `composite2.csh` inclusion. Its pre-existing untracked changelog/property files were not read or modified. The
   currently available authorized 1.9 and 1.10 lines therefore share the same shader-internal race; no clean alternate
   target is available without a new user-supplied scope decision.
+- `2026-08-13` scope-resolution audit: the user authorized a new synthetic target under `I:\code\mcshader`. The next
+  T19I continuation must initialize that path as a clean local Git worktree, add only a minimal compute-shader package
+  that writes a fixed deterministic color pattern, record its exact commit and source snapshot, and run the unchanged
+  two-consecutive same-commit temporal proof against that target. This is a new validation fixture, not a modification
+  or compatibility fallback for either Alpha-Piscium line; all declared repositories, protected dirty files, and Codex
+  MCP configuration remain outside its scope.
+ - `2026-08-13` entry-gate recheck: Vibris `main` is `216dfc66f8b7f77b165e62833b29fd532632c23c`, Iris
+   `1.21.11-shaderdev` is `a58f107f3a7e77d8447ba04998e9ae49f39e12a0`, AP8 remains clean at
+   `0c4112620b15dfd3b7684221714f58bda4fb6439`; the previously selected 1.9 source was recorded at
+   `8a15b72cc242a3ee1ac1a8c5e329c30aa06df073` with its recorded user files, while its current branch drift is listed
+   below. All declared review/runtime/shader
+   worktrees and protected files remain outside staging. Direct strict-v2 status for AP8 workspace
+   `410c59d7-a344-449a-a05f-5f1ea4c2d944` and 1.9 workspace `15e0ddd4-2df5-4b59-95da-9ef83f23416f` is
+   `SERVER_STATE_AVAILABLE`, `minecraft_connected=true`, `world_loaded=true`, `scene_applied=true`,
+   `can_accept_job=true`, `can_start_job=true`, with empty queue/jobs. The legacy checker path is absent; the
+   equivalent structural audit reports 33 task headings/status rows, `READY=1`, `BLOCKED=0`, `PENDING=3`, `DONE=29`.
+ - The same entry audit found external user-side worktree drift outside this task: `I:\code\mcshaders\Alpha-Piscium`
+   is now branch `1.10/atmo-optimize` at `1a6c1d1026ce607aebc91c9d3ec4e6f7b5d56101` with its recorded changelog/
+   property files; `Alpha-Piscium-2` retains tracked `TranslucentBackComposite.glsl` dirt and untracked
+   `scripts/kernel-sharing`; `Alpha-Piscium-4` is branch `1.10/image-cleanup` at
+   `62e206058e09dee9ace00858b5f4a2b248dd67b1` with untracked `scripts/block_model_aabbs.json`; `Alpha-Piscium-6`
+   retains tracked `GBufferSolid.frag.glsl` dirt; and `Alpha-Piscium-7` retains `_PdfExtract.java` and `tmp/`.
+   These are treated as user-owned, remain unstaged and untouched, and are not validation targets for the synthetic
+   T19I proof. The detached AP3/AP4 review copies remain at their recorded clean commits.
 
 ### T19H — Make paired visual capture deterministic
 
@@ -2562,9 +2593,10 @@ Scope:
   load and before the equal warmup/capture sequence, and retain both typed reset receipts.
 - Preserve two distinct capture frames, exact source/config/scene provenance guards, immutable artifact manifests,
   unchanged fail-closed visual thresholds, and transactional restoration.
-- Prove the correction live with exact clean `Alpha-Piscium-8` branch `1.10/fsr3` commit
-  `0c4112620b15dfd3b7684221714f58bda4fb6439` on both sides under `night-gi-1-720p`, then leave the restored runtime
-  available for T20.
+- Prove the correction live with the exact same clean authorized target on both sides under `night-gi-1-720p`, then
+  leave the restored runtime available for T20. Prefer clean `Alpha-Piscium-8` branch `1.10/fsr3` commit
+  `0c4112620b15dfd3b7684221714f58bda4fb6439`; if its unchanged shader race remains non-deterministic, use the fresh
+  clean `I:\code\mcshader` commit containing only the user-authorized compute color-write test shader.
 
 Non-scope:
 
@@ -2578,8 +2610,8 @@ Acceptance:
 
 - Focused protocol tests prove the exact order `load A -> reset -> warmup -> capture A -> load B -> reset -> warmup ->
   capture B -> compare`, and both resets return ordered successful typed receipts.
-- A live same-commit `Alpha-Piscium-8` `1.10/fsr3` comparison uses two distinct frames and passes every unchanged threshold, including
-  `max_threshold_pixel_ratio=0.001`, with matching source/config/scene hashes and successful restoration.
+- A live same-commit authorized-target comparison uses two distinct frames and passes every unchanged threshold,
+  including `max_threshold_pixel_ratio=0.001`, with matching source/config/scene hashes and successful restoration.
 - Existing deliberately different visual fixtures still fail closed, and `benchmark_ab` consumes the corrected visual
   path without changing its performance measurements or verdict rules.
 - Final live status is available with the entry source restored, an empty queue, and both accept/start true.
@@ -2594,7 +2626,8 @@ Expected commit title: `T19H make paired visual capture deterministic`
 
 Blockers:
 
-- None known beyond ordered dependency T19I, which is `READY` under the user-approved 1.10 validation scope.
+- None known beyond ordered dependency T19I, which is now `READY` under the user-authorized synthetic compute-shader
+  validation scope when the supplied 1.10/1.9 lines remain blocked by their unchanged race.
 
 Evidence:
 
@@ -2658,9 +2691,9 @@ Scope:
 Non-scope:
 
 - Do not switch launchers. Retain prior AP4/AP3 receipts for the already-proven two-worktree queue, compile, settings,
-  provenance, restoration, and pass-boundary portions; use the clean user-approved `Alpha-Piscium-8` `1.10/fsr3`
-  target for remaining temporal/visual proof. Do not require AP4's voxel allocator output to satisfy the same-source
-  visual gate. New MCP validation must directly invoke its executable without changing Codex MCP deployment/
+  provenance, restoration, and pass-boundary portions; use the clean user-approved `Alpha-Piscium-8` `1.10/fsr3` target
+  or the fresh user-authorized `I:\code\mcshader` compute color-write target for remaining temporal/visual proof. Do
+  not require AP4's voxel allocator output to satisfy the same-source visual gate. New MCP validation must directly invoke its executable without changing Codex MCP deployment/
   configuration or restarting Codex. Task-owned Mod deployment and restart of the existing MultiMC `1.21.11-Iris`
   instance remain authorized for this session.
 
@@ -3107,3 +3140,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-13 - T19I blocked - Iris product commit a58f107f3a7e77d8447ba04998e9ae49f39e12a0 and repeated direct Alpha-Piscium-8 same-source proofs passed all focused/runtime/provenance/restoration checks but failed the unchanged threshold-pixel-ratio gate; AP8 EnvProbe scatter has an in-dispatch imageStore race that cannot be fixed within the no-shader-change/no-threshold-change/no-compatibility scope - Control-plane commit title: roadmap block T19I on AP8 shader scatter nondeterminism`
 - `2026-08-13 - T19I blocker audit 2 - reverified every declared repository/worktree/protected boundary and found the authorized clean 1.9 line has the same EnvProbe scatter race as AP8; no alternate target or in-scope runtime fix exists, and no later task was started - Control-plane commit title: roadmap recheck T19I authorized branches remain blocked`
 - `2026-08-13 - T19I blocker audit 3 - reverified the unchanged AP8 EnvProbe scatter source, all repository/worktree/protected boundaries, and an available empty-queue runtime; the same blocker persists for the third consecutive Goal turn, so the Goal is marked blocked after this ledger-only checkpoint - Control-plane commit title: roadmap confirm T19I blocked on authorized shader targets`
+- `2026-08-13 - T19I scope unblocked - user authorized a fresh clean Git validation worktree under I:\code\mcshader containing a minimal compute shader that writes deterministic colors directly; T19I is READY again, while existing Alpha-Piscium worktrees, thresholds, compatibility boundaries, and protected state remain unchanged - Control-plane commit title: roadmap unblock T19I for synthetic compute shader`
