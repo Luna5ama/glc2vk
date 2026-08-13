@@ -2647,6 +2647,13 @@ Evidence:
   shader link still targets synthetic pending source `6fd993d2-40fd-46eb-aa02-f7e25ca2e674`. Because that lease is
   owned by another authorized task, T19I does not cancel, override, recover, deploy, or restart it; this resumed
   continuation records the blocker and leaves the Goal active for a future recheck.
+- `2026-08-13` the second resumed-audit poll at `06:44:43`, `06:44:53`, and `06:45:03` remained
+  `SERVER_STATE_RECOVERING` with lease `b075274b-1583-458b-8225-67615a37a10e` /
+  `943749f7-c9e2-366e-b651-4dab77152ecf`, `can_accept_job=false`, `can_start_job=false`, and empty queue/jobs.
+  A direct strict-v2 `vibris_job` query still returned durable job `cdf1d956-0863-41ed-a093-20451bb3d86e` in
+  `paused` / `restore_failed` with `ERROR_CODE_RESTORE_FAILED`, `resumable=false`, and the owner's manual recovery
+  instruction not to release the lease or restart Minecraft. T19I therefore remains unable to admit live proof; no
+  cancellation, override, recovery, deployment, process restart, or protected-file mutation was performed.
 
 ### T19H — Make paired visual capture deterministic
 
