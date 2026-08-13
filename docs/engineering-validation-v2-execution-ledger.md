@@ -2654,6 +2654,14 @@ Evidence:
   `paused` / `restore_failed` with `ERROR_CODE_RESTORE_FAILED`, `resumable=false`, and the owner's manual recovery
   instruction not to release the lease or restart Minecraft. T19I therefore remains unable to admit live proof; no
   cancellation, override, recovery, deployment, process restart, or protected-file mutation was performed.
+- `2026-08-13` the third resumed-audit entry check found the same repository/worktree/protected-state identities and
+  direct status at `SERVER_STATE_RECOVERING`, lease `b075274b-1583-458b-8225-67615a37a10e` /
+  `943749f7-c9e2-366e-b651-4dab77152ecf`, `can_accept_job=false`, and `can_start_job=false`. The external durable
+  job directory's `state.json` and `events.jsonl` remain unchanged since `10:06:18`, ending at `paused` /
+  `restore_failed` with the explicit instruction not to release the lease or restart Minecraft. T19I live proof is
+  still inadmissible; no cancellation, override, recovery, deployment, process restart, or protected-file mutation
+  was performed. This is the third identical resumed blocker audit; the Goal is marked blocked after this
+  ledger-only checkpoint.
 
 ### T19H — Make paired visual capture deterministic
 
