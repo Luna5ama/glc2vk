@@ -2621,6 +2621,11 @@ Evidence:
   shared lease is `b075274b-1583-458b-8225-67615a37a10e` / `943749f7-c9e2-366e-b651-4dab77152ecf`, workspace
   `24acfab9-fb0c-42c0-bce1-c1b6bd00117b`, so T19I comparison work is paused without cancelling or overriding the
   external recovery.
+- `2026-08-13` bounded direct v2 status polls at `03:13:34`, `03:13:45`, `03:13:55`, `03:15:06`, and `03:15:16`
+  all remained `SERVER_STATE_RECOVERING` with lease `b075274b-1583-458b-8225-67615a37a10e` at
+  `JOB_STAGE_RECOVERING`, `can_start_job=false`, while Minecraft/world/scene readiness stayed true. The external
+  `Alpha-Piscium-5` event log remained paused at `03:06:18`; no cancellation, override, deployment, or restart was
+  performed, so the same external recovery blocker still prevents T19I live comparison.
 
 ### T19H — Make paired visual capture deterministic
 
