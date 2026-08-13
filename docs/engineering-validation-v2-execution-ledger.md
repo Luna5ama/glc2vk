@@ -59,6 +59,11 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
   On `2026-08-12`, the user refined the session authorization: the existing MultiMC `1.21.11-Iris` instance may be
   restarted and a task-owned Mod may be redeployed when required, but new MCP validation must invoke the built
   executable directly without changing the Codex MCP deployment/configuration or restarting Codex.
+- On `2026-08-12`, the user replaced AP4 as the deterministic visual-validation target with a 1.10 or 1.9 branch and
+  authorized ignoring the AP4 voxel-specific divergence when it is not material to the Vibris contract. Use the
+  existing clean `I:\code\mcshaders\Alpha-Piscium-8` worktree at branch `1.10/fsr3`, exact HEAD
+  `0c4112620b15dfd3b7684221714f58bda4fb6439`, for the remaining same-source temporal/visual proof. Do not weaken a
+  threshold, modify a shader, or reinterpret a failed comparison; AP4's allocator output is simply outside that proof.
 - Pass-boundary capture v2 covers only named begin, prepare, deferred, composite, final, and shadow-composite stages; high-frequency gbuffer, terrain, and ordinary shadow draws are out of scope.
 - Artifact TTL defaults to 168 hours.
 - `cmake` and `ctest` are not on `PATH`; ledger commands use the Visual Studio copies under `C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin`.
@@ -77,6 +82,7 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | `I:\code\Iris` | `.vibris\` untracked | Runtime artifacts | Preserve and never stage. |
 | `I:\code\Iris` | `common\logs\` untracked | Runtime logs | Preserve and never stage. |
 | `I:\code\Iris` | `common\src\main\java\net\irisshaders\iris\vibris\IrisVibrisLifecycle.java` | User change committed as `6322cb2833edfddbfa64d0ac6001988c4d49efd1` | Resolved; the file is clean and may be modified by later task-owned work. |
+| `I:\code\mcshaders\Alpha-Piscium-8` | Clean `1.10/fsr3` at `0c4112620b15dfd3b7684221714f58bda4fb6439` | User-supplied live validation target | Do not modify or stage shader source; ignored `.vibris` runtime artifacts may be produced only by authorized live verification. |
 | Both | Any later unrelated dirty file | User until proven otherwise | Stop, classify ownership, and keep it outside task staging. |
 
 ## Status board
@@ -112,9 +118,9 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T19E | P0 | Vibris | Define strict detached-worktree provenance contract | DONE | `T19E define strict detached provenance contract` |
 | T19F | P0 | Iris | Implement and prove live detached-worktree provenance | DONE | `T19F complete live detached provenance` |
 | T19G | P0 | Vibris | Repair live paired-benchmark finalization | DONE | `T19G repair live paired benchmark finalization` |
-| T19I | P0 | Vibris/Iris | Add a frame-atomic deterministic temporal capture phase | BLOCKED | `T19I record deterministic temporal phase proof` |
-| T19H | P0 | Vibris | Make paired visual capture deterministic | BLOCKED | `T19H make paired visual capture deterministic` |
-| T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | BLOCKED | `T20 record live v2 acceptance` |
+| T19I | P0 | Vibris/Iris | Add a frame-atomic deterministic temporal capture phase | READY | `T19I record deterministic temporal phase proof` |
+| T19H | P0 | Vibris | Make paired visual capture deterministic | PENDING | `T19H make paired visual capture deterministic` |
+| T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | PENDING | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
 
 ## Task details
@@ -2302,7 +2308,7 @@ Evidence:
 
 ### T19I — Add a frame-atomic deterministic temporal capture phase
 
-Status: `BLOCKED`
+Status: `READY`
 
 Dependencies: T19G
 
@@ -2365,7 +2371,8 @@ Acceptance:
   cancellation or failure cannot publish a successful capture or leave deterministic mode active.
 - Iris tests feed different real nanosecond sequences but produce identical deterministic `frameCounter`, `frameTime`,
   and `frameTimeCounter` sequences. Success, cancellation, and failure all restore real-time mode.
-- At least two consecutive direct-executable same-clean-commit AP4 comparisons under `night-gi-1-720p` pass every
+- At least two consecutive direct-executable same-clean-commit comparisons of clean `Alpha-Piscium-8` branch
+  `1.10/fsr3` at exact HEAD `0c4112620b15dfd3b7684221714f58bda4fb6439` under `night-gi-1-720p` pass every
   unchanged threshold, including `max_threshold_pixel_ratio=0.001`, with distinct physical capture frames, matching
   source/config/scene hashes, verified artifacts, and successful restoration. A deliberately different fixture still
   fails closed.
@@ -2378,8 +2385,8 @@ Verification:
   receipt normalization, cancellation, and failure.
 - Focused Iris common/Fabric build and deterministic-time/host tests.
 - Focused native T19H protocol/visual/paired-benchmark tests against the coordinated builds.
-- Two consecutive direct live same-commit `night-gi-1-720p` comparisons with artifact SHA-256 verification, followed
-  by status, configuration, process, and protected Git-state audits.
+- Two consecutive direct live same-commit `Alpha-Piscium-8` `1.10/fsr3` `night-gi-1-720p` comparisons with artifact
+  SHA-256 verification, followed by status, configuration, process, and protected Git-state audits.
 - `git diff --cached --check`, staged names/stat/full diff, and exact post-commit SHA/subject checks separately in each
   repository.
 
@@ -2391,14 +2398,10 @@ Expected commit titles:
 
 Blockers:
 
-- Clean AP4 commit `b793f75bc411b309142305ce062e17bc52b259c3` contains a shader-internal nondeterministic
-  voxel allocator. `VoxelAllocatorMP_Assign.comp.glsl` assigns persistent brick allocation IDs with one
-  `atomicAdd(voxel_bucketCounts[dist], 1u)` per occupied brick across 1,024 workgroups. OpenGL does not define
-  cross-workgroup execution order, so identical occupancy and bucket-prefix inputs produce different allocation-ID
-  maps and downstream radiance-cache state. Iris cannot make that dispatch deterministic without changing the shader
-  algorithm or preserving/reusing one side's GPU state; both are outside T19I scope, as is weakening the visual gate.
-- Unblocking requires an explicit scope decision that authorizes a deterministic AP4 allocator implementation or
-  otherwise changes the current no-shader-change/no-state-reuse acceptance contract. T19H and T20 remain blocked.
+- None. The user explicitly moved the remaining deterministic visual proof to the clean 1.10/1.9 line and authorized
+  ignoring AP4's voxel-specific divergence when it is immaterial. The selected existing `Alpha-Piscium-8`
+  `1.10/fsr3` worktree contains no tracked voxel path and no allocator `atomicAdd`; AP4 remains untouched and its
+  shader-internal allocation-ID nondeterminism is a recorded non-gating limitation rather than a Vibris blocker.
 
 Evidence:
 
@@ -2482,10 +2485,17 @@ Evidence:
   reusing GPU state, so `T19I`, `T19H`, and `T20` remain `BLOCKED`, `T99` remains `PENDING`, and the queue has no
   `READY` task. No product code, shader, deployment, process, configuration, artifact, or runtime job was changed;
   after this ledger-only atomic checkpoint the Goal is marked `blocked` on its third consecutive identical audit.
+- `2026-08-12` scope-resolution audit verified the user's replacement target without creating a worktree:
+  `I:\code\mcshaders\Alpha-Piscium-8` is clean on local branch `1.10/fsr3`, exact HEAD
+  `0c4112620b15dfd3b7684221714f58bda4fb6439`, one commit ahead of its remote tracking ref. `git ls-tree` found no
+  tracked path containing `voxel`, and exact tree searches found neither
+  `atomicAdd(voxel_bucketCounts[dist], 1u)` nor the AP4 allocator file. T19I is therefore restored as the sole
+  `READY` task; T19H and T20 return to ordered `PENDING`. No product/shader file, deployment, process, configuration,
+  artifact, or runtime job changed in this control-plane continuation.
 
 ### T19H — Make paired visual capture deterministic
 
-Status: `BLOCKED`
+Status: `PENDING`
 
 Dependencies: T19G, T19I
 
@@ -2508,8 +2518,9 @@ Scope:
   load and before the equal warmup/capture sequence, and retain both typed reset receipts.
 - Preserve two distinct capture frames, exact source/config/scene provenance guards, immutable artifact manifests,
   unchanged fail-closed visual thresholds, and transactional restoration.
-- Prove the correction live with the exact same clean AP4 commit on both sides under `night-gi-1-720p`, then leave the
-  restored runtime available for T20.
+- Prove the correction live with exact clean `Alpha-Piscium-8` branch `1.10/fsr3` commit
+  `0c4112620b15dfd3b7684221714f58bda4fb6439` on both sides under `night-gi-1-720p`, then leave the restored runtime
+  available for T20.
 
 Non-scope:
 
@@ -2523,11 +2534,11 @@ Acceptance:
 
 - Focused protocol tests prove the exact order `load A -> reset -> warmup -> capture A -> load B -> reset -> warmup ->
   capture B -> compare`, and both resets return ordered successful typed receipts.
-- A live same-commit AP4 comparison uses two distinct frames and passes every unchanged threshold, including
+- A live same-commit `Alpha-Piscium-8` `1.10/fsr3` comparison uses two distinct frames and passes every unchanged threshold, including
   `max_threshold_pixel_ratio=0.001`, with matching source/config/scene hashes and successful restoration.
 - Existing deliberately different visual fixtures still fail closed, and `benchmark_ab` consumes the corrected visual
   path without changing its performance measurements or verdict rules.
-- Final live status is available with the original AP4 source active, an empty queue, and both accept/start true.
+- Final live status is available with the entry source restored, an empty queue, and both accept/start true.
 
 Verification:
 
@@ -2539,8 +2550,7 @@ Expected commit title: `T19H make paired visual capture deterministic`
 
 Blockers:
 
-- T19I must provide and prove a frame-atomic deterministic temporal capture phase before this task can satisfy its
-  unchanged live pixel-ratio acceptance gate.
+- None known beyond ordered dependency T19I, which is `READY` under the user-approved 1.10 validation scope.
 
 Evidence:
 
@@ -2581,7 +2591,7 @@ Evidence:
 
 ### T20 — Run live two-worktree 720p acceptance
 
-Status: `BLOCKED`
+Status: `PENDING`
 
 Dependencies: T19G, T19H
 
@@ -2603,10 +2613,12 @@ Scope:
 
 Non-scope:
 
-- Do not switch launchers or choose shader worktrees outside the user-supplied Alpha-Piscium-4 and Alpha-Piscium-3
-  paths. New MCP validation must directly invoke its executable without changing Codex MCP deployment/configuration or
-  restarting Codex. Task-owned Mod deployment and restart of the existing MultiMC `1.21.11-Iris` instance remain
-  authorized for this session.
+- Do not switch launchers. Retain prior AP4/AP3 receipts for the already-proven two-worktree queue, compile, settings,
+  provenance, restoration, and pass-boundary portions; use the clean user-approved `Alpha-Piscium-8` `1.10/fsr3`
+  target for remaining temporal/visual proof. Do not require AP4's voxel allocator output to satisfy the same-source
+  visual gate. New MCP validation must directly invoke its executable without changing Codex MCP deployment/
+  configuration or restarting Codex. Task-owned Mod deployment and restart of the existing MultiMC `1.21.11-Iris`
+  instance remain authorized for this session.
 
 Acceptance:
 
@@ -2625,9 +2637,8 @@ Expected commit title: `T20 record live v2 acceptance`
 
 Blockers:
 
-- T19H is the sole direct unmet dependency and is itself blocked by T19I. Direct new-MCP executable testing plus
-  task-owned Mod deployment/MultiMC restart remain authorized; Codex MCP redeployment/configuration changes and Codex
-  restart are not authorized.
+- None known beyond ordered dependency T19H. Direct new-MCP executable testing plus task-owned Mod deployment/MultiMC
+  restart remain authorized; Codex MCP redeployment/configuration changes and Codex restart are not authorized.
 
 Evidence:
 
@@ -3047,3 +3058,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-12 - T19I inserted - T19H's ordered planner resets passed focused tests and both typed receipts, but two direct same-clean-commit live jobs still failed the unchanged pixel-ratio gate; Core leaves load/reset/wait/capture as non-atomic handoffs and Iris resumes shader time from wall-clock deltas, so a no-compatibility cross-repository compound temporal-phase remediation is inserted before T19H - Control-plane commit title: roadmap insert T19I frame atomic temporal remediation`
 - `2026-08-12 - T19I blocker audit 2 - reverified the unchanged AP4 cross-workgroup allocation-ID nondeterminism, exact repository/worktree identities, and protected state for the second consecutive blocked Goal turn; no READY task exists and the Goal remains active - Control-plane commit title: roadmap recheck T19I allocator blocker`
 - `2026-08-12 - T19I blocker audit 3 - reverified the unchanged AP4 cross-workgroup allocation-ID nondeterminism, exact repository/worktree identities, and protected state for the third consecutive blocked Goal turn; after the ledger-only checkpoint the Goal is marked blocked - Control-plane commit title: roadmap confirm T19I blocked on shader allocator`
+- `2026-08-12 - T19I scope unblocked - user authorized the clean 1.10/1.9 line for deterministic validation and made AP4 voxel-specific divergence non-gating; existing clean Alpha-Piscium-8 1.10/fsr3 at 0c4112620b15dfd3b7684221714f58bda4fb6439 has no voxel paths or allocator, so T19I is READY and dependents return to PENDING - Control-plane commit title: roadmap unblock T19I with 1.10 validation target`
