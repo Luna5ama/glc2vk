@@ -2633,6 +2633,13 @@ Evidence:
   recheck still reports lease `b075274b-1583-458b-8225-67615a37a10e` / `943749f7-c9e2-366e-b651-4dab77152ecf` at
   `JOB_STAGE_RECOVERING`, so the second consecutive continuation cannot admit T19I's live proof and performs no
   cancellation, override, deployment, or restart.
+- `2026-08-13` the third consecutive complete entry audit verified the same immutable repository/worktree and
+  protected-state boundaries. Direct v2 status still reports the external `Alpha-Piscium-5` lease
+  `b075274b-1583-458b-8225-67615a37a10e` / `943749f7-c9e2-366e-b651-4dab77152ecf` at
+  `JOB_STAGE_RECOVERING`, with `can_accept_job=false`, `can_start_job=false`, and Minecraft/world/scene readiness
+  true. T19I live proof remains inadmissible without an external recovery-state change; no cancellation, override,
+  deployment, process restart, or protected-file mutation was performed. This is the third identical blocker audit;
+  the Goal is marked blocked after this ledger-only checkpoint.
 
 ### T19H — Make paired visual capture deterministic
 
