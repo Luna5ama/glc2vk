@@ -2567,6 +2567,22 @@ Evidence:
    retains tracked `GBufferSolid.frag.glsl` dirt; and `Alpha-Piscium-7` retains `_PdfExtract.java` and `tmp/`.
    These are treated as user-owned, remain unstaged and untouched, and are not validation targets for the synthetic
    T19I proof. The detached AP3/AP4 review copies remain at their recorded clean commits.
+- `2026-08-13` initialized the authorized `I:\code\mcshader` fixture as a standalone Git repository. Commit
+  `5923247281d4892c96984c27365f138bebcb82ba` compiled successfully under `night-gi-1-720p` with source snapshot
+  `6b3edcedcccdeed2aa50033f4ad0f23198a0cef9c9fe45a4a6aa1e062824076e`, shader tree
+  `4d744410299326865144cd60bec40fad18a2a2f3`, and the four-file source catalog. The first direct runtime load
+  failed closed before any capture because the no-shadow fixture could not satisfy Iris's retained shadow render-list
+  quiescence gate (`requested=65104`, `finalized=0`). The fixture was amended to commit
+  `7c2fea6ba692c6bff14c2f2dcab9f4f9ce9ea2e5`, adding only no-op shadow entrypoints alongside the deterministic
+  compute/final display path; its six-file snapshot is `342b3ebef4f4dee4b9c201754b9df69314af22d883214b5348da25b2689ba2e8`.
+- Direct load job `ad665900-bea3-4974-b42b-c908d35c0114` used the amended clean commit and exact preset, but still
+  failed closed at the prelude with `world_load_failed`: shadow render-list generation remained pending
+  (`requested=65126`, `finalized=0`). Its restoration receipt preserved the exact synthetic source/config/scene hashes
+  and no artifact was published. A follow-up compile-validation job `ff86d26e-fc59-4011-a8e1-e02c69925ab1` could not
+  start because the shared runtime was held by an external `Alpha-Piscium-4b` recovery lease
+  (`881d9500-3332-4d8e-ace4-79b6af20829f`, `768d176e-a54f-334b-a4b7-b34927ff053d`); status reported
+  `can_accept_job=false`, `can_start_job=false`, and `SERVER_STATE_RECOVERING`. Minecraft was restarted only under
+  the user's authorization; Codex was not restarted, and no other repository or protected T19H file was touched.
 
 ### T19H — Make paired visual capture deterministic
 
