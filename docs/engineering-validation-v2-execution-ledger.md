@@ -125,8 +125,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T19G | P0 | Vibris | Repair live paired-benchmark finalization | DONE | `T19G repair live paired benchmark finalization` |
 | T19I | P0 | Vibris/Iris | Add a frame-atomic deterministic temporal capture phase | DONE | `T19I record deterministic temporal phase proof` |
 | T19H | P0 | Vibris | Make paired visual capture deterministic | DONE | `T19H make paired visual capture deterministic` |
-| T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | READY | `T20 record live v2 acceptance` |
-| T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
+| T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | DONE | `T20 record live v2 acceptance` |
+| T99 | P0 | Vibris | Final integrated audit | READY | `T99 finalize engineering validation v2` |
 
 ## Task details
 
@@ -2821,7 +2821,7 @@ Evidence:
 
 ### T20 — Run live two-worktree 720p acceptance
 
-Status: `PENDING`
+Status: `DONE`
 
 Dependencies: T19G, T19H
 
@@ -2867,8 +2867,8 @@ Expected commit title: `T20 record live v2 acceptance`
 
 Blockers:
 
-- None known beyond ordered dependency T19H. Direct new-MCP executable testing plus task-owned Mod deployment/MultiMC
-  restart remain authorized; Codex MCP redeployment/configuration changes and Codex restart are not authorized.
+- None. The direct strict-v2 executable is available, both supplied workspaces are live and idle, and all T20 gates
+  have durable receipts. No Codex configuration/restart or compatibility path was used.
 
 Evidence:
 
@@ -3142,10 +3142,54 @@ Evidence:
   plan cannot satisfy its unchanged threshold even when both sides resolve to the exact clean AP4 commit, source,
   settings, and scene. The plan omitted a temporal reset before each equal warmup; T19H is inserted to correct and
   prove that boundary before T20 resumes. Runtime restoration passed and no shader source was modified.
+- `2026-08-13` T20 entry audit re-read the complete ledger and verified every declared repository/worktree, branch,
+  HEAD, staging area, and protected dirty file. Vibris remained on `main` at `949928e3159f61b2e62e2efdcfe563aa0086a2fd`;
+  Iris remained on `1.21.11-shaderdev` at `a58f107f3a7e77d8447ba04998e9ae49f39e12a0`; AP4 remained on
+  `1.10/image-cleanup@62e206058e09dee9ace00858b5f4a2b248dd67b1` with its recorded user-owned dirty state; AP3
+  remained on `2.0/voxel/non-cube-quad-lut@b793f75bc411b309142305ce062e17bc52b259c3` with its recorded dirty
+  `VoxelTrace.glsl`; and the protected Vibris `capture\a.spv` remained the only main-worktree dirt. No source,
+  generated shader, configuration, or protected file was changed.
+- The direct deployed v2 executable `I:\code\vibris\mcp\out\build\Release\vibris-mcp.exe` returned the exact
+  `night-gi-1-720p` version-2 preset, 1280x720 context, and preset SHA-256
+  `d3d37c2f3d751464214223d06ddd8b8924a54ac28be978608fd7eff5ea16dece`. AP4 current-HEAD synchronous
+  `compile_validate` job `2dd60cc4-d20f-4763-9377-5fac34b7deba` passed 172/172 programs with zero added, resolved,
+  or unchanged diagnostics; its provenance resolved `1.10/image-cleanup@62e206058e09dee9ace00858b5f4a2b248dd67b1`,
+  source snapshot `ab19674b32d39eefc7155bea0795cac598e318f468ebde3958a50d35b25e6241`, shader tree
+  `d105d0387a554dc4bde1c83b044485c13ecf77b6`, settings `f0113a2a64ca58e5116d4dd2485be0f5a152571d3ce8b3e8e16e19b6076d135d`,
+  and scene `6541ce12e1e9e7ecbea47971c0a7eec90fde0d50407b547377791b8c099fa674`.
+- AP3 current-HEAD synchronous `compile_validate` job `008e3fda-56ca-44e3-9ba7-8a301af6871b` passed 182/182
+  programs with zero added, resolved, or unchanged diagnostics; its provenance resolved
+  `2.0/voxel/non-cube-quad-lut@b793f75bc411b309142305ce062e17bc52b259c3`, source snapshot
+  `434a67519dba9f2b0249a3e5766f496553151ccd1a3b1884d4730d0191500a5e`, shader tree
+  `e72546a88e83d1f054eccc1d0a9b6f9712ec8007`, settings `8313635afeae14ac96a2c3262474154f0942daf2a4315c20d878761b26d99944`,
+  and the same scene SHA-256. The compile receipts reported `head_changed=false` and no stale shader content.
+- The retained two-worktree live receipts prove fair queueing, AP4/AP3 compile and restoration, effective-settings
+  preserve/override (`52b8cdea-dd08-4196-9357-1f482b1c8e61`), and the paired benchmark/statistical gates
+  (`29aee41b-bec5-489d-a2ec-152bca4f0ca2`, `cb27a4eb-d071-45a6-afbe-b3dfc5c585d7`, and T19G's published
+  receipt). The unchanged visual thresholds are now satisfied by T19H's frame-atomic same-clean-commit synthetic
+  comparison `ac599b54-9c18-4b66-a844-e14b7ee87e15` with 120-frame warmups, distinct capture frames, SSIM 1,
+  zero threshold-pixel ratio, fail-closed different-output control, complete provenance, and restoration.
+- Worktree-local artifact verification passed again. The exact-pass manifest
+  `I:\code\mcshaders\Alpha-Piscium-4\.vibris\artifact\244480a0-7e58-3bf9-b706-6268d5968763\c4a22875-8f4d-3770-b780-7edad6dadc6e\manifest.json`
+  is 4,312 bytes with SHA-256 `C07EEE84D7638C863F10A1D237EC1D9560D8837E0298484EB6F3DDFA0811EE49`; its
+  current/alternate textures are 5,044,889/12,491 bytes with SHA-256
+  `6098C0B5211D8B395DD157947E0FF2389473DAC17E4AB2EE942B765AAED09AED` /
+  `2D726ADAF5DC3FA1002583CC7E34B893653EEBBE742252F9452A9B484B52714B`, and its 16,384-byte buffers after
+  `composite/composite14` and `composite/composite15` differ at SHA-256
+  `9B020A0288853532827D9C799CE58802BEB589F606844119D6B03CE7636FC218` /
+  `120031CEB7288F460B3D71E26D2989220EA99CA9E81E2B2FB6BFE971386676AA`. The T19H synthetic comparison manifest
+  at `I:\code\mcshader\.vibris\artifact\c11d0155-ab37-3365-8d59-bd95994958b9\103c9b6c-207e-3375-96f1-b37b31a3568c\manifest.json`
+  is 2,651 bytes with SHA-256 `A485FB8B69BFE05716099281A9F01718BA179FD766433A59648D495706219CC3`; both 296,640-byte
+  PNG captures share SHA-256 `F54009E4E5A926CE771950C783985941AD2659C98FA54F06A038E2ECAD55F915`.
+- Final direct status for both workspace IDs `e5e1f8a1-2532-4972-9bad-2dcf6a0c72cc` and
+  `90485cf5-12a0-45b9-bb89-7141a9b7ee1e` returned `SERVER_STATE_AVAILABLE`, connected/applied 720p runtime,
+  empty queues and job lists, `can_accept_job=true`, and `can_start_job=true`, with the restored active source UUID
+  `1f4a34d7-64d1-4351-a6fd-528a4dafd92d`. This closes T20 without deployment, Codex restart, compatibility code,
+  threshold changes, or autonomous process restart.
 
 ### T99 — Final integrated audit
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T01, T02, T02A, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T12A, T13, T14, T15, T16, T17, T18, T19, T19A, T19B, T19C, T19D, T19E, T19F, T19G, T19I, T19H, T20
 
@@ -3226,7 +3270,7 @@ Queue order is authoritative and serial even where technical dependencies could 
 - [x] Full Vibris native/Gradle and Iris build validation passes.
 - [x] A fresh schema-2 runtime has the correct fixed-pack root, truthful unavailable unary failures, a usable typed
   first-load action, and post-load screenshot resource planning without a sacrificial job.
-- [ ] Live two-worktree 720p acceptance passes without autonomous deployment or process restart.
+- [x] Live two-worktree 720p acceptance passes without autonomous deployment or process restart.
 - [ ] Every expected commit is present in the intended repository and branch.
 - [x] Protected and pre-existing user state remains untouched.
 - [ ] Final worktree, branch, ledger, and Goal audits pass.
@@ -3296,3 +3340,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-13 - T19I scope unblocked - user authorized a fresh clean Git validation worktree under I:\code\mcshader containing a minimal compute shader that writes deterministic colors directly; T19I is READY again, while existing Alpha-Piscium worktrees, thresholds, compatibility boundaries, and protected state remain unchanged - Control-plane commit title: roadmap unblock T19I for synthetic compute shader`
 - `2026-08-13 - T19I - completed the frame-atomic deterministic temporal phase and recorded two passing same-clean-commit synthetic comparisons plus a fail-closed different-output guard; artifacts, source/config/scene provenance, distinct frames, restoration, and final available status were verified - Owner receipt commit title: T19I record deterministic temporal phase proof`
 - `2026-08-13 - T19H - added reset-after-load ordering and typed temporal-reset visual guards, passed focused native 14/14 plus Release rebuild, recovered one transient retained-camera drift with a scoped load, and recorded passing live same-clean-commit synthetic comparison job ac599b54-9c18-4b66-a844-e14b7ee87e15 with artifact/hash, provenance, distinct-frame, fail-closed, restoration, and final available-status evidence - Commit title: T19H make paired visual capture deterministic`
+- `2026-08-13 - T20 - verified the direct strict-v2 720p preset, current AP4/AP3 compile catalogs (172/172 and 182/182 with zero diagnostics), retained fair-queue/settings/benchmark/restoration receipts, T19H visual gate, exact texture-after-pass and buffer-after-pass hashes, and final available/empty-queue status across both workspaces - Commit title: T20 record live v2 acceptance`
