@@ -19,6 +19,7 @@ import dev.vibris.protocol.v2.JobSpec;
 import dev.vibris.protocol.v2.LoadShader;
 import dev.vibris.protocol.v2.PreparedSourceRef;
 import dev.vibris.protocol.v2.ReceiptStatus;
+import dev.vibris.protocol.v2.RecoverRuntimeRequest;
 import dev.vibris.protocol.v2.ResetTemporalState;
 import dev.vibris.protocol.v2.Resolution;
 import dev.vibris.protocol.v2.SceneContext;
@@ -34,7 +35,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -46,6 +51,82 @@ class RuntimeJobExecutorDeterministicCaptureTest {
 
     @TempDir
     Path temp;
+
+    @Test
+    void failedBeginStillClosesAttemptedSequence() throws Exception {
+        Fixture fixture = new Fixture();
+        Source source = fixture.source("A");
+        fixture.runtime.deterministicSequenceBeginStages.add(
+            CompletableFuture.failedFuture(new IllegalStateException("begin marker")));
+
+        RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
+            () -> fixture.executor.execute(
+                fixture.job(List.of(source), exactBlock(source, "shot", 0)), ignored -> {}));
+
+        assertEquals(ErrorCode.ERROR_CODE_INTERNAL, failure.code);
+        assertEquals(1, fixture.runtime.events.stream().filter("deterministic-sequence-begin"::equals).count());
+        assertEquals(1, fixture.runtime.events.stream().filter("deterministic-sequence-end"::equals).count());
+        assertFalse(fixture.runtime.events.contains("deterministic_capture"));
+        assertFalse(fixture.executor.hasPendingRecovery());
+    }
+
+    @Test
+    void cleanupFailureDominatesBodyFailureAndRecoveryWaitsForBarrier() throws Exception {
+        Fixture fixture = new Fixture();
+        Source source = fixture.source("A");
+        ResourceCatalog.ResourceDescriptor framebuffer = framebuffer();
+        fixture.runtime.catalog = ResourceCatalog.of(List.of(framebuffer), List.of());
+        fixture.runtime.deterministicCaptureStages.add(
+            CompletableFuture.failedFuture(new CancellationException("body marker")));
+        DeferredCleanupFuture cleanup = new DeferredCleanupFuture();
+        fixture.runtime.deterministicSequenceEndStages.add(cleanup);
+
+        RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
+            () -> fixture.executor.execute(
+                fixture.job(List.of(source), exactBlock(source, "shot", 0)), ignored -> {}));
+
+        assertEquals(ErrorCode.ERROR_CODE_RESTORE_FAILED, failure.code);
+        assertTrue(failure.holdOwnership);
+        assertTrue(fixture.executor.hasPendingRecovery());
+        assertFalse(fixture.activator.ready());
+        assertTrue(containsFailureCode(failure, ErrorCode.ERROR_CODE_CANCELLED));
+
+        var recovery = CompletableFuture.supplyAsync(() -> {
+            try {
+                return fixture.executor.execute(fixture.recoveryJob(), ignored -> {});
+            } catch (RuntimeJobExecutor.Failure exception) {
+                throw new java.util.concurrent.CompletionException(exception);
+            }
+        });
+        Thread.sleep(50);
+        assertFalse(recovery.isDone());
+        assertTrue(fixture.executor.hasPendingRecovery());
+        assertFalse(fixture.activator.ready());
+
+        cleanup.complete(null);
+        TerminalResult recovered = recovery.get(2, TimeUnit.SECONDS);
+        assertEquals(ReceiptStatus.RECEIPT_STATUS_OK,
+            recovered.completed().getResult().getRestoration().getStatus());
+        assertFalse(fixture.executor.hasPendingRecovery());
+        assertTrue(fixture.activator.ready());
+    }
+
+    private static boolean containsFailureCode(Throwable throwable, ErrorCode code) {
+        if (throwable instanceof RuntimeJobExecutor.Failure failure && failure.code == code) return true;
+        for (Throwable suppressed : throwable.getSuppressed()) {
+            if (containsFailureCode(suppressed, code)) return true;
+        }
+        return throwable.getCause() != null && containsFailureCode(throwable.getCause(), code);
+    }
+
+    private static final class DeferredCleanupFuture extends CompletableFuture<Void> {
+        @Override
+        public Void get(long timeout, TimeUnit unit)
+            throws InterruptedException, ExecutionException, TimeoutException {
+            if (!isDone()) throw new TimeoutException("cleanup remains pending");
+            return super.get(timeout, unit);
+        }
+    }
 
     @Test
     void exactPreludeResetWaitCaptureUsesOneCompoundCallAndOriginalReceipts() throws Exception {
@@ -68,6 +149,7 @@ class RuntimeJobExecutorDeterministicCaptureTest {
         assertFalse(fixture.runtime.events.contains("reset"));
         assertFalse(fixture.runtime.events.contains("frames"));
         assertFalse(fixture.runtime.events.contains("capture"));
+        assertSequenceWrapsCapture(fixture.runtime.events);
         assertEquals(1, result.getPreludeReceiptsCount());
         assertEquals(ActionKind.ACTION_KIND_LOAD_SHADER, result.getPreludeReceipts(0).getKind());
         assertEquals(0, result.getPreludeReceipts(0).getActionIndex());
@@ -142,6 +224,8 @@ class RuntimeJobExecutorDeterministicCaptureTest {
         assertEquals(0, fixture.runtime.deterministicCaptureCalls);
         assertEquals(2, fixture.runtime.events.stream().filter("frames"::equals).count());
         assertEquals(1, fixture.runtime.events.stream().filter("capture"::equals).count());
+        assertFalse(fixture.runtime.events.contains("deterministic-sequence-begin"));
+        assertFalse(fixture.runtime.events.contains("deterministic-sequence-end"));
         assertEquals(ReceiptStatus.RECEIPT_STATUS_OK,
             terminal.completed().getResult().getPreludeReceipts(0).getStatus());
     }
@@ -198,6 +282,7 @@ class RuntimeJobExecutorDeterministicCaptureTest {
                 receipt.getStatus() == ReceiptStatus.RECEIPT_STATUS_OK));
         fixture.assertNoPublishedCapture();
         assertFalse(fixture.runtime.deterministicPhaseActive);
+        assertSequenceWrapsCapture(fixture.runtime.events);
     }
 
     @Test
@@ -481,6 +566,17 @@ class RuntimeJobExecutorDeterministicCaptureTest {
             .setArtifactName(artifact).setFormat(ArtifactFormat.ARTIFACT_FORMAT_PNG))).build();
     }
 
+    private static void assertSequenceWrapsCapture(List<String> events) {
+        int begin = events.indexOf("deterministic-sequence-begin");
+        int capture = events.indexOf("deterministic_capture");
+        int end = events.indexOf("deterministic-sequence-end");
+        assertTrue(begin >= 0);
+        assertTrue(capture > begin);
+        assertTrue(end > capture);
+        assertEquals(1, events.stream().filter("deterministic-sequence-begin"::equals).count());
+        assertEquals(1, events.stream().filter("deterministic-sequence-end"::equals).count());
+    }
+
     private static Action load(Source source) {
         return Action.newBuilder().setPrelude(true).setLoadShader(LoadShader.newBuilder()
             .setSourceUuid(source.lease.uuid())
@@ -686,6 +782,16 @@ class RuntimeJobExecutorDeterministicCaptureTest {
             sources.forEach(source -> spec.addSources(source.lease.reference()));
             CoreJob job = new CoreJob(spec.build(), spec.getJobId(), WORKSPACE_ID, "message", null);
             job.initialize(sources.stream().map(Source::lease).toList());
+            return job;
+        }
+
+        CoreJob recoveryJob() {
+            JobSpec spec = JobSpec.newBuilder()
+                .setJobId("recover-" + UUID.randomUUID())
+                .setRecoverRuntime(RecoverRuntimeRequest.getDefaultInstance())
+                .build();
+            CoreJob job = new CoreJob(spec, spec.getJobId(), WORKSPACE_ID, "message", null);
+            job.initialize(List.of());
             return job;
         }
 

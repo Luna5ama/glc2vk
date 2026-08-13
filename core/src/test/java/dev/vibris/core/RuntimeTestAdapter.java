@@ -42,6 +42,8 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     final ArrayDeque<DeterministicCaptureOperation> deterministicCaptureOperations = new ArrayDeque<>();
     final ArrayDeque<CompletionStage<DeterministicTemporalCaptureOutcome>> deterministicCaptureStages =
         new ArrayDeque<>();
+    final ArrayDeque<CompletionStage<Void>> deterministicSequenceBeginStages = new ArrayDeque<>();
+    final ArrayDeque<CompletionStage<Void>> deterministicSequenceEndStages = new ArrayDeque<>();
     final ArrayDeque<DeterministicTemporalCaptureOutcome> deterministicCaptureOutcomes = new ArrayDeque<>();
     final ArrayDeque<ResourceCatalog> deterministicResourceCatalogs = new ArrayDeque<>();
     final ArrayDeque<CompileCatalog> deterministicCompileCatalogs = new ArrayDeque<>();
@@ -234,6 +236,24 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
             deterministicPhaseActive = false;
             return CompletableFuture.failedFuture(exception);
         }
+    }
+
+    @Override
+    public CompletionStage<Void> beginDeterministicSequence(CancellationToken cancellation) {
+        cancellation.throwIfCancellationRequested();
+        events.add("deterministic-sequence-begin");
+        return deterministicSequenceBeginStages.isEmpty()
+            ? CompletableFuture.completedFuture(null)
+            : deterministicSequenceBeginStages.removeFirst();
+    }
+
+    @Override
+    public CompletionStage<Void> endDeterministicSequence(CancellationToken cancellation) {
+        cancellation.throwIfCancellationRequested();
+        events.add("deterministic-sequence-end");
+        return deterministicSequenceEndStages.isEmpty()
+            ? CompletableFuture.completedFuture(null)
+            : deterministicSequenceEndStages.removeFirst();
     }
 
     @Override

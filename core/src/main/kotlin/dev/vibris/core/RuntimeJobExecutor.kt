@@ -22,6 +22,7 @@ import dev.vibris.protocol.v2.JobResult
 import dev.vibris.protocol.v2.JobStage
 import dev.vibris.protocol.v2.RestorationReceipt
 import java.io.IOException
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
@@ -84,6 +85,9 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             return completed(job, completed, startedAtUnixMs, startedNanos)
         } catch (failure: Failure) {
             if (failure.holdOwnership) throw failure
+            if (failure.cleanupBarrier != null) {
+                throw retainUnsafeRuntime(job, isolation, failure)
+            }
             val restored = try {
                 terminalize(job, isolation, false, progress)
             } catch (restoreFailure: Failure) {
@@ -902,6 +906,34 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         }
     }
 
+    private fun retainUnsafeRuntime(
+        job: CoreJob,
+        isolation: BenchmarkCaseIsolation,
+        failure: Failure,
+    ): Failure {
+        activator.markNotReady()
+        val message = failure.message ?: "The deterministic runtime sequence could not be closed."
+        val actual = runCatching(::currentSnapshot).getOrElse {
+            BenchmarkCaseIsolation.Snapshot(null, activeShaderSettings, activeContext)
+        }
+        val receipt = isolation.failureReceipt(
+            actual,
+            ErrorCode.ERROR_CODE_RESTORE_FAILED,
+            message,
+            false,
+        )
+        pendingRecovery = PendingRecovery(
+            isolation,
+            job.sources.toList(),
+            receipt,
+            failure.cleanupBarrier,
+        )
+        return failure.requiringRecovery(
+            receipt,
+            "$message ${BenchmarkCaseIsolation.MANUAL_RECOVERY}",
+        )
+    }
+
     private fun executeRecovery(
         job: CoreJob,
         progress: Consumer<JobStage>,
@@ -935,6 +967,9 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             }
         }
         try {
+            recovery.cleanupBarrier?.let { barrier ->
+                restoreAwait(barrier.handle<Void> { _, _ -> null })
+            }
             val actual = restore(recovery.isolation.snapshot)
             activator.markReadyAfterVerification()
             val receipt = recovery.isolation.successReceipt(actual, true)
@@ -1042,6 +1077,29 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     @Throws(Failure::class)
     fun <T> await(stage: CompletionStage<T>, job: CoreJob, deadline: Long): T = awaiter.await(stage, job, deadline)
 
+    @Throws(Failure::class)
+    fun beginDeterministicSequence(job: CoreJob, deadline: Long) {
+        await(runtime.beginDeterministicSequence(job.cancellation.token()), job, deadline)
+    }
+
+    @Throws(Failure::class)
+    fun endDeterministicSequence() {
+        val barrier = try {
+            runtime.endDeterministicSequence(CancellationToken.none())
+        } catch (failure: Exception) {
+            CompletableFuture.failedFuture<Void>(failure)
+        }
+        try {
+            restoreAwait(barrier)
+        } catch (failure: Exception) {
+            throw Failure(
+                ErrorCode.ERROR_CODE_RESTORE_FAILED,
+                failure.cause?.message ?: failure.message ?: "The deterministic runtime sequence could not be closed.",
+                barrier,
+            )
+        }
+    }
+
     data class LoadResult(
         val reload: ReloadResult,
         val context: ContextApplyResult,
@@ -1062,6 +1120,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         @JvmField val holdOwnership: Boolean,
         @JvmField val actionReceipts: List<ActionReceipt>,
         @JvmField val preludeReceipts: List<ActionReceipt>,
+        internal val cleanupBarrier: CompletionStage<Void>? = null,
     ) : Exception(message) {
         constructor(code: ErrorCode, message: String?) :
             this(
@@ -1103,6 +1162,22 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             java.util.List.of(),
         )
 
+        internal constructor(
+            code: ErrorCode,
+            message: String?,
+            cleanupBarrier: CompletionStage<Void>,
+        ) : this(
+            code,
+            message,
+            java.util.List.of(),
+            java.util.List.of(),
+            null,
+            false,
+            java.util.List.of(),
+            java.util.List.of(),
+            cleanupBarrier,
+        )
+
         fun withRestoration(value: RestorationReceipt): Failure = Failure(
             code,
             message,
@@ -1112,6 +1187,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             holdOwnership,
             actionReceipts,
             preludeReceipts,
+            cleanupBarrier,
         ).also { replacement -> suppressed.forEach(replacement::addSuppressed) }
 
         fun withActionReceipts(actions: List<ActionReceipt>, preludes: List<ActionReceipt>): Failure = Failure(
@@ -1123,6 +1199,19 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             holdOwnership,
             java.util.List.copyOf(actions),
             java.util.List.copyOf(preludes),
+            cleanupBarrier,
+        ).also { replacement -> suppressed.forEach(replacement::addSuppressed) }
+
+        fun requiringRecovery(value: RestorationReceipt, detail: String): Failure = Failure(
+            ErrorCode.ERROR_CODE_RESTORE_FAILED,
+            detail,
+            artifacts,
+            diagnostics,
+            value,
+            true,
+            actionReceipts,
+            preludeReceipts,
+            cleanupBarrier,
         ).also { replacement -> suppressed.forEach(replacement::addSuppressed) }
     }
 
@@ -1142,6 +1231,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         val isolation: BenchmarkCaseIsolation,
         val heldSources: List<SourceRegistry.Lease>,
         @Volatile var lastReceipt: RestorationReceipt,
+        val cleanupBarrier: CompletionStage<Void>? = null,
     )
 
     private data class DeterministicRuntimeSnapshot(

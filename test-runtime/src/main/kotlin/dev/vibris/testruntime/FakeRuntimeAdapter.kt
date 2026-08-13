@@ -366,6 +366,12 @@ class FakeRuntimeAdapter : VibrisRuntimeAdapter {
 
     private class MissedTargetException(message: String) : IllegalStateException(message)
 
+    override fun beginDeterministicSequence(cancellation: CancellationToken): CompletionStage<Void> =
+        immediateVoid(cancellation)
+
+    override fun endDeterministicSequence(cancellation: CancellationToken): CompletionStage<Void> =
+        immediateVoid(cancellation)
+
     override fun captureAfterPass(
         request: CapturePlan.AfterPassRequest,
         sink: ArtifactSink,
@@ -614,6 +620,15 @@ class FakeRuntimeAdapter : VibrisRuntimeAdapter {
         immediate {
             cancellation.throwIfCancellationRequested()
             operation()
+        }
+
+    private fun immediateVoid(cancellation: CancellationToken): CompletionStage<Void> =
+        try {
+            ensureOpen()
+            cancellation.throwIfCancellationRequested()
+            CompletableFuture<Void>().also { it.complete(null) }
+        } catch (exception: RuntimeException) {
+            CompletableFuture.failedFuture(exception)
         }
 
     private companion object {

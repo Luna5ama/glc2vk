@@ -373,6 +373,24 @@ class VibrisCoreEngine internal constructor(
                     )
                     return
                 }
+                if (!job.submission.hasRecoverRuntime() &&
+                    (executor.hasPendingRecovery() || !activator.ready())
+                ) {
+                    finish(
+                        job,
+                        ProtocolMessages.failure(
+                            job.submission.jobId,
+                            job.requestId,
+                            ErrorCode.ERROR_CODE_SERVER_NOT_AVAILABLE,
+                            "Vibris entered recovery before this queued job could start.",
+                            emptyList(),
+                            executor.restorationReceipt(),
+                        ),
+                        RequestState.FAILED,
+                        false,
+                    )
+                    return
+                }
                 requests.markRunning(job.requestId)
                 activeRequestId = job.requestId
                 activeStage = JobStage.JOB_STAGE_UNSPECIFIED

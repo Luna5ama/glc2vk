@@ -2393,6 +2393,7 @@ Verification:
 Expected commit titles:
 
 - Vibris product: `T19I add frame atomic temporal capture contract`
+- Vibris hardening continuation: `T19I fail closed deterministic cleanup and recovery`
 - Iris product: `T19I implement deterministic temporal capture phase`
 - Vibris owner receipt: `T19I record deterministic temporal phase proof`
 
@@ -2492,6 +2493,14 @@ Evidence:
   `atomicAdd(voxel_bucketCounts[dist], 1u)` nor the AP4 allocator file. T19I is therefore restored as the sole
   `READY` task; T19H and T20 return to ordered `PENDING`. No product/shader file, deployment, process, configuration,
   artifact, or runtime job changed in this control-plane continuation.
+- `2026-08-12` T19I Vibris hardening closed the deterministic sequence boundary around every attempted compound capture:
+  a failed begin still receives one cleanup attempt, cleanup failure is primary with the body failure suppressed, and
+  the unresolved cleanup barrier is retained as a recovery prerequisite. Recovery now waits for that barrier before
+  restoring the safe snapshot, while ordinary jobs already queued when recovery begins are rejected before entering the
+  runtime. New regressions cover failed-begin cleanup, cleanup-failure precedence/barrier waiting, and the queued-job
+  recovery gate. The focused API/Core/test-runtime suite passed 216/216 with zero failures, and offline `build` passed;
+  T19H's six protected MCP files, `capture\a.spv`, Iris, shader worktrees, deployment, and Codex configuration remain
+  untouched. The atomic continuation commit title is `T19I fail closed deterministic cleanup and recovery`.
 
 ### T19H — Make paired visual capture deterministic
 
@@ -3059,3 +3068,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-12 - T19I blocker audit 2 - reverified the unchanged AP4 cross-workgroup allocation-ID nondeterminism, exact repository/worktree identities, and protected state for the second consecutive blocked Goal turn; no READY task exists and the Goal remains active - Control-plane commit title: roadmap recheck T19I allocator blocker`
 - `2026-08-12 - T19I blocker audit 3 - reverified the unchanged AP4 cross-workgroup allocation-ID nondeterminism, exact repository/worktree identities, and protected state for the third consecutive blocked Goal turn; after the ledger-only checkpoint the Goal is marked blocked - Control-plane commit title: roadmap confirm T19I blocked on shader allocator`
 - `2026-08-12 - T19I scope unblocked - user authorized the clean 1.10/1.9 line for deterministic validation and made AP4 voxel-specific divergence non-gating; existing clean Alpha-Piscium-8 1.10/fsr3 at 0c4112620b15dfd3b7684221714f58bda4fb6439 has no voxel paths or allocator, so T19I is READY and dependents return to PENDING - Control-plane commit title: roadmap unblock T19I with 1.10 validation target`
+- `2026-08-12 - T19I Vibris hardening - deterministic cleanup is fail-closed, recovery waits for unresolved cleanup, and queued ordinary jobs cannot enter a recovering runtime; API/Core/test-runtime 216/216 and offline build passed - Commit title: T19I fail closed deterministic cleanup and recovery`

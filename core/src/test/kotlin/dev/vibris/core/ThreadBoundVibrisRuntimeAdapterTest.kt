@@ -86,6 +86,27 @@ class ThreadBoundVibrisRuntimeAdapterTest {
     }
 
     @Test
+    fun deterministicSequenceBoundariesRunAsDistinctClientTasks() {
+        val host = QueuedHost(RenderedFrameClock())
+        val adapter = ThreadBoundVibrisRuntimeAdapter(host, host.frames)
+
+        val begin = adapter.beginDeterministicSequence(CancellationToken.none()).toCompletableFuture()
+        assertEquals(1, host.pendingTasks())
+        host.runNextTask()
+        begin.join()
+
+        val end = adapter.endDeterministicSequence(CancellationToken.none()).toCompletableFuture()
+        assertEquals(1, host.pendingTasks())
+        host.runNextTask()
+        end.join()
+
+        assertEquals(
+            listOf("deterministic-sequence-begin", "deterministic-sequence-end"),
+            host.events,
+        )
+    }
+
+    @Test
     fun deterministicCaptureUsesOneClientTaskAndRegistersBeforeAnyInterleavingFrame() {
         val frames = RenderedFrameClock()
         val host = QueuedHost(frames)
@@ -742,6 +763,18 @@ class ThreadBoundVibrisRuntimeAdapterTest {
             return result
         }
 
+        override fun beginDeterministicSequence(cancellation: CancellationToken) {
+            requireClientThread()
+            cancellation.throwIfCancellationRequested()
+            events.add("deterministic-sequence-begin")
+        }
+
+        override fun endDeterministicSequence(cancellation: CancellationToken) {
+            requireClientThread()
+            cancellation.throwIfCancellationRequested()
+            events.add("deterministic-sequence-end")
+        }
+
         override fun resourceCatalog(frameId: Long): ResourceCatalog {
             requireClientThread()
             check(closeCount == 0) { "Host is closed" }
@@ -830,6 +863,10 @@ class ThreadBoundVibrisRuntimeAdapterTest {
             scheduler: DeterministicTemporalCaptureScheduler,
             cancellation: CancellationToken,
         ): CompletionStage<DeterministicTemporalCaptureOutcome> = unsupported()
+
+        override fun beginDeterministicSequence(cancellation: CancellationToken) = Unit
+
+        override fun endDeterministicSequence(cancellation: CancellationToken) = Unit
 
         override fun resourceCatalog(frameId: Long): ResourceCatalog = unsupported()
 

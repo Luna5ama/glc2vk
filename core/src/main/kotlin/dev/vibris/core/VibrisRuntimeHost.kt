@@ -54,6 +54,10 @@ interface VibrisRuntimeHost : AutoCloseable {
         cancellation: CancellationToken,
     ): CompletionStage<DeterministicTemporalCaptureOutcome>
 
+    fun beginDeterministicSequence(cancellation: CancellationToken)
+
+    fun endDeterministicSequence(cancellation: CancellationToken)
+
     fun resourceCatalog(frameId: Long): ResourceCatalog
 
     fun capture(

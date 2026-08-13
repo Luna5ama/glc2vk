@@ -25,6 +25,7 @@ import dev.vibris.protocol.v2.StatusWaitCondition
 import dev.vibris.protocol.v2.SubmitJob
 import dev.vibris.protocol.v2.WorkspaceOrigin
 import io.grpc.stub.StreamObserver
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -154,6 +155,47 @@ class RuntimeLeaseStatusTest {
         assertTrue(ready.satisfied)
         assertFalse(descriptor.status(engine).hasActiveLease())
         assertTrue(engine.ready())
+        engine.close()
+    }
+
+    @Test
+    fun queuedOrdinaryJobIsRejectedIfEarlierJobLeavesRuntimeInRecovery() {
+        val runtime = RuntimeTestAdapter()
+        val pending = temp.resolve("queued-recovery-pending").toAbsolutePath()
+        Files.createDirectories(pending)
+        val engine = VibrisCoreEngine(
+            pending,
+            runtime,
+            RetainingLink,
+            ShaderLogSink.none(),
+        )
+
+        val baselineSession = recordingSession()
+        engine.submit(baselineSession.session, loadJob("baseline-queued", source(pending), false))
+        assertTrue(baselineSession.terminal.await(2, TimeUnit.SECONDS))
+
+        val candidateReload = CompletableFuture<ReloadResult>()
+        runtime.reloadStages.add(candidateReload)
+        runtime.reloads.add(ReloadResult.failure(emptyList()))
+        val candidateStarted = CountDownLatch(1)
+        runtime.beforeReloadResult = Runnable { candidateStarted.countDown() }
+        val candidateSession = recordingSession()
+        engine.submit(candidateSession.session, loadJob("candidate-queued", source(pending), true))
+        assertTrue(candidateStarted.await(2, TimeUnit.SECONDS))
+
+        val queuedSession = recordingSession()
+        engine.submit(queuedSession.session, loadJob("queued-after-failure", source(pending), false))
+        assertTrue(engine.queueLength() >= 1)
+
+        candidateReload.complete(ReloadResult.success(EffectiveShaderSettings.empty(), emptyList()))
+        assertTrue(candidateSession.terminal.await(2, TimeUnit.SECONDS))
+        assertTrue(queuedSession.terminal.await(2, TimeUnit.SECONDS))
+
+        val candidateFailure = candidateSession.messages.last { it.hasJobFailed() }.jobFailed
+        assertEquals(ErrorCode.ERROR_CODE_RESTORE_FAILED, candidateFailure.error.code)
+        val queuedFailure = queuedSession.messages.last { it.hasJobFailed() }.jobFailed
+        assertEquals(ErrorCode.ERROR_CODE_SERVER_NOT_AVAILABLE, queuedFailure.error.code)
+        assertEquals(0, engine.probe().executionCount("queued-after-failure"))
         engine.close()
     }
 

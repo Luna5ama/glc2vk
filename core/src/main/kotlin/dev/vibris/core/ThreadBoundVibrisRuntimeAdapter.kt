@@ -166,6 +166,12 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
         }
     }
 
+    override fun beginDeterministicSequence(cancellation: CancellationToken): CompletionStage<Void> =
+        trackActivity { onClientTask(Runnable { host.beginDeterministicSequence(cancellation) }, cancellation) }
+
+    override fun endDeterministicSequence(cancellation: CancellationToken): CompletionStage<Void> =
+        trackActivity { onClientTask(Runnable { host.endDeterministicSequence(cancellation) }, cancellation) }
+
     override fun captureAfterPass(
         request: CapturePlan.AfterPassRequest,
         sink: ArtifactSink,
@@ -237,6 +243,25 @@ class ThreadBoundVibrisRuntimeAdapter @JvmOverloads constructor(
         } else {
             host.executeOnClient(task)
         }
+        return result
+    }
+
+    private fun onClientTask(action: Runnable, cancellation: CancellationToken): CompletionStage<Void> {
+        if (closed.get()) {
+            return CompletableFuture.failedFuture(IllegalStateException("Vibris runtime is closed"))
+        }
+        val result = CompletableFuture<Void>()
+        val task = Runnable {
+            try {
+                if (closed.get()) throw IllegalStateException("Vibris runtime is closed")
+                cancellation.throwIfCancellationRequested()
+                action.run()
+                result.complete(null)
+            } catch (throwable: Throwable) {
+                result.completeExceptionally(throwable)
+            }
+        }
+        if (host.isClientThread()) task.run() else host.executeOnClient(task)
         return result
     }
 

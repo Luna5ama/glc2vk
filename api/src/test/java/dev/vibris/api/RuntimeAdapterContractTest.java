@@ -492,6 +492,8 @@ class RuntimeAdapterContractTest {
         assertEquals(1, Arrays.stream(VibrisRuntimeAdapter.class.getDeclaredMethods())
             .filter(candidate -> candidate.getName().equals("captureDeterministicTemporalPhase"))
             .count());
+        assertRequiredSequenceMethod("beginDeterministicSequence");
+        assertRequiredSequenceMethod("endDeterministicSequence");
         var plannerMethod = DeterministicTemporalCapturePlanner.class.getMethod(
             "plan", ResourceCatalog.class, CompileCatalog.class
         );
@@ -518,6 +520,16 @@ class RuntimeAdapterContractTest {
             DeterministicTemporalCaptureOutcome.CaptureRejected.class,
             DeterministicTemporalCaptureOutcome.Captured.class
         ), Set.of(DeterministicTemporalCaptureOutcome.class.getPermittedSubclasses()));
+    }
+
+    private static void assertRequiredSequenceMethod(String name) throws NoSuchMethodException {
+        var method = VibrisRuntimeAdapter.class.getMethod(name, CancellationToken.class);
+        assertTrue(Modifier.isAbstract(method.getModifiers()));
+        assertTrue(!method.isDefault());
+        assertEquals(CompletionStage.class, method.getReturnType());
+        assertEquals(1, Arrays.stream(VibrisRuntimeAdapter.class.getDeclaredMethods())
+            .filter(candidate -> candidate.getName().equals(name))
+            .count());
     }
 
     @Test
@@ -844,6 +856,18 @@ class RuntimeAdapterContractTest {
                 1 + request.warmupFrames(),
                 captured(plan, 2L + request.warmupFrames())
             ));
+        }
+
+        @Override
+        public CompletionStage<Void> beginDeterministicSequence(CancellationToken cancellation) {
+            cancellation.throwIfCancellationRequested();
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> endDeterministicSequence(CancellationToken cancellation) {
+            cancellation.throwIfCancellationRequested();
+            return CompletableFuture.completedFuture(null);
         }
 
         @Override

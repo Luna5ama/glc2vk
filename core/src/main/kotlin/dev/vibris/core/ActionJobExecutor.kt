@@ -450,12 +450,37 @@ internal class ActionJobExecutor(
                 }
             }
 
+            fun executeSequencedSteps() {
+                val deterministic = action.program.steps.any {
+                    it.type == CaptureProgramBuilder.ActionType.DETERMINISTIC
+                }
+                if (!deterministic) {
+                    executeSteps()
+                    return
+                }
+
+                var executionFailure: Throwable? = null
+                try {
+                    owner.beginDeterministicSequence(job, deadline)
+                    executeSteps()
+                } catch (failure: Throwable) {
+                    executionFailure = failure
+                }
+                try {
+                    owner.endDeterministicSequence()
+                } catch (cleanupFailure: Throwable) {
+                    executionFailure?.let(cleanupFailure::addSuppressed)
+                    throw cleanupFailure
+                }
+                executionFailure?.let { throw it }
+            }
+
             if (prepared == null) {
-                executeSteps()
+                executeSequencedSteps()
                 return receiptBook.complete().addTo(JobResult.newBuilder()).build()
             }
             prepared.use {
-                executeSteps()
+                executeSequencedSteps()
                 progress.accept(JobStage.JOB_STAGE_WRITING_ARTIFACTS)
                 probe.event(job.requestId, "WRITING_ARTIFACTS")
                 val resultArtifacts = ProfileResultArtifacts.write(
