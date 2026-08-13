@@ -2626,6 +2626,13 @@ Evidence:
   `JOB_STAGE_RECOVERING`, `can_start_job=false`, while Minecraft/world/scene readiness stayed true. The external
   `Alpha-Piscium-5` event log remained paused at `03:06:18`; no cancellation, override, deployment, or restart was
   performed, so the same external recovery blocker still prevents T19I live comparison.
+- `2026-08-13` the complete entry audit found unrelated user-side shader drift since the prior receipt: the root
+  `Alpha-Piscium` worktree is now on `2.0/dev` at `368e764329cfa4469d7eb3e1e7d32856505e0653`, and
+  `Alpha-Piscium-8` is on `2.0/restir-optimize` at `7ca19441f490db73c813b6bb53550cd2603994d8` with its recorded
+  dirty shader files. Those worktrees remain outside the synthetic target and were not touched. The direct status
+  recheck still reports lease `b075274b-1583-458b-8225-67615a37a10e` / `943749f7-c9e2-366e-b651-4dab77152ecf` at
+  `JOB_STAGE_RECOVERING`, so the second consecutive continuation cannot admit T19I's live proof and performs no
+  cancellation, override, deployment, or restart.
 
 ### T19H — Make paired visual capture deterministic
 
