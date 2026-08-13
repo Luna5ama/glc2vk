@@ -118,7 +118,7 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T19E | P0 | Vibris | Define strict detached-worktree provenance contract | DONE | `T19E define strict detached provenance contract` |
 | T19F | P0 | Iris | Implement and prove live detached-worktree provenance | DONE | `T19F complete live detached provenance` |
 | T19G | P0 | Vibris | Repair live paired-benchmark finalization | DONE | `T19G repair live paired benchmark finalization` |
-| T19I | P0 | Vibris/Iris | Add a frame-atomic deterministic temporal capture phase | READY | `T19I record deterministic temporal phase proof` |
+| T19I | P0 | Vibris/Iris | Add a frame-atomic deterministic temporal capture phase | BLOCKED | `T19I record deterministic temporal phase proof` |
 | T19H | P0 | Vibris | Make paired visual capture deterministic | PENDING | `T19H make paired visual capture deterministic` |
 | T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | PENDING | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
@@ -2308,7 +2308,7 @@ Evidence:
 
 ### T19I — Add a frame-atomic deterministic temporal capture phase
 
-Status: `READY`
+Status: `BLOCKED`
 
 Dependencies: T19G
 
@@ -2399,10 +2399,13 @@ Expected commit titles:
 
 Blockers:
 
-- None. The user explicitly moved the remaining deterministic visual proof to the clean 1.10/1.9 line and authorized
-  ignoring AP4's voxel-specific divergence when it is immaterial. The selected existing `Alpha-Piscium-8`
-  `1.10/fsr3` worktree contains no tracked voxel path and no allocator `atomicAdd`; AP4 remains untouched and its
-  shader-internal allocation-ID nondeterminism is a recorded non-gating limitation rather than a Vibris blocker.
+- The required direct visual gate remains unachievable on the authorized clean Alpha-Piscium-8 1.10 target without
+  violating T19I's no-shader-change, no-threshold-change, and no-compatibility-bypass constraints. Its unchanged
+  `shaders/pass/composite/EnvProbeUpdate1ReprojectScatter.comp.glsl` dispatches 512x2x3 workgroups and performs a
+  plain `imageStore` through `persistent_envProbeTemp` at line 51; multiple invocations can target one texel, and
+  GL barriers cannot impose an order inside that dispatch. The Iris phase now makes the CPU-visible temporal inputs
+  deterministic, but cannot serialize this shader-internal collision. A user-authorized shader fix, a different clean
+  validation target without this race, or an explicit acceptance-scope change is required before T19I can complete.
 
 Evidence:
 
@@ -2501,6 +2504,32 @@ Evidence:
   recovery gate. The focused API/Core/test-runtime suite passed 216/216 with zero failures, and offline `build` passed;
   T19H's six protected MCP files, `capture\a.spv`, Iris, shader worktrees, deployment, and Codex configuration remain
   untouched. The atomic continuation commit title is `T19I fail closed deterministic cleanup and recovery`.
+- `2026-08-12` Iris product commit `a58f107f3a7e77d8447ba04998e9ae49f39e12a0` implemented the frame-origin deterministic
+  `frameCounter`, `frameTime`, and `frameTimeCounter` phase with focused `:common:compileJava`,
+  `:fabric:vibrisBridgeTest`, and `:fabric:remapJar` passing. The built and installed Mod jars match at SHA-256
+  `E6BB181CCF9A539582B542F3301D5E1DB778EE1FA851CFE960F559FED5791890`; the six retained T19H files, `capture\a.spv`,
+  and Iris runtime directories remained outside the commit.
+- Direct same-clean-commit AP8 job `cc5c926c-c593-49aa-a4ea-e65d68ef84cf` used exact commit
+  `0c4112620b15dfd3b7684221714f58bda4fb6439`, preset `night-gi-1-720p`, and 120-frame warmups. Distinct captures
+  `52002`/`52222` matched source snapshot `c9da2530f499317e4a6b61a5b9206842b705a2a5a15d9fafa23949ccc02b74cf`,
+  config `d08a39a3e7055aadbfb77b2c192a7ea777841d3c4f22121b0979ecd0cb033c8f`, and scene
+  `6541ce12e1e9e7ecbea47971c0a7eec90fde0d50407b547377791b8c099fa674`; restoration and all non-visual guards passed.
+  The unchanged visual gate failed only `threshold_pixel_ratio`: `0.003959418402777777 > 0.001` (MAE
+  `0.00039572908156284886`, RMSE `0.0013625340985276787`, P95 `0.00392156862745098`, maximum
+  `0.058823529411764705`, SSIM `0.9999831940518547`). The manifest was deleted after its receipt was recorded.
+- A second direct same-clean-commit AP8 job `a9a4d806-5b08-41d9-9756-f9a0e09eb6d7` repeated the same exact
+  provenance and 120-frame protocol at distinct captures `59279`/`59510`. Restoration and all provenance/config/scene
+  guards again passed, while the unchanged visual gate again failed only `threshold_pixel_ratio` at
+  `0.006438802083333334 > 0.001` (MAE `0.00047570082720548013`, RMSE `0.0015503486988184968`, P95
+  `0.00392156862745098`, maximum `0.1803921568627451`, SSIM `0.999975342281981`). Its manifest and artifacts were
+  deleted after the receipt was recorded; final AP8 status was available with an empty queue and both accept/start
+  true.
+- Two one-frame `iris_custom_image.uimg_frgba16f` debug captures (`c4a6af41-0915-400e-ac62-f8d70e74c3c0` and
+  `059082c8-d6d4-46bc-923a-7850605ddb9f`) were byte-identical at SHA-256
+  `579a56fff58abb8b6d25c732dd17ec5c2e5057c624df78416f4f9f87d499543d`, while prior 120-frame readbacks differed
+  only inside the fixed `envProbeTemp` atlas region. This localizes the divergence to the unchanged AP8 scatter
+  shader rather than source, preset, scene, restoration, or Iris window/process state. No shader or Codex MCP file was
+  modified, and no Minecraft/MultiMC window was brought to the foreground.
 
 ### T19H — Make paired visual capture deterministic
 
@@ -3069,3 +3098,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-12 - T19I blocker audit 3 - reverified the unchanged AP4 cross-workgroup allocation-ID nondeterminism, exact repository/worktree identities, and protected state for the third consecutive blocked Goal turn; after the ledger-only checkpoint the Goal is marked blocked - Control-plane commit title: roadmap confirm T19I blocked on shader allocator`
 - `2026-08-12 - T19I scope unblocked - user authorized the clean 1.10/1.9 line for deterministic validation and made AP4 voxel-specific divergence non-gating; existing clean Alpha-Piscium-8 1.10/fsr3 at 0c4112620b15dfd3b7684221714f58bda4fb6439 has no voxel paths or allocator, so T19I is READY and dependents return to PENDING - Control-plane commit title: roadmap unblock T19I with 1.10 validation target`
 - `2026-08-12 - T19I Vibris hardening - deterministic cleanup is fail-closed, recovery waits for unresolved cleanup, and queued ordinary jobs cannot enter a recovering runtime; API/Core/test-runtime 216/216 and offline build passed - Commit title: T19I fail closed deterministic cleanup and recovery`
+- `2026-08-13 - T19I blocked - Iris product commit a58f107f3a7e77d8447ba04998e9ae49f39e12a0 and repeated direct Alpha-Piscium-8 same-source proofs passed all focused/runtime/provenance/restoration checks but failed the unchanged threshold-pixel-ratio gate; AP8 EnvProbe scatter has an in-dispatch imageStore race that cannot be fixed within the no-shader-change/no-threshold-change/no-compatibility scope - Control-plane commit title: roadmap block T19I on AP8 shader scatter nondeterminism`
