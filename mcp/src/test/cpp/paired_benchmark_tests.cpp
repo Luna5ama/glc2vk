@@ -115,7 +115,8 @@ double stable_value(const Json& request) {
 }
 
 Json visual_result(bool passed, std::string candidate_config_hash = "visual-config-hash",
-    std::string candidate_scene_hash = "visual-scene-hash", bool include_heatmap = true) {
+    std::string candidate_scene_hash = "visual-scene-hash", bool include_heatmap = true,
+    bool include_resets = true) {
     const auto load = [](std::size_t index, std::string source, std::string config_hash,
                           std::string scene_hash) {
         const auto source_hash = source + "-hash";
@@ -148,6 +149,14 @@ Json visual_result(bool passed, std::string candidate_config_hash = "visual-conf
                 {"provenance", strict_provenance("candidate", "visual-config-hash", "visual-scene-hash")},
                 {"restoration", {{"status", "RECEIPT_STATUS_OK"}}},
                 {"result_manifest_id", "visual-manifest"}};
+    if (include_resets) {
+        result["action_receipts"] = Json::array({
+            {{"action_index", 0}, {"kind", "ACTION_KIND_RESET_TEMPORAL_STATE"},
+             {"status", "RECEIPT_STATUS_OK"}, {"reset_temporal", {{"completed_at_unix_ms", 1001}}}},
+            {{"action_index", 3}, {"kind", "ACTION_KIND_RESET_TEMPORAL_STATE"},
+             {"status", "RECEIPT_STATUS_OK"}, {"reset_temporal", {{"completed_at_unix_ms", 1002}}}},
+        });
+    }
     if (include_heatmap) {
         result["artifacts"].push_back({{"kind", "ARTIFACT_KIND_HEATMAP"},
             {"format", "ARTIFACT_FORMAT_PNG"}, {"relative_path", "visual/diff-heatmap.png"}});
@@ -367,6 +376,7 @@ void visual_gate_returns_combined_performance_and_visual_verdicts() {
             visual_request.at("visual_thresholds").at("min_ssim") == 0.995,
         "The paired benchmark did not request a deterministic screenshot comparison with its sources and thresholds.");
     require(result.at("success") == false && result.at("status") == "completed_with_failures" &&
+            result.at("requested_measurements") == 16 &&
             result.at("performance_verdict") == "ACCEPTED" && result.at("visual_verdict") == "failed" &&
             result.at("verdict") == "GATE_FAILED" && result.at("visual").at("status") == "failed" &&
             result.at("visual").at("comparison").at("ssim") == 0.8143305138814317 &&
@@ -380,15 +390,16 @@ void visual_receipts_fail_closed_on_state_or_artifact_mismatch() {
     auto request_arguments = arguments("abba", 2);
     request_arguments["visual"] = {{"pixel_error_threshold", 0.01}, {"max_absolute_error", 0.1}};
     const auto run = [&request_arguments](std::string config_hash, std::string scene_hash,
-                         bool include_heatmap) {
+                         bool include_heatmap, bool include_resets = true) {
         return std::get<Json>(vibris::mcp::run_paired_benchmark(
             request_arguments, workflow_id, 19,
             [](const Json& request) -> ToolOutcome {
                 return profile_result(request, stable_value(request));
             },
             [config_hash = std::move(config_hash), scene_hash = std::move(scene_hash),
-                include_heatmap](const Json&) mutable -> ToolOutcome {
-                return visual_result(true, std::move(config_hash), std::move(scene_hash), include_heatmap);
+                include_heatmap, include_resets](const Json&) mutable -> ToolOutcome {
+                return visual_result(true, std::move(config_hash), std::move(scene_hash),
+                    include_heatmap, include_resets);
             }));
     };
 
@@ -412,6 +423,17 @@ void visual_receipts_fail_closed_on_state_or_artifact_mismatch() {
             missing_artifact.at("verdict") == "GATE_FAILED" &&
             missing_artifact.at("visual").at("guards").at("diff_heatmap_artifact") == false,
         "A visual receipt without the required difference heatmap was accepted.");
+
+    const auto missing_resets = run("visual-config-hash", "visual-scene-hash", true, false);
+    std::set<std::string> reset_codes;
+    for (const auto& mismatch : missing_resets.at("visual").at("guards").at("mismatches")) {
+        reset_codes.insert(mismatch.at("code").get<std::string>());
+    }
+    require(missing_resets.at("success") == false &&
+            missing_resets.at("status") == "invalid_comparison" &&
+            missing_resets.at("visual").at("guards").at("two_ordered_temporal_reset_receipts") == false &&
+            reset_codes.contains("TWO_ORDERED_TEMPORAL_RESET_RECEIPTS_REQUIRED"),
+        "A visual receipt without both ordered successful temporal resets was accepted.");
 }
 
 void typed_sibling_and_sentinel_guardrails_reject_regressions() {

@@ -174,11 +174,16 @@ void visual_normalization_strict_v2() {
 		terminal_json(completed_visual_message()), "ab_compare");
 	require(result.at("success") == true && result.at("frame_ids") == Json::array({41, 42}) &&
 		result.at("comparison").at("passed") == true && result.at("artifacts").size() == 2 &&
-		result.at("action_receipts").size() == 3 && result.at("prelude_receipts").size() == 2 &&
+		result.at("action_receipts").size() == 7 && result.at("prelude_receipts").size() == 2 &&
+		result.at("action_receipts").at(0).at("kind") == "ACTION_KIND_RESET_TEMPORAL_STATE" &&
+		result.at("action_receipts").at(0).at("reset_temporal").at("completed_at_unix_ms") == 1001 &&
+		result.at("action_receipts").at(3).at("kind") == "ACTION_KIND_RESET_TEMPORAL_STATE" &&
+		result.at("action_receipts").at(3).at("reset_temporal").at("completed_at_unix_ms") == 1002 &&
 		!result.contains("action_results"),
 		"visual normalization did not derive its receipt from strict-v2 action details");
 	const auto guards = vibris::mcp::visual_comparison_guards(result, true);
-	require(guards.at("passed") == true, "strict-v2 visual receipt failed deterministic guards");
+	require(guards.at("passed") == true && guards.at("two_ordered_temporal_reset_receipts") == true,
+		"strict-v2 visual receipt failed deterministic temporal-reset guards");
 }
 
 void screenshot_result_compact_strict_v2() {

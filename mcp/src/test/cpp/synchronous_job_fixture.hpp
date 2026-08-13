@@ -198,6 +198,30 @@ inline proto::ActionReceipt* add_capture_receipt(proto::JobResult* result, const
     return receipt;
 }
 
+inline proto::ActionReceipt* add_reset_receipt(proto::JobResult* result, const std::uint32_t action_index,
+    const std::uint64_t completed_at_unix_ms) {
+    auto* receipt = result->add_action_receipts();
+    receipt->set_action_index(action_index);
+    receipt->set_kind(proto::ACTION_KIND_RESET_TEMPORAL_STATE);
+    receipt->set_status(proto::RECEIPT_STATUS_OK);
+    receipt->mutable_reset_temporal()->set_completed_at_unix_ms(completed_at_unix_ms);
+    return receipt;
+}
+
+inline proto::ActionReceipt* add_wait_receipt(proto::JobResult* result, const std::uint32_t action_index,
+    const std::uint64_t start_frame, const std::uint64_t end_frame) {
+    auto* receipt = result->add_action_receipts();
+    receipt->set_action_index(action_index);
+    receipt->set_kind(proto::ACTION_KIND_WAIT_FRAMES);
+    receipt->set_status(proto::RECEIPT_STATUS_OK);
+    auto* wait = receipt->mutable_wait_frames();
+    wait->set_requested_frames(static_cast<std::uint32_t>(end_frame - start_frame));
+    wait->set_start_frame(start_frame);
+    wait->set_end_frame(end_frame);
+    wait->set_completed_frames(static_cast<std::uint32_t>(end_frame - start_frame));
+    return receipt;
+}
+
 inline proto::ServerMessage completed_visual_message() {
     proto::ServerMessage message;
     message.set_request_id("request-visual");
@@ -208,10 +232,14 @@ inline proto::ServerMessage completed_visual_message() {
     fill_result_common(result);
     add_load_receipt(result, 0, "baseline", "baseline-sha");
     add_load_receipt(result, 1, "candidate", "candidate-sha");
+    add_reset_receipt(result, 0, 1001);
+    add_wait_receipt(result, 1, 1, 41);
     add_capture_receipt(result, 2, 41);
-    add_capture_receipt(result, 3, 42);
+    add_reset_receipt(result, 3, 1002);
+    add_wait_receipt(result, 4, 2, 42);
+    add_capture_receipt(result, 5, 42);
     auto* comparison = result->add_action_receipts();
-    comparison->set_action_index(4);
+    comparison->set_action_index(6);
     comparison->set_kind(proto::ACTION_KIND_COMPARE_CAPTURES);
     comparison->set_status(proto::RECEIPT_STATUS_OK);
     comparison->mutable_comparison()->set_passed(true);

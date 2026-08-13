@@ -693,6 +693,34 @@ Json visual_comparison_guards(const Json& result, bool require_heatmap) {
             "The visual comparison must identify distinct baseline and candidate capture frames.");
     }
 
+    std::vector<const Json*> resets;
+    if (const auto receipts = result.find("action_receipts"); receipts != result.end() && receipts->is_array()) {
+        for (const auto& receipt : *receipts) {
+            if (receipt.is_object() &&
+                receipt.value("kind", std::string{}) == "ACTION_KIND_RESET_TEMPORAL_STATE") {
+                resets.push_back(&receipt);
+            }
+        }
+    }
+    bool reset_receipts = resets.size() == 2;
+    if (reset_receipts) {
+        std::uint64_t previous_index = 0;
+        for (std::size_t index = 0; index < resets.size(); ++index) {
+            const auto detail = resets[index]->find("reset_temporal");
+            const auto action_index = resets[index]->value("action_index", std::uint64_t{});
+            const bool ordered = index == 0 || action_index > previous_index;
+            const bool successful = resets[index]->value("status", std::string{}) == "RECEIPT_STATUS_OK" &&
+                detail != resets[index]->end() && detail->is_object() &&
+                detail->value("completed_at_unix_ms", std::uint64_t{}) != 0;
+            reset_receipts = reset_receipts && ordered && successful;
+            previous_index = action_index;
+        }
+    }
+    if (!reset_receipts) {
+        add_mismatch("TWO_ORDERED_TEMPORAL_RESET_RECEIPTS_REQUIRED",
+            "The visual comparison must return two ordered successful typed temporal-reset receipts.");
+    }
+
     bool metrics_artifact = false;
     const auto artifacts = result.find("artifacts");
     if (artifacts != result.end() && artifacts->is_array()) {
@@ -794,6 +822,7 @@ Json visual_comparison_guards(const Json& result, bool require_heatmap) {
             {"runtime_success", runtime_success},
             {"comparison_receipt", comparison_receipt},
             {"two_distinct_frames", two_frames},
+            {"two_ordered_temporal_reset_receipts", reset_receipts},
             {"diff_metrics_artifact", metrics_artifact},
             {"diff_heatmap_required", require_heatmap},
             {"diff_heatmap_artifact", heatmap_artifact},

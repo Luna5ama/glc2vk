@@ -234,6 +234,10 @@ void append_load(proto::ActionSequence& sequence, const proto::PreparedSourceRef
     value->mutable_config()->CopyFrom(config);
 }
 
+void append_reset(proto::ActionSequence& sequence) {
+    sequence.add_actions()->mutable_reset_temporal_state();
+}
+
 void append_wait(proto::ActionSequence& sequence, const std::uint32_t frames) {
     if (frames != 0) sequence.add_actions()->mutable_wait_frames()->set_frame_count(frames);
 }
@@ -425,6 +429,7 @@ void build_recipe(const Json& arguments, const JobContext& config, const SourceM
     if (recipe == "ab_compare") {
         const auto shader = require_config(configs, "config");
         append_load(*sequence, require_source(sources, "a"), "a", "config", shader);
+        append_reset(*sequence);
         append_wait(*sequence, arguments.value("warmup_frames", config.default_warmup_frames));
         std::vector<std::uint32_t> baseline_captures;
         std::size_t capture_index = 0;
@@ -433,6 +438,7 @@ void build_recipe(const Json& arguments, const JobContext& config, const SourceM
                 append_capture(*sequence, capture, "a-" + std::to_string(capture_index++)));
         }
         append_load(*sequence, require_source(sources, "b"), "b", "config", shader);
+        append_reset(*sequence);
         append_wait(*sequence, arguments.value("warmup_frames", config.default_warmup_frames));
         std::vector<std::uint32_t> candidate_captures;
         capture_index = 0;

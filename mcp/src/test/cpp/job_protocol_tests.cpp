@@ -124,6 +124,41 @@ void load_and_screenshot_emits_one_post_load_capture_sequence() {
 		"load_and_screenshot did not emit one load prelude followed by wait and capture");
 }
 
+void ab_compare_resets_each_source_before_equal_warmup_and_capture() {
+	const Json arguments{{"recipe", "ab_compare"}, {"preset_id", "night-gi-1-720p"},
+		{"a", {{"label", "baseline"}, {"source", {{"kind", "workspace"}}}}},
+		{"b", {{"label", "candidate"}, {"source", {{"kind", "commit"}, {"revision", "HEAD"}}}}},
+		{"config", {{"QUALITY", 2}}}, {"warmup_frames", 6},
+		{"captures", Json::array({{{"type", "screenshot"}, {"format", "png"}}})},
+		{"visual_thresholds", {{"pixel_error_threshold", 0.01}, {"max_threshold_pixel_ratio", 0.001},
+			{"min_ssim", 0.995}}}};
+	const std::vector sources{
+		source("bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"),
+		source("cccccccc-dddd-4eee-8fff-aaaaaaaaaaaa"),
+	};
+	const auto request = JobProtocol::request(
+		"vibris_run_recipe", arguments, config(), scene(), sources, std::string(request_id));
+	const auto& actions = request.submit_job().job().action_sequence().actions();
+	require(actions.size() == 9 &&
+		actions[0].prelude() && actions[0].has_load_shader() && actions[0].load_shader().source_id() == "a" &&
+		!actions[1].prelude() && actions[1].has_reset_temporal_state() &&
+		actions[2].has_wait_frames() && actions[2].wait_frames().frame_count() == 6 &&
+		actions[3].has_take_screenshot() && actions[3].take_screenshot().artifact_name() == "a-0" &&
+		actions[4].prelude() && actions[4].has_load_shader() && actions[4].load_shader().source_id() == "b" &&
+		!actions[5].prelude() && actions[5].has_reset_temporal_state() &&
+		actions[6].has_wait_frames() && actions[6].wait_frames().frame_count() == 6 &&
+		actions[7].has_take_screenshot() && actions[7].take_screenshot().artifact_name() == "b-0" &&
+		actions[8].has_compare_captures(),
+		"ab_compare did not reset both sources immediately before equal warmup and capture phases");
+	const auto& compare = actions[8].compare_captures();
+	require(compare.baseline_action_index() == 3 && compare.candidate_action_index() == 7 &&
+		compare.baseline_label() == "baseline" && compare.candidate_label() == "candidate" &&
+		compare.thresholds().pixel_error_threshold() == 0.01 &&
+		compare.thresholds().max_threshold_pixel_ratio() == 0.001 &&
+		compare.thresholds().min_ssim() == 0.995,
+		"ab_compare changed capture references, labels, or fail-closed visual thresholds");
+}
+
 void after_pass_actions_preserve_exact_pass_and_resource_selectors() {
 	const Json arguments{{"preset_id", "quality"}, {"actions", Json::array({
 		{{"type", "dump_texture_after_pass"}, {"pass_id", "composite/composite21"},
@@ -427,6 +462,7 @@ int main() {
 		strict_v2_request_contains_typed_texture_and_buffer_actions();
 		explicit_load_action_uses_declared_v2_ids();
 		load_and_screenshot_emits_one_post_load_capture_sequence();
+		ab_compare_resets_each_source_before_equal_warmup_and_capture();
 		after_pass_actions_preserve_exact_pass_and_resource_selectors();
 		after_pass_terminal_mapping_preserves_complete_artifact_receipt();
 		terminal_integer_scalars_are_canonical_native_numbers();
