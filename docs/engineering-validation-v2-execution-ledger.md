@@ -123,8 +123,8 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T19E | P0 | Vibris | Define strict detached-worktree provenance contract | DONE | `T19E define strict detached provenance contract` |
 | T19F | P0 | Iris | Implement and prove live detached-worktree provenance | DONE | `T19F complete live detached provenance` |
 | T19G | P0 | Vibris | Repair live paired-benchmark finalization | DONE | `T19G repair live paired benchmark finalization` |
-| T19I | P0 | Vibris/Iris | Add a frame-atomic deterministic temporal capture phase | READY | `T19I record deterministic temporal phase proof` |
-| T19H | P0 | Vibris | Make paired visual capture deterministic | PENDING | `T19H make paired visual capture deterministic` |
+| T19I | P0 | Vibris/Iris | Add a frame-atomic deterministic temporal capture phase | DONE | `T19I record deterministic temporal phase proof` |
+| T19H | P0 | Vibris | Make paired visual capture deterministic | READY | `T19H make paired visual capture deterministic` |
 | T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | PENDING | `T20 record live v2 acceptance` |
 | T99 | P0 | Vibris | Final integrated audit | PENDING | `T99 finalize engineering validation v2` |
 
@@ -2313,7 +2313,7 @@ Evidence:
 
 ### T19I — Add a frame-atomic deterministic temporal capture phase
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T19G
 
@@ -2663,9 +2663,40 @@ Evidence:
   was performed. This is the third identical resumed blocker audit; the Goal is marked blocked after this
   ledger-only checkpoint.
 
+- `2026-08-13` the user-authorized synthetic fixture at `I:\code\mcshader` was amended with explicit
+  `shadow.enabled=true` and committed as `a664ece1dbd49573f1a96765c34c13cce832828a` (six tracked shader files,
+  source snapshot `e96e0f2cfb218ee2457e1815faa354b278f10ccfeb631427f056797ec894991f`, shader tree
+  `54f763284a330206b0796e9bcabb7b8f79a77f09`, 1,015 bytes). Direct executable
+  `I:\code\vibris\mcp\out\build\Release\vibris-mcp.exe` remained the only MCP entrypoint (15,378,432 bytes,
+  SHA-256 `67659200785AAEE528881C4A01A2249D2A76BDBAFC3E25B1BE79AB19EEA14D24`); Codex configuration and the
+  retained T19H files stayed untouched. Two consecutive direct `ab_compare` jobs under exact
+  `night-gi-1-720p` with 120 warmup frames and unchanged `max_threshold_pixel_ratio=0.001` passed: job
+  `6b2f369b-93c9-44dc-aee3-1fbe4a6188f8` captured distinct frames `27737/28068`, and job
+  `de1f4714-e9b2-4bd4-90d1-4a5de0327ceb` captured distinct frames `30425/30765`. Both used the same clean
+  commit on both sides, matching source snapshot/config/scene hashes
+  (`e96e0f2cfb218ee2457e1815faa354b278f10ccfeb631427f056797ec894991f`,
+  `e03b14a864edc17ba2f9890ad106ce6436d3f9e9a0b5c834117f052d5b99fa9a`,
+  `6541ce12e1e9e7ecbea47971c0a7eec90fde0d50407b547377791b8c099fa674`), two ordered reset/load receipts,
+  and restoration `RECEIPT_STATUS_OK`. Each comparison passed with zero max/mean/P95/RMSE error, SSIM 1,
+  threshold-pixel ratio 0; both PNGs were 296,640 bytes with SHA-256
+  `F54009E4E5A926CE771950C783985941AD2659C98FA54F06A038E2ECAD55F915`. The first artifact manifest is at
+  `I:\code\mcshader\.vibris\artifact\5dfaba75-718b-30e0-922a-3e761e267cff\22943d65-7a51-3db8-9d81-fb9c3fdf01ef\manifest.json`
+  (SHA-256 `6DFF0BA59B75D7360615E79744E6BA64F283AAB654FA0F1ECB63A977B736E2E9`), and the second is at
+  `I:\code\mcshader\.vibris\artifact\6a4638d0-f64b-3c10-833c-76ba5791284b\e430fd51-16e5-3b83-91dd-8fde423ae044\manifest.json`
+  (SHA-256 `7F56A9B9145DCDEF0D7FCBF507C145A977E226366E43D101AECE76EAE7E955EB`); diff metrics and heatmap
+  artifacts were present and hash-verified in both manifests. A deliberately different temporary workspace output
+  (pure-red `final.fsh`, reverted immediately) failed closed in job `313d970a-8f07-47c5-9b71-3a10faec2710`:
+  result `completed_with_failures` / verdict `failed`, threshold-pixel ratio `1`, SSIM `0.014056324467699484`,
+  and restoration `RECEIPT_STATUS_OK`; its two capture frames were `38745/39098` and its differing PNG hashes
+  were `F54009E4E5A926CE771950C783985941AD2659C98FA54F06A038E2ECAD55F915` and
+  `83FB625A7BAFEE0130FC5AFD45ABC4D83BF38599448718EA6B54C9FEB4A721E9`. Final direct v2 status is
+  `SERVER_STATE_AVAILABLE` with `world_loaded=true`, `scene_applied=true`, empty queue/jobs, active source UUID
+  `9911db8c-9a1e-4bb7-9b46-ff4f26d2565c`, and `can_accept_job=true` / `can_start_job=true`; the fixture worktree
+  is clean except for runtime-untracked `.vibris/`.
+
 ### T19H — Make paired visual capture deterministic
 
-Status: `PENDING`
+Status: `READY`
 
 Dependencies: T19G, T19I
 
@@ -2721,7 +2752,7 @@ Expected commit title: `T19H make paired visual capture deterministic`
 
 Blockers:
 
-- None known beyond ordered dependency T19I, which is now `READY` under the user-authorized synthetic compute-shader
+- None known beyond ordered dependency T19I, which is now `DONE` under the user-authorized synthetic compute-shader
   validation scope when the supplied 1.10/1.9 lines remain blocked by their unchanged race.
 
 Evidence:
@@ -3236,3 +3267,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-13 - T19I blocker audit 2 - reverified every declared repository/worktree/protected boundary and found the authorized clean 1.9 line has the same EnvProbe scatter race as AP8; no alternate target or in-scope runtime fix exists, and no later task was started - Control-plane commit title: roadmap recheck T19I authorized branches remain blocked`
 - `2026-08-13 - T19I blocker audit 3 - reverified the unchanged AP8 EnvProbe scatter source, all repository/worktree/protected boundaries, and an available empty-queue runtime; the same blocker persists for the third consecutive Goal turn, so the Goal is marked blocked after this ledger-only checkpoint - Control-plane commit title: roadmap confirm T19I blocked on authorized shader targets`
 - `2026-08-13 - T19I scope unblocked - user authorized a fresh clean Git validation worktree under I:\code\mcshader containing a minimal compute shader that writes deterministic colors directly; T19I is READY again, while existing Alpha-Piscium worktrees, thresholds, compatibility boundaries, and protected state remain unchanged - Control-plane commit title: roadmap unblock T19I for synthetic compute shader`
+- `2026-08-13 - T19I - completed the frame-atomic deterministic temporal phase and recorded two passing same-clean-commit synthetic comparisons plus a fail-closed different-output guard; artifacts, source/config/scene provenance, distinct frames, restoration, and final available status were verified - Owner receipt commit title: T19I record deterministic temporal phase proof`
