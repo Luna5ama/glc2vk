@@ -355,7 +355,7 @@ private:
                         },
                     };
                     auto outcome = SynchronousJobRunner(client(), source_handler_, execution.config).run(
-                        "vibris_run_recipe", execution.arguments, response.server(), context, control);
+                        execution.tool_name, execution.arguments, response.server(), context, control);
                     artifact_link_.rewrite(outcome);
                     return outcome;
                 });
