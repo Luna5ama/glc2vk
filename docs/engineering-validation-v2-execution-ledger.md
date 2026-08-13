@@ -2607,6 +2607,20 @@ Evidence:
   `requested=65231`, `finalized=0`; restoration remained `RECEIPT_STATUS_OK` and no artifact was published. The
   shared runtime was then held by external recovery job `7b77b5e1-aff7-40c9-9cc0-f00d4d9c9c15` / lease
   `80a17359-5773-3f58-aacb-687d81192989`, so no compile or comparison was admitted afterward.
+- `2026-08-13` the authorized Minecraft-only restart cleared the stale lease and returned the direct v2 status to
+  `SERVER_STATE_AVAILABLE` with `can_accept_job=true` and `can_start_job=true`; Codex was not restarted. A safe
+  `restore_state=false/false` load of the existing user-owned `Alpha-Piscium-6` workspace completed as job
+  `595e18fc-7dc2-4b34-85f1-faac3dcef30e`, preserving its dirty worktree and recording source snapshot
+  `142649034efc14648293710c0538a3744d69e94c1681884463a9e15bc453a2cd`. Synthetic `compile_validate` job
+  `863d1a79-4ed7-4436-9f26-6e780832b98f` then reached the real loader and paused only because the Core-owned safe
+  snapshot was not yet available (`restore_failed`), with no compile diagnostic. After that snapshot, synthetic load
+  job `cf2b35a5-a3ab-4884-9e34-94b37272c0e0` reached the synthetic link and failed closed at the existing shadow
+  quiescence gate (`requested=19779`, `finalized=0`; restoration `RECEIPT_STATUS_OK`, source snapshot
+  `342b3ebef4f4dee4b9c201754b9df69314af22d883214b5348da25b2689ba2e8`). At the same time, an independently
+  authorized `Alpha-Piscium-5` compile job `cdf1d956-0863-41ed-a093-20451bb3d86e` entered recovery; the current
+  shared lease is `b075274b-1583-458b-8225-67615a37a10e` / `943749f7-c9e2-366e-b651-4dab77152ecf`, workspace
+  `24acfab9-fb0c-42c0-bce1-c1b6bd00117b`, so T19I comparison work is paused without cancelling or overriding the
+  external recovery.
 
 ### T19H — Make paired visual capture deterministic
 
