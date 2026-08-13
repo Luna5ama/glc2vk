@@ -126,7 +126,7 @@ For an Iris-owned task, commit only Iris files first and end the continuation. O
 | T19I | P0 | Vibris/Iris | Add a frame-atomic deterministic temporal capture phase | DONE | `T19I record deterministic temporal phase proof` |
 | T19H | P0 | Vibris | Make paired visual capture deterministic | DONE | `T19H make paired visual capture deterministic` |
 | T20 | P0 | Vibris/Iris | Run live two-worktree 720p acceptance | DONE | `T20 record live v2 acceptance` |
-| T99 | P0 | Vibris | Final integrated audit | READY | `T99 finalize engineering validation v2` |
+| T99 | P0 | Vibris | Final integrated audit | DONE | `T99 finalize engineering validation v2` |
 
 ## Task details
 
@@ -3189,7 +3189,7 @@ Evidence:
 
 ### T99 — Final integrated audit
 
-Status: `READY`
+Status: `DONE`
 
 Dependencies: T01, T02, T02A, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T12A, T13, T14, T15, T16, T17, T18, T19, T19A, T19B, T19C, T19D, T19E, T19F, T19G, T19I, T19H, T20
 
@@ -3234,11 +3234,85 @@ Expected commit title: `T99 finalize engineering validation v2`
 
 Blockers:
 
-- None known beyond unresolved earlier tasks.
+- None. The legacy `check_ledger.py` named by the original handoff is absent from both installed skill locations;
+  the equivalent structural audit and all required build, native test, artifact, schema, live, and Git checks passed.
 
 Evidence:
 
-- Pending.
+- `2026-08-13` final entry audit re-read the complete ledger before execution and verified every declared repository,
+  worktree, branch, HEAD, worktree list, staging area, and protected dirty boundary. Final maintained repositories are
+  Vibris `main@cb41abbb54d43ce82b4a41fcf7ec67c2022312ed` and Iris `1.21.11-shaderdev@a58f107f3a7e77d8447ba04998e9ae49f39e12a0`.
+  The three Vibris review worktrees remain detached and clean at `4ca48d392178efbb1a935648ab5d6be9aae6cb0a`,
+  `951968e683ed3c140a6e135caabc6e80a45d42f8`, and `cac895c7956b4293d1a6217c79004faf9b608798`; the Iris auxiliary
+  worktree remains clean at `bac171f611a29909ba547f5b7da21b7f2495ab9e`. All declared Alpha-Piscium worktrees retain
+  their audited current branches/HEADs and user-owned dirt; no shader source, review worktree, or protected file was
+  modified. Vibris has only protected untracked `capture\a.spv` (9,160 bytes, SHA-256
+  `6E99E1C70D9FCA92A6B8AC878B95FA47C115A4F18B789FC0411AFC0D71AF3613`); Iris retains only `.codex\`, `.vibris\`,
+  and `common\logs\` untracked. Both maintained repositories have empty staging and pass `git diff --check`.
+- The missing legacy checker was verified at both `C:\Users\Luna5ama\.codex\skills\run-persistent-roadmap\scripts\check_ledger.py`
+  and `J:\.codex\skills\run-persistent-roadmap\scripts\check_ledger.py`. The installed
+  `pyxis_roadmap.py` correctly reports that the legacy Markdown path is not a `.pyxis` roadmap, so an equivalent
+  structural audit was run against the complete file: 33 unique task rows, 33 matching detail headings, no duplicate
+  or omitted IDs, and final status counts `DONE=33`, `READY=0`, `PENDING=0`, `BLOCKED=0`, `SUPERSEDED=0`.
+- Final native build used the Visual Studio CMake preset from `I:\code\vibris\mcp` (the legacy root has no
+  `CMakePresets.json`): `cmake --build --preset release` completed all production and test targets. A clean rerun of
+  `ctest --preset release --output-on-failure` passed `86/86` in 168.08 seconds. The first invocation exposed only a
+  test-fixture cleanup race in #83 that left a scoped temporary directory; it was moved intact to the generated
+  `.vibris\tmp\stdio-v2-tools.failed-t99-20260813` quarantine, #83 and #84-#86 then passed individually, and the
+  subsequent complete 86-test run passed with no product failure or source change.
+- Final offline builds passed: Vibris `./gradlew.bat build --offline --console=plain` (`BUILD SUCCESSFUL`, 64
+  actionable tasks) and Iris `./gradlew.bat :common:compileJava :fabric:build --offline --console=plain`
+  (`BUILD SUCCESSFUL`, 41 actionable tasks). Current direct MCP build output is 15,378,432 bytes with SHA-256
+  `67659200785AAEE528881C4A01A2249D2A76BDBAFC3E25B1BE79AB19EEA14D24`; its generated strict-v2 descriptor is
+  30,288 bytes with SHA-256 `F6686F81ACD864FFF47768E8DC406D5FF6EF82E24A86197579F8E85232914646`. The unchanged Codex
+  configuration currently selects `I:\code\vibris\build\delivery-t19g-51748267-68027918\vibris-mcp.exe` (15,376,896
+  bytes, SHA-256 `5174826772A93B6169E81BDFDC2F85AD30235B14DA48A2EB224969BDA060FCEE`); T99 did not deploy, edit
+  configuration, or restart Codex/Minecraft.
+- Strict-cutover static audit found zero `dev.vibris.protocol.v1` or `vibris.control.v1` references in maintained Core,
+  MCP, and protocol source/test roots. The only removed-field matches are the intentional strict rejection denylist and
+  tests (`action_results`, `list_textures`, `list_buffers`, and `dump_texture_v2`); no compatibility reader, alias,
+  fallback, migration, dual-read, or dual-write path was introduced. Direct stdio against the current executable
+  negotiated `2024-11-05`, exposed exactly the eight typed tools, and returned the exact version-2
+  `night-gi-1-720p` preset with SHA-256 `d3d37c2f3d751464214223d06ddd8b8924a54ac28be978608fd7eff5ea16dece`.
+- Final direct live status for AP4 workspace `e5e1f8a1-2532-4972-9bad-2dcf6a0c72cc` and AP3 workspace
+  `90485cf5-12a0-45b9-bb89-7141a9b7ee1e` is `SERVER_STATE_AVAILABLE`: Minecraft/Core connected, world and scene
+  applied, shader reload complete, queue/jobs empty, `can_accept_job=true`, and `can_start_job=true`. The listener
+  remains the existing authorized Java runtime on `127.0.0.1:50051`; no autonomous restart occurred.
+- The AP4 exact-pass manifest is schema 2, contains 10 files, totals 5,096,953 bytes, has no missing or unsafe paths,
+  and remains SHA-256 `C07EEE84D7638C863F10A1D237EC1D9560D8837E0298484EB6F3DDFA0811EE49`. It retains the upright
+  current/alternate textures (SHA-256 `6098C0B5211D8B395DD157947E0FF2389473DAC17E4AB2EE942B765AAED09AED` /
+  `2D726ADAF5DC3FA1002583CC7E34B893653EEBBE742252F9452A9B484B52714B`) and the distinct 16,384-byte
+  `dump_buffer_after_pass` sentinel buffers after `composite/composite14` and `composite/composite15` (SHA-256
+  `9B020A0288853532827D9C799CE58802BEB589F606844119D6B03CE7636FC218` /
+  `120031CEB7288F460B3D71E26D2989220EA99CA9E81E2B2FB6BFE971386676AA`). The synthetic T19H comparison manifest
+  is also schema 2, has six present files, totals 602,064 bytes, no missing/unsafe paths, and SHA-256
+  `A485FB8B69BFE05716099281A9F01718BA179FD766433A59648D495706219CC3`; both captured PNGs are 296,640 bytes with
+  SHA-256 `F54009E4E5A926CE771950C783985941AD2659C98FA54F06A038E2ECAD55F915`.
+- Documentation audit confirms `docs\capture-control.md` contains both `dump_texture_after_pass` and
+  `dump_buffer_after_pass` contracts and has SHA-256 `1F797EF76A9F15D9D4A4BE7DB0D280927525E0AB3138A8763484AD4B164221E0`.
+  The final ledger itself contains the same paired contracts, all 33 task receipts, and the complete acceptance evidence.
+- Task-to-commit reconciliation searched the full history of the intended branch in each maintained repository and
+  found every expected task commit. Vibris: T00=`0803cf08f8b951b500d3aceba269f44ccb71c92c`,
+  T01=`6a4beceb94f0984dddf462b52a26471eee4da873`, T02=`1bece4fbedc33b9e4999c4b9d6fa0489656b74d2`,
+  T02A=`5bf3dab0014ee837771e559dd00fffef591b2910`, T03=`41810628dbf303d3b2044c61c7995f336be8ab55`,
+  T04=`bc43aa240ee1221ae1bc0c2ecb1eec4516a743dd`, T05=`1e703de9e563dd2749a6d624128b709a36c5c41e`,
+  T06=`95edb84d2f23342ddfc2edb5f0b6a67e32900d29`, T08=`7084bf440e2cc97f066a2fd03893954e2824e94d`,
+  T09=`f01a40ff1dd883802dea90bca27d0f9aa207582b`, T11=`ac07559ad25a7bf041f95650b270118360b4a51b`,
+  T12=`6bad1e92874b287453018b89b043f6eafe3c250c`, T12A=`d5ed2ad3bf0ec99fe49790e805c46449f40265ed`,
+  T13=`4a478aaab5bf50c15252e3c20e1f9ab61ef680bb`, T14=`369964a7c7865176d1ee45566e80136d39e62797`,
+  T15=`b9983e66d061ce1cfa3c33bb5673e54e8a8862e3`, T17=`70e6967906227bda702373ee9153488dadf103e7`,
+  T18=`f0456e099c2d946c90f4db57fbabb3667611baf0`, T19=`4fe98606bb879f589ea706e6f11f76981d8fec76`,
+  T19A=`d0bcfbf355e229abdc24e4a19d2f13bf5ef9f979`, T19B=`4a5c60b29562e682b768b6801abe6bbb35d0ac23`,
+  T19D=`a4d1cf42406912aa9f36206c8b9429e519450fae`, T19E=`89b20842ac5b78747ab200c926f5e487d0cbcb7f`,
+  T19G=`2e857aeb2b9ab8b5db02dc4e9d0053b35ce490e2`, T19I-contract=`1971cf1abc6e0b6d8d05d40a17ed9261e69674fc`,
+  T19I-cleanup=`fa2400231b0612c85284b3c9766a599da4602293`, T19I-receipt=`fad69c1ee1a516bf11f8e671275d331a84491e7d`,
+  T19H=`949928e3159f61b2e62e2efdcfe563aa0086a2fd`, and T20=`cb41abbb54d43ce82b4a41fcf7ec67c2022312ed`.
+  Iris: T07=`7096295b3875a13b6f00607b6f30d0649bd4f68f`, T10=`0ccdadd3a9b80891d147ace95a3c3919b7055b76`,
+  T16=`38a7d2eaf88939983e0e01f731ccd4c627fbf6a9`, T19C=`3f3e458ea9fe904398bb28e4a8e05cb4c22e7afc`,
+  T19F=`5c5909726df7e39dcf35e1199d27aacd6ab64cf2`, and T19I-iris=`a58f107f3a7e77d8447ba04998e9ae49f39e12a0`.
+- This task's atomic commit completes the final task-to-commit map with
+  `T99 finalize engineering validation v2`; the task-owned file set is exactly
+  `docs\engineering-validation-v2-execution-ledger.md`.
 
 ## Dependency order
 
@@ -3271,9 +3345,9 @@ Queue order is authoritative and serial even where technical dependencies could 
 - [x] A fresh schema-2 runtime has the correct fixed-pack root, truthful unavailable unary failures, a usable typed
   first-load action, and post-load screenshot resource planning without a sacrificial job.
 - [x] Live two-worktree 720p acceptance passes without autonomous deployment or process restart.
-- [ ] Every expected commit is present in the intended repository and branch.
+- [x] Every expected commit is present in the intended repository and branch.
 - [x] Protected and pre-existing user state remains untouched.
-- [ ] Final worktree, branch, ledger, and Goal audits pass.
+- [x] Final worktree, branch, ledger, and Goal audits pass.
 
 ## Completion evidence
 
@@ -3341,3 +3415,4 @@ Record final artifact paths, hashes, test totals, live request/job receipts, rep
 - `2026-08-13 - T19I - completed the frame-atomic deterministic temporal phase and recorded two passing same-clean-commit synthetic comparisons plus a fail-closed different-output guard; artifacts, source/config/scene provenance, distinct frames, restoration, and final available status were verified - Owner receipt commit title: T19I record deterministic temporal phase proof`
 - `2026-08-13 - T19H - added reset-after-load ordering and typed temporal-reset visual guards, passed focused native 14/14 plus Release rebuild, recovered one transient retained-camera drift with a scoped load, and recorded passing live same-clean-commit synthetic comparison job ac599b54-9c18-4b66-a844-e14b7ee87e15 with artifact/hash, provenance, distinct-frame, fail-closed, restoration, and final available-status evidence - Commit title: T19H make paired visual capture deterministic`
 - `2026-08-13 - T20 - verified the direct strict-v2 720p preset, current AP4/AP3 compile catalogs (172/172 and 182/182 with zero diagnostics), retained fair-queue/settings/benchmark/restoration receipts, T19H visual gate, exact texture-after-pass and buffer-after-pass hashes, and final available/empty-queue status across both workspaces - Commit title: T20 record live v2 acceptance`
+- `2026-08-13 - T99 - final integrated audit passed the full native 86/86 CTest suite, Vibris and Iris offline builds, strict-v2/no-compatibility scans, exact eight-tool/preset/live status checks, schema-2 artifact/path/hash validation, complete task-to-commit reconciliation, documentation audit, and protected final Git-state checks - Commit title: T99 finalize engineering validation v2`
