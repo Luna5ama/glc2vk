@@ -22,6 +22,7 @@ import dev.vibris.protocol.v2.JobResult
 import dev.vibris.protocol.v2.JobStage
 import dev.vibris.protocol.v2.RestorationReceipt
 import java.io.IOException
+import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.TimeUnit
@@ -34,12 +35,20 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     private val activator: SourceActivator,
     private val shaderLogs: ShaderLogSink,
     maxActions: Int = ServerConfiguration.DEFAULT_MAX_ACTIONS_PER_JOB,
+    private val restorationTimeout: Duration = DEFAULT_RESTORATION_TIMEOUT,
 ) {
     private val runtime: VibrisRuntimeAdapter = requireNotNull(runtime) { "runtime" }
     private val captures = CaptureJobExecutor(shaderLogs as? ArtifactManager, maxActions)
     private val awaiter = RuntimeAwaiter(probe)
     private val actions = ActionJobExecutor(this.runtime, probe, captures, this)
     private val compileValidation = CompileValidationJobExecutor(this)
+
+    init {
+        require(!restorationTimeout.isZero && !restorationTimeout.isNegative) {
+            "restorationTimeout must be positive"
+        }
+    }
+
     @Volatile
     private var activeContext: SceneContext? = null
 
@@ -674,16 +683,20 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         }
         val settings = previous.settings ?: return false
         return try {
-            val reload = restoreAwait(
-                runtime.reloadVibrisShaderpack(settings.values(), CancellationToken.none()),
-            )
+            val reload = restoreOperation("shader reload") { cancellation ->
+                runtime.reloadVibrisShaderpack(settings.values(), cancellation)
+            }
             if (!reload.successful || !settings.hasSameResolvedState(reload.effectiveSettings)) return false
             val reloadedAtUnixMs = System.currentTimeMillis()
-            val catalog = restoreAwait(runtime.getCompileCatalog(CancellationToken.none()))
+            val catalog = restoreOperation("compile catalog refresh") { cancellation ->
+                runtime.getCompileCatalog(cancellation)
+            }
             activeShaderSettings = reload.effectiveSettings
             activeShaderLoadedAtUnixMs = reloadedAtUnixMs
             activePassMappingSha256 = catalog.mappingSha256
             true
+        } catch (failure: Failure) {
+            throw failure
         } catch (_: Exception) {
             false
         }
@@ -692,10 +705,14 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     private fun restorePreviousContext(previous: DeterministicRuntimeSnapshot): Boolean {
         val context = previous.context ?: return false
         return try {
-            val applied = restoreAwait(runtime.ensureWorldAndContext(context, CancellationToken.none()))
+            val applied = restoreOperation("scene restoration") { cancellation ->
+                runtime.ensureWorldAndContext(context, cancellation)
+            }
             if (!applied.successful || applied.context != context) return false
             activeContext = applied.context
             true
+        } catch (failure: Failure) {
+            throw failure
         } catch (_: Exception) {
             false
         }
@@ -837,11 +854,13 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
 
     private fun reloadPreviousSource(): Boolean {
         try {
-            val result = runtime.reloadVibrisShaderpack(null, CancellationToken.none())
-                .toCompletableFuture()
-                .join()
+            val result = restoreOperation("shader reload") { cancellation ->
+                runtime.reloadVibrisShaderpack(null, cancellation)
+            }
             if (result.successful) activeShaderSettings = result.effectiveSettings
             return result.successful
+        } catch (failure: Failure) {
+            throw failure
         } catch (_: Exception) {
             return false
         }
@@ -868,8 +887,8 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         if (!isolation.shouldRestore(successful)) {
             if (successful) {
                 try {
-                    activator.verifyActiveSource()
-                    return isolation.currentReceipt(currentSnapshot())
+                    val source = activator.verifyActiveSource()
+                    return isolation.currentReceipt(currentSnapshot(source))
                 } catch (failure: SourceActivator.Failure) {
                     throw Failure(failure.code, failure.message)
                 }
@@ -896,7 +915,12 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
                 message,
                 false,
             )
-            pendingRecovery = PendingRecovery(isolation, job.sources.toList(), receipt)
+            pendingRecovery = PendingRecovery(
+                isolation,
+                job.sources.toList(),
+                receipt,
+                (failure as? Failure)?.cleanupBarrier,
+            )
             throw Failure(
                 ErrorCode.ERROR_CODE_RESTORE_FAILED,
                 "$message ${BenchmarkCaseIsolation.MANUAL_RECOVERY}",
@@ -945,11 +969,11 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         val recovery = pendingRecovery
         if (recovery == null) {
             try {
-                activator.markReadyAfterVerification()
+                val source = activator.markReadyAfterVerification()
                 return completed(
                     job,
                     JobResult.newBuilder()
-                        .setRestoration(BenchmarkCaseIsolation.noMutationReceipt(currentSnapshot()))
+                        .setRestoration(BenchmarkCaseIsolation.noMutationReceipt(currentSnapshot(source)))
                         .build(),
                     startedAtUnixMs,
                     startedNanos,
@@ -968,10 +992,10 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         }
         try {
             recovery.cleanupBarrier?.let { barrier ->
-                restoreAwait(barrier.handle<Void> { _, _ -> null })
+                restoreAwait(barrier, operation = "the previous restoration operation")
+                recovery.cleanupBarrier = null
             }
-            val actual = restore(recovery.isolation.snapshot)
-            activator.markReadyAfterVerification()
+            val actual = restore(recovery.isolation.snapshot, markReady = true)
             val receipt = recovery.isolation.successReceipt(actual, true)
             recovery.isolation.release(activator)
             activator.release(recovery.heldSources)
@@ -984,6 +1008,9 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             )
         } catch (failure: Exception) {
             activator.markNotReady()
+            if (failure is Failure && failure.cleanupBarrier != null) {
+                recovery.cleanupBarrier = failure.cleanupBarrier
+            }
             val message = failure.message ?: "Runtime recovery could not verify the last safe snapshot."
             val actual = runCatching(::currentSnapshot).getOrElse {
                 BenchmarkCaseIsolation.Snapshot(null, activeShaderSettings, activeContext)
@@ -1005,28 +1032,39 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     }
 
     @Throws(Exception::class)
-    private fun restore(expected: BenchmarkCaseIsolation.Snapshot): BenchmarkCaseIsolation.Snapshot {
+    private fun restore(
+        expected: BenchmarkCaseIsolation.Snapshot,
+        markReady: Boolean = false,
+    ): BenchmarkCaseIsolation.Snapshot {
         activator.restore(expected.source)
         if (expected.source != null) {
-            val reload = restoreAwait(
-                runtime.reloadVibrisShaderpack(expected.shaderSettings!!.values(), CancellationToken.none()),
-            )
+            val reload = restoreOperation("shader reload") { cancellation ->
+                runtime.reloadVibrisShaderpack(expected.shaderSettings!!.values(), cancellation)
+            }
             check(reload.successful) { "The safe shader source or settings could not be reloaded." }
             activeShaderSettings = reload.effectiveSettings
         } else {
             activeShaderSettings = null
         }
         expected.scene?.let { scene ->
-            val context = restoreAwait(runtime.ensureWorldAndContext(scene, CancellationToken.none()))
+            val context = restoreOperation("scene restoration") { cancellation ->
+                runtime.ensureWorldAndContext(scene, cancellation)
+            }
             check(context.successful && context.context == scene) {
                 "The safe scene context could not be restored exactly."
             }
             activeContext = context.context
         }
-        val reset = restoreAwait(runtime.resetTemporalState(CancellationToken.none()))
+        val reset = restoreOperation("temporal reset") { cancellation ->
+            runtime.resetTemporalState(cancellation)
+        }
         check(reset.successful) { "Temporal state could not be reset after restoration." }
-        activator.verifyActiveSource()
-        val actual = currentSnapshot()
+        val source = if (markReady) {
+            activator.markReadyAfterVerification()
+        } else {
+            activator.verifyActiveSource()
+        }
+        val actual = currentSnapshot(source)
         check(expected.source?.uuid == actual.source?.uuid) { "Restored source UUID does not match the safe snapshot." }
         check(expected.source?.snapshotSha256 == actual.source?.snapshotSha256) {
             "Restored source content does not match the safe snapshot."
@@ -1040,33 +1078,44 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         return actual
     }
 
-    private fun currentSnapshot(): BenchmarkCaseIsolation.Snapshot = BenchmarkCaseIsolation.Snapshot(
-        activator.activeSnapshot(),
+    private fun currentSnapshot(
+        source: SourceRegistry.Lease? = activator.activeSnapshot(),
+    ): BenchmarkCaseIsolation.Snapshot = BenchmarkCaseIsolation.Snapshot(
+        source,
         activeShaderSettings,
         activeContext,
     )
 
     @Throws(Exception::class)
-    private fun <T> restoreAwait(stage: CompletionStage<T>): T {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(RESTORE_TIMEOUT_SECONDS)
+    private fun <T> restoreOperation(
+        operation: String,
+        start: (CancellationToken) -> CompletionStage<T>,
+    ): T {
+        val cancellation = CancellationToken.source()
+        return restoreAwait(start(cancellation.token()), cancellation, operation)
+    }
+
+    @Throws(Failure::class)
+    private fun <T> restoreAwait(
+        stage: CompletionStage<T>,
+        cancellation: CancellationToken.Source? = null,
+        operation: String = "runtime restoration",
+    ): T {
+        val timeoutNanos = restorationTimeout.toNanos()
+        val deadline = System.nanoTime() + timeoutNanos
         var interrupted = false
         try {
             while (true) {
                 val remaining = deadline - System.nanoTime()
                 if (remaining <= 0) {
-                    throw IllegalStateException(
-                        "Runtime restoration timed out after $RESTORE_TIMEOUT_SECONDS seconds.",
-                    )
+                    throw restorationTimeout(stage, cancellation, operation, null)
                 }
                 try {
                     return stage.toCompletableFuture().get(remaining, TimeUnit.NANOSECONDS)
                 } catch (_: InterruptedException) {
                     interrupted = true
                 } catch (failure: TimeoutException) {
-                    throw IllegalStateException(
-                        "Runtime restoration timed out after $RESTORE_TIMEOUT_SECONDS seconds.",
-                        failure,
-                    )
+                    throw restorationTimeout(stage, cancellation, operation, failure)
                 }
             }
         } finally {
@@ -1084,20 +1133,46 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
 
     @Throws(Failure::class)
     fun endDeterministicSequence() {
-        val barrier = try {
-            runtime.endDeterministicSequence(CancellationToken.none())
-        } catch (failure: Exception) {
-            CompletableFuture.failedFuture<Void>(failure)
-        }
         try {
-            restoreAwait(barrier)
+            restoreOperation("deterministic sequence cleanup") { cancellation ->
+                runtime.endDeterministicSequence(cancellation)
+            }
+        } catch (failure: Failure) {
+            throw failure
         } catch (failure: Exception) {
+            val barrier = CompletableFuture.failedFuture<Void>(failure)
             throw Failure(
                 ErrorCode.ERROR_CODE_RESTORE_FAILED,
                 failure.cause?.message ?: failure.message ?: "The deterministic runtime sequence could not be closed.",
                 barrier,
             )
         }
+    }
+
+    private fun restorationTimeout(
+        stage: CompletionStage<*>,
+        cancellation: CancellationToken.Source?,
+        operation: String,
+        cause: TimeoutException?,
+    ): Failure {
+        cancellation?.cancel()
+        val timeout = if (restorationTimeout.nano == 0) {
+            "${restorationTimeout.seconds} seconds"
+        } else {
+            "${restorationTimeout.toMillis()} milliseconds"
+        }
+        val detail = if (cancellation == null) {
+            "$operation did not reach a safe point within $timeout. " +
+                "Recovery remains blocked on that in-flight operation."
+        } else {
+            "$operation did not reach a safe point within $timeout. " +
+                "Cancellation was requested; recovery will wait for that in-flight operation to stop."
+        }
+        return Failure(
+            ErrorCode.ERROR_CODE_RESTORE_FAILED,
+            detail,
+            stage.handle<Void> { _, _ -> null },
+        ).also { failure -> if (cause != null) failure.initCause(cause) }
     }
 
     data class LoadResult(
@@ -1231,7 +1306,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         val isolation: BenchmarkCaseIsolation,
         val heldSources: List<SourceRegistry.Lease>,
         @Volatile var lastReceipt: RestorationReceipt,
-        val cleanupBarrier: CompletionStage<Void>? = null,
+        @Volatile var cleanupBarrier: CompletionStage<Void>? = null,
     )
 
     private data class DeterministicRuntimeSnapshot(
@@ -1243,7 +1318,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     )
 
     private companion object {
-        const val RESTORE_TIMEOUT_SECONDS = 10L
+        val DEFAULT_RESTORATION_TIMEOUT: Duration = Duration.ofSeconds(45)
     }
 
 }

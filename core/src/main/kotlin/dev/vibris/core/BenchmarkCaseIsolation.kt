@@ -57,7 +57,7 @@ internal class BenchmarkCaseIsolation private constructor(
 
     companion object {
         const val MANUAL_RECOVERY =
-            "Keep the current runtime open, repair the Vibris shader link or runtime bridge, then submit recover_runtime again. Do not release the reported lease or restart Minecraft."
+            "Keep the current runtime open. After any in-flight recovery operation reaches its safe point, repair the Vibris shader link or runtime bridge and submit recover_runtime again."
         const val BOOTSTRAP_RECOVERY =
             "Submit one load_shader action with restore_state.on_success=false and restore_state.on_error=false to establish the first Core-owned safe snapshot, then retry the transactional job."
 

@@ -195,13 +195,13 @@ internal class SourceRegistry @JvmOverloads constructor(
 
     @Synchronized
     @Throws(Failure::class)
-    fun requireActiveOwned() {
-        activeSource?.let { source ->
-            requireOwned(source)
-            if (!trees.matchesSnapshot(source.directory, source.snapshotSha256)) {
-                throw Failure(ErrorCode.ERROR_CODE_SOURCE_ACTIVATION_FAILED, "Prepared source content changed.")
-            }
+    fun requireActiveOwned(): Lease? {
+        val source = activeSource ?: return null
+        requireOwned(source)
+        if (!trees.matchesSnapshot(source.directory, source.snapshotSha256)) {
+            throw Failure(ErrorCode.ERROR_CODE_SOURCE_ACTIVATION_FAILED, "Prepared source content changed.")
         }
+        return source
     }
 
     @Synchronized
@@ -209,10 +209,7 @@ internal class SourceRegistry @JvmOverloads constructor(
 
     @Synchronized
     @Throws(Failure::class)
-    fun activeSnapshot(): Lease? {
-        requireActiveOwned()
-        return activeSource
-    }
+    fun activeSnapshot(): Lease? = requireActiveOwned()
 
     @Synchronized
     fun detachActive() {

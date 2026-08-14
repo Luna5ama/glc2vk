@@ -16,6 +16,9 @@ $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "..\..\tools\git-process.ps1")
 
+$script:VibrisRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
+$script:IrisRoot = [System.IO.Path]::GetFullPath((Join-Path $script:VibrisRoot "..\Iris"))
+
 function Resolve-IrisArtifact
 {
     param([Parameter(Mandatory)] [string] $Path, [Parameter(Mandatory)] [string] $Label)
@@ -370,7 +373,7 @@ try
     {
         throw "Protocol must transfer prepared-source references, not source byte fields: $protoSchema"
     }
-    foreach ($requiredField in @("string uuid", "uint64 file_count", "uint64 total_bytes"))
+    foreach ($requiredField in @("string source_uuid", "uint64 file_count", "uint64 total_bytes"))
     {
         if (-not $protoSchemaText.Contains($requiredField))
         {
@@ -387,16 +390,19 @@ try
         $_.Groups[1].Value
     })
     $expectedTools = @(
-        "vibris_list_presets",
         "vibris_get_status",
+        "vibris_list_presets",
+        "vibris_list_resources",
         "vibris_run_recipe",
         "vibris_run_actions",
-        "vibris_run_matrix"
+        "vibris_run_matrix",
+        "vibris_job",
+        "vibris_artifacts"
     )
     if ([string]::Join("`n", $tools) -cne [string]::Join("`n", $expectedTools) -or
         @($tools | Select-Object -Unique).Count -ne $expectedTools.Count)
     {
-        throw "Native MCP tool registry does not expose exactly the expected 5-tool surface."
+        throw "Native MCP tool registry does not expose exactly the expected 8-tool surface."
     }
     foreach ($legacy in @(
         "mcp\src\main\cpp\debug_tools.cpp",
@@ -421,9 +427,13 @@ try
             $_.FullName -match '[\\/]mixin[\\/]' -and $_.Name -match '(?i)vibris'
         }
     })
-    if ($vibrisMixins.Count -ne 0)
+    $expectedVibrisMixin = [System.IO.Path]::GetFullPath((Join-Path $script:IrisRoot `
+        "common\src\main\java\net\irisshaders\iris\mixin\MixinMinecraft_VibrisFrameThrottle.java"))
+    if ($vibrisMixins.Count -ne 1 -or
+        -not [string]::Equals($vibrisMixins[0].FullName, $expectedVibrisMixin,
+            [System.StringComparison]::OrdinalIgnoreCase))
     {
-        throw "Iris contains a Vibris-specific mixin: $($vibrisMixins[0].FullName)"
+        throw "Iris must contain only the expected Vibris frame-throttle mixin: $expectedVibrisMixin"
     }
 
     $exe = Resolve-IrisArtifact -Path $McpExe -Label "Release native MCP"
@@ -589,8 +599,8 @@ try
     }
 
     Write-Output ($descriptorOutput | Where-Object { $_ -like "PASS *" })
-    Write-Output ("PASS source_audit=true transport=grpc source_payload=reference tools=5 " +
-        "jvm_language=kotlin native_mcp=cpp core_iris_jgit_imports=0 vibris_mixins=0 " +
+    Write-Output ("PASS source_audit=true transport=grpc source_payload=reference tools=8 " +
+        "jvm_language=kotlin native_mcp=cpp core_iris_jgit_imports=0 vibris_mixins=1 " +
         "renderdoc_dependencies=0 package_exe=1 package_iris_jar=1 extra_mod_jars=0 " +
         "delivery_files=2 release_mcp_sha256=$releaseMcpHash requested_iris_sha256=$requestedIrisHash " +
         "built_protocol_sha256=$javaProtocolHash embedded_protocol_sha256=$embeddedProtocolHash " +

@@ -106,7 +106,7 @@ class RuntimeLeaseStatusTest {
     }
 
     @Test
-    fun restoreFailureKeepsOriginalLeaseAndOnlyRecoveryCanMakeCoreReady() {
+    fun restoreFailureReleasesTerminalLeaseAndRecoveryCanMakeCoreReady() {
         val runtime = RuntimeTestAdapter()
         val pending = temp.resolve("recovery-pending").toAbsolutePath()
         Files.createDirectories(pending)
@@ -136,14 +136,23 @@ class RuntimeLeaseStatusTest {
 
         val recovering = descriptor.status(engine, StatusDetail.STATUS_DETAIL_FULL)
         assertTrue(recovering.state == ServerState.SERVER_STATE_RECOVERING)
-        assertTrue(recovering.hasActiveLease())
-        assertTrue(recovering.activeLease.jobId == "candidate")
+        assertFalse(recovering.hasActiveLease())
         assertFalse(recovering.canAcceptJob)
 
         val rejectedSession = recordingSession()
         engine.submit(rejectedSession.session, loadJob("must-be-rejected", source(pending), false))
         val rejected = rejectedSession.messages.last { it.hasJobFailed() }.jobFailed
         assertTrue(rejected.error.code == ErrorCode.ERROR_CODE_SERVER_NOT_AVAILABLE)
+
+        runtime.reloads.add(ReloadResult.failure(emptyList()))
+        val failedRecoverySession = recordingSession()
+        engine.submit(failedRecoverySession.session, recoveryJob("recover-failed"))
+        assertTrue(failedRecoverySession.terminal.await(2, TimeUnit.SECONDS))
+        val failedRecovery = failedRecoverySession.messages.last { it.hasJobFailed() }.jobFailed
+        assertEquals(ErrorCode.ERROR_CODE_RECOVERY_FAILED, failedRecovery.error.code)
+        val stillRecovering = descriptor.status(engine, StatusDetail.STATUS_DETAIL_FULL)
+        assertEquals(ServerState.SERVER_STATE_RECOVERING, stillRecovering.state)
+        assertFalse(stillRecovering.hasActiveLease())
 
         runtime.reloads.add(ReloadResult.success(EffectiveShaderSettings.empty(), emptyList()))
         val recoverySession = recordingSession()

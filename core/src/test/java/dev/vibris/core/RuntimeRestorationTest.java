@@ -21,10 +21,13 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -174,7 +177,7 @@ class RuntimeRestorationTest {
         RuntimeJobExecutor.Failure failedRecovery = assertThrows(RuntimeJobExecutor.Failure.class,
             () -> fixture.executor.execute(fixture.recoveryJob(), ignored -> {}));
         assertEquals(ErrorCode.ERROR_CODE_RECOVERY_FAILED, failedRecovery.code);
-        assertTrue(failedRecovery.getMessage().contains("Do not release"));
+        assertTrue(failedRecovery.getMessage().contains("in-flight recovery operation"));
         assertTrue(fixture.executor.hasPendingRecovery());
 
         fixture.runtime.reloads.add(ReloadResult.success(EffectiveShaderSettings.empty(), List.of()));
@@ -184,6 +187,39 @@ class RuntimeRestorationTest {
         assertEquals(baseline.uuid, fixture.registry.activeUuid());
         assertFalse(fixture.executor.hasPendingRecovery());
         assertTrue(fixture.activator.ready());
+    }
+
+    @Test
+    void timedOutRestorationCancelsTheOperationAndRecoveryWaitsForItsBarrier() throws Exception {
+        Fixture fixture = new Fixture(Duration.ofMillis(25));
+        Source baseline = fixture.bootstrap();
+        Source candidate = fixture.source("candidate");
+        CountDownLatch cancellationObserved = new CountDownLatch(1);
+        fixture.runtime.reloadOperations.add(cancellation -> CompletableFuture.completedFuture(
+            ReloadResult.success(EffectiveShaderSettings.empty(), List.of())));
+        fixture.runtime.reloadOperations.add(cancellation -> {
+            CompletableFuture<ReloadResult> stage = new CompletableFuture<>();
+            Thread.ofVirtual().start(() -> {
+                while (!cancellation.isCancellationRequested()) Thread.onSpinWait();
+                cancellationObserved.countDown();
+                stage.completeExceptionally(new CancellationException());
+            });
+            return stage;
+        });
+
+        RuntimeJobExecutor.Failure failure = assertThrows(RuntimeJobExecutor.Failure.class,
+            () -> fixture.executor.execute(fixture.mutatingJob(candidate), ignored -> {}));
+
+        assertEquals(ErrorCode.ERROR_CODE_RESTORE_FAILED, failure.code);
+        assertTrue(cancellationObserved.await(1, TimeUnit.SECONDS));
+        assertTrue(fixture.executor.hasPendingRecovery());
+
+        fixture.runtime.reloads.add(ReloadResult.success(EffectiveShaderSettings.empty(), List.of()));
+        TerminalResult recovered = fixture.executor.execute(fixture.recoveryJob(), ignored -> {});
+        assertEquals(ReceiptStatus.RECEIPT_STATUS_OK,
+            recovered.completed().getResult().getRestoration().getStatus());
+        assertEquals(baseline.uuid, fixture.registry.activeUuid());
+        assertFalse(fixture.executor.hasPendingRecovery());
     }
 
     @Test
@@ -205,13 +241,21 @@ class RuntimeRestorationTest {
         final RuntimeTestAdapter runtime = new RuntimeTestAdapter();
         final SourceRegistry registry = new SourceRegistry(pending, new CoreProbe());
         final SourceActivator activator = new SourceActivator(registry, new RecordingLink(runtime.events));
-        final RuntimeJobExecutor executor = new RuntimeJobExecutor(
-            runtime,
-            new CoreProbe(),
-            activator,
-            new ArtifactManager(temp.resolve("artifacts")));
+        final RuntimeJobExecutor executor;
 
-        Fixture() throws Exception {}
+        Fixture() throws Exception {
+            this(Duration.ofSeconds(45));
+        }
+
+        Fixture(Duration restorationTimeout) throws Exception {
+            executor = new RuntimeJobExecutor(
+                runtime,
+                new CoreProbe(),
+                activator,
+                new ArtifactManager(temp.resolve("artifacts")),
+                ServerConfiguration.DEFAULT_MAX_ACTIONS_PER_JOB,
+                restorationTimeout);
+        }
 
         Source bootstrap() throws Exception {
             Source source = source("baseline");

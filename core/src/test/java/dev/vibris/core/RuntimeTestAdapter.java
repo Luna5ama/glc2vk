@@ -34,6 +34,8 @@ import java.util.function.Function;
 final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
     final List<String> events = new ArrayList<>();
     final ArrayDeque<ReloadResult> reloads = new ArrayDeque<>();
+    final ArrayDeque<Function<CancellationToken, CompletionStage<ReloadResult>>> reloadOperations =
+        new ArrayDeque<>();
     final ArrayDeque<CompletionStage<ReloadResult>> reloadStages = new ArrayDeque<>();
     final ArrayDeque<CompileCatalog> compileCatalogs = new ArrayDeque<>();
     final ArrayDeque<String> actionResponses = new ArrayDeque<>();
@@ -124,6 +126,7 @@ final class RuntimeTestAdapter implements VibrisRuntimeAdapter {
         lastShaderConfig = config;
         shaderConfigs.add(config == null ? null : Map.copyOf(config));
         beforeReloadResult.run();
+        if (!reloadOperations.isEmpty()) return reloadOperations.removeFirst().apply(cancellation);
         if (!reloadStages.isEmpty()) return reloadStages.removeFirst();
         ReloadResult result = reloads.isEmpty()
             ? ReloadResult.success(EffectiveShaderSettings.empty(), List.of())

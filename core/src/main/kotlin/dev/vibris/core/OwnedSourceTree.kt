@@ -199,6 +199,7 @@ internal class OwnedSourceTree(
         @Throws(IOException::class)
         fun sha256(root: Path): String {
             val digest = MessageDigest.getInstance("SHA-256")
+            val buffer = ByteArray(HASH_BUFFER_BYTES)
             digest.update("vibris-source-tree-v1\u0000".toByteArray(Charsets.UTF_8))
             paths.sortedBy { root.relativize(it).toString().replace('\\', '/') }.forEach { path ->
                 val relative = root.relativize(path).toString().replace('\\', '/').toByteArray(Charsets.UTF_8)
@@ -209,7 +210,6 @@ internal class OwnedSourceTree(
                 requireOrdinary(path, before)
                 digest.update(ByteBuffer.allocate(Long.SIZE_BYTES).putLong(before.size()).array())
                 Files.newInputStream(path).use { input ->
-                    val buffer = ByteArray(1024 * 1024)
                     while (true) {
                         val count = input.read(buffer)
                         if (count < 0) break
@@ -230,6 +230,7 @@ internal class OwnedSourceTree(
     companion object {
         private const val DEFAULT_MAX_BYTES = 512L * 1024 * 1024
         private const val DEFAULT_MAX_FILES = 100_000
+        private const val HASH_BUFFER_BYTES = 1024 * 1024
 
         @JvmStatic
         fun delete(root: Path): Boolean {

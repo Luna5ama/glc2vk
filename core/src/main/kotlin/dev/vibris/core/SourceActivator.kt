@@ -72,17 +72,15 @@ internal class SourceActivator(
 
     @Synchronized
     @Throws(Failure::class)
-    fun verifyActiveSource() {
-        try {
-            link.retainsActiveSource()
-            sources.requireActiveOwned()
-        } catch (failure: SourceRegistry.Failure) {
-            ready = false
-            throw Failure(ErrorCode.ERROR_CODE_SOURCE_ACTIVATION_FAILED, failure.message, failure)
-        } catch (failure: ShaderLink.Failure) {
-            ready = false
-            throw Failure(ErrorCode.ERROR_CODE_SOURCE_ACTIVATION_FAILED, failure.message, failure)
-        }
+    fun verifyActiveSource(): SourceRegistry.Lease? = try {
+        link.retainsActiveSource()
+        sources.requireActiveOwned()
+    } catch (failure: SourceRegistry.Failure) {
+        ready = false
+        throw Failure(ErrorCode.ERROR_CODE_SOURCE_ACTIVATION_FAILED, failure.message, failure)
+    } catch (failure: ShaderLink.Failure) {
+        ready = false
+        throw Failure(ErrorCode.ERROR_CODE_SOURCE_ACTIVATION_FAILED, failure.message, failure)
     }
 
     @Synchronized
@@ -144,14 +142,15 @@ internal class SourceActivator(
 
     @Synchronized
     @Throws(Failure::class)
-    fun markReadyAfterVerification() {
+    fun markReadyAfterVerification(): SourceRegistry.Lease? {
         if (closed) {
             throw Failure(ErrorCode.ERROR_CODE_SERVER_NOT_AVAILABLE, "Source activation is closed.")
         }
         try {
             link.retainsActiveSource()
-            sources.requireActiveOwned()
+            val source = sources.requireActiveOwned()
             ready = true
+            return source
         } catch (failure: SourceRegistry.Failure) {
             ready = false
             throw Failure(ErrorCode.ERROR_CODE_RECOVERY_FAILED, failure.message, failure)

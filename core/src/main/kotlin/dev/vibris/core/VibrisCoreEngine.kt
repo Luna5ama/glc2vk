@@ -69,7 +69,6 @@ class VibrisCoreEngine internal constructor(
     private var closed = false
     private var activeRequestId = ""
     private var activeStage = JobStage.JOB_STAGE_UNSPECIFIED
-    private var recoveryOwner: RecoveryOwner? = null
 
     constructor(pendingRoot: Path, runtime: VibrisRuntimeAdapter) :
         this(pendingRoot, runtime, ShaderLink.transientLink(), ShaderLogSink.none())
@@ -122,19 +121,7 @@ class VibrisCoreEngine internal constructor(
         val projection = projectionLocked(schedulerSnapshot)
         val active = schedulerSnapshot.active
         val activeJob = active?.metadata?.requestId?.let(liveJobs::get)
-        val lease = recoveryOwner?.let { owner ->
-            RuntimeLease.newBuilder()
-                .setLeaseId(leaseId(owner.metadata, owner.startedAtUnixMs))
-                .setWorkspaceId(owner.metadata.workspaceId)
-                .setWorktreeRoot(owner.metadata.worktreeRoot)
-                .setJobId(owner.metadata.jobId)
-                .setRequestId(owner.metadata.requestId)
-                .setOperation(owner.metadata.operation)
-                .setStage(JobStage.JOB_STAGE_RECOVERING)
-                .setStartedAtUnixMs(owner.startedAtUnixMs)
-                .setCancellationRequested(false)
-                .build()
-        } ?: active?.let {
+        val lease = active?.let {
             RuntimeLease.newBuilder()
                 .setLeaseId(leaseId(it))
                 .setWorkspaceId(it.metadata.workspaceId)
@@ -470,14 +457,7 @@ class VibrisCoreEngine internal constructor(
             if (liveJobs.remove(job.requestId) == null) return
             if (releaseSources) {
                 activator.release(job.sources)
-            } else if (recoveryOwner == null) {
-                val startedAtUnixMs = scheduler.snapshot().active
-                    ?.takeIf { it.metadata.requestId == job.requestId }
-                    ?.startedAtUnixMs
-                    ?: System.currentTimeMillis()
-                recoveryOwner = RecoveryOwner(metadata(job), startedAtUnixMs)
             }
-            if (successful && job.submission.hasRecoverRuntime()) recoveryOwner = null
             requests.finish(job.requestId, state, terminal)
             terminalJobs[job.submission.jobId] = terminalSummary(job, state)
             while (terminalJobs.size > TERMINAL_JOB_CAPACITY) {
@@ -756,11 +736,6 @@ class VibrisCoreEngine internal constructor(
 
     internal data class ActiveJob(val requestId: String, val stage: JobStage)
 
-    private data class RecoveryOwner(
-        val metadata: FairJobScheduler.JobMetadata,
-        val startedAtUnixMs: Long,
-    )
-
     companion object {
         const val REQUEST_REGISTRY_CAPACITY = 192
         const val MAX_STATUS_WAIT_MS = 300_000L
@@ -811,11 +786,6 @@ class VibrisCoreEngine internal constructor(
             (active.metadata.requestId + '\u0000' + active.startedAtUnixMs)
                 .toByteArray(StandardCharsets.UTF_8),
         ).toString()
-
-        private fun leaseId(metadata: FairJobScheduler.JobMetadata, startedAtUnixMs: Long): String =
-            UUID.nameUUIDFromBytes(
-                (metadata.requestId + '\u0000' + startedAtUnixMs).toByteArray(StandardCharsets.UTF_8),
-            ).toString()
 
         private fun runtimePhase(stage: JobStage): RuntimePhase = when (stage) {
             JobStage.JOB_STAGE_ACTIVATING_SOURCE,
