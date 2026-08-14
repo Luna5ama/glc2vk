@@ -203,13 +203,8 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         source: SourceRegistry.Lease,
         progress: Consumer<JobStage>,
         deadline: Long,
-    ): ReloadResult = activateSource(
-        job,
-        source,
-        null,
-        progress,
-        deadline,
-    )
+    ): ReloadResult = reuseLoadedPipeline(job, source, null, progress)
+        ?: activateSource(job, source, null, progress, deadline)
 
     @Throws(Failure::class)
     fun loadShader(
@@ -220,7 +215,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         deadline: Long,
     ): LoadResult {
         val settings = if (config.preserveCurrent) null else config.valuesMap
-        val reload = if (activator.isActive(source)) {
+        val reload = reuseLoadedPipeline(job, source, settings, progress) ?: if (activator.isActive(source)) {
             reloadActiveSource(job, source, settings, progress, deadline)
         } else {
             activateSource(job, source, settings, progress, deadline)
@@ -239,6 +234,12 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         deadline: Long,
     ): CompileResult {
         val settings = if (config.preserveCurrent) null else config.valuesMap
+        reuseLoadedPipeline(job, source, settings, progress)?.let { reload ->
+            val catalog = await(runtime.getCompileCatalog(job.cancellation.token()), job, deadline)
+            val loadedAtUnixMs = activeShaderLoadedAtUnixMs.takeIf { it > 0 } ?: System.currentTimeMillis()
+            observeCatalog(catalog, loadedAtUnixMs)
+            return CompileResult(reload, catalog, loadedAtUnixMs)
+        }
         val activation = if (activator.isActive(source)) null else try {
             progress.accept(JobStage.JOB_STAGE_ACTIVATING_SOURCE)
             probe.event(job.requestId, "ACTIVATING_SOURCE")
@@ -349,6 +350,55 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             activePassMappingSha256 = ""
         }
         return result
+    }
+
+    @Throws(Failure::class)
+    private fun reuseLoadedPipeline(
+        job: CoreJob,
+        source: SourceRegistry.Lease,
+        config: Map<String, String>?,
+        progress: Consumer<JobStage>,
+    ): ReloadResult? {
+        if (!activator.ready()) return null
+        val current = try {
+            activator.activeSnapshot()
+        } catch (failure: SourceActivator.Failure) {
+            throw Failure(failure.code, failure.message)
+        } ?: return null
+        val settings = activeShaderSettings ?: return null
+        if (current.snapshotSha256 != source.snapshotSha256 || !matchesLoadedSettings(settings, config)) {
+            return null
+        }
+        if (!activator.isActive(source)) {
+            progress.accept(JobStage.JOB_STAGE_ACTIVATING_SOURCE)
+            probe.event(job.requestId, "ACTIVATING_SOURCE")
+            val activation = try {
+                activator.begin(source)
+            } catch (failure: SourceActivator.Failure) {
+                throw Failure(failure.code, failure.message)
+            }
+            try {
+                activator.commit(activation)
+            } catch (failure: SourceActivator.Failure) {
+                val restored = activator.rollback(activation)
+                if (!restored) activator.fail(activation)
+                throw Failure(failure.code, failure.message)
+            }
+        }
+        probe.event(job.requestId, "REUSING_LOADED_SHADER")
+        return ReloadResult.success(settings, emptyList())
+    }
+
+    private fun matchesLoadedSettings(
+        settings: EffectiveShaderSettings,
+        config: Map<String, String>?,
+    ): Boolean {
+        if (config == null) return true
+        val known = settings.settings.associateBy { setting -> setting.name }
+        if (config.keys.any { name -> name !in known }) return false
+        return settings.settings.all { setting ->
+            setting.value == (config[setting.name] ?: setting.defaultValue)
+        }
     }
 
     @Throws(Failure::class)
@@ -1036,13 +1086,22 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
         expected: BenchmarkCaseIsolation.Snapshot,
         markReady: Boolean = false,
     ): BenchmarkCaseIsolation.Snapshot {
+        val currentSource = activator.activeSnapshot()
+        val currentSettings = activeShaderSettings
+        val canReusePipeline = activator.ready() && expected.source != null && expected.shaderSettings != null &&
+            currentSource?.snapshotSha256 == expected.source.snapshotSha256 &&
+            currentSettings?.let(expected.shaderSettings::hasSameResolvedState) == true
         activator.restore(expected.source)
         if (expected.source != null) {
-            val reload = restoreOperation("shader reload") { cancellation ->
-                runtime.reloadVibrisShaderpack(expected.shaderSettings!!.values(), cancellation)
+            if (canReusePipeline) {
+                activeShaderSettings = expected.shaderSettings
+            } else {
+                val reload = restoreOperation("shader reload") { cancellation ->
+                    runtime.reloadVibrisShaderpack(expected.shaderSettings!!.values(), cancellation)
+                }
+                check(reload.successful) { "The safe shader source or settings could not be reloaded." }
+                activeShaderSettings = reload.effectiveSettings
             }
-            check(reload.successful) { "The safe shader source or settings could not be reloaded." }
-            activeShaderSettings = reload.effectiveSettings
         } else {
             activeShaderSettings = null
         }

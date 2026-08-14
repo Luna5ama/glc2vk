@@ -4,6 +4,8 @@ import dev.vibris.api.ArtifactSink;
 import dev.vibris.api.CancellationToken;
 import dev.vibris.api.CapturePlan;
 import dev.vibris.api.CaptureResult;
+import dev.vibris.api.EffectiveShaderSettings;
+import dev.vibris.api.ReloadResult;
 import dev.vibris.api.ResourceCatalog;
 import dev.vibris.protocol.v2.Action;
 import dev.vibris.protocol.v2.ActionKind;
@@ -129,6 +131,15 @@ class RuntimeJobExecutorCaptureTest {
     @Test
     void freshRuntimeLoadsThenPlansScreenshotFromPostLoadCatalog() throws Exception {
         Fixture fixture = new Fixture();
+        EffectiveShaderSettings high = EffectiveShaderSettings.of(List.of(
+            new EffectiveShaderSettings.Setting(
+                "QUALITY", "high", "low", EffectiveShaderSettings.Origin.REQUEST_OVERRIDE)
+        ));
+        EffectiveShaderSettings low = EffectiveShaderSettings.of(List.of(
+            new EffectiveShaderSettings.Setting(
+                "QUALITY", "low", "low", EffectiveShaderSettings.Origin.DEFAULT)
+        ));
+        fixture.runtime.reloads.add(ReloadResult.success(high, List.of()));
         TerminalResult bootstrap = fixture.executor.execute(
             fixture.loadJob(false, ActionSequence.getDefaultInstance(), false),
             ignored -> {}
@@ -145,9 +156,16 @@ class RuntimeJobExecutorCaptureTest {
             ResourceCatalog.of(List.of(screenshot), List.of());
         fixture.runtime.captureResult = captureResult(12, Map.of("screenshot", screenshot));
         fixture.runtime.captureFiles.put("screenshot.png", new byte[]{1, 2, 3});
+        fixture.runtime.reloads.add(ReloadResult.success(low, List.of()));
+        fixture.runtime.reloads.add(ReloadResult.success(high, List.of()));
 
         TerminalResult terminal = fixture.executor.execute(
-            fixture.loadJob(true, screenshotActions(), true),
+            fixture.loadJob(
+                true,
+                screenshotActions(),
+                true,
+                ShaderConfig.newBuilder().putValues("QUALITY", "low").build()
+            ),
             ignored -> {}
         );
 
@@ -633,13 +651,22 @@ class RuntimeJobExecutorCaptureTest {
         }
 
         CoreJob loadJob(boolean prelude, ActionSequence actions, boolean restore) {
+            return loadJob(
+                prelude,
+                actions,
+                restore,
+                ShaderConfig.newBuilder().setPreserveCurrent(true).build()
+            );
+        }
+
+        CoreJob loadJob(boolean prelude, ActionSequence actions, boolean restore, ShaderConfig config) {
             Action load = Action.newBuilder()
                 .setPrelude(prelude)
                 .setLoadShader(LoadShader.newBuilder()
                     .setSourceUuid(source.uuid())
                     .setSourceId("source")
                     .setConfigId("config")
-                    .setConfig(ShaderConfig.newBuilder().setPreserveCurrent(true)))
+                    .setConfig(config))
                 .build();
             JobSpec spec = JobSpec.newBuilder()
                 .setJobId("job-" + UUID.randomUUID())

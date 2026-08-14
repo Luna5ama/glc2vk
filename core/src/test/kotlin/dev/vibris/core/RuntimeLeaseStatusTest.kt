@@ -228,7 +228,7 @@ class RuntimeLeaseStatusTest {
     private fun source(pending: Path): PreparedSourceRef {
         val uuid = UUID.randomUUID().toString()
         val source = Files.createDirectory(pending.resolve(uuid))
-        val file = Files.writeString(source.resolve("main.glsl"), "fixture")
+        val file = Files.writeString(source.resolve("main.glsl"), uuid)
         return PreparedSourceRef.newBuilder()
             .setSourceUuid(uuid)
             .setVcsCheckoutState(dev.vibris.protocol.v2.VcsCheckoutState.VCS_CHECKOUT_STATE_ATTACHED)

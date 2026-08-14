@@ -18,6 +18,7 @@ import dev.vibris.protocol.v2.LoadShader;
 import dev.vibris.protocol.v2.PreparedSourceRef;
 import dev.vibris.protocol.v2.ReceiptStatus;
 import dev.vibris.protocol.v2.ResetTemporalState;
+import dev.vibris.protocol.v2.RestorePolicy;
 import dev.vibris.protocol.v2.SceneContext;
 import dev.vibris.protocol.v2.ShaderConfig;
 import dev.vibris.protocol.v2.WaitFrames;
@@ -128,6 +129,91 @@ class RuntimeJobExecutorTest {
             provenance.getVcsCheckoutState());
         assertEquals("", provenance.getBranch());
         assertEquals("a".repeat(40), provenance.getStartHead());
+    }
+
+    @Test
+    void equivalentFreshSourceReusesPipelineAndRestoresExactSourceWithoutReload() throws Exception {
+        Fixture fixture = new Fixture();
+        Source baseline = fixture.source("same");
+        fixture.executor.execute(fixture.loadJob(baseline), ignored -> {});
+        fixture.runtime.events.clear();
+        Source equivalent = fixture.source("same");
+
+        TerminalResult terminal = fixture.executor.execute(
+            fixture.loadJob(equivalent, ShaderConfig.newBuilder().setPreserveCurrent(true).build(), true),
+            ignored -> {});
+
+        assertEquals(List.of("link:same", "context", "reset", "compile_catalog", "link:same", "context", "reset"),
+            fixture.runtime.events);
+        assertEquals(baseline.uuid, fixture.registry.activeUuid());
+        assertEquals(baseline.uuid, terminal.completed().getResult().getRestoration().getActualSourceUuid());
+    }
+
+    @Test
+    void equivalentFreshSourceAndResolvedConfigReuseLoadedPipeline() throws Exception {
+        Fixture fixture = new Fixture();
+        Source baseline = fixture.source("same");
+        EffectiveShaderSettings settings = EffectiveShaderSettings.of(List.of(
+            new EffectiveShaderSettings.Setting(
+                "QUALITY", "high", "low", EffectiveShaderSettings.Origin.REQUEST_OVERRIDE)
+        ));
+        ShaderConfig config = ShaderConfig.newBuilder().putValues("QUALITY", "high").build();
+        fixture.runtime.reloads.add(ReloadResult.success(settings, List.of()));
+        fixture.executor.execute(fixture.loadJob(baseline, config, false), ignored -> {});
+        fixture.runtime.events.clear();
+        Source equivalent = fixture.source("same");
+
+        fixture.executor.execute(fixture.loadJob(equivalent, config, false), ignored -> {});
+
+        assertEquals(List.of("link:same", "context", "reset", "compile_catalog"), fixture.runtime.events);
+        assertEquals(equivalent.uuid, fixture.registry.activeUuid());
+    }
+
+    @Test
+    void changedResolvedConfigReloadsEquivalentFreshSource() throws Exception {
+        Fixture fixture = new Fixture();
+        Source baseline = fixture.source("same");
+        EffectiveShaderSettings high = EffectiveShaderSettings.of(List.of(
+            new EffectiveShaderSettings.Setting(
+                "QUALITY", "high", "low", EffectiveShaderSettings.Origin.REQUEST_OVERRIDE)
+        ));
+        EffectiveShaderSettings low = EffectiveShaderSettings.of(List.of(
+            new EffectiveShaderSettings.Setting(
+                "QUALITY", "low", "low", EffectiveShaderSettings.Origin.DEFAULT)
+        ));
+        fixture.runtime.reloads.add(ReloadResult.success(high, List.of()));
+        fixture.executor.execute(fixture.loadJob(
+            baseline, ShaderConfig.newBuilder().putValues("QUALITY", "high").build(), false), ignored -> {});
+        fixture.runtime.events.clear();
+        Source equivalent = fixture.source("same");
+        fixture.runtime.reloads.add(ReloadResult.success(low, List.of()));
+
+        fixture.executor.execute(fixture.loadJob(
+            equivalent, ShaderConfig.getDefaultInstance(), false), ignored -> {});
+
+        assertEquals(List.of("link:same", "reload", "context", "reset", "compile_catalog"),
+            fixture.runtime.events);
+        assertEquals(equivalent.uuid, fixture.registry.activeUuid());
+    }
+
+    @Test
+    void repeatedEquivalentFreshSourcesKeepOneLoadedPipelineAndOneOwnedSnapshot() throws Exception {
+        Fixture fixture = new Fixture();
+        Source baseline = fixture.source("same");
+        fixture.executor.execute(fixture.loadJob(baseline), ignored -> {});
+        fixture.activator.release(List.of(baseline.lease));
+        fixture.runtime.events.clear();
+
+        for (int index = 0; index < 64; index++) {
+            Source equivalent = fixture.source("same");
+            fixture.executor.execute(fixture.loadJob(equivalent), ignored -> {});
+            fixture.activator.release(List.of(equivalent.lease));
+        }
+
+        assertEquals(0, fixture.runtime.events.stream().filter("reload"::equals).count());
+        try (var entries = Files.list(pending)) {
+            assertEquals(1, entries.count());
+        }
     }
 
     @Test
@@ -309,7 +395,6 @@ class RuntimeJobExecutorTest {
             CompileCatalog.DiagnosticSeverity.ERROR, "candidate.fsh", 9, 2, "candidate failed");
         var resolved = CompileCatalog.Diagnostic.of(
             CompileCatalog.DiagnosticSeverity.WARNING, "baseline.glsl", 7, 1, "baseline warning");
-        fixture.runtime.reloads.add(ReloadResult.success(EffectiveShaderSettings.empty(), List.of()));
         fixture.runtime.reloads.add(ReloadResult.failure(List.of(error("candidate failed"))));
         fixture.runtime.reloads.add(ReloadResult.success(EffectiveShaderSettings.empty(), List.of()));
         fixture.runtime.compileCatalogs.add(catalog(List.of(unchanged, resolved), false));
@@ -351,8 +436,6 @@ class RuntimeJobExecutorTest {
         Source candidate = fixture.source("candidate");
         var baselineError = CompileCatalog.Diagnostic.of(
             CompileCatalog.DiagnosticSeverity.ERROR, "baseline.fsh", 3, 1, "baseline failed");
-        fixture.runtime.reloads.add(ReloadResult.failure(List.of(error("baseline failed"))));
-        fixture.runtime.reloads.add(ReloadResult.success(EffectiveShaderSettings.empty(), List.of()));
         fixture.runtime.compileCatalogs.add(catalog(baselineError, true));
         CompileValidationRequest validation = CompileValidationRequest.newBuilder()
             .setBaseline(compileCase("baseline", baseline, "base"))
@@ -521,13 +604,21 @@ class RuntimeJobExecutorTest {
         }
 
         CoreJob loadJob(Source source) {
+            return loadJob(
+                source,
+                ShaderConfig.newBuilder().setPreserveCurrent(true).build(),
+                false
+            );
+        }
+
+        CoreJob loadJob(Source source, ShaderConfig config, boolean restore) {
             return job(source, ActionSequence.newBuilder()
                 .addActions(Action.newBuilder().setLoadShader(LoadShader.newBuilder()
                     .setSourceUuid(source.uuid)
                     .setSourceId("source")
                     .setConfigId("config")
-                    .setConfig(ShaderConfig.newBuilder().setPreserveCurrent(true))))
-                .build());
+                    .setConfig(config)))
+                .build(), restore);
         }
 
         CompileValidationCase compileCase(String id, Source source, String configId) {
@@ -549,6 +640,10 @@ class RuntimeJobExecutorTest {
         }
 
         CoreJob job(Source source, ActionSequence actions) {
+            return job(source, actions, false);
+        }
+
+        CoreJob job(Source source, ActionSequence actions, boolean restore) {
             JobSpec spec = JobSpec.newBuilder()
                 .setJobId("job-" + UUID.randomUUID())
                 .setContext(SceneContext.newBuilder()
@@ -557,6 +652,7 @@ class RuntimeJobExecutorTest {
                     .setFov(70.0))
                 .addSources(source.lease.reference())
                 .setActionSequence(actions)
+                .setRestoreState(RestorePolicy.newBuilder().setOnSuccess(restore).setOnError(restore))
                 .build();
             CoreJob job = new CoreJob(spec, spec.getJobId(), WORKSPACE_ID, "message", null);
             job.initialize(List.of(source.lease));
