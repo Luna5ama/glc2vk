@@ -427,13 +427,27 @@ try
             $_.FullName -match '[\\/]mixin[\\/]' -and $_.Name -match '(?i)vibris'
         }
     })
-    $expectedVibrisMixin = [System.IO.Path]::GetFullPath((Join-Path $script:IrisRoot `
-        "common\src\main\java\net\irisshaders\iris\mixin\MixinMinecraft_VibrisFrameThrottle.java"))
-    if ($vibrisMixins.Count -ne 1 -or
-        -not [string]::Equals($vibrisMixins[0].FullName, $expectedVibrisMixin,
+    $expectedVibrisMixins = @(
+        "common\src\main\java\net\irisshaders\iris\mixin\MixinKeyboardHandler_VibrisInputBlock.java",
+        "common\src\main\java\net\irisshaders\iris\mixin\MixinLevelLoadingScreen_VibrisTrackerRelease.java",
+        "common\src\main\java\net\irisshaders\iris\mixin\MixinLevelLoadTracker_VibrisServerViewRelease.java",
+        "common\src\main\java\net\irisshaders\iris\mixin\MixinMinecraft_VibrisFrameThrottle.java",
+        "common\src\main\java\net\irisshaders\iris\mixin\MixinMinecraft_VibrisLevelLoadRelease.java",
+        "common\src\main\java\net\irisshaders\iris\mixin\MixinMouseHandler_VibrisInputBlock.java"
+    ) | ForEach-Object {
+        [System.IO.Path]::GetFullPath((Join-Path $script:IrisRoot $_))
+    } | Sort-Object
+    $actualVibrisMixins = @($vibrisMixins | ForEach-Object {
+        [System.IO.Path]::GetFullPath($_.FullName)
+    } | Sort-Object)
+    if ($actualVibrisMixins.Count -ne $expectedVibrisMixins.Count -or
+        -not [string]::Equals(
+            [string]::Join("`n", $actualVibrisMixins),
+            [string]::Join("`n", $expectedVibrisMixins),
             [System.StringComparison]::OrdinalIgnoreCase))
     {
-        throw "Iris must contain only the expected Vibris frame-throttle mixin: $expectedVibrisMixin"
+        throw "Iris Vibris mixins differ from the exact audited set: " +
+            [string]::Join(", ", $expectedVibrisMixins)
     }
 
     $exe = Resolve-IrisArtifact -Path $McpExe -Label "Release native MCP"
@@ -600,7 +614,8 @@ try
 
     Write-Output ($descriptorOutput | Where-Object { $_ -like "PASS *" })
     Write-Output ("PASS source_audit=true transport=grpc source_payload=reference tools=8 " +
-        "jvm_language=kotlin native_mcp=cpp core_iris_jgit_imports=0 vibris_mixins=1 " +
+        "jvm_language=kotlin native_mcp=cpp core_iris_jgit_imports=0 " +
+        "vibris_mixins=$($actualVibrisMixins.Count) " +
         "renderdoc_dependencies=0 package_exe=1 package_iris_jar=1 extra_mod_jars=0 " +
         "delivery_files=2 release_mcp_sha256=$releaseMcpHash requested_iris_sha256=$requestedIrisHash " +
         "built_protocol_sha256=$javaProtocolHash embedded_protocol_sha256=$embeddedProtocolHash " +

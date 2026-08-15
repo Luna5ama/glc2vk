@@ -289,7 +289,7 @@ private:
             if (arguments.contains("wait_until")) {
                 request.set_wait_until(arguments.at("wait_until") == "job_terminal"
                     ? control::STATUS_WAIT_CONDITION_JOB_TERMINAL
-                    : control::STATUS_WAIT_CONDITION_CAN_START_JOB);
+                    : control::STATUS_WAIT_CONDITION_CAN_ACCEPT_JOB);
             }
             if (arguments.contains("job_id")) request.set_job_id(arguments.at("job_id").get<std::string>());
             request.set_timeout_ms(arguments.value("timeout_ms", std::uint64_t{0}));

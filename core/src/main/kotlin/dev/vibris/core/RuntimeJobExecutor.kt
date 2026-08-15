@@ -21,6 +21,7 @@ import dev.vibris.protocol.v2.JobCompleted
 import dev.vibris.protocol.v2.JobResult
 import dev.vibris.protocol.v2.JobStage
 import dev.vibris.protocol.v2.RestorationReceipt
+import dev.vibris.protocol.v2.RuntimeRecovery
 import java.io.IOException
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
@@ -920,6 +921,20 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     fun hasPendingRecovery(): Boolean = pendingRecovery != null
 
     @Synchronized
+    fun recoveryStatus(): RuntimeRecovery? = pendingRecovery?.let { recovery ->
+        RuntimeRecovery.newBuilder()
+            .setJobId(recovery.jobId)
+            .setRequestId(recovery.requestId)
+            .setWorkspaceId(recovery.workspaceId)
+            .setStartedAtUnixMs(recovery.startedAtUnixMs)
+            .setAttemptCount(recovery.attemptCount)
+            .apply {
+                if (recovery.lastReceipt.hasError()) setLastError(recovery.lastReceipt.error)
+            }
+            .build()
+    }
+
+    @Synchronized
     fun restorationReceipt(): RestorationReceipt {
         pendingRecovery?.let { return it.lastReceipt }
         val actual = runCatching(::currentSnapshot).getOrElse {
@@ -966,10 +981,14 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
                 false,
             )
             pendingRecovery = PendingRecovery(
-                isolation,
-                job.sources.toList(),
-                receipt,
-                (failure as? Failure)?.cleanupBarrier,
+                isolation = isolation,
+                heldSources = job.sources.toList(),
+                jobId = job.submission.jobId,
+                requestId = job.requestId,
+                workspaceId = job.workspaceId,
+                startedAtUnixMs = System.currentTimeMillis(),
+                lastReceipt = receipt,
+                cleanupBarrier = (failure as? Failure)?.cleanupBarrier,
             )
             throw Failure(
                 ErrorCode.ERROR_CODE_RESTORE_FAILED,
@@ -997,10 +1016,14 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
             false,
         )
         pendingRecovery = PendingRecovery(
-            isolation,
-            job.sources.toList(),
-            receipt,
-            failure.cleanupBarrier,
+            isolation = isolation,
+            heldSources = job.sources.toList(),
+            jobId = job.submission.jobId,
+            requestId = job.requestId,
+            workspaceId = job.workspaceId,
+            startedAtUnixMs = System.currentTimeMillis(),
+            lastReceipt = receipt,
+            cleanupBarrier = failure.cleanupBarrier,
         )
         return failure.requiringRecovery(
             receipt,
@@ -1040,6 +1063,7 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
                 )
             }
         }
+        recovery.attemptCount++
         try {
             recovery.cleanupBarrier?.let { barrier ->
                 restoreAwait(barrier, operation = "the previous restoration operation")
@@ -1364,6 +1388,11 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     private data class PendingRecovery(
         val isolation: BenchmarkCaseIsolation,
         val heldSources: List<SourceRegistry.Lease>,
+        val jobId: String,
+        val requestId: String,
+        val workspaceId: String,
+        val startedAtUnixMs: Long,
+        @Volatile var attemptCount: Int = 0,
         @Volatile var lastReceipt: RestorationReceipt,
         @Volatile var cleanupBarrier: CompletionStage<Void>? = null,
     )

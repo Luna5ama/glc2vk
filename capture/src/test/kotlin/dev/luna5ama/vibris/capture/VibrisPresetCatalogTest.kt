@@ -12,10 +12,11 @@ class VibrisPresetCatalogTest {
     @Test
     fun storesEachSceneAsOneCompletePreset() {
         val directory = createTempDirectory("vibris-presets-test")
+        var catalog: VibrisPresetCatalog? = null
         try {
             val path = directory.resolve("presets.json")
             Files.writeString(path, INITIAL_PRESETS)
-            val catalog = VibrisPresetCatalog.load(path)
+            catalog = VibrisPresetCatalog.load(path)
             val current = VibrisPresetCatalog.Preset(
                 "current",
                 "test-world",
@@ -33,18 +34,92 @@ class VibrisPresetCatalogTest {
                 "default",
             )
 
-            assertEquals("current", catalog.save(current))
-            assertEquals(listOf("current", "existing"), catalog.presets().map { it.presetId })
-            assertEquals(listOf("2", "2"), catalog.presets().map { it.version })
-            assertEquals(current.context(), catalog.presets().first().context)
-            assertEquals(listOf("baseline"), catalog.presets().last().tags)
-            assertEquals(18_234, catalog.resolve(current.context()).tick)
-            assertTrue(VibrisPresetCatalog.load(path).validate(current.context()).valid)
-            assertFalse(catalog.validate(SceneContext(
+            assertEquals("current", catalog!!.save(current))
+            assertEquals(listOf("current", "existing"), catalog!!.presets().map { it.presetId })
+            assertEquals(listOf("2", "2"), catalog!!.presets().map { it.version })
+            assertEquals(current.context(), catalog!!.presets().first().context)
+            assertEquals(listOf("baseline"), catalog!!.presets().last().tags)
+            assertEquals(18_234, catalog!!.resolve(current.context()).tick)
+            val reloaded = VibrisPresetCatalog.load(path)
+            try {
+                assertTrue(reloaded.validate(current.context()).valid)
+            } finally {
+                reloaded.close()
+            }
+            assertFalse(catalog!!.validate(SceneContext(
                 "test-world", "minecraft:the_nether", "existing", "", "current", 82.0,
                 SceneContext.Resolution.unspecified(), "",
             )).valid)
         } finally {
+            catalog?.close()
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun reloadsManualFileChangesWhileTheCatalogIsRunning() {
+        val directory = createTempDirectory("vibris-presets-watch-test")
+        var catalog: VibrisPresetCatalog? = null
+        try {
+            val path = directory.resolve("presets.json")
+            Files.writeString(path, INITIAL_PRESETS)
+            catalog = VibrisPresetCatalog.load(path)
+
+            Files.writeString(path, UPDATED_PRESETS)
+
+            val context = VibrisPresetCatalog.Preset(
+                "existing",
+                "test-world",
+                "Test World",
+                "minecraft:overworld",
+                0.5,
+                100.0,
+                0.5,
+                180.0f,
+                15.0f,
+                70.0,
+                12_000,
+                "clear",
+                SceneContext.Resolution(1920, 1080),
+                "default",
+            ).context()
+            assertEquals(12_000, catalog!!.resolve(context).tick)
+        } finally {
+            catalog?.close()
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun manualFileChangesWinOverAStaleSave() {
+        val directory = createTempDirectory("vibris-presets-conflict-test")
+        var catalog: VibrisPresetCatalog? = null
+        try {
+            val path = directory.resolve("presets.json")
+            Files.writeString(path, INITIAL_PRESETS)
+            catalog = VibrisPresetCatalog.load(path)
+            Files.writeString(path, UPDATED_PRESETS)
+
+            val stale = VibrisPresetCatalog.Preset(
+                "existing",
+                "test-world",
+                "Test World",
+                "minecraft:overworld",
+                0.5,
+                100.0,
+                0.5,
+                180.0f,
+                15.0f,
+                70.0,
+                99_999,
+                "clear",
+                SceneContext.Resolution(1920, 1080),
+                "default",
+            )
+            assertEquals("existing", catalog!!.save(stale))
+            assertEquals(12_000, catalog!!.resolve(stale.copy(tick = 12_000).context()).tick)
+        } finally {
+            catalog?.close()
             directory.toFile().deleteRecursively()
         }
     }
@@ -84,5 +159,7 @@ class VibrisPresetCatalogTest {
             "tags":["baseline"]
           }]
         }"""
+
+        val UPDATED_PRESETS = INITIAL_PRESETS.replace("\"tick\":6000", "\"tick\":12000")
     }
 }

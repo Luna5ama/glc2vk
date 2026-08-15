@@ -72,6 +72,11 @@ void exact_v2_tool_catalog() {
             "tool omitted required worktree_root");
         verify_typed_schema(tool.at("inputSchema"), name + ".inputSchema");
         verify_typed_schema(tool.at("outputSchema"), name + ".outputSchema");
+        if (name == "vibris_get_status" || name == "vibris_run_recipe" ||
+            name == "vibris_run_actions" || name == "vibris_run_matrix") {
+            require(tool.at("description").get<std::string>().find("round-robin") != std::string::npos,
+                name + " omitted round-robin admission guidance");
+        }
     }
     require(names == std::unordered_set<std::string>(expected.begin(), expected.end()),
         "tools/list exposed the wrong v2 names");
@@ -80,6 +85,14 @@ void exact_v2_tool_catalog() {
 void exact_filters_and_job_control() {
     const ToolRegistry registry([](std::string_view, const Json& arguments) { return arguments; });
     const Json scope{{"worktree_root", "I:\\shader-worktree"}};
+
+    auto status = scope;
+    status["wait_until"] = "can_accept_job";
+    require(std::holds_alternative<Json>(registry.invoke("vibris_get_status", status)),
+        "round-robin admission wait was rejected");
+    status["wait_until"] = "can_start_job";
+    require(std::holds_alternative<InvocationError>(registry.invoke("vibris_get_status", status)),
+        "removed global-idle wait remained available");
 
     auto presets = scope;
     presets["preset_id"] = "sky-noon-1";

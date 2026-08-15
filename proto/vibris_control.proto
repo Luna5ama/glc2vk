@@ -153,7 +153,7 @@ enum StatusDetail {
 
 enum StatusWaitCondition {
     STATUS_WAIT_CONDITION_UNSPECIFIED = 0;
-    STATUS_WAIT_CONDITION_CAN_START_JOB = 1;
+    STATUS_WAIT_CONDITION_CAN_ACCEPT_JOB = 1;
     STATUS_WAIT_CONDITION_JOB_TERMINAL = 2;
 }
 
@@ -184,6 +184,7 @@ message ServerStatus {
     repeated StateTransition transitions = 9;
     ArtifactCapacity artifact_capacity = 10;
     string active_source_uuid = 11;
+    optional RuntimeRecovery recovery = 12;
 }
 
 enum ServerState {
@@ -232,6 +233,15 @@ message RuntimeLease {
     uint64 started_at_unix_ms = 8;
     optional uint64 eta_ms = 9;
     bool cancellation_requested = 10;
+}
+
+message RuntimeRecovery {
+    string job_id = 1;
+    string request_id = 2;
+    string workspace_id = 3;
+    uint64 started_at_unix_ms = 4;
+    uint32 attempt_count = 5;
+    optional ProtocolError last_error = 6;
 }
 
 message QueueEntry {
@@ -412,6 +422,7 @@ message JobSpec {
     RestorePolicy restore_state = 6;
     ResultArtifactOptions result_artifacts = 7;
     string preset_sha256 = 8;
+    string scheduling_group_id = 9;
     oneof workload {
         ActionSequence action_sequence = 20;
         MatrixRequest matrix = 21;

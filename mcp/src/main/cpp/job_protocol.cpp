@@ -16,7 +16,7 @@ namespace {
 
 namespace proto = ::vibris::control::v2;
 
-constexpr std::uint64_t queue_timeout_ms = 60'000;
+constexpr std::uint64_t queue_timeout_ms = 15 * 60'000;
 constexpr std::uint64_t execution_timeout_ms = 120'000;
 
 std::string lower_enum_name(std::string value, std::string_view prefix) {
@@ -505,6 +505,7 @@ proto::ClientMessage JobProtocol::request(const std::string_view tool_name, cons
     auto* job = message.mutable_submit_job()->mutable_job();
     job->set_job_id(request_id);
     job->set_preset_id(arguments.value("preset_id", std::string{}));
+    job->set_scheduling_group_id(arguments.value("__vibris_workflow_id", std::string{}));
     if (const auto preset = arguments.find("__vibris_preset");
         preset != arguments.end() && preset->is_object()) {
         job->set_preset_sha256(preset->value("preset_sha256", std::string{}));

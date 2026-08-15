@@ -79,7 +79,9 @@ Json wait_terminal(DurableJobWorkflow& workflow, const std::string& job_id) {
 		auto value = std::get<Json>(workflow.control(
 			{{"operation", "query"}, {"job_id", job_id}, {"event_cursor", 0}}));
 		const auto state = value.at("workflow_state").get<std::string>();
-		if (state == "completed" || state == "paused" || state == "cancelled") return value;
+		if (state == "completed" || state == "failed" || state == "paused" || state == "cancelled") {
+			return value;
+		}
 		std::this_thread::sleep_for(2ms);
 	}
 	throw std::runtime_error("durable workflow did not reach a terminal or resumable state");
@@ -247,7 +249,7 @@ void finalization_only_resume_reuses_immutable_receipts() {
 		"finalization-only resume reran an executor step or failed to publish the result");
 }
 
-void nonretryable_step_failure_remains_nonresumable() {
+void nonretryable_step_failure_terminalizes_failed() {
 	WorkspaceFixture workspace;
 	std::size_t executor_calls = 0;
 	DurableJobWorkflow workflow(workspace.worktree(), std::string(workspace_id),
@@ -255,31 +257,101 @@ void nonretryable_step_failure_remains_nonresumable() {
 			++executor_calls;
 			return ToolFailure{"INVALID_TEST_STEP", "fixture nonretryable step failure", false};
 		});
-	const auto paused = std::get<Json>(workflow.start("vibris_run_recipe", matrix(1), config()));
-	require(paused.at("workflow_state") == "paused" && paused.at("resumable") == false &&
-		paused.at("progress").at("completed_steps") == 0 && executor_calls == 1,
-		"nonretryable step failure was advertised as resumable");
+	const auto failed = std::get<Json>(workflow.start("vibris_run_recipe", matrix(1), config()));
+	require(failed.at("workflow_state") == "failed" && failed.at("resumable") == false &&
+		failed.at("progress").at("completed_steps") == 0 && executor_calls == 1 &&
+		failed.at("result").at("status") == "failed" &&
+		failed.at("result").at("error").at("error_code") == "INVALID_TEST_STEP",
+		"nonretryable step failure did not publish a truthful terminal result");
 	const auto resumed = workflow.control(
-		{{"operation", "resume"}, {"job_id", paused.at("job_id")}});
+		{{"operation", "resume"}, {"job_id", failed.at("job_id")}});
 	const auto* failure = std::get_if<ToolFailure>(&resumed);
 	require(failure != nullptr && failure->code == "JOB_NOT_RESUMABLE" && executor_calls == 1,
 		"unsafe nonretryable step failure resumed or re-executed the step");
 }
 
+void semantic_retryable_failure_retries_the_same_step() {
+	WorkspaceFixture workspace;
+	std::vector<std::string> calls;
+	bool first = true;
+	DurableJobWorkflow workflow(workspace.worktree(), std::string(workspace_id),
+		[&](DurableJobStepExecution execution) -> ToolOutcome {
+			const auto id = execution.arguments.at("__vibris_case_id").get<std::string>();
+			calls.push_back(id);
+			if (first) {
+				first = false;
+				execution.progress("terminal-child-request", "accepted", true);
+				return Json{{"success", false}, {"status", "completed_with_failures"},
+					{"cases", Json::array({{{"status", "failed"},
+						{"error", {{"error_code", "server_not_available"},
+							{"message", "fixture runtime unavailable"}, {"retryable", false}}}}})}};
+			}
+			require(!execution.resume_request_id,
+				"a terminal semantic failure tried to resume an already terminal child request");
+			return profile_success(execution);
+		});
+	const auto paused = std::get<Json>(workflow.start("vibris_run_recipe", matrix(2), config()));
+	require(paused.at("workflow_state") == "paused" && paused.at("resumable") == true &&
+		paused.at("progress").at("completed_steps") == 0 &&
+		paused.at("current_request_id").is_null() && !paused.at("current_request_accepted"),
+		"retryable semantic failure was checkpointed as success or retained a terminal child request");
+	static_cast<void>(workflow.control({{"operation", "resume"}, {"job_id", paused.at("job_id")}}));
+	const auto completed = wait_terminal(workflow, paused.at("job_id").get<std::string>());
+	require(completed.at("workflow_state") == "completed" &&
+		calls == std::vector<std::string>({"source--config-1", "source--config-1", "source--config-2"}),
+		"resume did not retry exactly the interrupted semantic-failure step");
+}
+
+void semantic_nonretryable_failure_stops_following_steps() {
+	WorkspaceFixture workspace;
+	std::vector<std::string> calls;
+	DurableJobWorkflow workflow(workspace.worktree(), std::string(workspace_id),
+		[&](DurableJobStepExecution execution) -> ToolOutcome {
+			const auto id = execution.arguments.at("__vibris_case_id").get<std::string>();
+			calls.push_back(id);
+			if (calls.size() == 2) {
+				return Json{{"success", false}, {"status", "failed"},
+					{"details", {{"restoration", {{"error", {
+						{"code", "ERROR_CODE_RESTORE_FAILED"}, {"message", "fixture heap exhaustion"},
+						{"retryable", false}}}}}}}};
+			}
+			return profile_success(execution);
+		});
+	const auto failed = std::get<Json>(workflow.start("vibris_run_recipe", matrix(3), config()));
+	const auto job_id = failed.at("job_id").get<std::string>();
+	require(failed.at("workflow_state") == "failed" && failed.at("resumable") == false &&
+		failed.at("progress").at("completed_steps") == 1 && calls.size() == 2 &&
+		failed.at("result").at("error").at("error_code") == "ERROR_CODE_RESTORE_FAILED" &&
+		failed.at("result").at("receipts").size() == 2,
+		"nonretryable semantic child failure did not stop and terminalize the workflow");
+	const auto root = workspace.worktree() / ".vibris" / "jobs" / job_id / "receipts";
+	require(std::filesystem::is_regular_file(root / "00000000.json") &&
+		std::filesystem::is_regular_file(root / "00000001.json") &&
+		!std::filesystem::exists(root / "00000002.json"),
+		"semantic failure executed or checkpointed a later child step");
+	const auto result = std::get<Json>(workflow.control(
+		{{"operation", "result"}, {"job_id", job_id}, {"event_cursor", 0}}));
+	require(result.at("workflow_state") == "failed" && result.contains("result"),
+		"vibris_job result did not expose the terminal failure document");
+}
+
 void generic_plans_checkpoint_each_case() {
 	WorkspaceFixture workspace;
 	std::size_t calls = 0;
+	std::set<std::string> scheduling_groups;
 	DurableJobWorkflow workflow(workspace.worktree(), std::string(workspace_id),
 		[&](DurableJobStepExecution execution) -> ToolOutcome {
 			++calls;
+			scheduling_groups.insert(execution.arguments.at("__vibris_workflow_id").get<std::string>());
 			return Json{{"success", true}, {"tool", execution.tool_name}, {"case", execution.arguments.at("name")}};
 		});
 	Json arguments{{"cases", Json::array({{{"name", "compile-a"}}, {{"name", "compile-b"}},
 		{{"name", "compile-c"}}})}, {"__vibris_scene_context", scene()}};
 	const auto result = std::get<Json>(workflow.start("compile_validate", arguments, config()));
-	require(result.at("workflow_state") == "completed" && calls == 3 &&
+	require(result.at("workflow_state") == "completed" && calls == 3 && scheduling_groups.size() == 1 &&
+		*scheduling_groups.begin() == result.at("job_id").get<std::string>() &&
 		result.at("progress").at("completed_steps") == 3,
-		"generic compile-like cases were not checkpointed independently");
+		"generic compile-like cases were not checkpointed under one scheduling group");
 	const auto request_path = workspace.worktree() / ".vibris" / "jobs" /
 		result.at("job_id").get<std::string>() / "request.json";
 	auto request = Json::parse(vibris::mcp::test::read_file(request_path));
@@ -436,7 +508,9 @@ int main() {
 		interruption_after_17_resumes_at_18();
 		cancellation_is_truthful_and_resumable();
 		finalization_only_resume_reuses_immutable_receipts();
-		nonretryable_step_failure_remains_nonresumable();
+		nonretryable_step_failure_terminalizes_failed();
+		semantic_retryable_failure_retries_the_same_step();
+		semantic_nonretryable_failure_stops_following_steps();
 		generic_plans_checkpoint_each_case();
 		compile_matrix_checkpoints_and_aggregates_every_case();
 		matrix_and_benchmark_use_step_plans();

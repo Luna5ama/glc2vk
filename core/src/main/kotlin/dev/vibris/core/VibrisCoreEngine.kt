@@ -13,6 +13,7 @@ import dev.vibris.protocol.v2.QueueEntry
 import dev.vibris.protocol.v2.RuntimeFailure
 import dev.vibris.protocol.v2.RuntimeLease
 import dev.vibris.protocol.v2.RuntimePhase
+import dev.vibris.protocol.v2.RuntimeRecovery
 import dev.vibris.protocol.v2.ServerMessage
 import dev.vibris.protocol.v2.ServerState
 import dev.vibris.protocol.v2.StateTransition
@@ -166,6 +167,7 @@ class VibrisCoreEngine internal constructor(
             projection.canAcceptJob,
             projection.canStartJob,
             lease,
+            executor.recoveryStatus(),
             queue,
             jobs,
             lastError,
@@ -554,7 +556,7 @@ class VibrisCoreEngine internal constructor(
     }
 
     private fun conditionSatisfiedLocked(condition: StatusWaitCondition, jobId: String): Boolean = when (condition) {
-        StatusWaitCondition.STATUS_WAIT_CONDITION_CAN_START_JOB -> projectionLocked().canStartJob
+        StatusWaitCondition.STATUS_WAIT_CONDITION_CAN_ACCEPT_JOB -> projectionLocked().canAcceptJob
         StatusWaitCondition.STATUS_WAIT_CONDITION_JOB_TERMINAL -> terminalJobs[jobId]?.state?.terminal() == true
         else -> true
     }
@@ -724,6 +726,7 @@ class VibrisCoreEngine internal constructor(
         val canAcceptJob: Boolean,
         val canStartJob: Boolean,
         val activeLease: RuntimeLease?,
+        val recovery: RuntimeRecovery?,
         val queue: List<QueueEntry>,
         val jobs: List<JobSummary>,
         val lastError: RuntimeFailure?,
@@ -761,6 +764,7 @@ class VibrisCoreEngine internal constructor(
             job.submission.jobId,
             worktreeRoot(job),
             operation(job),
+            job.submission.schedulingGroupId,
             job.acceptedAtUnixMs,
         )
 
@@ -804,9 +808,9 @@ class VibrisCoreEngine internal constructor(
             -> "Reconnect the Minecraft runtime bridge and retry status."
             ErrorCode.ERROR_CODE_QUEUE_FULL,
             ErrorCode.ERROR_CODE_QUEUE_TIMEOUT,
-            -> "Wait for can_start_job or retry after the current lease is released."
+            -> "Wait for can_accept_job, then submit; accepted work runs in workspace round-robin order."
             ErrorCode.ERROR_CODE_SHADER_COMPILE_FAILED -> "Inspect the shader compile log and correct the source."
-            ErrorCode.ERROR_CODE_CANCELLED -> "Submit a new job when the runtime can start work."
+            ErrorCode.ERROR_CODE_CANCELLED -> "Submit a new job when can_accept_job is true."
             else -> "Inspect the failure details and run recover_runtime if runtime state is uncertain."
         }
 

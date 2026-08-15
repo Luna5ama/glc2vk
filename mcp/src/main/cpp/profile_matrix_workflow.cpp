@@ -10,6 +10,7 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <fstream>
@@ -368,6 +369,55 @@ Json failure_json(const ToolFailure& failure) {
 		{"retryable", failure.retryable}, {"details", failure.details}};
 }
 
+const Json* nested_error(const Json& value, const std::size_t depth = 0) {
+	if (depth > 8 || !value.is_object()) return nullptr;
+	if ((value.contains("error_code") || value.contains("code")) && value.contains("message")) {
+		return &value;
+	}
+	if (const auto error = value.find("error"); error != value.end() && error->is_object()) {
+		if (const auto* found = nested_error(*error, depth + 1)) return found;
+	}
+	for (const auto* key : {"details", "restoration", "cases", "job_attempts", "result"}) {
+		const auto nested = value.find(key);
+		if (nested == value.end()) continue;
+		if (nested->is_array()) {
+			for (const auto& item : *nested) {
+				if (const auto* found = nested_error(item, depth + 1)) return found;
+			}
+		} else if (const auto* found = nested_error(*nested, depth + 1)) {
+			return found;
+		}
+	}
+	return nullptr;
+}
+
+bool known_retryable_child_error(std::string code) {
+	std::ranges::transform(code, code.begin(), [](const unsigned char value) {
+		return static_cast<char>(std::tolower(value));
+	});
+	for (const auto suffix : {"server_not_available", "server_offline", "server_restarted",
+		"queue_timeout", "execution_timeout", "job_busy", "transport_error", "grpc_unavailable"}) {
+		if (code == suffix || code.ends_with(std::string("error_code_") + suffix)) return true;
+	}
+	return false;
+}
+
+std::optional<ToolFailure> semantic_failure(const Json& result) {
+	if (!result.is_object() || result.value("success", true)) return std::nullopt;
+	const auto* error = nested_error(result);
+	const auto& source = error == nullptr ? result : *error;
+	auto code = source.value("error_code", source.value("code", std::string{}));
+	if (code.empty()) code = result.value("error_code", result.value("code", std::string("CHILD_JOB_FAILED")));
+	auto message = source.value("message", std::string{});
+	if (message.empty()) message = result.value("message", std::string("A durable child step reported failure."));
+	const auto retryable = known_retryable_child_error(code) ||
+		(source.contains("retryable") ? source.at("retryable").get<bool>() : result.value("retryable", false));
+	auto details = source.value("details", Json::object());
+	if (!details.is_object()) details = Json{{"reported_details", std::move(details)}};
+	if (result.contains("status")) details["child_status"] = result.at("status");
+	return ToolFailure{std::move(code), std::move(message), retryable, std::move(details)};
+}
+
 ToolOutcome receipt_outcome(const Json& receipt) {
 	if (receipt.at("success").get<bool>()) return receipt.at("result");
 	const auto& error = receipt.at("error");
@@ -376,7 +426,7 @@ ToolOutcome receipt_outcome(const Json& receipt) {
 }
 
 bool terminal_state(std::string_view state) {
-	return state == "completed" || state == "cancelled";
+	return state == "completed" || state == "failed" || state == "cancelled";
 }
 
 } // namespace
@@ -403,6 +453,7 @@ DurableJobWorkflow::Record DurableJobWorkflow::create_record(
 	arguments.erase("execution");
 	arguments = freeze_arguments(workspace_root_, state_directory_, job_id, std::move(arguments));
 	auto steps = plan_steps(tool_name, arguments, job_id, config.default_warmup_frames);
+	for (auto& step : steps) step["arguments"]["__vibris_workflow_id"] = job_id;
 	if (steps.empty() || steps.size() > maximum_steps) {
 		throw StateError("INVALID_JOB", "A durable job must contain between 1 and 4096 steps.");
 	}
@@ -692,7 +743,7 @@ Json DurableJobWorkflow::snapshot(
 		{"current_request_accepted", state.at("current_request_accepted")},
 		{"last_error", state.at("last_error")}, {"event_cursor", state.at("event_sequence")},
 		{"events", events(state.at("job_id").get<std::string>(), event_cursor)}};
-	if (include_result && workflow_state == "completed") {
+	if (include_result && (workflow_state == "completed" || workflow_state == "failed")) {
 		auto durable_result = Json::parse(read_file(
 			state_directory_ / state.at("job_id").get<std::string>() / "result.json"));
 		refresh_artifact_expiry(durable_result);
@@ -738,7 +789,8 @@ ToolOutcome DurableJobWorkflow::control(const Json& arguments) {
 				{"total_steps", record.state.at("total_steps")}, {"receipts", std::move(receipts)}};
 			return value;
 		}
-		if (record.state.at("workflow_state") != "completed") {
+		if (record.state.at("workflow_state") != "completed" &&
+			record.state.at("workflow_state") != "failed") {
 			return ToolFailure{"JOB_NOT_TERMINAL", "The durable job has not completed.", true,
 				{{"job_id", job_id}, {"workflow_state", record.state.at("workflow_state")}}};
 		}
@@ -776,6 +828,10 @@ ToolOutcome DurableJobWorkflow::control(const Json& arguments) {
 	auto record = load(job_id);
 	const auto state = record.state.at("workflow_state").get<std::string>();
 	if (state == "completed") return snapshot(record, cursor, true);
+	if (state == "failed") {
+		return ToolFailure{"JOB_NOT_RESUMABLE", "The durable job has failed terminally.", false,
+			{{"job_id", job_id}, {"workflow_state", state}}};
+	}
 	if (state != "paused" && state != "cancelled") {
 		return ToolFailure{"JOB_NOT_RESUMABLE", "The durable job is not paused or cancelled.", false,
 			{{"job_id", job_id}, {"workflow_state", state}}};
@@ -834,7 +890,8 @@ ToolOutcome DurableJobWorkflow::begin(std::string job_id, const bool asynchronou
 	}
 	execute(job_id, {});
 	auto record = load(job_id);
-	return record.state.at("workflow_state") == "completed"
+	return record.state.at("workflow_state") == "completed" ||
+		record.state.at("workflow_state") == "failed"
 		? ToolOutcome(snapshot(record, 0, true)) : ToolOutcome(snapshot(record, 0, false));
 }
 
@@ -898,16 +955,73 @@ void DurableJobWorkflow::execute(std::string job_id, const std::stop_token stop)
 				save_state(state);
 			};
 			auto outcome = executor_(std::move(execution));
+			std::optional<ToolFailure> reported_failure;
+			const Json* child_result = std::get_if<Json>(&outcome);
+			const bool child_terminal = child_result != nullptr;
 			if (const auto* failure = std::get_if<ToolFailure>(&outcome)) {
-				state["workflow_state"] = stop.stop_requested() || failure->code == "CANCELLED"
-					? "cancelled" : "paused";
-				state["stage"] = state.at("workflow_state");
-				state["last_error"] = failure_json(*failure);
-				if (!state.at("current_request_accepted").get<bool>()) state["current_request_id"] = nullptr;
-				append_event(state, "interrupted", state.at("stage").get<std::string>(), step,
+				reported_failure = *failure;
+			} else {
+				reported_failure = semantic_failure(*child_result);
+			}
+			if (reported_failure) {
+				const auto& failure = *reported_failure;
+				if (stop.stop_requested() || failure.code == "CANCELLED") {
+					state["workflow_state"] = "cancelled";
+					state["stage"] = "cancelled";
+					state["cancel_requested"] = true;
+					state["last_error"] = failure_json(failure);
+					append_event(state, "cancelled", "cancelled", step,
+						state.at("current_request_id").is_string()
+							? state.at("current_request_id").get<std::string>() : std::string{},
+						state.at("current_request_accepted").get<bool>());
+					save_state(state);
+					finish_active(job_id);
+					return;
+				}
+				if (failure.retryable) {
+					state["workflow_state"] = "paused";
+					state["stage"] = "paused";
+					state["last_error"] = failure_json(failure);
+					if (child_terminal) {
+						state["current_request_id"] = nullptr;
+						state["current_request_accepted"] = false;
+						state["step_started_unix_ms"] = nullptr;
+					} else if (!state.at("current_request_accepted").get<bool>()) {
+						state["current_request_id"] = nullptr;
+					}
+					append_event(state, "interrupted", "paused", step,
+						state.at("current_request_id").is_string()
+							? state.at("current_request_id").get<std::string>() : std::string{},
+						state.at("current_request_accepted").get<bool>());
+					save_state(state);
+					finish_active(job_id);
+					return;
+				}
+
+				Json receipt{{"schema_version", 2}, {"job_id", job_id}, {"step_index", index},
+					{"step_id", step.at("id")}, {"success", false},
+					{"result", child_result == nullptr ? Json(nullptr) : *child_result},
+					{"error", failure_json(failure)}, {"completed_unix_ms", unix_ms()}};
+				publish_receipt(job_id, index, receipt);
+				Json receipts = Json::array();
+				for (std::size_t receipt_index = 0; receipt_index <= index; ++receipt_index) {
+					if (const auto stored = load_receipt(job_id, receipt_index)) receipts.push_back(*stored);
+				}
+				Json result{{"success", false}, {"kind", record.request.at("kind")},
+					{"job_id", job_id}, {"status", "failed"}, {"completed_steps", index},
+					{"total_steps", steps.size()},
+					{"failed_step", {{"index", index}, {"id", step.at("id")}, {"kind", step.at("kind")}}},
+					{"error", failure_json(failure)}, {"receipts", std::move(receipts)}};
+				if (child_result != nullptr) result["child_result"] = *child_result;
+				publish_result(job_id, result);
+				state["workflow_state"] = "failed";
+				state["stage"] = "failed";
+				state["last_error"] = failure_json(failure);
+				state["current_request_accepted"] = false;
+				state["eta_ms"] = nullptr;
+				append_event(state, "failed", "failed", step,
 					state.at("current_request_id").is_string()
-						? state.at("current_request_id").get<std::string>() : std::string{},
-					state.at("current_request_accepted").get<bool>());
+						? state.at("current_request_id").get<std::string>() : std::string{}, false);
 				save_state(state);
 				finish_active(job_id);
 				return;

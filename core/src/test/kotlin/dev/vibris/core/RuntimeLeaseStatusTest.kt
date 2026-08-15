@@ -58,11 +58,13 @@ class RuntimeLeaseStatusTest {
 
         engine.submit(session, job("cancel-safe", source(pending)))
         assertTrue(compiling.await(2, TimeUnit.SECONDS))
-        assertTrue(engine.awaitStatus(
-            StatusWaitCondition.STATUS_WAIT_CONDITION_CAN_START_JOB,
+        val admission = engine.awaitStatus(
+            StatusWaitCondition.STATUS_WAIT_CONDITION_CAN_ACCEPT_JOB,
             "",
             0,
-        ).timedOut)
+        )
+        assertTrue(admission.satisfied)
+        assertFalse(admission.timedOut)
 
         engine.cancel(session, "cancel-safe")
         val cancelling = descriptor.status(engine, StatusDetail.STATUS_DETAIL_FULL)
@@ -70,22 +72,16 @@ class RuntimeLeaseStatusTest {
         assertTrue(cancelling.activeLease.cancellationRequested)
         assertFalse(cancelling.canStartJob)
 
-        val waiter = CompletableFuture.supplyAsync {
-            engine.awaitStatus(StatusWaitCondition.STATUS_WAIT_CONDITION_CAN_START_JOB, "", 2_000)
-        }
         val terminalWaiter = CompletableFuture.supplyAsync {
             engine.awaitStatus(StatusWaitCondition.STATUS_WAIT_CONDITION_JOB_TERMINAL, "cancel-safe", 2_000)
         }
         reload.complete(ReloadResult.success(EffectiveShaderSettings.empty(), emptyList()))
         assertTrue(terminal.await(2, TimeUnit.SECONDS))
-        val result = waiter.get(2, TimeUnit.SECONDS)
-        assertTrue(result.satisfied)
-        assertFalse(result.timedOut)
         val terminalResult = terminalWaiter.get(2, TimeUnit.SECONDS)
         assertTrue(terminalResult.satisfied)
         assertFalse(terminalResult.timedOut)
-        assertFalse(descriptor.status(engine).hasActiveLease())
         engine.close()
+        assertFalse(descriptor.status(engine).hasActiveLease())
     }
 
     @Test
@@ -138,6 +134,11 @@ class RuntimeLeaseStatusTest {
         assertTrue(recovering.state == ServerState.SERVER_STATE_RECOVERING)
         assertFalse(recovering.hasActiveLease())
         assertFalse(recovering.canAcceptJob)
+        assertTrue(recovering.hasRecovery())
+        assertEquals("candidate", recovering.recovery.jobId)
+        assertEquals(WORKSPACE_ID, recovering.recovery.workspaceId)
+        assertEquals(0, recovering.recovery.attemptCount)
+        assertEquals(ErrorCode.ERROR_CODE_RESTORE_FAILED, recovering.recovery.lastError.code)
 
         val rejectedSession = recordingSession()
         engine.submit(rejectedSession.session, loadJob("must-be-rejected", source(pending), false))
@@ -153,6 +154,9 @@ class RuntimeLeaseStatusTest {
         val stillRecovering = descriptor.status(engine, StatusDetail.STATUS_DETAIL_FULL)
         assertEquals(ServerState.SERVER_STATE_RECOVERING, stillRecovering.state)
         assertFalse(stillRecovering.hasActiveLease())
+        assertTrue(stillRecovering.hasRecovery())
+        assertEquals(1, stillRecovering.recovery.attemptCount)
+        assertEquals(ErrorCode.ERROR_CODE_RECOVERY_FAILED, stillRecovering.recovery.lastError.code)
 
         runtime.reloads.add(ReloadResult.success(EffectiveShaderSettings.empty(), emptyList()))
         val recoverySession = recordingSession()
@@ -160,9 +164,10 @@ class RuntimeLeaseStatusTest {
         assertTrue(recoverySession.terminal.await(2, TimeUnit.SECONDS))
         val completed = recoverySession.messages.last { it.hasJobCompleted() }.jobCompleted
         assertTrue(completed.result.restoration.status == ReceiptStatus.RECEIPT_STATUS_OK)
-        val ready = engine.awaitStatus(StatusWaitCondition.STATUS_WAIT_CONDITION_CAN_START_JOB, "", 2_000)
+        val ready = engine.awaitStatus(StatusWaitCondition.STATUS_WAIT_CONDITION_CAN_ACCEPT_JOB, "", 2_000)
         assertTrue(ready.satisfied)
         assertFalse(descriptor.status(engine).hasActiveLease())
+        assertFalse(descriptor.status(engine).hasRecovery())
         assertTrue(engine.ready())
         engine.close()
     }

@@ -398,6 +398,21 @@ void explicit_restore_policy_is_not_overridden() {
 		"explicit restore_state policy was replaced by hard-coded defaults");
 }
 
+void round_robin_queue_window_is_bounded_but_not_one_turn() {
+	const Json arguments{{"recipe", "profile"}, {"source", {{"kind", "workspace"}}},
+		{"frames", 4}, {"__vibris_workflow_id", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"}};
+	const std::vector sources{source()};
+	const auto request = JobProtocol::request(
+		"vibris_run_recipe", arguments, config(), scene(), sources, std::string(request_id));
+	const auto& timeouts = request.submit_job().job().timeouts();
+	require(request.submit_job().job().scheduling_group_id() ==
+			"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" &&
+		timeouts.queue_timeout_ms() == 15 * 60'000 &&
+		timeouts.execution_timeout_ms() >= 120'000 &&
+		timeouts.total_timeout_ms() == timeouts.queue_timeout_ms() + timeouts.execution_timeout_ms(),
+		"job timeouts do not leave a bounded multi-turn round-robin admission window");
+}
+
 void accepted_request_reconnects_with_resume_only() {
 	PendingRequestRegistry registry(2);
 	const std::vector sources{source()};
@@ -470,6 +485,7 @@ int main() {
 		compile_validation_uses_typed_uuid_cases_without_render_actions();
 		recovery_request_has_no_scene_or_source_dependency();
 		explicit_restore_policy_is_not_overridden();
+		round_robin_queue_window_is_bounded_but_not_one_turn();
 		accepted_request_reconnects_with_resume_only();
 		resume_registration_and_terminal_mapping_are_strict_v2();
 		std::cout << "PASS JobProtocolStrictV2Resume\n";

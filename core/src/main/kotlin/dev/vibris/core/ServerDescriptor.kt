@@ -78,6 +78,7 @@ internal class ServerDescriptor @JvmOverloads constructor(
             )
             .setActiveSourceUuid(snapshot.activeSourceUuid)
         snapshot.activeLease?.let(builder::setActiveLease)
+        snapshot.recovery?.let(builder::setRecovery)
 
         if (detail == StatusDetail.STATUS_DETAIL_JOBS || detail == StatusDetail.STATUS_DETAIL_FULL) {
             builder.addAllQueue(snapshot.queue)
@@ -159,6 +160,9 @@ internal class ServerDescriptor @JvmOverloads constructor(
 
     private fun readinessDetail(snapshot: VibrisCoreEngine.StatusSnapshot): String = when {
         !snapshot.coreOnline -> "Core source activation is unavailable."
+        snapshot.recovery != null ->
+            "Runtime recovery is pending for job ${snapshot.recovery.jobId} " +
+                "from workspace ${snapshot.recovery.workspaceId}."
         snapshot.activeLease != null ->
             "Runtime lease ${snapshot.activeLease.leaseId} is owned by workspace ${snapshot.activeLease.workspaceId}."
         snapshot.queue.isNotEmpty() -> "Runtime work is queued."

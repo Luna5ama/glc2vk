@@ -42,9 +42,13 @@ The server publishes exactly eight tools:
 Every call includes `worktree_root`. Calls that start work also include `preset_id`. Recipe requests include the typed
 `recipe` discriminator. Job query, result, cancel, and resume operations exist only on `vibris_job`.
 
-`vibris_get_status` reports the current runtime lease, queue, transitions, bounded job summaries, last error and
-recovery action. `can_accept_job` means the request can be queued; `can_start_job` means the shared runtime can begin it
-now. Status waits are event-driven and report whether the condition was satisfied or timed out.
+`vibris_get_status` reports the current runtime lease, pending recovery, queue, transitions, bounded job summaries,
+last error and recovery action. `can_accept_job` is the admission gate: submit immediately when it is true, even if
+another workspace owns the runtime. Core uses round-robin workspace turns. Consecutive child jobs from one durable
+workflow share a turn for at most four jobs or two minutes, then the next waiting workspace runs. `can_start_job` only
+reports that the runtime is idle enough to begin immediately and must not be used as a preflight gate. Status waits are
+event-driven for `can_accept_job` or one job's terminal state and report whether the condition was satisfied or timed
+out.
 
 ## Sources and settings
 
@@ -61,7 +65,8 @@ action.
 Long-running work is stored below `.vibris/jobs/<job_id>` with immutable request/source inputs, atomic state,
 append-only events, immutable per-step receipts, and an immutable terminal result. Use `vibris_job` to query or cancel a
 job and to resume only when its recorded phase is safe. Completed steps are never repeated; uncertain side effects are
-not replayed.
+not replayed. A retryable terminal child result pauses before checkpointing that step and is resubmitted on resume. A
+non-retryable child result terminalizes the durable job as `failed`; later steps are never executed.
 
 If the process stops, start the matching v2 service, inspect status and the job record, then request resume. A job that
 cannot prove a safe continuation returns a terminal failure with recovery guidance.
