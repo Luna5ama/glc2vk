@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 
 #include "config_document.hpp"
@@ -32,6 +33,7 @@ namespace {
 namespace control = vibris::control::v2;
 namespace fs = std::filesystem;
 constexpr std::size_t pending_limit = 256;
+constexpr auto unary_wait = std::chrono::minutes(5);
 
 std::string bounded(std::string value) {
     constexpr std::size_t limit = 512;
@@ -170,19 +172,33 @@ private:
 
         template <typename Response, typename Start, typename Map>
         ToolOutcome unary(Start&& start, Map&& map,
-            const std::chrono::milliseconds wait = std::chrono::seconds(6)) {
-            auto completion = std::make_shared<std::promise<std::pair<grpc::Status, Response>>>();
-            auto result = completion->get_future();
-            const auto accepted = std::forward<Start>(start)(
-                [completion](const grpc::Status& status, const Response& response) {
-                    completion->set_value({status, response});
-                });
-            if (!accepted) return ToolFailure{"QUEUE_FULL", "The bounded gRPC request registry is full.", true};
-            if (result.wait_for(wait) != std::future_status::ready) {
-                return ToolFailure{"SERVER_OFFLINE", "The local Vibris server did not respond before its deadline.", true};
-            }
-            auto [status, response] = result.get();
-            if (!status.ok()) {
+            const std::chrono::milliseconds wait = unary_wait + std::chrono::seconds(1),
+            const bool retry_transport = true) {
+            const auto deadline = std::chrono::steady_clock::now() + wait;
+            while (true) {
+                auto completion = std::make_shared<std::promise<std::pair<grpc::Status, Response>>>();
+                auto result = completion->get_future();
+                const auto accepted = start(
+                    [completion](const grpc::Status& status, const Response& response) {
+                        completion->set_value({status, response});
+                    });
+                if (!accepted) return ToolFailure{"QUEUE_FULL", "The bounded gRPC request registry is full.", true};
+                if (result.wait_until(deadline) != std::future_status::ready) {
+                    return ToolFailure{"SERVER_OFFLINE",
+                        "The local Vibris server remained unreachable for five minutes.", true};
+                }
+                auto [status, response] = result.get();
+                if (status.ok()) return std::forward<Map>(map)(response);
+
+                const bool transient_transport =
+                    status.error_code() == grpc::StatusCode::UNAVAILABLE ||
+                    status.error_code() == grpc::StatusCode::DEADLINE_EXCEEDED ||
+                    status.error_code() == grpc::StatusCode::RESOURCE_EXHAUSTED;
+                if (retry_transport && transient_transport &&
+                    std::chrono::steady_clock::now() < deadline) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
+                }
                 switch (status.error_code()) {
                 case grpc::StatusCode::INVALID_ARGUMENT:
                     return ToolFailure{"INVALID_REQUEST", bounded(status.error_message()), false};
@@ -196,7 +212,6 @@ private:
                     return ToolFailure{"SERVER_OFFLINE", bounded(status.error_message()), true};
                 }
             }
-            return std::forward<Map>(map)(response);
         }
 
         ToolOutcome list_presets(const Json& arguments) {
@@ -207,7 +222,7 @@ private:
             }
             return unary<control::ListPresetsResponse>(
                 [this, request = std::move(request)](auto completion) mutable {
-                    return client().list_presets(std::move(request), std::move(completion));
+                    return client().list_presets(request, std::move(completion));
                 },
                 [&arguments](const auto& response) -> ToolOutcome {
                     auto result = ResultMapper::list_presets(response);
@@ -236,7 +251,7 @@ private:
             request.set_preset_id(arguments.at("preset_id").get<std::string>());
             return unary<control::ListPresetsResponse>(
                 [this, request = std::move(request)](auto completion) mutable {
-                    return client().list_presets(std::move(request), std::move(completion));
+                    return client().list_presets(request, std::move(completion));
                 },
                 [this, &arguments, &continuation](const auto& presets) -> ToolOutcome {
                     const auto preset = SceneContextResolver::resolve_preset(
@@ -247,7 +262,7 @@ private:
                     *request.mutable_context() = preset.context();
                     return unary<control::ValidateContextResponse>(
                         [this, request = std::move(request)](auto completion) mutable {
-                            return client().validate_context(std::move(request), std::move(completion));
+                            return client().validate_context(request, std::move(completion));
                         },
                         [&config, &preset, &continuation](const auto& response) -> ToolOutcome {
                             if (!response.valid()) {
@@ -276,7 +291,7 @@ private:
             if (arguments.contains("pass_id")) filter->set_pass_id(arguments.at("pass_id").get<std::string>());
             return unary<control::ListResourcesResponse>(
                 [this, request = std::move(request)](auto completion) mutable {
-                    return client().list_resources(std::move(request), std::move(completion));
+                    return client().list_resources(request, std::move(completion));
                 },
                 [](const auto& response) -> ToolOutcome { return ResultMapper::list_resources(response); });
         }
@@ -295,7 +310,7 @@ private:
             request.set_timeout_ms(arguments.value("timeout_ms", std::uint64_t{0}));
             return unary<control::GetStatusResponse>(
                 [this, request = std::move(request)](auto completion) mutable {
-                    return client().get_status(std::move(request), std::move(completion));
+                    return client().get_status(request, std::move(completion));
                 },
                 [](const auto& response) -> ToolOutcome {
                     auto mapped = ResultMapper::status(response);
@@ -328,13 +343,13 @@ private:
             }
             return unary<control::ManageArtifactsResponse>(
                 [this, request = std::move(request)](auto completion) mutable {
-                    return client().manage_artifacts(std::move(request), std::move(completion));
+                    return client().manage_artifacts(request, std::move(completion));
                 },
                 [this](const auto& response) -> ToolOutcome {
                     ToolOutcome outcome = ResultMapper::artifacts(response);
                     artifact_link_.rewrite(outcome);
                     return outcome;
-                });
+                }, unary_wait + std::chrono::seconds(1), false);
         }
 
         ToolOutcome run_durable_step(DurableJobStepExecution execution) {
@@ -415,6 +430,7 @@ private:
                     .mcp_version = "0.1.0",
                     .process_instance_uuid = process_id_,
                     .pending_request_limit = pending_limit,
+                    .unary_deadline = unary_wait,
                 });
                 grpc_->start();
                 used_client_ = true;

@@ -150,6 +150,29 @@ void finalize_all(nlohmann::json& value) {
     }
 }
 
+void hide_operational_runtime_internals(nlohmann::json& mapped) {
+    auto status = mapped.find("status");
+    if (status == mapped.end() || !status->is_object()) return;
+    const auto readiness = status->find("readiness");
+    if (readiness == status->end() || !readiness->is_object() ||
+        !readiness->value("core_online", false) ||
+        !readiness->value("minecraft_connected", false)) {
+        return;
+    }
+
+    // These fields describe internal lease and shader-load transitions, not whether
+    // an agent may submit work. Exposing them makes a healthy, queueable server look
+    // broken while Minecraft is compiling a shader pack. Core remains authoritative;
+    // MCP only removes the transient diagnostics from the agent-facing projection.
+    (*status)["operational"] = true;
+    status->erase("state");
+    status->erase("can_start_job");
+    status->erase("readiness");
+    status->erase("active_lease");
+    status->erase("transitions");
+    status->erase("last_error");
+}
+
 }
 
 nlohmann::json ResultMapper::message(const google::protobuf::Message& value) {
@@ -180,7 +203,9 @@ nlohmann::json ResultMapper::validation(const proto::ValidateContextResponse& re
 }
 
 nlohmann::json ResultMapper::status(const proto::GetStatusResponse& response) {
-    return message(response);
+    auto mapped = message(response);
+    hide_operational_runtime_internals(mapped);
+    return mapped;
 }
 
 nlohmann::json ResultMapper::artifacts(const proto::ManageArtifactsResponse& response) {

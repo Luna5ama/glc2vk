@@ -281,10 +281,12 @@ Json definition(const char* name, const char* description, Json input_schema, bo
 Json build_definitions() {
     Json definitions = Json::array({
         definition("vibris_get_status",
-                   "Read the compact v2 server, runtime, queue, lease and job status for the explicit Git worktree. "
-                   "can_accept_job is the admission gate: when true, submit work immediately even if "
-                   "can_start_job is false; Core queues accepted jobs by workspace round-robin. wait_until can "
-                   "wait for admission or one job's terminal state, never for a globally idle lease. Resource "
+                   "Read agent-actionable admission, queue and job status for the explicit Git worktree. "
+                   "When operational=true, submit immediately if can_accept_job=true; otherwise use one "
+                   "wait_until=can_accept_job call; never wait for a global idle lease. Internal shader "
+                   "compilation, runtime phases, foreign leases and other healthy-server transitions are "
+                   "intentionally hidden. Core queues accepted jobs by workspace round-robin. wait_until can "
+                   "wait for admission or one job's terminal state. Resource "
                    "catalogs are intentionally omitted.",
                    scoped(closed_object({
                        {"detail", enum_string({"summary", "jobs", "full"})},
@@ -304,9 +306,9 @@ Json build_definitions() {
                        {"pass_id", {{"type", "string"}, {"minLength", 1}}},
                    }), false), true),
         definition("vibris_run_recipe",
-                   "Run a standard shader workflow for the explicit Git worktree and scene preset. "
-                   "Submit without waiting for can_start_job: accepted work joins Core's workspace round-robin "
-                   "queue while another workspace owns the runtime. "
+                   "Run a standard shader workflow for the explicit Git worktree and scene preset. Submit without "
+                   "waiting for a global idle lease: accepted work joins Core's workspace round-robin queue while "
+                   "another workspace owns the runtime. "
                    "load_and_screenshot loads one "
                    "shader source and config, waits for the requested warmup frames, and saves a screenshot. Profile "
                    "recipes return normalized cases with summary, metrics, or full result detail. Long-running "
@@ -320,8 +322,8 @@ Json build_definitions() {
                    recipe_schema(), false),
         definition("vibris_run_actions",
                    "Run one ordered shader action sequence synchronously or as a durable async job for the explicit "
-                   "Git worktree and scene preset. Submit without waiting for can_start_job; accepted work joins "
-                   "Core's workspace round-robin queue. restore_state defaults to true for both terminal outcomes; an "
+                   "Git worktree and scene preset. Submit without waiting for a global idle lease; accepted work "
+                   "joins Core's workspace round-robin queue. restore_state defaults to true for both terminal outcomes; an "
                    "explicit false/false load may establish the first verified Core-owned runtime snapshot.",
                    scoped(closed_object({{"sources", named_sources_schema()},
                                          {"configs", named_configs_schema()},
@@ -331,9 +333,8 @@ Json build_definitions() {
                                         {"actions"}), true), false),
         definition("vibris_run_matrix",
                    "Run the action template synchronously or as a durable async job for every selected source/config "
-                   "combination in the explicit Git "
-                   "worktree and scene preset. Submit without waiting for can_start_job; accepted work joins Core's "
-                   "workspace round-robin queue. Each combination "
+                   "combination in the explicit Git worktree and scene preset. Submit without waiting for a global "
+                   "idle lease; accepted work joins Core's workspace round-robin queue. Each combination "
                    "automatically begins with load_shader; do not include load_shader in the action template.",
                    scoped(closed_object({{"sources", named_sources_schema()},
                                          {"configs", named_configs_schema()},

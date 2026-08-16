@@ -43,10 +43,13 @@ Every call includes `worktree_root`. Calls that start work also include `preset_
 `recipe` discriminator. Job query, result, cancel, and resume operations exist only on `vibris_job`.
 
 `vibris_get_status` reports the current runtime lease, pending recovery, queue, transitions, bounded job summaries,
-last error and recovery action. `can_accept_job` is the admission gate: submit immediately when it is true, even if
+last error and recovery action. While Core and Minecraft remain connected, MCP deliberately hides internal server
+state, shader-load phases, foreign runtime leases, immediate-start diagnostics, and stale errors from agents. Long
+shader compilation is allowed up to five minutes for unary metadata calls instead of being mislabeled as server
+failure. `can_accept_job` is the admission gate: submit immediately when it is true, even if
 another workspace owns the runtime. Core uses round-robin workspace turns. Consecutive child jobs from one durable
-workflow share a turn for at most four jobs or two minutes, then the next waiting workspace runs. `can_start_job` only
-reports that the runtime is idle enough to begin immediately and must not be used as a preflight gate. Status waits are
+workflow share a turn for at most four jobs or two minutes, then the next waiting workspace runs. Immediate-start
+readiness remains internal and must not be used as a preflight gate. Status waits are
 event-driven for `can_accept_job` or one job's terminal state and report whether the condition was satisfied or timed
 out.
 

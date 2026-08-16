@@ -985,6 +985,8 @@ void status_lease_transition_mapping() {
     status->set_state(proto::SERVER_STATE_OCCUPIED);
     status->set_can_accept_job(true);
     status->set_can_start_job(false);
+    status->mutable_readiness()->set_core_online(true);
+    status->mutable_readiness()->set_minecraft_connected(true);
     status->mutable_readiness()->set_phase(proto::RUNTIME_PHASE_RELOADING_SHADERS);
     auto* lease = status->mutable_active_lease();
     lease->set_lease_id("lease-a");
@@ -1018,17 +1020,22 @@ void status_lease_transition_mapping() {
     require(mapped.at("wait_satisfied") == true && mapped.at("wait_timed_out") == false,
         "Status wait flags were not mapped truthfully.");
     const auto& mapped_status = mapped.at("status");
-    require(mapped_status.at("active_lease").at("workspace_id") == "workspace-a" &&
-            mapped_status.at("active_lease").at("cancellation_requested") == true,
-        "Authoritative runtime lease was not preserved by the MCP result mapper.");
+    require(mapped_status.at("operational") == true && mapped_status.at("can_accept_job") == true,
+        "Operational status did not preserve the agent admission gate.");
+    require(!mapped_status.contains("state") && !mapped_status.contains("can_start_job") &&
+            !mapped_status.contains("readiness") && !mapped_status.contains("active_lease") &&
+            !mapped_status.contains("transitions") && !mapped_status.contains("last_error"),
+        "Operational status leaked internal runtime transitions to the agent.");
     require(mapped_status.at("queue").size() == 1 &&
             mapped_status.at("queue").front().at("position") == 1,
         "Fair queue position was not preserved by the MCP result mapper.");
-    require(mapped_status.at("transitions").size() == 1 &&
-            mapped_status.at("transitions").front().at("job_id") == "job-a",
-        "Status transition history was not preserved by the MCP result mapper.");
-    require(mapped_status.at("last_error").at("recovery_action") == "Reconnect the runtime bridge.",
-        "Bounded recovery advice was not preserved by the MCP result mapper.");
+
+    status->mutable_readiness()->set_core_online(false);
+    const auto diagnostic = vibris::mcp::ResultMapper::status(response).at("status");
+    require(!diagnostic.contains("operational") && diagnostic.contains("state") &&
+            diagnostic.contains("active_lease") && diagnostic.contains("transitions") &&
+            diagnostic.contains("last_error"),
+        "Non-operational status did not preserve server diagnostics.");
 }
 
 using TestCase = std::pair<std::string_view, void (*)()>;
