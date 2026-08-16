@@ -168,14 +168,16 @@ class ShaderDebugControl constructor(
 
     fun pushPass(name: String) {
         passStack.get().addLast(name)
-        metrics.beginAggregate(
-            GpuTimingScope(
-                metric = "${name}_total",
-                kind = GpuTimingScopeKind.FRAMEWORK_TOTAL,
-                frameworkPass = name,
-                stage = null,
-            ),
-        )
+        if (metrics.isCapturing()) {
+            metrics.beginAggregate(
+                GpuTimingScope(
+                    metric = "${name}_total",
+                    kind = GpuTimingScopeKind.FRAMEWORK_TOTAL,
+                    frameworkPass = name,
+                    stage = null,
+                ),
+            )
+        }
     }
 
     fun popPass() {
@@ -184,7 +186,6 @@ class ShaderDebugControl constructor(
             metrics.end()
             stack.removeLast()
         }
-        if (stack.isEmpty()) passStack.remove()
     }
 
     fun beginDraw() = beginTiming("draw")
@@ -227,7 +228,6 @@ class ShaderDebugControl constructor(
         if (!metrics.isCapturing()) return
         val stack = timingStack.get()
         if (stack.isNotEmpty() && stack.removeLast()) metrics.end()
-        if (stack.isEmpty()) timingStack.remove()
     }
 
     private fun currentPass() = passStack.get().peekLast()
