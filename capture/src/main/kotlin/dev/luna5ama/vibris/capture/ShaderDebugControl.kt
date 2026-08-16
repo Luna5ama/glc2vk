@@ -200,6 +200,7 @@ class ShaderDebugControl constructor(
     fun endCompute() = endTiming()
 
     private fun beginTiming(kind: String, program: GpuTimingProgram? = null) {
+        if (!metrics.isCapturing()) return
         val pass = currentPass()
         val measured = when {
             program != null -> {
@@ -223,6 +224,7 @@ class ShaderDebugControl constructor(
     }
 
     private fun endTiming() {
+        if (!metrics.isCapturing()) return
         val stack = timingStack.get()
         if (stack.isNotEmpty() && stack.removeLast()) metrics.end()
         if (stack.isEmpty()) timingStack.remove()

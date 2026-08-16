@@ -14,6 +14,8 @@ internal class GpuTimingMetrics {
     private val histories = GpuTimingHistories()
     private var capture: Capture? = null
 
+    fun isCapturing(): Boolean = capture != null
+
     fun capture(frames: Int): CompletionStage<GpuTimingSnapshot> {
         require(frames in 1..MAX_CAPTURE_FRAMES) { "frames must be between 1 and $MAX_CAPTURE_FRAMES" }
         check(capture == null) { "GPU metric capture is already active" }
