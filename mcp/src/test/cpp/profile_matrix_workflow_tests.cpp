@@ -75,16 +75,11 @@ ToolOutcome profile_success(const DurableJobStepExecution& execution) {
 }
 
 Json wait_terminal(DurableJobWorkflow& workflow, const std::string& job_id) {
-	for (int attempt = 0; attempt < 500; ++attempt) {
-		auto value = std::get<Json>(workflow.control(
-			{{"operation", "query"}, {"job_id", job_id}, {"event_cursor", 0}}));
-		const auto state = value.at("workflow_state").get<std::string>();
-		if (state == "completed" || state == "failed" || state == "paused" || state == "cancelled") {
-			return value;
-		}
-		std::this_thread::sleep_for(2ms);
-	}
-	throw std::runtime_error("durable workflow did not reach a terminal or resumable state");
+	auto value = std::get<Json>(workflow.control(
+		{{"operation", "wait"}, {"job_id", job_id}, {"timeout_ms", 5'000}}));
+	require(!value.at("wait_timed_out").get<bool>(),
+		"single blocking durable-job wait timed out");
+	return value;
 }
 
 void interruption_after_17_resumes_at_18() {
@@ -501,6 +496,44 @@ void expired_artifacts_remain_in_durable_results() {
 		"expired artifacts were removed from or not marked in the durable result projection");
 }
 
+void blocking_wait_times_out_compactly_without_polling() {
+	WorkspaceFixture workspace;
+	DurableJobWorkflow workflow(workspace.worktree(), std::string(workspace_id),
+		[](DurableJobStepExecution execution) -> ToolOutcome {
+			while (!execution.stop.stop_requested()) std::this_thread::sleep_for(1ms);
+			return ToolFailure{"CANCELLED", "fixture cancellation", false};
+		});
+	const auto started = std::get<Json>(workflow.start(
+		"vibris_run_recipe", matrix(1, "async"), config()));
+	const auto job_id = started.at("job_id").get<std::string>();
+	const auto waited = std::get<Json>(workflow.control(
+		{{"operation", "wait"}, {"job_id", job_id}, {"timeout_ms", 5}}));
+	require(waited.at("wait_timed_out").get<bool>() && !waited.contains("events") &&
+		waited.at("next_action").at("arguments").at("operation") == "wait" &&
+		waited.at("next_action").at("arguments").at("timeout_ms") == 300'000,
+		"bounded durable-job wait did not return one compact retry instruction");
+	static_cast<void>(workflow.control({{"operation", "cancel"}, {"job_id", job_id}}));
+}
+
+void server_restart_resubmits_current_step_once() {
+	WorkspaceFixture workspace;
+	std::size_t calls = 0;
+	DurableJobWorkflow workflow(workspace.worktree(), std::string(workspace_id),
+		[&](DurableJobStepExecution execution) -> ToolOutcome {
+			++calls;
+			if (calls == 1) {
+				execution.progress("lost-request", "retrying", false);
+				return ToolFailure{"SERVER_RESTARTED", "fixture server restart", true};
+			}
+			return profile_success(execution);
+		});
+	const auto started = std::get<Json>(workflow.start(
+		"vibris_run_recipe", matrix(1, "async"), config()));
+	const auto completed = wait_terminal(workflow, started.at("job_id").get<std::string>());
+	require(completed.at("workflow_state") == "completed" && calls == 2,
+		"a lost child job was not resubmitted exactly once after server restart");
+}
+
 } // namespace
 
 int main() {
@@ -515,6 +548,8 @@ int main() {
 		compile_matrix_checkpoints_and_aggregates_every_case();
 		matrix_and_benchmark_use_step_plans();
 		expired_artifacts_remain_in_durable_results();
+		blocking_wait_times_out_compactly_without_polling();
+		server_restart_resubmits_current_step_once();
 		std::cout << "PASS DurableWorkflowCheckpointResume\n";
 		return 0;
 	} catch (const std::exception& error) {

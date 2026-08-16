@@ -283,10 +283,12 @@ Json build_definitions() {
         definition("vibris_get_status",
                    "Read agent-actionable admission, queue and job status for the explicit Git worktree. "
                    "When operational=true, submit immediately if can_accept_job=true; otherwise use one "
-                   "wait_until=can_accept_job call; never wait for a global idle lease. Internal shader "
-                   "compilation, runtime phases, foreign leases and other healthy-server transitions are "
-                   "intentionally hidden. Core queues accepted jobs by workspace round-robin. wait_until can "
-                   "wait for admission or one job's terminal state. Resource "
+                   "wait_until=can_accept_job call; never wait for a global idle lease. "
+                   "Internal shader compilation, runtime phases, foreign leases "
+                   "and other healthy-server transitions are intentionally hidden. Core queues accepted "
+                   "same-workspace and cross-workspace jobs by round-robin. wait_until can "
+                   "wait for admission or one Core job's terminal state in one call; never poll with shell sleep. "
+                   "Durable MCP workflows use vibris_job operation=wait. Resource "
                    "catalogs are intentionally omitted.",
                    scoped(closed_object({
                        {"detail", enum_string({"summary", "jobs", "full"})},
@@ -306,13 +308,14 @@ Json build_definitions() {
                        {"pass_id", {{"type", "string"}, {"minLength", 1}}},
                    }), false), true),
         definition("vibris_run_recipe",
-                   "Run a standard shader workflow for the explicit Git worktree and scene preset. Submit without "
-                   "waiting for a global idle lease: accepted work joins Core's workspace round-robin queue while "
-                   "another workspace owns the runtime. "
+                   "ADMISSION RULE: never wait for a global idle lease; when can_accept_job is "
+                   "true, submit now and let Core queue the job by workspace round-robin. Run a standard shader "
+                   "workflow for the explicit Git worktree and scene preset. "
                    "load_and_screenshot loads one "
                    "shader source and config, waits for the requested warmup frames, and saves a screenshot. Profile "
                    "recipes return normalized cases with summary, metrics, or full result detail. Long-running "
-                   "recipes support durable sync/async execution; query, result, resume and cancellation use vibris_job. "
+                   "recipes support durable sync/async execution. An async result contains next_action: invoke its "
+                   "vibris_job operation=wait once and never poll with query or shell sleep. "
                    "benchmark_ab requires typed target, sibling, and sentinel metrics, repeated ABBA, ABAB, or "
                    "seeded randomized profiles, same-source controls, and deterministic visual thresholds; it "
                    "accepts only stable target improvements after compile, provenance, restoration, statistical, "
@@ -321,9 +324,12 @@ Json build_definitions() {
                    "retained safe snapshot after a transactional restore failure.",
                    recipe_schema(), false),
         definition("vibris_run_actions",
-                   "Run one ordered shader action sequence synchronously or as a durable async job for the explicit "
-                   "Git worktree and scene preset. Submit without waiting for a global idle lease; accepted work "
-                   "joins Core's workspace round-robin queue. restore_state defaults to true for both terminal outcomes; an "
+                   "ADMISSION RULE: never wait for a global idle lease; when can_accept_job is "
+                   "true, submit now and let Core queue the job by workspace round-robin. Run one ordered shader "
+                   "action sequence synchronously or as a durable async job for the explicit Git worktree and scene "
+                   "preset. An async result's next_action is one blocking vibris_job operation=wait call; never poll. "
+                   "Put related multi-image exports into one ordered action sequence instead of waiting for "
+                   "an idle lease between images. restore_state defaults to true for both terminal outcomes; an "
                    "explicit false/false load may establish the first verified Core-owned runtime snapshot.",
                    scoped(closed_object({{"sources", named_sources_schema()},
                                          {"configs", named_configs_schema()},
@@ -332,9 +338,12 @@ Json build_definitions() {
                                          {"actions", {{"type", "array"}, {"items", action_schema()}, {"maxItems", 64}}}},
                                         {"actions"}), true), false),
         definition("vibris_run_matrix",
-                   "Run the action template synchronously or as a durable async job for every selected source/config "
-                   "combination in the explicit Git worktree and scene preset. Submit without waiting for a global "
-                   "idle lease; accepted work joins Core's workspace round-robin queue. Each combination "
+                   "ADMISSION RULE: never wait for a global idle lease; when can_accept_job is "
+                   "true, submit now and let Core queue the job by workspace round-robin. Run the action template "
+                   "synchronously or as a durable async job for every selected source/config combination in the "
+                   "explicit Git worktree and scene preset. An async result's next_action is one blocking vibris_job "
+                   "operation=wait call; never poll. Use this single call for related config/image exports. "
+                   "Each combination "
                    "automatically begins with load_shader; do not include load_shader in the action template.",
                    scoped(closed_object({{"sources", named_sources_schema()},
                                          {"configs", named_configs_schema()},
@@ -343,11 +352,17 @@ Json build_definitions() {
                                          {"actions", {{"type", "array"}, {"items", action_schema()}, {"maxItems", 64}}}},
                                         {"sources", "configs", "matrix", "actions"}), true), false),
         definition("vibris_job",
-                   "Query, retrieve, cancel or resume one durable v2 job for the explicit Git worktree.",
+                   "Wait for, inspect, retrieve, cancel or resume one durable v2 job for the explicit Git worktree. "
+                   "For an async job, call operation=wait once with timeout_ms=300000; if that bounded wait times out, "
+                   "call wait again. Never poll with query, repeated tool calls, Start-Sleep, or shell sleep. "
+                   "query is only for a one-time diagnostic snapshot. "
+                   "DURABLE_WORKFLOW_BUSY describes one local MCP workflow worker, not the Core runtime lease or "
+                   "job queue; wait on the returned job_id instead of inspecting global runtime occupancy.",
                    scoped(closed_object({
-                       {"operation", enum_string({"query", "result", "cancel", "resume"})},
+                       {"operation", enum_string({"wait", "query", "result", "cancel", "resume"})},
                        {"job_id", {{"type", "string"}, {"minLength", 1}}},
                        {"event_cursor", bounded_integer(0, std::numeric_limits<std::uint64_t>::max())},
+                       {"timeout_ms", bounded_integer(1, 300'000)},
                        {"reason", {{"type", "string"}, {"maxLength", 512}}},
                    }, {"operation", "job_id"}), false), false),
         definition("vibris_artifacts",

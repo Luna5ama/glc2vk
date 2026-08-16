@@ -12,12 +12,14 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace vibris::mcp::test {
 
 class ReconnectService final : public control::v2::VibrisControl::Service {
 public:
-    explicit ReconnectService(std::size_t drop_after) : drop_after_(drop_after) {
+    explicit ReconnectService(std::size_t drop_after, grpc::Status disconnect_status)
+        : drop_after_(drop_after), disconnect_status_(std::move(disconnect_status)) {
     }
 
     void release_requests() {
@@ -81,7 +83,7 @@ private:
                 if (!stream->Write(response)) {
                     return {grpc::StatusCode::UNAVAILABLE, "JobAccepted write failed"};
                 }
-                return {grpc::StatusCode::UNAVAILABLE, "fixture disconnect after JobAccepted"};
+                return disconnect_status_;
             }
             if (request.has_resume_job()) {
                 ++resume_requests_;
@@ -114,7 +116,7 @@ private:
                 gate_.wait(lock, [this] { return released_; });
             }
             if (connection == 1 && drop_after_ != 0 && first_connection_responses_ >= drop_after_) {
-                return {grpc::StatusCode::UNAVAILABLE, "fixture disconnect"};
+                return disconnect_status_;
             }
             auto* pong = response.mutable_pong();
             pong->set_sequence(request.ping().sequence());
@@ -131,6 +133,7 @@ private:
     }
 
     const std::size_t drop_after_;
+    const grpc::Status disconnect_status_;
     std::atomic<std::size_t> connections_ = 0;
     std::atomic<std::size_t> submit_jobs_ = 0;
     std::atomic<std::size_t> resume_requests_ = 0;
@@ -143,7 +146,9 @@ private:
 
 class ReconnectServer final {
 public:
-    ReconnectServer(std::uint16_t port, std::size_t drop_after) : service_(drop_after) {
+    ReconnectServer(std::uint16_t port, std::size_t drop_after,
+        grpc::Status disconnect_status = {grpc::StatusCode::UNAVAILABLE, "fixture disconnect"})
+        : service_(drop_after, std::move(disconnect_status)) {
         grpc::ServerBuilder builder;
         int bound_port = 0;
         builder.AddListeningPort(

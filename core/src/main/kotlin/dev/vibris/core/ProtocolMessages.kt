@@ -155,6 +155,7 @@ internal object ProtocolMessages {
         .setRetryable(
             code == ErrorCode.ERROR_CODE_QUEUE_FULL ||
                 code == ErrorCode.ERROR_CODE_QUEUE_TIMEOUT ||
-                code == ErrorCode.ERROR_CODE_EXECUTION_TIMEOUT,
+                code == ErrorCode.ERROR_CODE_EXECUTION_TIMEOUT ||
+                code == ErrorCode.ERROR_CODE_SERVER_RESTARTED,
         )
 }

@@ -396,7 +396,8 @@ bool known_retryable_child_error(std::string code) {
 		return static_cast<char>(std::tolower(value));
 	});
 	for (const auto suffix : {"server_not_available", "server_offline", "server_restarted",
-		"queue_timeout", "execution_timeout", "job_busy", "transport_error", "grpc_unavailable"}) {
+		"queue_timeout", "execution_timeout", "durable_workflow_busy", "transport_error",
+		"grpc_unavailable"}) {
 		if (code == suffix || code.ends_with(std::string("error_code_") + suffix)) return true;
 	}
 	return false;
@@ -427,6 +428,10 @@ ToolOutcome receipt_outcome(const Json& receipt) {
 
 bool terminal_state(std::string_view state) {
 	return state == "completed" || state == "failed" || state == "cancelled";
+}
+
+bool wait_complete_state(std::string_view state) {
+	return terminal_state(state) || state == "paused";
 }
 
 } // namespace
@@ -466,6 +471,7 @@ DurableJobWorkflow::Record DurableJobWorkflow::create_record(
 		{"kind", request.at("kind")}, {"workflow_state", "queued"}, {"stage", "queued"},
 		{"next_step", 0}, {"completed_steps", 0}, {"total_steps", request.at("steps").size()},
 		{"current_step", nullptr}, {"current_request_id", nullptr}, {"current_request_accepted", false},
+		{"restart_resubmissions", 0},
 		{"cancel_requested", false}, {"last_error", nullptr}, {"event_sequence", 0},
 		{"execution_mode", execution_mode},
 		{"created_unix_ms", created}, {"updated_unix_ms", created}, {"step_started_unix_ms", nullptr},
@@ -520,8 +526,12 @@ void DurableJobWorkflow::save_state(const Json& state) const {
 	auto text = state.dump(2);
 	if (text.size() > maximum_document_bytes) checkpoint_error("Durable job state exceeded 64 MiB.");
 	text.push_back('\n');
-	std::scoped_lock lock(store_mutex_);
-	atomic_write(state_directory_ / job_id / "state.json", std::move(text), true);
+	{
+		std::scoped_lock lock(store_mutex_);
+		atomic_write(state_directory_ / job_id / "state.json", std::move(text), true);
+	}
+	state_generation_.fetch_add(1, std::memory_order_release);
+	state_changed_.notify_all();
 }
 
 void DurableJobWorkflow::publish_request(const Json& request) const {
@@ -749,6 +759,16 @@ Json DurableJobWorkflow::snapshot(
 		refresh_artifact_expiry(durable_result);
 		result["result"] = std::move(durable_result);
 	}
+	if (workflow_state == "queued" || workflow_state == "running") {
+		result["next_action"] = {{"tool", "vibris_job"},
+			{"arguments", {{"worktree_root", workspace_root_.string()}, {"operation", "wait"},
+				{"job_id", state.at("job_id")}, {"timeout_ms", 300'000}}},
+			{"instruction", "Call this blocking wait once. Never poll with query or shell sleep."}};
+	} else if ((workflow_state == "paused" || workflow_state == "cancelled") && result.at("resumable").get<bool>()) {
+		result["next_action"] = {{"tool", "vibris_job"},
+			{"arguments", {{"worktree_root", workspace_root_.string()}, {"operation", "resume"},
+				{"job_id", state.at("job_id")}}}};
+	}
 	return result;
 }
 
@@ -757,7 +777,9 @@ ToolOutcome DurableJobWorkflow::start(
 	reap_finished();
 	{
 		std::scoped_lock lock(worker_mutex_);
-		if (worker_running_) return ToolFailure{"JOB_BUSY", "Another durable job is active.", true,
+		if (worker_running_) return ToolFailure{"DURABLE_WORKFLOW_BUSY",
+			"This MCP process already has a durable workflow worker for the worktree; wait once with "
+			"vibris_job operation=wait and never poll it with query or shell sleep.", true,
 			{{"job_id", active_job_id_}}};
 	}
 	auto record = create_record(tool_name, arguments, config);
@@ -774,6 +796,31 @@ ToolOutcome DurableJobWorkflow::control(const Json& arguments) {
 	const auto job_id = arguments.at("job_id").get<std::string>();
 	const auto cursor = arguments.value("event_cursor", std::uint64_t{});
 	if (operation == "query") return snapshot(load(job_id), cursor, false);
+	if (operation == "wait") {
+		const auto timeout = std::chrono::milliseconds(arguments.value("timeout_ms", 300'000));
+		const auto deadline = std::chrono::steady_clock::now() + timeout;
+		while (true) {
+			const auto observed_generation = state_generation_.load(std::memory_order_acquire);
+			auto record = load(job_id);
+			const auto state = record.state.at("workflow_state").get<std::string>();
+			if (wait_complete_state(state)) {
+				auto value = snapshot(record, cursor, state == "completed" || state == "failed");
+				value.erase("events");
+				value["wait_timed_out"] = false;
+				return value;
+			}
+			if (std::chrono::steady_clock::now() >= deadline) {
+				auto value = snapshot(record, cursor, false);
+				value.erase("events");
+				value["wait_timed_out"] = true;
+				return value;
+			}
+			std::unique_lock lock(wait_mutex_);
+			state_changed_.wait_until(lock, deadline, [&] {
+				return state_generation_.load(std::memory_order_acquire) != observed_generation;
+			});
+		}
+	}
 	if (operation == "result") {
 		auto record = load(job_id);
 		if (record.state.at("workflow_state") == "cancelled") {
@@ -801,7 +848,7 @@ ToolOutcome DurableJobWorkflow::control(const Json& arguments) {
 		{
 			std::scoped_lock lock(worker_mutex_);
 			if (worker_running_ && active_job_id_ == job_id && !worker_.joinable()) {
-				return ToolFailure{"JOB_BUSY",
+				return ToolFailure{"DURABLE_WORKFLOW_BUSY",
 					"A synchronous durable job cannot be cancelled from another request.", true,
 					{{"job_id", job_id}}};
 			}
@@ -845,13 +892,16 @@ ToolOutcome DurableJobWorkflow::control(const Json& arguments) {
 	}
 	{
 		std::scoped_lock lock(worker_mutex_);
-		if (worker_running_) return ToolFailure{"JOB_BUSY", "Another durable job is active.", true,
+		if (worker_running_) return ToolFailure{"DURABLE_WORKFLOW_BUSY",
+			"This MCP process already has a durable workflow worker for the worktree; wait once with "
+			"vibris_job operation=wait, or cancel it before resuming another workflow.", true,
 			{{"job_id", active_job_id_}}};
 	}
 	record.state["workflow_state"] = "queued";
 	record.state["stage"] = "queued";
 	record.state["cancel_requested"] = false;
 	record.state["last_error"] = nullptr;
+	record.state["restart_resubmissions"] = 0;
 	record.state["execution_mode"] = "async";
 	record.state["step_started_unix_ms"] = nullptr;
 	append_event(record.state, "resumed", "queued", record.state.at("current_step"));
@@ -879,7 +929,9 @@ bool DurableJobWorkflow::running() const {
 ToolOutcome DurableJobWorkflow::begin(std::string job_id, const bool asynchronous) {
 	{
 		std::scoped_lock lock(worker_mutex_);
-		if (worker_running_) return ToolFailure{"JOB_BUSY", "Another durable job is active.", true,
+		if (worker_running_) return ToolFailure{"DURABLE_WORKFLOW_BUSY",
+			"This MCP process already has a durable workflow worker for the worktree; wait once with "
+			"vibris_job operation=wait and never poll it with query or shell sleep.", true,
 			{{"job_id", active_job_id_}}};
 		worker_running_ = true;
 		active_job_id_ = job_id;
@@ -914,6 +966,7 @@ void DurableJobWorkflow::execute(std::string job_id, const std::stop_token stop)
 				state["current_step"] = nullptr;
 				state["current_request_id"] = nullptr;
 				state["current_request_accepted"] = false;
+				state["restart_resubmissions"] = 0;
 				state["step_started_unix_ms"] = nullptr;
 				append_event(state, "receipt_recovered", "checkpointed", step);
 				save_state(state);
@@ -978,6 +1031,20 @@ void DurableJobWorkflow::execute(std::string job_id, const std::stop_token stop)
 					finish_active(job_id);
 					return;
 				}
+				std::string normalized_code = failure.code;
+				std::ranges::transform(normalized_code, normalized_code.begin(), [](const unsigned char value) {
+					return static_cast<char>(std::tolower(value));
+				});
+				if (failure.retryable && normalized_code == "server_restarted" &&
+					state.value("restart_resubmissions", 0) == 0) {
+					state["current_request_id"] = nullptr;
+					state["current_request_accepted"] = false;
+					state["restart_resubmissions"] = 1;
+					state["last_error"] = failure_json(failure);
+					append_event(state, "server_restart_resubmit", "retrying", step);
+					save_state(state);
+					continue;
+				}
 				if (failure.retryable) {
 					state["workflow_state"] = "paused";
 					state["stage"] = "paused";
@@ -1037,6 +1104,7 @@ void DurableJobWorkflow::execute(std::string job_id, const std::stop_token stop)
 			state["current_step"] = nullptr;
 			state["current_request_id"] = nullptr;
 			state["current_request_accepted"] = false;
+			state["restart_resubmissions"] = 0;
 			state["step_started_unix_ms"] = nullptr;
 			state["last_error"] = nullptr;
 			state["stage"] = "checkpointed";

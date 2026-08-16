@@ -74,8 +74,21 @@ void exact_v2_tool_catalog() {
         verify_typed_schema(tool.at("outputSchema"), name + ".outputSchema");
         if (name == "vibris_get_status" || name == "vibris_run_recipe" ||
             name == "vibris_run_actions" || name == "vibris_run_matrix") {
-            require(tool.at("description").get<std::string>().find("round-robin") != std::string::npos,
+            const auto description = tool.at("description").get<std::string>();
+            require(description.find("round-robin") != std::string::npos,
                 name + " omitted round-robin admission guidance");
+            require(description.find("never wait for a global idle lease") != std::string::npos,
+                name + " omitted the hard no-global-idle-wait rule");
+            if (name != "vibris_get_status") {
+                require(description.find("operation=wait") != std::string::npos,
+                    name + " omitted durable blocking-wait guidance");
+            }
+        }
+        if (name == "vibris_job") {
+            const auto description = tool.at("description").get<std::string>();
+            require(description.find("operation=wait") != std::string::npos &&
+                    description.find("Never poll") != std::string::npos,
+                "vibris_job omitted the blocking wait and hard no-poll guidance");
         }
     }
     require(names == std::unordered_set<std::string>(expected.begin(), expected.end()),
@@ -118,6 +131,9 @@ void exact_filters_and_job_control() {
     job["operation"] = "query";
     job["job_id"] = "job-1";
     require(std::holds_alternative<Json>(registry.invoke("vibris_job", job)), "typed job query was rejected");
+    job["operation"] = "wait";
+    job["timeout_ms"] = 300'000;
+    require(std::holds_alternative<Json>(registry.invoke("vibris_job", job)), "typed job wait was rejected");
     auto old_control = scope;
     old_control["recipe"] = "profile_matrix";
     old_control["operation"] = "status";

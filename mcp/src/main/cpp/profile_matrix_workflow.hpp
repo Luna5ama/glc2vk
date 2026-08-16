@@ -5,6 +5,8 @@
 
 #include <filesystem>
 #include <functional>
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -78,6 +80,9 @@ private:
     std::string workspace_id_;
     DurableJobStepExecutor executor_;
     mutable std::mutex store_mutex_;
+    mutable std::mutex wait_mutex_;
+    mutable std::condition_variable state_changed_;
+    mutable std::atomic<std::uint64_t> state_generation_{0};
     mutable std::mutex worker_mutex_;
     std::jthread worker_;
     std::string active_job_id_;

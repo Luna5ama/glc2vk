@@ -26,7 +26,8 @@ void require(bool condition, std::string_view message) {
 void accepted_request_resumes_after_disconnect() {
     // Given: a server that accepts one SubmitJob and immediately drops its first control stream.
     constexpr std::uint16_t port = 55065;
-    ReconnectServer server(port, 0);
+    ReconnectServer server(port, 0,
+        {grpc::StatusCode::INTERNAL, "Received RST_STREAM with error code 8"});
     std::mutex mutex;
     std::condition_variable completed;
     std::vector<proto::ServerMessage::PayloadCase> events;

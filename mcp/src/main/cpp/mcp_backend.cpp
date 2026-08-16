@@ -139,7 +139,12 @@ private:
                          arguments.value("recipe", std::string{}) == "compile_validate"));
                 if (durable) return start_durable_job(name, arguments);
                 if (jobs_.running()) {
-                    return ToolFailure{"JOB_BUSY", "A durable job is active.", true};
+                    return ToolFailure{"DURABLE_WORKFLOW_BUSY",
+                        "This MCP process already has a durable workflow worker for the worktree. "
+                        "Wait once with vibris_job operation=wait; never poll it with query or shell sleep. "
+                        "Alternatively combine related captures into one "
+                        "vibris_run_actions or vibris_run_matrix call. This is not the Core runtime lease gate.",
+                        true};
                 }
                 return run_job(name, arguments);
             }

@@ -28,7 +28,9 @@ bool is_request_event(const proto::ServerMessage& message) {
 }
 
 bool reconnectable(const grpc::Status& status) {
-    return status.ok() || status.error_code() == grpc::StatusCode::UNAVAILABLE ||
+    const bool reset_stream = status.error_code() == grpc::StatusCode::INTERNAL &&
+        status.error_message().find("RST_STREAM") != std::string::npos;
+    return status.ok() || reset_stream || status.error_code() == grpc::StatusCode::UNAVAILABLE ||
         status.error_code() == grpc::StatusCode::CANCELLED ||
         status.error_code() == grpc::StatusCode::UNKNOWN;
 }

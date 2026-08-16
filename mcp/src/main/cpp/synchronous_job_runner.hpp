@@ -80,6 +80,18 @@ private:
         std::string_view request_id,
         const SynchronousJobControl& control);
 
+    [[nodiscard]] ToolOutcome resume_or_submit(
+        std::string_view request_id,
+        std::string_view tool_name,
+        const Json& arguments,
+        const ::vibris::control::v2::ServerHello& server,
+        const ::vibris::control::v2::SceneContext& context,
+        const SynchronousJobControl& control);
+
+    [[nodiscard]] std::optional<bool> job_present(
+        std::string_view request_id,
+        std::stop_token stop);
+
     GrpcClient& client_;
     SourceHandler& sources_;
     const JobContext& config_;

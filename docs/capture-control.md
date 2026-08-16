@@ -44,14 +44,24 @@ Every call includes `worktree_root`. Calls that start work also include `preset_
 
 `vibris_get_status` reports the current runtime lease, pending recovery, queue, transitions, bounded job summaries,
 last error and recovery action. While Core and Minecraft remain connected, MCP deliberately hides internal server
-state, shader-load phases, foreign runtime leases, immediate-start diagnostics, and stale errors from agents. Long
-shader compilation is allowed up to five minutes for unary metadata calls instead of being mislabeled as server
-failure. `can_accept_job` is the admission gate: submit immediately when it is true, even if
+state, shader-load phases, foreign runtime leases, immediate-start diagnostics, and stale errors from agents. Long shader
+compilation is allowed up to five minutes for unary metadata calls instead of being mislabeled as server failure.
+`can_accept_job` is the admission gate: submit immediately when it is true, even if
 another workspace owns the runtime. Core uses round-robin workspace turns. Consecutive child jobs from one durable
 workflow share a turn for at most four jobs or two minutes, then the next waiting workspace runs. Immediate-start
 readiness remains internal and must not be used as a preflight gate. Status waits are
 event-driven for `can_accept_job` or one job's terminal state and report whether the condition was satisfied or timed
 out.
+
+Never poll or sleep for a global idle lease. Core accepts multiple jobs from the same workspace
+and from different workspaces whenever `can_accept_job=true`, then schedules them by workspace round-robin. A
+`DURABLE_WORKFLOW_BUSY` response is narrower: one durable workflow worker is already active in that MCP process for
+the worktree. It is not a Core queue rejection. Wait for the returned job with one
+`vibris_job(operation=wait, timeout_ms=300000)` call, or combine related captures into one `vibris_run_actions`
+sequence or one `vibris_run_matrix` request.
+
+If a control stream reports `RST_STREAM` after submission, the MCP reconnects and resumes the accepted request by
+request ID. Do not resubmit blindly and do not wait for the current lease to become idle.
 
 ## Sources and settings
 
@@ -66,10 +76,21 @@ action.
 ## Durable jobs
 
 Long-running work is stored below `.vibris/jobs/<job_id>` with immutable request/source inputs, atomic state,
-append-only events, immutable per-step receipts, and an immutable terminal result. Use `vibris_job` to query or cancel a
-job and to resume only when its recorded phase is safe. Completed steps are never repeated; uncertain side effects are
-not replayed. A retryable terminal child result pauses before checkpointing that step and is resubmitted on resume. A
+append-only events, immutable per-step receipts, and an immutable terminal result. Async submission returns a
+`next_action` containing `vibris_job(operation=wait, timeout_ms=300000)`. Invoke that blocking wait once. If it reaches
+its five-minute bound first, invoke `wait` again. Never combine `query` with `Start-Sleep`, shell sleep, or repeated
+tool calls; `query` is only a one-time diagnostic snapshot. `wait` returns directly when the job completes, fails,
+pauses for resume, or is cancelled, and includes the terminal result when one exists. Use `cancel` to cancel a job and
+`resume` only when its recorded phase is safe. Completed steps are never repeated; uncertain side effects are not
+replayed. A retryable terminal child result pauses before checkpointing that step and is resubmitted on resume. A
 non-retryable child result terminalizes the durable job as `failed`; later steps are never executed.
+
+While an accepted child request is quiet, the MCP worker performs a low-frequency five-second Core status probe. An
+unreachable server is treated as a transient restart window, not proof that the job disappeared. If a reachable Core
+instance explicitly has no matching job, MCP classifies the old request as `SERVER_RESTARTED`, clears that child
+request, and safely resubmits the same durable step once. A second consecutive loss pauses the workflow and returns a
+`next_action` for explicit resume instead of waiting indefinitely. A restarted Core also answers an unknown
+`ResumeJob` with the same retryable terminal error; it never leaves the resume request unanswered.
 
 If the process stops, start the matching v2 service, inspect status and the job record, then request resume. A job that
 cannot prove a safe continuation returns a terminal failure with recovery guidance.

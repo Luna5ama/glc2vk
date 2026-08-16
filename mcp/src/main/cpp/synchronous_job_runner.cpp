@@ -15,6 +15,7 @@
 #include <functional>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -54,6 +55,8 @@ ToolFailure request_failure(ToolFailure failure, std::string_view request_id, co
     if (request_accepted) failure.details["resume_required"] = true;
     return failure;
 }
+
+constexpr auto job_watchdog_interval = std::chrono::seconds(5);
 
 std::string progress_stage(const proto::JobStage stage) {
     switch (stage) {
@@ -957,6 +960,29 @@ SynchronousJobRunner::SynchronousJobRunner(
     if (maximum_wait_.count() < 0) throw std::invalid_argument("maximum wait must not be negative");
 }
 
+std::optional<bool> SynchronousJobRunner::job_present(
+    const std::string_view request_id, const std::stop_token stop) {
+    proto::GetStatusRequest request;
+    request.set_detail(proto::STATUS_DETAIL_JOBS);
+    auto completion = std::make_shared<std::promise<std::pair<grpc::Status, proto::GetStatusResponse>>>();
+    auto result = completion->get_future();
+    if (!client_.get_status(std::move(request),
+        [completion](const grpc::Status& status, const proto::GetStatusResponse& response) {
+            completion->set_value({status, response});
+        })) {
+        return std::nullopt;
+    }
+    while (!stop.stop_requested() &&
+        result.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
+    }
+    if (stop.stop_requested()) return std::nullopt;
+    auto [status, response] = result.get();
+    if (!status.ok()) return std::nullopt;
+    return std::ranges::any_of(response.status().jobs(), [request_id](const proto::JobSummary& job) {
+        return job.request_id() == request_id || job.job_id() == request_id;
+    });
+}
+
 ToolOutcome SynchronousJobRunner::submit_once(std::string_view tool_name, const Json& arguments,
     const proto::ServerHello& server, const proto::SceneContext& context,
     const SynchronousJobControl& control) {
@@ -999,9 +1025,26 @@ ToolOutcome SynchronousJobRunner::submit_once(std::string_view tool_name, const 
 
         std::unique_lock lock(state->mutex);
         const auto deadline = std::chrono::steady_clock::now() + maximum_wait;
+        auto next_watchdog = std::chrono::steady_clock::now() + job_watchdog_interval;
+        bool server_restarted = false;
         while (!state->done && !control.stop.stop_requested() &&
             std::chrono::steady_clock::now() < deadline) {
-            state->ready.wait_for(lock, std::chrono::milliseconds(100), [&state] { return state->done; });
+            state->ready.wait_until(lock, std::min(deadline, next_watchdog), [&state] { return state->done; });
+            if (state->done || !request_accepted->load(std::memory_order_relaxed) ||
+                std::chrono::steady_clock::now() < next_watchdog) {
+                continue;
+            }
+            lock.unlock();
+            const auto present = job_present(request_id, control.stop);
+            if (present == false) {
+                server_restarted = client_.cancel(
+                    request_id, "The job watchdog found a new Vibris server instance without this request.");
+            }
+            lock.lock();
+            if (server_restarted && !state->done) {
+                state->ready.wait(lock, [&state] { return state->done; });
+            }
+            next_watchdog = std::chrono::steady_clock::now() + job_watchdog_interval;
         }
         if (control.stop.stop_requested() && !state->done) {
             lock.unlock();
@@ -1031,6 +1074,11 @@ ToolOutcome SynchronousJobRunner::submit_once(std::string_view tool_name, const 
         auto terminal = std::move(state->terminal);
         lock.unlock();
         sources_.retire(request_id);
+        if (server_restarted) {
+            report_progress(control.progress, request_id, "retrying", false);
+            return ToolFailure{"SERVER_RESTARTED",
+                "The connected Vibris server no longer owns the accepted job; it may be submitted again.", true};
+        }
         if (!status.ok()) {
             if (status.error_code() == grpc::StatusCode::NOT_FOUND) {
                 report_progress(control.progress, request_id, "loading", false);
@@ -1078,9 +1126,23 @@ ToolOutcome SynchronousJobRunner::resume_once(std::string_view request_id,
     const auto maximum_wait = maximum_wait_.count() == 0 ? std::chrono::minutes(15) : maximum_wait_;
     std::unique_lock lock(state->mutex);
     const auto deadline = std::chrono::steady_clock::now() + maximum_wait;
+    auto next_watchdog = std::chrono::steady_clock::now() + job_watchdog_interval;
+    bool server_restarted = false;
     while (!state->done && !control.stop.stop_requested() &&
         std::chrono::steady_clock::now() < deadline) {
-        state->ready.wait_for(lock, std::chrono::milliseconds(100), [&state] { return state->done; });
+        state->ready.wait_until(lock, std::min(deadline, next_watchdog), [&state] { return state->done; });
+        if (state->done || std::chrono::steady_clock::now() < next_watchdog) continue;
+        lock.unlock();
+        const auto present = job_present(request_id, control.stop);
+        if (present == false) {
+            server_restarted = client_.cancel(
+                request_id, "The job watchdog found a new Vibris server instance without this request.");
+        }
+        lock.lock();
+        if (server_restarted && !state->done) {
+            state->ready.wait(lock, [&state] { return state->done; });
+        }
+        next_watchdog = std::chrono::steady_clock::now() + job_watchdog_interval;
     }
     if (control.stop.stop_requested() && !state->done) {
         lock.unlock();
@@ -1105,6 +1167,11 @@ ToolOutcome SynchronousJobRunner::resume_once(std::string_view request_id,
     const auto status = state->status;
     auto terminal = std::move(state->terminal);
     lock.unlock();
+    if (server_restarted) {
+        report_progress(control.progress, std::string(request_id), "retrying", false);
+        return ToolFailure{"SERVER_RESTARTED",
+            "The connected Vibris server no longer owns the accepted job; it may be submitted again.", true};
+    }
     if (!status.ok()) {
         if (status.error_code() == grpc::StatusCode::NOT_FOUND) {
             report_progress(control.progress, std::string(request_id), "loading", false);
@@ -1119,6 +1186,19 @@ ToolOutcome SynchronousJobRunner::resume_once(std::string_view request_id,
     return outcome;
 }
 
+ToolOutcome SynchronousJobRunner::resume_or_submit(std::string_view request_id,
+    std::string_view tool_name, const Json& arguments, const proto::ServerHello& server,
+    const proto::SceneContext& context, const SynchronousJobControl& control) {
+    auto outcome = resume_once(request_id, control);
+    const auto* failure = std::get_if<ToolFailure>(&outcome);
+    if (failure == nullptr ||
+        (failure->code != "server_restarted" && failure->code != "SERVER_RESTARTED")) {
+        return outcome;
+    }
+    report_progress(control.progress, {}, "retrying", false);
+    return submit_once(tool_name, arguments, server, context, control);
+}
+
 ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& arguments,
     const proto::ServerHello& server, const proto::SceneContext& context,
     const SynchronousJobControl& control) {
@@ -1130,7 +1210,8 @@ ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& ar
                 [this, &server, &context, &control, &first_attempt](const Json& attempt, bool matrix) -> ToolOutcome {
                     ToolOutcome outcome;
                     if (first_attempt && control.resume_request_id) {
-                        outcome = resume_once(*control.resume_request_id, control);
+                        outcome = resume_or_submit(*control.resume_request_id,
+                            "vibris_run_recipe", attempt, server, context, control);
                         if (auto* failure = std::get_if<ToolFailure>(&outcome);
                             failure != nullptr && failure->code == "CANCELLED" &&
                             (!failure->details.is_object() ||
@@ -1167,13 +1248,13 @@ ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& ar
         }
         if (recipe == "compile_validate") {
             auto outcome = control.resume_request_id
-                ? resume_once(*control.resume_request_id, control)
+                ? resume_or_submit(*control.resume_request_id, tool_name, arguments, server, context, control)
                 : submit_once(tool_name, arguments, server, context, control);
             if (!std::holds_alternative<Json>(outcome)) return outcome;
             return compile_validation_result(std::get<Json>(std::move(outcome)), arguments);
         }
         auto outcome = control.resume_request_id
-            ? resume_once(*control.resume_request_id, control)
+            ? resume_or_submit(*control.resume_request_id, tool_name, arguments, server, context, control)
             : submit_once(tool_name, arguments, server, context, control);
         if (recipe == "ab_compare" && std::holds_alternative<Json>(outcome)) {
             auto result = detail::normalize_action_sequence_result(std::get<Json>(std::move(outcome)), recipe);
@@ -1212,7 +1293,7 @@ ToolOutcome SynchronousJobRunner::run(std::string_view tool_name, const Json& ar
         return outcome;
     }
     auto outcome = control.resume_request_id
-        ? resume_once(*control.resume_request_id, control)
+        ? resume_or_submit(*control.resume_request_id, tool_name, arguments, server, context, control)
         : submit_once(tool_name, arguments, server, context, control);
     if (tool_name == "vibris_run_matrix" && std::holds_alternative<Json>(outcome)) {
         return matrix_result(std::get<Json>(outcome), arguments);
