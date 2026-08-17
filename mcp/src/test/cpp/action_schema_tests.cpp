@@ -89,7 +89,8 @@ void registry_has_exactly_the_supported_tools() {
     }
     const std::set<std::string> expected{
         "vibris_list_presets", "vibris_get_status",
-        "vibris_run_recipe", "vibris_run_actions", "vibris_run_matrix"};
+        "vibris_run_recipe", "vibris_run_actions", "vibris_run_matrix",
+        "vibris_gputrace_launch"};
     require(registry.definitions().size() == expected.size() && names == expected,
         "Tool registry added a duplicate, atomic, submit, poll, or wait tool.");
     const std::array forbidden_tools{
@@ -477,6 +478,38 @@ void matrix_schema_requires_named_sources_configs_and_axes() {
     require(dispatches == 1, "Invalid matrix arguments reached dispatch.");
 }
 
+void gputrace_tool_schema_validates_arguments() {
+    std::size_t dispatches = 0;
+    TestRegistry registry([&](std::string_view name, const Json&) {
+        ++dispatches;
+        require(name == "vibris_gputrace_launch", "Gputrace schema dispatched the wrong tool.");
+        return Json{{"accepted", true}};
+    });
+    const Json valid{
+        {"worktree_root", worktree_root},
+        {"exe", "C:\\Program Files\\Java\\java.exe"},
+        {"args", Json::array({"-Xmx2G", "-cp", "lib;bin", "Main"})},
+        {"output_dir", "D:\\traces"},
+        {"max_duration_ms", 5000},
+        {"dry_run", true},
+    };
+    require(std::holds_alternative<Json>(registry.invoke("vibris_gputrace_launch", valid)),
+        "Valid gputrace arguments were rejected.");
+    require(dispatches == 1, "Valid gputrace arguments did not reach dispatch exactly once.");
+
+    Json missing_root = valid;
+    missing_root.erase("worktree_root");
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_gputrace_launch", missing_root)),
+        "Gputrace accepted a missing worktree_root.");
+    Json unknown = valid;
+    unknown["bogus_option"] = 1;
+    require(std::holds_alternative<InvocationError>(
+                registry.invoke("vibris_gputrace_launch", unknown)),
+        "Gputrace accepted an unknown option.");
+    require(dispatches == 1, "Invalid gputrace arguments reached dispatch.");
+}
+
 void registry_declares_accurate_tool_annotations() {
     TestRegistry registry;
     const std::set<std::string> read_only{
@@ -504,6 +537,7 @@ int main() {
         profile_result_detail_schema();
         paired_benchmark_recipe_schema();
         matrix_schema_requires_named_sources_configs_and_axes();
+        gputrace_tool_schema_validates_arguments();
         registry_declares_accurate_tool_annotations();
         std::cout << "PASS ActionSchemaRejectsForbiddenAndDuplicateTools\n";
         return 0;

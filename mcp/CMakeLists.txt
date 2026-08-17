@@ -113,6 +113,7 @@ add_library(vibris_mcp_core STATIC
     src/main/cpp/job_protocol.cpp
     src/main/cpp/mcp_stdio_server.cpp
     src/main/cpp/native_metrics.cpp
+    src/main/cpp/nsight_gputrace.cpp
     src/main/cpp/paired_benchmark.cpp
     src/main/cpp/pending_request_registry.cpp
     src/main/cpp/profile_matrix_workflow.cpp
