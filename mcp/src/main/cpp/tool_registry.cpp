@@ -301,8 +301,8 @@ Json build_definitions() {
                    "Launch Nsight Graphics GPU Trace (ngfx.exe) on a target game process for the explicit Git "
                    "worktree and return the capture report path. Nsight requires launch-time injection, so this "
                    "tool starts the target via ngfx and cannot attach to an already-running process: the caller "
-                   "must supply the target executable (exe) and its full argument list (args) — e.g. the "
-                   "Minecraft JVM + game arguments — plus optional profiler knobs. The tool waits for the "
+                   "must supply the target executable (exe) and its full argument list (args), e.g. the "
+                   "Minecraft JVM + game arguments, plus optional profiler knobs. The tool waits for the "
                    "capture to finish and locates the newest .ngfx-gputrace report in the output directory. "
                    "Use dry_run=true to print the assembled command without launching.",
                    scoped(closed_object({

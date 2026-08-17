@@ -123,14 +123,22 @@ bool optional_bool(const Json& value, const char* key, const bool fallback) {
 // Probe for the newest Nsight Graphics ngfx.exe under the standard install
 // roots. Returns an empty path when none is found.
 fs::path probe_ngfx() {
+    auto environment_value = [](const wchar_t* name) {
+        std::wstring value(32768, L'\0');
+        const DWORD copied = GetEnvironmentVariableW(name, value.data(), static_cast<DWORD>(value.size()));
+        if (copied == 0 || copied >= value.size()) return std::wstring{};
+        value.resize(copied);
+        return value;
+    };
     std::vector<fs::path> roots;
-    if (const auto* program_files = std::getenv("ProgramFiles"); program_files != nullptr) {
-        roots.emplace_back(program_files) /= "NVIDIA Corporation";
-    }
-    if (const auto* program_files_x86 = std::getenv("ProgramFiles(x86)"); program_files_x86 != nullptr) {
-        roots.emplace_back(program_files_x86) /= "NVIDIA Corporation";
+    for (const auto* variable : {L"ProgramFiles", L"ProgramFiles(x86)"}) {
+        const auto value = environment_value(variable);
+        if (!value.empty()) {
+            roots.emplace_back(value) /= "NVIDIA Corporation";
+        }
     }
     fs::path best;
+    std::filesystem::file_time_type best_installed;
     for (const auto& nvidia : roots) {
         std::error_code error;
         for (const auto& entry : fs::directory_iterator(nvidia, error)) {
@@ -139,9 +147,13 @@ fs::path probe_ngfx() {
                 continue;
             }
             const auto candidate = entry.path() / L"host" / L"windows-desktop-nomad-x64" / L"ngfx.exe";
-            if (fs::is_regular_file(candidate, error) && !error &&
-                (best.empty() || entry.path().filename() > best.parent_path().parent_path().parent_path().filename())) {
+            if (!fs::is_regular_file(candidate, error) || error) continue;
+            // Prefer the most recently installed Nsight Graphics: directory
+            // name comparison is unreliable for multi-part versions.
+            const auto installed = entry.last_write_time(error);
+            if (error || (best.empty() || installed > best_installed)) {
                 best = candidate;
+                best_installed = installed;
             }
         }
     }
@@ -166,10 +178,15 @@ ProcessResult run_process(const fs::path& executable, const std::vector<std::wst
     const BOOL stdout_created = CreatePipe(&stdout_read_handle, &stdout_write_handle, &security, 1024 * 1024);
     const BOOL stderr_created = CreatePipe(&stderr_read_handle, &stderr_write_handle, &security, 1024 * 1024);
     if (!stdout_created || !stderr_created) {
-        if (stdout_read_handle != nullptr) CloseHandle(stdout_read_handle);
-        if (stdout_write_handle != nullptr) CloseHandle(stdout_write_handle);
-        if (stderr_read_handle != nullptr) CloseHandle(stderr_read_handle);
-        if (stderr_write_handle != nullptr) CloseHandle(stderr_write_handle);
+        // A pipe may have been created before the failure; close every handle
+        // that is set so a partial failure does not leak.
+        for (HANDLE* handle : {&stdout_read_handle, &stdout_write_handle, &stderr_read_handle,
+                               &stderr_write_handle}) {
+            if (*handle != nullptr) {
+                CloseHandle(*handle);
+                *handle = nullptr;
+            }
+        }
         throw StateError("INTERNAL_ERROR", "Unable to create the Nsight process pipes.", true);
     }
     static_cast<void>(SetHandleInformation(stdout_read_handle, HANDLE_FLAG_INHERIT, 0));
@@ -182,10 +199,12 @@ ProcessResult run_process(const fs::path& executable, const std::vector<std::wst
     startup.hStdOutput = stdout_write_handle;
     startup.hStdError = stderr_write_handle;
 
-    auto command = command_line(executable.wstring(), arguments);
+    const auto executable_text = executable.wstring();
+    const auto working_dir_text = working_dir.empty() ? std::wstring{} : working_dir.wstring();
+    auto command = command_line(executable_text, arguments);
     PROCESS_INFORMATION process_info{};
-    const auto created = CreateProcessW(executable.wstring().c_str(), command.data(), nullptr, nullptr, TRUE,
-        CREATE_NO_WINDOW, nullptr, working_dir.empty() ? nullptr : working_dir.wstring().c_str(),
+    const auto created = CreateProcessW(executable_text.c_str(), command.data(), nullptr, nullptr, TRUE,
+        CREATE_NO_WINDOW, nullptr, working_dir_text.empty() ? nullptr : working_dir_text.c_str(),
         &startup, &process_info);
     CloseHandle(stdout_write_handle);
     CloseHandle(stderr_write_handle);
@@ -203,6 +222,9 @@ ProcessResult run_process(const fs::path& executable, const std::vector<std::wst
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
     bool timed_out = false;
 
+    // Drain the child's pipes while waiting, mirroring GitRepository::read:
+    // a child that fills its stdout/stderr buffer blocks forever, so the
+    // pipes must be emptied on every poll or ngfx stalls until the timeout.
     auto drain_pipe = [&](HANDLE pipe) {
         std::array<char, 4096> buffer{};
         for (;;) {
@@ -212,8 +234,9 @@ ProcessResult run_process(const fs::path& executable, const std::vector<std::wst
                 continue;
             }
             if (available == 0) return;
-            const auto requested = (std::min)({available, static_cast<DWORD>(buffer.size()),
-                static_cast<DWORD>(max_output_bytes - (std::min)(output.size(), max_output_bytes))});
+            const auto requested = static_cast<DWORD>((std::min<std::size_t>)({
+                buffer.size(), static_cast<std::size_t>(available),
+                max_output_bytes - (std::min)(output.size(), max_output_bytes)}));
             DWORD read = 0;
             if (!ReadFile(pipe, buffer.data(), requested, &read, nullptr)) {
                 if (GetLastError() == ERROR_BROKEN_PIPE) return;
@@ -228,6 +251,8 @@ ProcessResult run_process(const fs::path& executable, const std::vector<std::wst
 
     for (;;) {
         const auto wait = WaitForSingleObject(process_handle, 100);
+        drain_pipe(stdout_read_handle);
+        drain_pipe(stderr_read_handle);
         if (wait == WAIT_OBJECT_0) break;
         if (std::chrono::steady_clock::now() >= deadline) {
             timed_out = true;
@@ -371,10 +396,10 @@ ToolOutcome launch_nsight_gputrace(const Json& arguments) {
                     {"command", wide_to_utf8(command)}};
     }
 
-    const auto command = command_line(options.ngfx.wstring(), ngfx_arguments(options));
+    const auto ngfx_command = ngfx_arguments(options);
     ProcessResult result;
     try {
-        result = run_process(options.ngfx, ngfx_arguments(options), options.working_dir, options.timeout_seconds);
+        result = run_process(options.ngfx, ngfx_command, options.working_dir, options.timeout_seconds);
     } catch (const StateError& error) {
         return ToolFailure{std::string(error.code()), std::string(error.what()), error.retryable(),
                            Json::object()};
