@@ -15,6 +15,7 @@
 #include <utility>
 
 #include "config_document.hpp"
+#include "nsight_gputrace.hpp"
 #include "profile_matrix_workflow.hpp"
 #include "result_mapper.hpp"
 #include "scene_context_resolver.hpp"
@@ -134,6 +135,7 @@ private:
         ToolOutcome dispatch(std::string_view name, const Json& arguments) {
             if (name == "vibris_list_presets") return list_presets(arguments);
             if (name == "vibris_get_status") return get_status();
+            if (name == "vibris_gputrace_launch") return launch_nsight_gputrace(arguments);
             if (name == "vibris_run_recipe" &&
                 arguments.value("recipe", std::string{}) == "profile_matrix") {
                 if (arguments.contains("operation")) return profile_matrix_.control(arguments);

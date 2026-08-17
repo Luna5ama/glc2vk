@@ -89,7 +89,8 @@ void registry_has_exactly_the_supported_tools() {
     }
     const std::set<std::string> expected{
         "vibris_list_presets", "vibris_get_status",
-        "vibris_run_recipe", "vibris_run_actions", "vibris_run_matrix"};
+        "vibris_run_recipe", "vibris_run_actions", "vibris_run_matrix",
+        "vibris_gputrace_launch"};
     require(registry.definitions().size() == expected.size() && names == expected,
         "Tool registry added a duplicate, atomic, submit, poll, or wait tool.");
     const std::array forbidden_tools{

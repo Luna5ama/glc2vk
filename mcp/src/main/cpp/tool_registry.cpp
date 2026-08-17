@@ -297,6 +297,32 @@ Json build_definitions() {
                                          {"matrix", matrix_axes_schema()},
                                          {"actions", {{"type", "array"}, {"items", action_schema()}, {"maxItems", 64}}}},
                                         {"sources", "configs", "matrix", "actions"}), true), false),
+        definition("vibris_gputrace_launch",
+                   "Launch Nsight Graphics GPU Trace (ngfx.exe) on a target game process for the explicit Git "
+                   "worktree and return the capture report path. Nsight requires launch-time injection, so this "
+                   "tool starts the target via ngfx and cannot attach to an already-running process: the caller "
+                   "must supply the target executable (exe) and its full argument list (args) — e.g. the "
+                   "Minecraft JVM + game arguments — plus optional profiler knobs. The tool waits for the "
+                   "capture to finish and locates the newest .ngfx-gputrace report in the output directory. "
+                   "Use dry_run=true to print the assembled command without launching.",
+                   scoped(closed_object({
+                       {"ngfx_path", {{"type", "string"}, {"minLength", 1}}},
+                       {"exe", {{"type", "string"}, {"minLength", 1}}},
+                       {"working_dir", {{"type", "string"}, {"minLength", 1}}},
+                       {"output_dir", {{"type", "string"}, {"minLength", 1}}},
+                       {"args", string_array(256)},
+                       {"start_after_frames", bounded_integer(1, std::numeric_limits<std::int32_t>::max())},
+                       {"start_after_ms", bounded_integer(1, std::numeric_limits<std::int32_t>::max())},
+                       {"max_duration_ms", bounded_integer(1, std::numeric_limits<std::int32_t>::max())},
+                       {"limit_frames", bounded_integer(1, std::numeric_limits<std::int32_t>::max())},
+                       {"architecture", {{"type", "string"}, {"minLength", 1}}},
+                       {"metric_set_id", bounded_integer(0, std::numeric_limits<std::int32_t>::max())},
+                       {"metric_set_name", {{"type", "string"}, {"minLength", 1}}},
+                       {"multi_pass_metrics", {{"type", "boolean"}}},
+                       {"auto_export", {{"type", "boolean"}}},
+                       {"dry_run", {{"type", "boolean"}}},
+                       {"timeout_seconds", bounded_integer(1, 3600)},
+                   }), false), false),
     });
     return definitions;
 }

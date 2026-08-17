@@ -973,7 +973,7 @@ void typed_preset_discovery_and_request_scene() {
 
 void tool_metadata_is_request_scoped() {
     const vibris::mcp::ToolRegistry tools;
-    require(tools.definitions().size() == 5, "Tool registry did not expose exactly five stateless tools.");
+    require(tools.definitions().size() == 6, "Tool registry did not expose exactly six stateless tools.");
     for (const auto& definition : tools.definitions()) {
         const auto name = definition.at("name").get<std::string>();
         const auto description = definition.at("description").get<std::string>();
