@@ -11,6 +11,12 @@
 #include <utility>
 #include <vector>
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <Windows.h>
 
 #include "state_error.hpp"
@@ -88,6 +94,11 @@ std::wstring command_line(const std::wstring& executable, const std::vector<std:
     for (const auto& argument : arguments) {
         command.push_back(L' ');
         command += quote_argument(argument);
+    }
+    // CreateProcessW rejects command lines over 32767 characters; fail early
+    // with a clear error instead of letting the spawn fail obscurely.
+    if (command.size() >= 32767) {
+        throw StateError("INTERNAL_ERROR", "The Nsight command line is too long.", true);
     }
     return command;
 }
@@ -347,8 +358,6 @@ std::vector<std::wstring> ngfx_arguments(const GputraceOptions& options) {
     }
     if (options.auto_export) result.push_back(L"--auto-export");
     if (!options.output_dir.empty()) {
-        std::error_code error;
-        fs::create_directories(options.output_dir, error);
         result.push_back(L"--output-dir");
         result.push_back(options.output_dir.wstring());
     }
@@ -390,12 +399,26 @@ ToolOutcome launch_nsight_gputrace(const Json& arguments) {
         return ToolFailure{"MISSING_EXE", "The exe (target game executable) is required.", false, Json::object()};
     }
     if (options.dry_run) {
-        const auto command = command_line(options.ngfx.wstring(), ngfx_arguments(options));
-        return Json{{"dry_run", true},
-                    {"ngfx", options.ngfx.string()},
-                    {"command", wide_to_utf8(command)}};
+        try {
+            const auto command = command_line(options.ngfx.wstring(), ngfx_arguments(options));
+            return Json{{"dry_run", true},
+                        {"ngfx", options.ngfx.string()},
+                        {"command", wide_to_utf8(command)}};
+        } catch (const StateError& error) {
+            return ToolFailure{std::string(error.code()), std::string(error.what()), error.retryable(),
+                               Json::object()};
+        }
     }
 
+    if (!options.output_dir.empty()) {
+        std::error_code error;
+        fs::create_directories(options.output_dir, error);
+        if (error) {
+            return ToolFailure{"OUTPUT_DIR_ERROR",
+                "Unable to create the Nsight output directory: " + options.output_dir.string(), false,
+                Json{{"path", options.output_dir.string()}}};
+        }
+    }
     const auto ngfx_command = ngfx_arguments(options);
     ProcessResult result;
     try {
