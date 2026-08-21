@@ -160,6 +160,9 @@ internal class ServerDescriptor @JvmOverloads constructor(
 
     private fun readinessDetail(snapshot: VibrisCoreEngine.StatusSnapshot): String = when {
         !snapshot.coreOnline -> "Core source activation is unavailable."
+        snapshot.state == ServerState.SERVER_STATE_FAILED && snapshot.recovery != null ->
+            "Runtime recovery failed for job ${snapshot.recovery.jobId} " +
+                "from workspace ${snapshot.recovery.workspaceId}; explicit recovery is required."
         snapshot.recovery != null ->
             "Runtime recovery is pending for job ${snapshot.recovery.jobId} " +
                 "from workspace ${snapshot.recovery.workspaceId}."

@@ -586,11 +586,13 @@ class VibrisCoreEngine internal constructor(
 
     private fun projectionLocked(schedulerSnapshot: FairJobScheduler.Snapshot = scheduler.snapshot()): Projection {
         val recoveryPending = executor.hasPendingRecovery()
+        val recoveryFailed = executor.hasFailedRecovery()
         val coreOnline = !closed && (activator.ready() || recoveryPending)
         val active = schedulerSnapshot.active
         val hasWork = active != null || schedulerSnapshot.queued.isNotEmpty() || recoveryPending
         val phase = when {
             closed -> RuntimePhase.RUNTIME_PHASE_DISCONNECTED
+            recoveryFailed && active == null -> RuntimePhase.RUNTIME_PHASE_FAILED
             !coreOnline -> RuntimePhase.RUNTIME_PHASE_FAILED
             recoveryPending && active == null -> RuntimePhase.RUNTIME_PHASE_RECOVERING
             active != null -> runtimePhase(currentStage(active.metadata.requestId))
@@ -601,6 +603,7 @@ class VibrisCoreEngine internal constructor(
         }
         val state = when {
             closed -> ServerState.SERVER_STATE_STOPPING
+            recoveryFailed && active == null -> ServerState.SERVER_STATE_FAILED
             !coreOnline -> ServerState.SERVER_STATE_FAILED
             !runtimeObserved -> ServerState.SERVER_STATE_STARTING
             hasWork && phase == RuntimePhase.RUNTIME_PHASE_RECOVERING -> ServerState.SERVER_STATE_RECOVERING

@@ -15,6 +15,7 @@ import dev.vibris.protocol.v2.PreparedSourceRef
 import dev.vibris.protocol.v2.ReceiptStatus
 import dev.vibris.protocol.v2.RecoverRuntimeRequest
 import dev.vibris.protocol.v2.RestorePolicy
+import dev.vibris.protocol.v2.RuntimePhase
 import dev.vibris.protocol.v2.SceneContext
 import dev.vibris.protocol.v2.ServerMessage
 import dev.vibris.protocol.v2.ServerState
@@ -151,12 +152,14 @@ class RuntimeLeaseStatusTest {
         assertTrue(failedRecoverySession.terminal.await(2, TimeUnit.SECONDS))
         val failedRecovery = failedRecoverySession.messages.last { it.hasJobFailed() }.jobFailed
         assertEquals(ErrorCode.ERROR_CODE_RECOVERY_FAILED, failedRecovery.error.code)
-        val stillRecovering = descriptor.status(engine, StatusDetail.STATUS_DETAIL_FULL)
-        assertEquals(ServerState.SERVER_STATE_RECOVERING, stillRecovering.state)
-        assertFalse(stillRecovering.hasActiveLease())
-        assertTrue(stillRecovering.hasRecovery())
-        assertEquals(1, stillRecovering.recovery.attemptCount)
-        assertEquals(ErrorCode.ERROR_CODE_RECOVERY_FAILED, stillRecovering.recovery.lastError.code)
+        val failedRuntime = descriptor.status(engine, StatusDetail.STATUS_DETAIL_FULL)
+        assertEquals(ServerState.SERVER_STATE_FAILED, failedRuntime.state)
+        assertEquals(RuntimePhase.RUNTIME_PHASE_FAILED, failedRuntime.readiness.phase)
+        assertFalse(failedRuntime.hasActiveLease())
+        assertFalse(failedRuntime.canAcceptJob)
+        assertTrue(failedRuntime.hasRecovery())
+        assertEquals(1, failedRuntime.recovery.attemptCount)
+        assertEquals(ErrorCode.ERROR_CODE_RECOVERY_FAILED, failedRuntime.recovery.lastError.code)
 
         runtime.reloads.add(ReloadResult.success(EffectiveShaderSettings.empty(), emptyList()))
         val recoverySession = recordingSession()

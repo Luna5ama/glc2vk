@@ -921,6 +921,9 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     fun hasPendingRecovery(): Boolean = pendingRecovery != null
 
     @Synchronized
+    fun hasFailedRecovery(): Boolean = pendingRecovery?.attemptCount?.let { it > 0 } == true
+
+    @Synchronized
     fun recoveryStatus(): RuntimeRecovery? = pendingRecovery?.let { recovery ->
         RuntimeRecovery.newBuilder()
             .setJobId(recovery.jobId)
