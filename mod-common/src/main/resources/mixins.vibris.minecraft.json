@@ -1,0 +1,30 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.vibris.mod.mixin.minecraft",
+  "plugin": "dev.vibris.mod.mixin.VibrisMixinPlugin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "MixinGlCommandEncoderVibris",
+    "MixinGlProgramVibris",
+    "FrameCounterAccess",
+    "MixinGameRendererVibris",
+    "MixinKeyboardHandler_VibrisInputBlock",
+    "MixinLevelLoadingScreen_VibrisTrackerRelease",
+    "MixinLevelLoadTracker_VibrisServerViewRelease",
+    "MixinMinecraft_VibrisFrameThrottle",
+    "MixinMinecraft_VibrisLevelLoadRelease",
+    "MixinMinecraftShutdown",
+    "MixinMouseHandler_VibrisInputBlock",
+    "MixinQuickPlayAutomation",
+    "MixinTextureAtlasVibris",
+    "MixinWindowAutomation",
+    "TimerAccess",
+    "WorldOpenFlowsInvoker",
+    "TextureAtlasAccess"
+  ],
+  "injectors": {
+    "defaultRequire": 1,
+    "maxShiftBy": 2
+  }
+}

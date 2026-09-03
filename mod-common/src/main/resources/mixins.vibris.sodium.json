@@ -1,0 +1,16 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.vibris.mod.mixin.sodium",
+  "plugin": "dev.vibris.mod.mixin.VibrisMixinPlugin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "MixinImmediateDrawCommandList",
+    "MixinRenderSectionManager",
+    "MixinSodiumWorldRenderer"
+  ],
+  "injectors": {
+    "defaultRequire": 1,
+    "maxShiftBy": 2
+  }
+}

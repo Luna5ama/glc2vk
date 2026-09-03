@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "vibris",
+  "version": "${version}",
+  "name": "Vibris",
+  "description": "Shader development automation and capture integration for Iris",
+  "authors": ["Luna5ama"],
+  "license": "LGPL-3.0-only",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["dev.vibris.mod.fabric.VibrisFabricClient"]
+  },
+  "mixins": [
+    "mixins.vibris.minecraft.json",
+    "mixins.vibris.iris.json",
+    "mixins.vibris.sodium.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.18.1",
+    "minecraft": "=1.21.11",
+    "iris": "=1.10.6-vibris.1+mc1.21.11",
+    "sodium": "0.8.x"
+  }
+}

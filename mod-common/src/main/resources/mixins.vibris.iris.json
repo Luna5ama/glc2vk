@@ -1,0 +1,34 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.vibris.mod.mixin.iris",
+  "plugin": "dev.vibris.mod.mixin.VibrisMixinPlugin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "IrisAccessor",
+    "MixinCompositePass",
+    "MixinCompositeRenderer",
+    "MixinComputeProgram",
+    "MixinFinalPassRenderer",
+    "MixinGlImage",
+    "MixinGLDebug",
+    "MixinIrisLifecycle",
+    "MixinIrisDiagnostics",
+    "MixinIrisRenderSystem",
+    "MixinIrisRenderingPipeline",
+    "MixinPipelineManager",
+    "MixinProgram",
+    "MixinProgramBuilder",
+    "MixinRenderTargets",
+    "MixinShaderStorageBufferHolder",
+    "MixinShaderCreator",
+    "MixinShadowCompositePass",
+    "MixinShadowCompositeRenderer",
+    "MixinShadowRenderTargets",
+    "ShaderPrinterAccess"
+  ],
+  "injectors": {
+    "defaultRequire": 1,
+    "maxShiftBy": 2
+  }
+}
