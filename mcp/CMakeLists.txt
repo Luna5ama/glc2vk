@@ -110,6 +110,7 @@ add_library(vibris_mcp_core STATIC
     src/main/cpp/job_protocol.cpp
     src/main/cpp/mcp_stdio_server.cpp
     src/main/cpp/native_metrics.cpp
+    src/main/cpp/nsight_analyzer.cpp
     src/main/cpp/paired_benchmark.cpp
     src/main/cpp/pending_request_registry.cpp
     src/main/cpp/profile_matrix_workflow.cpp
@@ -175,6 +176,9 @@ if(BUILD_TESTING)
     target_include_directories(vibris-grpc-tests PRIVATE src/test/cpp)
     target_link_libraries(vibris-grpc-tests PRIVATE vibris_mcp_core)
 
+    add_executable(vibris-grpc-planned-restart-tests src/test/cpp/grpc_planned_restart_tests.cpp)
+    target_link_libraries(vibris-grpc-planned-restart-tests PRIVATE vibris_mcp_core)
+
     add_executable(vibris-grpc-request-ownership-tests src/test/cpp/grpc_request_ownership_tests.cpp)
     target_link_libraries(vibris-grpc-request-ownership-tests PRIVATE vibris_mcp_core)
 
@@ -199,6 +203,9 @@ if(BUILD_TESTING)
     add_executable(vibris-action-schema-tests src/test/cpp/action_schema_tests.cpp)
     target_link_libraries(vibris-action-schema-tests PRIVATE vibris_mcp_core)
 
+    add_executable(vibris-nsight-analyzer-tests src/test/cpp/nsight_analyzer_tests.cpp)
+    target_link_libraries(vibris-nsight-analyzer-tests PRIVATE vibris_mcp_core)
+
     add_executable(vibris-durable-workflow-tests src/test/cpp/profile_matrix_workflow_tests.cpp)
     target_include_directories(vibris-durable-workflow-tests PRIVATE src/test/cpp)
     target_link_libraries(vibris-durable-workflow-tests PRIVATE vibris_mcp_core)
@@ -216,6 +223,7 @@ if(BUILD_TESTING)
         target_compile_options(vibris-stdio-fixture-test PRIVATE /W4 /permissive-)
         target_compile_options(vibris-stdio-v2-server PRIVATE /W4 /permissive-)
         target_compile_options(vibris-grpc-tests PRIVATE /W4 /permissive-)
+        target_compile_options(vibris-grpc-planned-restart-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-grpc-request-ownership-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-grpc-source-ownership-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-grpc-accepted-resume-tests PRIVATE /W4 /permissive-)
@@ -223,6 +231,7 @@ if(BUILD_TESTING)
         target_compile_options(vibris-synchronous-job-runner-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-workspace-artifact-link-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-action-schema-tests PRIVATE /W4 /permissive-)
+        target_compile_options(vibris-nsight-analyzer-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-durable-workflow-tests PRIVATE /W4 /permissive-)
         target_compile_options(vibris-paired-benchmark-tests PRIVATE /W4 /permissive-)
     endif()
@@ -232,9 +241,11 @@ if(BUILD_TESTING)
                 vibris-state-tests vibris-worktree-discovery-tests vibris-workspace-source-tests
                 vibris-commit-source-tests vibris-git-repository-security-tests
                 vibris-stdio-fixture-test vibris-stdio-v2-server
-                vibris-grpc-tests vibris-grpc-request-ownership-tests
+                vibris-grpc-tests vibris-grpc-planned-restart-tests
+                vibris-grpc-request-ownership-tests
                 vibris-grpc-source-ownership-tests vibris-grpc-accepted-resume-tests)
     add_dependencies(mcp-tests vibris-job-protocol-tests vibris-action-schema-tests)
+    add_dependencies(mcp-tests vibris-nsight-analyzer-tests)
     add_dependencies(mcp-tests vibris-synchronous-job-runner-tests)
     add_dependencies(mcp-tests vibris-workspace-artifact-link-tests)
     add_dependencies(mcp-tests vibris-durable-workflow-tests)
@@ -374,6 +385,8 @@ if(BUILD_TESTING)
 
     add_test(NAME AcceptedRequestResumesAfterDisconnect COMMAND vibris-grpc-accepted-resume-tests)
     set_tests_properties(AcceptedRequestResumesAfterDisconnect PROPERTIES RUN_SERIAL TRUE TIMEOUT 30)
+    add_test(NAME PlannedRestartWaitsForReplacementRuntime COMMAND vibris-grpc-planned-restart-tests)
+    set_tests_properties(PlannedRestartWaitsForReplacementRuntime PROPERTIES RUN_SERIAL TRUE TIMEOUT 30)
 
     add_test(NAME JobProtocolStrictV2Resume COMMAND vibris-job-protocol-tests)
     set_tests_properties(JobProtocolStrictV2Resume PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
@@ -394,6 +407,7 @@ if(BUILD_TESTING)
         add_test(NAME ${scenario} COMMAND vibris-workspace-artifact-link-tests ${scenario})
     endforeach()
     add_test(NAME ActionSchemaPassResourceV2Contract COMMAND vibris-action-schema-tests)
+    add_test(NAME NsightAnalyzerReplayContract COMMAND vibris-nsight-analyzer-tests)
     add_test(NAME DurableMatrixCheckpointResume COMMAND vibris-durable-workflow-tests)
     add_test(NAME CompileValidationCheckpointResume COMMAND vibris-durable-workflow-tests)
     set_tests_properties(DurableMatrixCheckpointResume PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)

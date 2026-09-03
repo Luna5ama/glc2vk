@@ -5,7 +5,13 @@ import dev.luna5ama.vibris.capture.captureGlDispatchCompute
 import dev.luna5ama.vibris.capture.endGlCapture
 import dev.luna5ama.vibris.capture.glDebugGroupCaptureAware
 import dev.luna5ama.vibris.common.CaptureData
+import dev.luna5ama.vibris.common.CaptureMetadata
 import dev.luna5ama.vibris.common.Command
+import dev.luna5ama.vibris.common.ImageData
+import dev.luna5ama.vibris.common.ImageDataType
+import dev.luna5ama.vibris.common.ImageMetadata
+import dev.luna5ama.vibris.common.VkFormat
+import dev.luna5ama.vibris.common.VkImageViewType
 import dev.luna5ama.glwrapper.base.GL_COMPILE_STATUS
 import dev.luna5ama.glwrapper.base.GL_COMPUTE_SHADER
 import dev.luna5ama.glwrapper.base.GL_DYNAMIC_STORAGE_BIT
@@ -54,6 +60,10 @@ import org.lwjgl.glfw.GLFW.glfwMakeContextCurrent
 import org.lwjgl.glfw.GLFW.glfwTerminate
 import org.lwjgl.glfw.GLFW.glfwWindowHint
 import org.lwjgl.opengl.GL
+import org.lwjgl.opengl.GL11C.GL_RGBA
+import org.lwjgl.opengl.GL11C.GL_UNSIGNED_BYTE
+import org.lwjgl.opengl.GL45C.glGetTextureImage
+import java.nio.ByteBuffer
 import kotlin.io.path.Path
 import kotlin.io.path.exists
 import kotlin.test.Test
@@ -61,6 +71,76 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 class ReplayGLRuntimeTest {
+    @Test
+    fun resetsEveryCapturedTextureMipLevel() {
+        if (!System.getProperty("vibris.runtimeTest").toBoolean()) {
+            return
+        }
+        check(glfwInit()) { "Failed to initialize GLFW" }
+        val window = try {
+            glfwDefaultWindowHints()
+            glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API)
+            glfwWindowHint(GLFW_CONTEXT_CREATION_API, GLFW_NATIVE_CONTEXT_API)
+            glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4)
+            glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6)
+            glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE)
+            glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, 1)
+            glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE)
+            glfwCreateWindow(64, 64, "vibris-mip-reset-test", 0L, 0L).also {
+                check(it != 0L) { "Failed to create GLFW window" }
+            }
+        } catch (t: Throwable) {
+            glfwTerminate()
+            throw t
+        }
+        try {
+            glfwMakeContextCurrent(window)
+            GL.createCapabilities()
+            val level0 = directBytes(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+            val level1 = directBytes(17, 34, 51, 68)
+            val captureData = CaptureData(
+                CaptureMetadata(
+                    images = listOf(
+                        ImageMetadata(
+                            name = "mip-reset-test",
+                            width = 2,
+                            height = 2,
+                            depth = 1,
+                            mipLevels = 2,
+                            arrayLayers = 1,
+                            format = VkFormat.R8G8B8A8_UNORM,
+                            dataType = ImageDataType.COLOR,
+                            viewType = VkImageViewType.`2D`,
+                            levelDataSizes = listOf(16L, 4L),
+                        ),
+                    ),
+                    buffers = emptyList(),
+                ),
+                imageData = listOf(
+                    ImageData(listOf(Arr.wrap(level0), Arr.wrap(level1)), listOf(level0, level1)),
+                ),
+                bufferData = emptyList(),
+            )
+            val resources = GLReplayResource(captureData)
+            try {
+                resources.resetCapturedData()
+                val readback = ByteBuffer.allocateDirect(4)
+                glGetTextureImage(resources.textureId(0), 1, GL_RGBA, GL_UNSIGNED_BYTE, readback)
+                assertEquals(17, readback.get(0).toInt() and 0xff)
+                assertEquals(34, readback.get(1).toInt() and 0xff)
+                assertEquals(51, readback.get(2).toInt() and 0xff)
+                assertEquals(68, readback.get(3).toInt() and 0xff)
+            } finally {
+                resources.destroy()
+            }
+        } finally {
+            GL.destroy()
+            glfwFreeCallbacks(window)
+            glfwDestroyWindow(window)
+            glfwTerminate()
+        }
+    }
+
     @Test
     fun captureAndReplayTwoDispatches() {
         if (!System.getProperty("vibris.runtimeTest").toBoolean()) {
@@ -183,5 +263,10 @@ class ReplayGLRuntimeTest {
         glDetachShader(program, shader)
         glDeleteShader(shader)
         return program
+    }
+
+    private fun directBytes(vararg values: Int): ByteBuffer = ByteBuffer.allocateDirect(values.size).apply {
+        values.forEach { put(it.toByte()) }
+        flip()
     }
 }

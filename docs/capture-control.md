@@ -1,8 +1,8 @@
 # Vibris engineering validation v2
 
 Vibris exposes a breaking, request-scoped engineering-validation service. The wire protocol, MCP schemas,
-configuration, workspace identity, durable-job state, delivery receipts, and delivery transaction manifests all use
-schema version 2. There is no translation, migration, alias, dual-read, or dual-write path for earlier formats.
+workspace identity, durable-job state, delivery receipts, and delivery transaction manifests use schema version 2.
+The canonical `server.json` format is schema 4.
 
 ## Clean cutover
 
@@ -10,9 +10,11 @@ Build and run matching v2 copies of Iris, Vibris Core, and Vibris MCP. A client 
 workspace ID on every request. Missing or different protocol versions fail with `UNSUPPORTED_VERSION` before any job
 is submitted.
 
-Persisted configuration, workspace identity, build receipts, and delivery transaction manifests whose
-`schema_version` is not 2 are rejected and left byte-for-byte unchanged. Move old files aside manually if their
-contents must be retained, then let the v2 service create new state. Vibris never deletes or converts old user data.
+Persisted workspace identity, build receipts, and delivery transaction manifests whose `schema_version` is not 2 are
+rejected and left byte-for-byte unchanged. `server.json` accepts legacy schema 2 without restart support and schema 3
+with separate pending/artifact roots for compatibility; schema 4 replaces both roots with `vibris_root`. Move
+unsupported files aside manually if their contents must be retained, then let the service create new state. Vibris
+never deletes or converts old user data.
 
 The authoritative workspace identity document has this shape:
 
@@ -23,16 +25,37 @@ The authoritative workspace identity document has this shape:
 }
 ```
 
-Configuration additionally contains the loopback listen address, artifact root, capacity/TTL policy, and any
-deployment-specific runtime paths. Relative paths resolve from the selected game directory exactly as written.
+Configuration additionally contains the loopback listen address, capacity/TTL policy, and deployment-specific paths.
+Schema 4 derives `pending`, `artifacts`, and ephemeral `replay_capture` beneath one `vibris_root`:
+
+```json
+{
+  "schema_version": 4,
+  "listen_address": "127.0.0.1:50051",
+  "vibris_root": "R:\\vibris",
+  "artifact_quota_bytes": 3221225472,
+  "artifact_ttl_hours": 168,
+  "shaderpack_root": "I:\\code\\mcshaders\\vibris",
+  "max_source_bytes": 536870912,
+  "max_source_files": 100000,
+  "max_global_queue": 32,
+  "max_actions_per_job": 64,
+  "restart_executable": "I:\\PCL\\启动 1.21.11-Vibris.bat"
+}
+```
+
+An empty `restart_executable` disables the restart tool; a configured value must resolve to an ordinary file. Relative
+paths resolve from the selected game directory exactly as written.
 
 ## MCP surface
 
-The server publishes exactly eight tools:
+The MCP publishes exactly ten tools:
 
 - `vibris_get_status`
+- `vibris_restart`
 - `vibris_list_presets`
 - `vibris_list_resources`
+- `mcp_vibiris_nsight_analyze`
 - `vibris_run_actions`
 - `vibris_run_matrix`
 - `vibris_run_recipe`
@@ -63,11 +86,71 @@ sequence or one `vibris_run_matrix` request.
 If a control stream reports `RST_STREAM` after submission, the MCP reconnects and resumes the accepted request by
 request ID. Do not resubmit blindly and do not wait for the current lease to become idle.
 
+`vibris_restart` is a top-level lifecycle control, never a run action. Core immediately closes new admission, broadcasts
+`ServerShuttingDown` to every connected MCP, drains every already accepted queued or active job without cancelling it,
+then invokes `restart_executable`. MCP clients retain the planned-restart state, reconnect until the replacement runtime
+sends `ServerHello`, and continue job-starting calls after that handshake instead of reporting the expected disconnect
+as a runtime failure. Status and durable-job control remain available while the old instance drains.
+
+## Atomic Nsight GPU Trace
+
+Raw replay-capture actions (`capture_pass` and `capture_multi`) are not part of the public MCP or wire action surface.
+They remain an Iris/Vibris runtime implementation detail used only by the atomic `nsight_gpu_trace` run action. Its
+`capture` selector is either one exact named pass (`mode: "single"`, `pass_id`) or one stage group
+(`mode: "multi"`, `capture_type`: `prepare`, `begin`, `deferred`, or `composite`).
+
+One Core job owns the complete sequence: wait for the internal capture service, capture into
+`<vibris_root>/replay_capture`, run the selected Vibris GL/VK replayer under Nsight GPU Trace, require the complete
+auto-export BASE bundle, publish the descriptor/TSV/log files through the normal managed artifact transaction, and
+delete the raw replay capture and `.ngfx-gputrace` tree. Core's single active-job scheduler therefore serializes the
+entire Nsight sequence across MCP processes and agents; there is no separately acquirable Nsight lock or partial trace
+phase.
+
+Example action:
+
+```json
+{
+  "worktree_root": "I:/code/mcshaders/example",
+  "preset_id": "720p",
+  "actions": [{
+    "type": "nsight_gpu_trace",
+    "capture": {"mode": "single", "pass_id": "composite/composite1"},
+    "artifact_name": "composite1",
+    "replay_backend": "gl",
+    "architecture": "Ada",
+    "metric_set_name": "Throughput Metrics",
+    "replay_frames": 300,
+    "start_after_ms": 1000,
+    "max_duration_ms": 1000,
+    "timeout_seconds": 300,
+    "time_every_action": true,
+    "gpu_clocks": "base"
+  }]
+}
+```
+
+Deploy the optimized replayers together with the mod as `<game_directory>/vibris/replayer-gl.jar` and/or
+`<game_directory>/vibris/replayer-vk.jar`; this game-side directory is independent of `vibris_root` and
+`replay_capture`. Java is resolved from `<vibris_root>/runtime/java/bin/java.exe`, `VIBRIS_REPLAY_JAVA`, `JAVA_HOME`,
+then `PATH`. Nsight is resolved from
+`VIBRIS_NSIGHT_NGFX` or the newest installed Nsight Graphics. Multi-pass metrics are intentionally unavailable because
+they are incompatible with the required auto-export workflow.
+
+Pass the returned `*.nsight.bundle.json` managed artifact path to `mcp_vibiris_nsight_analyze`. This top-level tool runs
+entirely inside MCP and does not contact Minecraft or Core. Its JSON `query.operation` supports `summary`, `stages`,
+`actions`, `metric`, `stalls`, `bandwidth`, `shader_bound`, `texture_cache`, `overdraw`, `geometry`, and `draws`.
+`GPUTRACE_REGIMES.xls` is streamed with metric-column projection. By default only durations and metrics inside the
+outer `Replay` marker are shader evidence; whole-trace/frame-budget, CPU submission, `Copy`, sleep/yield, and unmarked
+tail values are context or excluded.
+
 ## Sources and settings
 
 Omitting `source` selects the caller's workspace source. If `source` is supplied, `kind` is mandatory. Workspace and
 commit sources are frozen before execution. Results include source identity, shader-content identity, effective shader
 settings, origins, defaults, stable settings hash, and completion-time staleness facts.
+
+A config without `values`, or an omitted recipe `config`, selects shaderpack defaults. It never preserves settings from
+an earlier request. `vibris_run_matrix` applies that rule independently to every generated source/config case.
 
 State-changing validation snapshots the source, effective settings, scene, and temporal state. Terminal results carry
 restoration receipts. If restoration cannot be proved, the job fails closed and status exposes the required recovery

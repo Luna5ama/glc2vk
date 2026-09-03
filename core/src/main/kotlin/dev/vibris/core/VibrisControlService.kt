@@ -13,10 +13,13 @@ import dev.vibris.protocol.v2.ListResourcesRequest
 import dev.vibris.protocol.v2.ListResourcesResponse
 import dev.vibris.protocol.v2.ManageArtifactsRequest
 import dev.vibris.protocol.v2.ManageArtifactsResponse
+import dev.vibris.protocol.v2.RequestRestartRequest
+import dev.vibris.protocol.v2.RequestRestartResponse
 import dev.vibris.protocol.v2.ArtifactOperation
 import dev.vibris.protocol.v2.Pong
 import dev.vibris.protocol.v2.ScenePreset
 import dev.vibris.protocol.v2.ServerMessage
+import dev.vibris.protocol.v2.ServerShuttingDown
 import dev.vibris.protocol.v2.StatusDetail
 import dev.vibris.protocol.v2.StatusWaitCondition
 import dev.vibris.protocol.v2.ValidateContextRequest
@@ -25,12 +28,21 @@ import dev.vibris.protocol.v2.VibrisControlGrpc
 import io.grpc.Status
 import io.grpc.stub.StreamObserver
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 
 class VibrisControlService internal constructor(
     configuration: ServerConfiguration,
     private val runtime: VibrisRuntimeAdapter,
     shaderLink: ShaderLink,
+    private val restartHandler: VibrisBootstrap.RestartHandler,
 ) : VibrisControlGrpc.VibrisControlImplBase(), AutoCloseable {
+    private val logger = System.getLogger(VibrisControlService::class.java.name)
+    private val restartExecutable = configuration.restartExecutable
+    private val sessions = ConcurrentHashMap.newKeySet<ControlSession>()
+    private val restartCoordinator = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "Vibris Restart Coordinator").apply { isDaemon = true }
+    }
     private val artifacts = ArtifactManager(
         configuration.paths.artifactRoot,
         configuration.artifactQuotaBytes,
@@ -45,6 +57,9 @@ class VibrisControlService internal constructor(
         configuration.maxSourceFiles,
         configuration.maxGlobalQueue,
         configuration.maxActionsPerJob,
+        configuration.replayCaptureRoot,
+        configuration.replayerRoot,
+        configuration.vibrisRoot.resolve("runtime/java/bin/java.exe"),
     )
     private val descriptor = ServerDescriptor(
         configuration.paths.pendingShadersRoot,
@@ -65,6 +80,9 @@ class VibrisControlService internal constructor(
         ServerConfiguration.defaults(pendingRoot, artifactRoot),
         runtime,
         shaderLink,
+        VibrisBootstrap.RestartHandler { executable ->
+            throw IllegalStateException("No Minecraft restart handler is installed for $executable")
+        },
     )
 
     constructor(pendingRoot: Path, artifactRoot: Path, runtime: VibrisRuntimeAdapter) :
@@ -270,6 +288,41 @@ class VibrisControlService internal constructor(
         }
     }
 
+    override fun requestRestart(
+        request: RequestRestartRequest,
+        observer: StreamObserver<RequestRestartResponse>,
+    ) {
+        if (!request.hasProtocolVersion() || request.protocolVersion.major != 2) {
+            observer.onError(Status.FAILED_PRECONDITION.withDescription("UNSUPPORTED_VERSION").asRuntimeException())
+            return
+        }
+        if (request.workspaceId.isBlank()) {
+            observer.onError(Status.INVALID_ARGUMENT.withDescription("WORKSPACE_ID_REQUIRED").asRuntimeException())
+            return
+        }
+        val executable = restartExecutable
+        if (executable == null) {
+            observer.onError(Status.FAILED_PRECONDITION.withDescription("RESTART_NOT_CONFIGURED").asRuntimeException())
+            return
+        }
+        val result = engine.requestRestart(
+            request.workspaceId,
+            request.reason.ifBlank { "Minecraft restart requested through Vibris MCP." },
+        )
+        observer.onNext(
+            RequestRestartResponse.newBuilder()
+                .setProtocolVersion(ProtocolMessages.V2)
+                .setRestart(result.status)
+                .setAlreadyScheduled(result.alreadyScheduled)
+                .build(),
+        )
+        observer.onCompleted()
+        broadcastRestart(result.status)
+        if (!result.alreadyScheduled) {
+            restartCoordinator.execute { drainAndRestart(executable) }
+        }
+    }
+
     private fun artifactManifest(managed: ArtifactManager.ManagedManifest): dev.vibris.protocol.v2.ArtifactManifest {
         val document = managed.document
         return dev.vibris.protocol.v2.ArtifactManifest.newBuilder()
@@ -349,11 +402,13 @@ class VibrisControlService internal constructor(
                 }
                 greeted = true
                 session.identify(workspace, message.clientHello.processInstanceId)
+                sessions.add(session)
                 session.send(
                     ProtocolMessages.envelope(message.messageId, message.requestId, workspace)
                         .setServerHello(descriptor.hello(engine))
                         .build(),
                 )
+                engine.statusSnapshot().restart?.let { broadcastRestart(it, listOf(session)) }
             }
 
             private fun fail(status: Status) {
@@ -361,6 +416,7 @@ class VibrisControlService internal constructor(
                     return
                 }
                 terminated = true
+                sessions.remove(session)
                 engine.disconnected(session)
                 responses.onError(status.asRuntimeException())
             }
@@ -370,6 +426,7 @@ class VibrisControlService internal constructor(
                     return
                 }
                 terminated = true
+                sessions.remove(session)
                 engine.disconnected(session)
             }
 
@@ -378,6 +435,7 @@ class VibrisControlService internal constructor(
                     return
                 }
                 terminated = true
+                sessions.remove(session)
                 session.complete()
                 engine.disconnected(session)
             }
@@ -385,7 +443,54 @@ class VibrisControlService internal constructor(
     }
 
     override fun close() {
+        restartCoordinator.shutdownNow()
         engine.close()
+    }
+
+    private fun drainAndRestart(executable: Path) {
+        try {
+            if (!engine.awaitRestartDrain()) return
+            val launching = engine.markRestartLaunching() ?: return
+            broadcastRestart(launching)
+            Thread.sleep(RESTART_DISPATCH_GRACE_MS)
+            restartHandler.restart(executable)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        } catch (failure: Exception) {
+            logger.log(System.Logger.Level.ERROR, "Scheduled Minecraft restart launch failed.", failure)
+            engine.restartFailed(failure.message ?: failure.javaClass.simpleName)
+            sessions.forEach { session ->
+                session.send(
+                    ProtocolMessages.envelope("restart-cancelled", "", session.workspaceId())
+                        .setServerHello(descriptor.hello(engine))
+                        .build(),
+                )
+            }
+        }
+    }
+
+    private fun broadcastRestart(
+        status: dev.vibris.protocol.v2.RestartStatus,
+        targets: Collection<ControlSession> = sessions,
+    ) {
+        val event = ServerShuttingDown.newBuilder()
+            .setReason(
+                "Planned Minecraft restart ${status.phase.name.removePrefix("RESTART_PHASE_").lowercase()}; " +
+                    "accepted jobs are draining and MCP clients should wait and retry.",
+            )
+            .setRetryAfterMs(status.retryAfterMs)
+            .build()
+        targets.forEach { session ->
+            session.send(
+                ProtocolMessages.envelope("restart-notice", "", session.workspaceId())
+                    .setServerShuttingDown(event)
+                    .build(),
+            )
+        }
+    }
+
+    private companion object {
+        const val RESTART_DISPATCH_GRACE_MS = 250L
     }
 
 }

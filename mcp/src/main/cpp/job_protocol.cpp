@@ -108,12 +108,12 @@ ConfigMap config_map(const Json& arguments) {
         for (const auto& item : *declared) {
             const auto values = item.find("values");
             result.emplace(item.at("id").get<std::string>(),
-                shader_config(values == item.end() ? nullptr : &*values, values == item.end()));
+                shader_config(values == item.end() ? nullptr : &*values, false));
         }
     } else if (const auto values = arguments.find("config"); values != arguments.end()) {
         result.emplace("config", shader_config(&*values, false));
     } else {
-        result.emplace("config", shader_config(nullptr, true));
+        result.emplace("config", shader_config(nullptr, false));
     }
     if (const auto values = arguments.find("baseline_config"); values != arguments.end()) {
         result.emplace("baseline_config", shader_config(&*values, false));
@@ -192,14 +192,24 @@ void append_action(const Json& input, const SourceMap& sources, const ConfigMap&
         value->set_source_id(source_id);
         value->set_config_id(config_id);
         value->mutable_config()->CopyFrom(require_config(configs, config_id));
-    } else if (type == "capture_pass") {
-        auto* value = action->mutable_capture_pass();
-        value->set_pass_id(input.at("pass_id").get<std::string>());
+    } else if (type == "nsight_gpu_trace") {
+        auto* value = action->mutable_nsight_gpu_trace();
+        const auto& capture = input.at("capture");
+        if (capture.at("mode") == "single") {
+            value->set_pass_id(capture.at("pass_id").get<std::string>());
+        } else {
+            value->set_capture_type(capture.at("capture_type").get<std::string>());
+        }
         value->set_artifact_name(std::string(artifact_prefix) + input.at("artifact_name").get<std::string>());
-    } else if (type == "capture_multi") {
-        auto* value = action->mutable_capture_multi();
-        value->set_capture_type(input.at("capture_type").get<std::string>());
-        value->set_artifact_name(std::string(artifact_prefix) + input.at("artifact_name").get<std::string>());
+        value->set_replay_backend(input.value("replay_backend", "gl"));
+        value->set_architecture(input.at("architecture").get<std::string>());
+        value->set_metric_set_name(input.value("metric_set_name", "Throughput Metrics"));
+        value->set_replay_frames(input.value("replay_frames", std::uint32_t{300}));
+        value->set_start_after_ms(input.value("start_after_ms", std::uint32_t{1'000}));
+        value->set_max_duration_ms(input.value("max_duration_ms", std::uint32_t{1'000}));
+        value->set_timeout_seconds(input.value("timeout_seconds", std::uint32_t{300}));
+        value->set_time_every_action(input.value("time_every_action", true));
+        value->set_gpu_clocks(input.value("gpu_clocks", "base"));
     } else if (type == "inspect_shader") {
         action->mutable_inspect_shader();
     } else if (type == "get_gpu_metrics") {
@@ -471,17 +481,39 @@ std::uint64_t rendered_frames(const proto::ActionSequence& sequence) {
     return result;
 }
 
+std::uint64_t nsight_timeout_ms(const proto::ActionSequence& sequence) {
+    std::uint64_t result = 0;
+    for (const auto& action : sequence.actions()) {
+        if (!action.has_nsight_gpu_trace()) continue;
+        const auto milliseconds = static_cast<std::uint64_t>(action.nsight_gpu_trace().timeout_seconds()) * 1'000;
+        result = result > std::numeric_limits<std::uint64_t>::max() - milliseconds
+            ? std::numeric_limits<std::uint64_t>::max()
+            : result + milliseconds;
+    }
+    return result;
+}
+
 void scale_timeouts(proto::JobSpec& job) {
     std::uint64_t frames = job.has_action_sequence() ? rendered_frames(job.action_sequence()) : 0;
+    std::uint64_t nsight = job.has_action_sequence() ? nsight_timeout_ms(job.action_sequence()) : 0;
     if (job.has_matrix()) {
-        for (const auto& value : job.matrix().cases()) frames += rendered_frames(value.actions());
+        for (const auto& value : job.matrix().cases()) {
+            frames += rendered_frames(value.actions());
+            const auto case_nsight = nsight_timeout_ms(value.actions());
+            nsight = nsight > std::numeric_limits<std::uint64_t>::max() - case_nsight
+                ? std::numeric_limits<std::uint64_t>::max()
+                : nsight + case_nsight;
+        }
     }
     constexpr std::uint64_t setup_ms = 60'000;
     constexpr std::uint64_t ms_per_frame = 1'000;
     const auto measured = frames > (std::numeric_limits<std::uint64_t>::max() - setup_ms) / ms_per_frame
         ? std::numeric_limits<std::uint64_t>::max()
         : setup_ms + frames * ms_per_frame;
-    const auto execution = std::max(execution_timeout_ms, measured);
+    const auto nsight_measured = nsight > std::numeric_limits<std::uint64_t>::max() - setup_ms
+        ? std::numeric_limits<std::uint64_t>::max()
+        : setup_ms + nsight;
+    const auto execution = std::max({execution_timeout_ms, measured, nsight_measured});
     job.mutable_timeouts()->set_queue_timeout_ms(queue_timeout_ms);
     job.mutable_timeouts()->set_execution_timeout_ms(execution);
     job.mutable_timeouts()->set_total_timeout_ms(

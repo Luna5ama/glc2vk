@@ -165,12 +165,16 @@ void hide_operational_runtime_internals(nlohmann::json& mapped) {
     // broken while Minecraft is compiling a shader pack. Core remains authoritative;
     // MCP only removes the transient diagnostics from the agent-facing projection.
     (*status)["operational"] = true;
+    const auto last_error = status->find("last_error");
+    const bool restart_launch_failed = last_error != status->end() && last_error->is_object() &&
+        last_error->value("message", std::string{}).starts_with(
+            "Scheduled Minecraft restart could not be launched:");
     status->erase("state");
     status->erase("can_start_job");
     status->erase("readiness");
     status->erase("active_lease");
     status->erase("transitions");
-    status->erase("last_error");
+    if (!restart_launch_failed) status->erase("last_error");
 }
 
 }

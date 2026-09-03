@@ -43,7 +43,8 @@ internal class CaptureJobExecutor(
         }
         val prepared = if (
             captures.isEmpty() && !program.planningSession.hasDeferredCaptures &&
-            !ProfileResultArtifacts.requested(job.submission)
+            !ProfileResultArtifacts.requested(job.submission) &&
+            program.steps.none { it.type == CaptureProgramBuilder.ActionType.NSIGHT }
         ) {
             null
         } else {
@@ -299,6 +300,23 @@ internal class CaptureJobExecutor(
             artifactNames.addAll(newNames)
             estimatedCaptureBytes = newEstimate
             outputFileCount = newFileCount
+            requestedReservationBytes = reservation
+        }
+
+        @Throws(IOException::class)
+        @Synchronized
+        fun reserveAdditionalArtifacts(files: Map<String, Long>) {
+            require(files.values.all { it >= 0 }) { "Artifact sizes must not be negative." }
+            val canonicalNames = files.keys.map { it.lowercase(Locale.ROOT) }
+            if (canonicalNames.size != canonicalNames.toSet().size || canonicalNames.any(artifactNames::contains)) {
+                throw IOException("Artifact names are repeated.")
+            }
+            val bytes = files.values.fold(0L, Math::addExact)
+            val overhead = Math.multiplyExact(files.size.toLong(), 2L * 1024)
+            val reservation = Math.addExact(requestedReservationBytes, Math.addExact(bytes, overhead))
+            checkNotNull(artifacts).reserve(transaction, reservation)
+            artifactNames.addAll(canonicalNames)
+            outputFileCount = Math.addExact(outputFileCount, files.size)
             requestedReservationBytes = reservation
         }
 

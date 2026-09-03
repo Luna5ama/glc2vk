@@ -74,6 +74,21 @@ bool GrpcClient::Impl::cancel(const std::string_view request_id, std::string rea
     return true;
 }
 
+bool GrpcClient::Impl::restart_scheduled() const noexcept {
+    return restart_scheduled_.load(std::memory_order_acquire);
+}
+
+bool GrpcClient::Impl::wait_for_restart(const std::chrono::milliseconds timeout) {
+    if (!restart_scheduled()) return true;
+    std::unique_lock lock(mutex_);
+    if (!stream_ && started_ && !stopping_) {
+        schedule_alarm_locked(AlarmKind::reconnect, std::chrono::milliseconds::zero());
+    }
+    return restart_changed_.wait_for(lock, timeout, [this] {
+        return stopping_ || !restart_scheduled_.load(std::memory_order_acquire);
+    }) && !stopping_;
+}
+
 GrpcClient::Impl::Impl(GrpcClientOptions options)
     : options_(std::move(options)), pending_(options_.pending_request_limit) {
     if (!is_loopback_target(options_.target) || options_.workspace_id.empty() || options_.mcp_version.empty() ||
@@ -104,6 +119,7 @@ void GrpcClient::Impl::shutdown() {
             return;
         }
         stopping_ = true;
+        restart_changed_.notify_all();
         worker_.request_stop();
         if (control_context_) {
             control_context_->TryCancel();
@@ -137,6 +153,8 @@ GrpcClientStats GrpcClient::Impl::stats() const {
         .worker_threads_started = workers_started_.load(std::memory_order_relaxed),
         .worker_threads_joined = workers_joined_.load(std::memory_order_relaxed),
         .control_connected = connected_.load(std::memory_order_relaxed),
+        .restart_scheduled = restart_scheduled_.load(std::memory_order_relaxed),
+        .restart_retry_after_ms = restart_retry_after_ms_.load(std::memory_order_relaxed),
     };
 }
 
@@ -182,6 +200,11 @@ bool GrpcClient::get_status(
     GetStatusCompletion completion) {
     return impl_->get_status(std::move(request), std::move(completion));
 }
+bool GrpcClient::request_restart(
+    ::vibris::control::v2::RequestRestartRequest request,
+    RequestRestartCompletion completion) {
+    return impl_->request_restart(std::move(request), std::move(completion));
+}
 bool GrpcClient::manage_artifacts(
     ::vibris::control::v2::ManageArtifactsRequest request,
     ManageArtifactsCompletion completion) {
@@ -195,6 +218,10 @@ bool GrpcClient::resume(std::string request_id, GrpcCompletion completion) {
 }
 bool GrpcClient::cancel(std::string_view request_id, std::string reason) {
     return impl_->cancel(request_id, std::move(reason));
+}
+bool GrpcClient::restart_scheduled() const noexcept { return impl_->restart_scheduled(); }
+bool GrpcClient::wait_for_restart(const std::chrono::milliseconds timeout) {
+    return impl_->wait_for_restart(timeout);
 }
 void GrpcClient::shutdown() { impl_->shutdown(); }
 GrpcClientStats GrpcClient::stats() const { return impl_->stats(); }

@@ -16,8 +16,6 @@ import kotlinx.serialization.json.longOrNull
 internal object RuntimeActionProtocol {
     fun isRuntime(action: Action): Boolean = when (action.actionCase) {
         Action.ActionCase.GET_CAPTURE_STATUS,
-        Action.ActionCase.CAPTURE_PASS,
-        Action.ActionCase.CAPTURE_MULTI,
         Action.ActionCase.GET_GPU_METRICS,
         -> true
         else -> false
@@ -25,19 +23,6 @@ internal object RuntimeActionProtocol {
 
     fun toApi(action: Action): RuntimeAction = when (action.actionCase) {
         Action.ActionCase.GET_CAPTURE_STATUS -> RuntimeAction.CaptureStatus
-        Action.ActionCase.CAPTURE_PASS -> action.capturePass.let { command ->
-            RuntimeAction.CapturePass(
-                command.passId.requireText("pass_id"),
-                command.artifactName.takeIf(String::isNotBlank),
-            )
-        }
-        Action.ActionCase.CAPTURE_MULTI -> action.captureMulti.let { command ->
-            require(command.captureType in captureTypes) { "capture_type is unsupported" }
-            RuntimeAction.CaptureMulti(
-                command.captureType,
-                command.artifactName.takeIf(String::isNotBlank),
-            )
-        }
         Action.ActionCase.GET_GPU_METRICS ->
             action.getGpuMetrics.let { command ->
                 command.frames.requireRange("frames", 1, 10_000)
@@ -142,8 +127,6 @@ internal object RuntimeActionProtocol {
         Action.ActionCase.ACTIVATE_SOURCE -> ActionKind.ACTION_KIND_ACTIVATE_SOURCE
         Action.ActionCase.COMPARE_CAPTURES -> ActionKind.ACTION_KIND_COMPARE_CAPTURES
         Action.ActionCase.GET_CAPTURE_STATUS -> ActionKind.ACTION_KIND_GET_CAPTURE_STATUS
-        Action.ActionCase.CAPTURE_PASS -> ActionKind.ACTION_KIND_CAPTURE_PASS
-        Action.ActionCase.CAPTURE_MULTI -> ActionKind.ACTION_KIND_CAPTURE_MULTI
         Action.ActionCase.INSPECT_SHADER -> ActionKind.ACTION_KIND_INSPECT_SHADER
         Action.ActionCase.GET_GPU_METRICS -> ActionKind.ACTION_KIND_GET_GPU_METRICS
         Action.ActionCase.LOAD_SHADER -> ActionKind.ACTION_KIND_LOAD_SHADER
@@ -153,6 +136,7 @@ internal object RuntimeActionProtocol {
         Action.ActionCase.GET_PATCHED_SHADERS -> ActionKind.ACTION_KIND_GET_PATCHED_SHADERS
         Action.ActionCase.DUMP_TEXTURE_AFTER_PASS -> ActionKind.ACTION_KIND_DUMP_TEXTURE_AFTER_PASS
         Action.ActionCase.DUMP_BUFFER_AFTER_PASS -> ActionKind.ACTION_KIND_DUMP_BUFFER_AFTER_PASS
+        Action.ActionCase.NSIGHT_GPU_TRACE -> ActionKind.ACTION_KIND_NSIGHT_GPU_TRACE
         else -> throw IllegalArgumentException("Action kind is unsupported")
     }
 
@@ -237,6 +221,4 @@ internal object RuntimeActionProtocol {
         val p95: Long,
         val samples: List<Long>,
     )
-
-    private val captureTypes = setOf("prepare", "begin", "deferred", "composite", "final", "shadow_composite")
 }

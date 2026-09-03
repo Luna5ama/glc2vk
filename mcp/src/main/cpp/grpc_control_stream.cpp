@@ -122,9 +122,21 @@ void GrpcClient::Impl::handle_control(const ControlKind kind, const bool ok) noe
             if (is_request_event(read_message_)) {
                 pending_.resolve(read_message_);
             }
+            if (read_message_.has_server_hello()) {
+                const auto& status = read_message_.server_hello().status();
+                const bool scheduled = status.has_restart();
+                restart_scheduled_.store(scheduled, std::memory_order_release);
+                restart_retry_after_ms_.store(
+                    scheduled ? status.restart().retry_after_ms() : 0,
+                    std::memory_order_release);
+                restart_changed_.notify_all();
+            }
             if (read_message_.has_server_shutting_down()) {
-                fail_stream();
-                return;
+                restart_scheduled_.store(true, std::memory_order_release);
+                restart_retry_after_ms_.store(
+                    read_message_.server_shutting_down().retry_after_ms(),
+                    std::memory_order_release);
+                restart_changed_.notify_all();
             }
             if (stream_failed_) return maybe_finish();
             begin_read();
@@ -199,7 +211,7 @@ void GrpcClient::Impl::finish_stream() {
         stream_failed_ = false;
     }
     if (reconnectable(status)) {
-        if (pending_.size() != 0) {
+        if (pending_.size() != 0 || restart_scheduled_.load(std::memory_order_acquire)) {
             std::scoped_lock lock(mutex_);
             if (!stopping_) {
                 schedule_alarm_locked(AlarmKind::reconnect, options_.reconnect_delay);

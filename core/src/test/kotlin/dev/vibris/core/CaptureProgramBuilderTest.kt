@@ -10,6 +10,7 @@ import dev.vibris.protocol.v2.GetGpuMetrics
 import dev.vibris.protocol.v2.InspectShader
 import dev.vibris.protocol.v2.JobSpec
 import dev.vibris.protocol.v2.LoadShader
+import dev.vibris.protocol.v2.NsightGpuTrace
 import dev.vibris.protocol.v2.ResetTemporalState
 import dev.vibris.protocol.v2.ResourceSelector
 import dev.vibris.protocol.v2.ResultArtifactOptions
@@ -365,6 +366,27 @@ class CaptureProgramBuilderTest {
     }
 
     @Test
+    fun `atomic Nsight action owns single and multi replay capture planning`() {
+        val single = nsight("single-trace") {
+            passId = "composite/composite1"
+        }
+        val multi = nsight("multi-trace") {
+            captureType = "composite"
+        }
+
+        val program = CaptureProgramBuilder().actions(job(listOf(single, multi)), ResourceCatalog.empty())
+
+        assertEquals(
+            listOf(CaptureProgramBuilder.ActionType.NSIGHT, CaptureProgramBuilder.ActionType.NSIGHT),
+            program.steps.map { it.type },
+        )
+        assertEquals(listOf(0, 1), program.steps.map { it.actionIndex })
+        assertThrows(RuntimeJobExecutor.Failure::class.java) {
+            CaptureProgramBuilder().actions(job(listOf(single, single)), ResourceCatalog.empty())
+        }
+    }
+
+    @Test
     fun `capture after a non-strict load resolves from the post-load catalog`() {
         val actions = listOf(
             load(prelude = false),
@@ -458,6 +480,24 @@ class CaptureProgramBuilderTest {
             .setCandidateActionIndex(candidate)
             .setBaselineLabel("baseline")
             .setCandidateLabel("candidate"),
+    ).build()
+
+    private fun nsight(
+        artifactName: String,
+        capture: NsightGpuTrace.Builder.() -> Unit,
+    ): Action = Action.newBuilder().setNsightGpuTrace(
+        NsightGpuTrace.newBuilder()
+            .apply(capture)
+            .setArtifactName(artifactName)
+            .setReplayBackend("gl")
+            .setArchitecture("Ada")
+            .setMetricSetName("Throughput Metrics")
+            .setReplayFrames(300)
+            .setStartAfterMs(1_000)
+            .setMaxDurationMs(1_000)
+            .setTimeoutSeconds(300)
+            .setTimeEveryAction(true)
+            .setGpuClocks("base"),
     ).build()
 
     private fun bufferCatalog(

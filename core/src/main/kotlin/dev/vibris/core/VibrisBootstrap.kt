@@ -93,6 +93,10 @@ class VibrisBootstrap private constructor(
         fun start(address: InetSocketAddress, service: BindableService): Listener
     }
 
+    fun interface RestartHandler {
+        fun restart(executable: Path)
+    }
+
     interface Listener {
         fun port(): Int
 
@@ -140,7 +144,17 @@ class VibrisBootstrap private constructor(
         @JvmStatic
         @Throws(Failure::class)
         fun start(gameDirectory: Path?, runtime: VibrisRuntimeAdapter?): VibrisBootstrap {
-            return start(gameDirectory, runtime, ListenerFactory(::startListener))
+            return start(gameDirectory, runtime, RestartHandler(::restartUnavailable))
+        }
+
+        @JvmStatic
+        @Throws(Failure::class)
+        fun start(
+            gameDirectory: Path?,
+            runtime: VibrisRuntimeAdapter?,
+            restartHandler: RestartHandler?,
+        ): VibrisBootstrap {
+            return start(gameDirectory, runtime, restartHandler, ListenerFactory(::startListener))
         }
 
         @JvmStatic
@@ -149,9 +163,24 @@ class VibrisBootstrap private constructor(
             gameDirectory: Path?,
             runtime: VibrisRuntimeAdapter?,
             listenerFactory: ListenerFactory?,
+        ): VibrisBootstrap = start(
+            gameDirectory,
+            runtime,
+            RestartHandler(::restartUnavailable),
+            listenerFactory,
+        )
+
+        @JvmStatic
+        @Throws(Failure::class)
+        fun start(
+            gameDirectory: Path?,
+            runtime: VibrisRuntimeAdapter?,
+            restartHandler: RestartHandler?,
+            listenerFactory: ListenerFactory?,
         ): VibrisBootstrap {
             val game = Objects.requireNonNull(gameDirectory, "gameDirectory")!!.toAbsolutePath().normalize()
             val actualRuntime = Objects.requireNonNull(runtime, "runtime")!!
+            val actualRestartHandler = Objects.requireNonNull(restartHandler, "restartHandler")!!
             val actualFactory = Objects.requireNonNull(listenerFactory, "listenerFactory")!!
             val configuration = try {
                 ServerConfiguration.load(game)
@@ -168,6 +197,7 @@ class VibrisBootstrap private constructor(
             return startConfigured(
                 configuration,
                 actualRuntime,
+                actualRestartHandler,
                 actualFactory,
                 createRoots = false,
                 notReady = true,
@@ -187,6 +217,7 @@ class VibrisBootstrap private constructor(
             return startConfigured(
                 ServerConfiguration.defaults(actualConfig),
                 actualRuntime,
+                RestartHandler(::restartUnavailable),
                 actualFactory,
                 createRoots = true,
                 notReady = false,
@@ -196,6 +227,7 @@ class VibrisBootstrap private constructor(
         private fun startConfigured(
             configuration: ServerConfiguration,
             runtime: VibrisRuntimeAdapter,
+            restartHandler: RestartHandler,
             listenerFactory: ListenerFactory,
             createRoots: Boolean,
             notReady: Boolean,
@@ -209,10 +241,11 @@ class VibrisBootstrap private constructor(
                     OwnedPathIdentity.createDirectoriesSafely(paths.pendingShadersRoot)
                     OwnedPathIdentity.createDirectoriesSafely(paths.shaderpackRoot)
                     OwnedPathIdentity.createDirectoriesSafely(paths.artifactRoot)
+                    OwnedPathIdentity.createDirectoriesSafely(configuration.replayCaptureRoot)
                 }
                 link.prepare()
                 pendingSources.prepare()
-                service = VibrisControlService(configuration, runtime, link)
+                service = VibrisControlService(configuration, runtime, link, restartHandler)
                 val listener = listenerFactory.start(configuration.address, service)
                 return VibrisBootstrap(service, pendingSources, listener, true, paths.pendingShadersRoot)
             } catch (exception: Exception) {
@@ -287,6 +320,10 @@ class VibrisBootstrap private constructor(
             }
             current.addSuppressed(exception)
             return current
+        }
+
+        private fun restartUnavailable(executable: Path) {
+            throw IllegalStateException("No Minecraft restart handler is installed for $executable")
         }
     }
 }

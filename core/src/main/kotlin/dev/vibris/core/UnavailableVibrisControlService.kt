@@ -13,6 +13,8 @@ import dev.vibris.protocol.v2.ListResourcesRequest
 import dev.vibris.protocol.v2.ListResourcesResponse
 import dev.vibris.protocol.v2.ManageArtifactsRequest
 import dev.vibris.protocol.v2.ManageArtifactsResponse
+import dev.vibris.protocol.v2.RequestRestartRequest
+import dev.vibris.protocol.v2.RequestRestartResponse
 import dev.vibris.protocol.v2.Pong
 import dev.vibris.protocol.v2.RuntimeFailure
 import dev.vibris.protocol.v2.RuntimePhase
@@ -99,6 +101,11 @@ internal class UnavailableVibrisControlService(
     override fun manageArtifacts(
         request: ManageArtifactsRequest,
         observer: StreamObserver<ManageArtifactsResponse>,
+    ) = unavailable(observer)
+
+    override fun requestRestart(
+        request: RequestRestartRequest,
+        observer: StreamObserver<RequestRestartResponse>,
     ) = unavailable(observer)
 
     override fun control(responses: StreamObserver<ServerMessage>): StreamObserver<ClientMessage> =

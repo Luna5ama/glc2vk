@@ -51,15 +51,17 @@ void exact_v2_tool_catalog() {
     const ToolRegistry registry;
     const std::array expected{
         "vibris_get_status",
+        "vibris_restart",
         "vibris_list_presets",
         "vibris_list_resources",
+        "mcp_vibiris_nsight_analyze",
         "vibris_run_recipe",
         "vibris_run_actions",
         "vibris_run_matrix",
         "vibris_job",
         "vibris_artifacts",
     };
-    require(registry.definitions().size() == expected.size(), "tools/list must expose exactly eight tools");
+    require(registry.definitions().size() == expected.size(), "tools/list must expose exactly ten tools");
     std::unordered_set<std::string> names;
     for (const auto& tool : registry.definitions()) {
         const auto name = tool.at("name").get<std::string>();
@@ -90,6 +92,14 @@ void exact_v2_tool_catalog() {
                     description.find("Never poll") != std::string::npos,
                 "vibris_job omitted the blocking wait and hard no-poll guidance");
         }
+        if (name == "vibris_restart") {
+            require(tool.at("annotations").at("destructiveHint") == true,
+                "vibris_restart must disclose its destructive lifecycle effect");
+            const auto description = tool.at("description").get<std::string>();
+            require(description.find("already accepted") != std::string::npos &&
+                    description.find("wait") != std::string::npos,
+                "vibris_restart omitted graceful drain and retry guidance");
+        }
     }
     require(names == std::unordered_set<std::string>(expected.begin(), expected.end()),
         "tools/list exposed the wrong v2 names");
@@ -106,6 +116,11 @@ void exact_filters_and_job_control() {
     status["wait_until"] = "can_start_job";
     require(std::holds_alternative<InvocationError>(registry.invoke("vibris_get_status", status)),
         "removed global-idle wait remained available");
+
+    auto restart = scope;
+    restart["reason"] = "deploy new Vibris build";
+    require(std::holds_alternative<Json>(registry.invoke("vibris_restart", restart)),
+        "typed graceful restart request was rejected");
 
     auto presets = scope;
     presets["preset_id"] = "sky-noon-1";
@@ -219,6 +234,25 @@ void typed_actions_reject_aliases() {
         "explicit transactional restore policy was rejected");
     request.erase("restore_state");
 
+    request["actions"] = Json::array({
+        {{"type", "nsight_gpu_trace"},
+         {"capture", {{"mode", "single"}, {"pass_id", "composite/composite21"}}},
+         {"artifact_name", "composite21-trace"}, {"architecture", "Ada"}},
+        {{"type", "nsight_gpu_trace"},
+         {"capture", {{"mode", "multi"}, {"capture_type", "composite"}}},
+         {"artifact_name", "composite-trace"}, {"architecture", "Ada"},
+         {"replay_backend", "gl"}, {"replay_frames", 300},
+         {"start_after_ms", 1000}, {"max_duration_ms", 1000}},
+    });
+    require(std::holds_alternative<Json>(registry.invoke("vibris_run_actions", request)),
+        "typed single/multi atomic Nsight actions were rejected");
+
+    for (const auto* removed_type : {"capture_pass", "capture_multi"}) {
+        request["actions"] = Json::array({{{"type", removed_type}, {"output_path", "removed"}}});
+        require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_actions", request)),
+            "removed raw replay-capture action remained public");
+    }
+
     for (const auto* old_type : {"list_textures", "list_buffers", "dump_texture_v2"}) {
         request["actions"] = Json::array({{{"type", old_type}}});
         require(std::holds_alternative<InvocationError>(registry.invoke("vibris_run_actions", request)),
@@ -327,6 +361,22 @@ void bounded_single_structured_result() {
         "full payload marker was duplicated outside structuredContent");
 }
 
+void local_nsight_analysis_shape_is_strict_and_typed() {
+    const ToolRegistry registry([](std::string_view, const Json& arguments) { return arguments; });
+    Json request{{"worktree_root", "I:\\shader-worktree"},
+                 {"artifact_path", "I:\\shader-worktree\\.vibris\\artifact\\trace.nsight.bundle.json"},
+                 {"query", {{"operation", "summary"}}}};
+    require(std::holds_alternative<Json>(registry.invoke("mcp_vibiris_nsight_analyze", request)),
+        "typed local Nsight summary query was rejected");
+    request["query"] = {{"operation", "metric"}, {"name", "dramc__throughput"},
+                        {"in_marker", "^Replay$"}, {"all_matches", true}};
+    require(std::holds_alternative<Json>(registry.invoke("mcp_vibiris_nsight_analyze", request)),
+        "typed local Nsight metric query was rejected");
+    request["query"] = {{"operation", "not_a_query"}};
+    require(std::holds_alternative<InvocationError>(registry.invoke("mcp_vibiris_nsight_analyze", request)),
+        "unknown local Nsight query was accepted");
+}
+
 } // namespace
 
 int main() {
@@ -335,6 +385,7 @@ int main() {
         exact_filters_and_job_control();
         typed_actions_reject_aliases();
         compile_validation_shape_is_strict_and_typed();
+        local_nsight_analysis_shape_is_strict_and_typed();
         bounded_single_structured_result();
         std::cout << "PASS ActionSchemaV2ToolContract\n";
         return 0;

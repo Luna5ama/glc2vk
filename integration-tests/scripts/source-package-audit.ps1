@@ -386,13 +386,15 @@ try
     ) | ForEach-Object {
         Get-Content -Raw -LiteralPath (Join-Path $script:VibrisRoot $_)
     }) -join "`n"
-    $tools = @([regex]::Matches($toolSource, 'definition\("(vibris_[^"]+)"') | ForEach-Object {
+    $tools = @([regex]::Matches($toolSource, 'definition\("((?:vibris_|mcp_vibiris_)[^"]+)"') | ForEach-Object {
         $_.Groups[1].Value
     })
     $expectedTools = @(
         "vibris_get_status",
+        "vibris_restart",
         "vibris_list_presets",
         "vibris_list_resources",
+        "mcp_vibiris_nsight_analyze",
         "vibris_run_recipe",
         "vibris_run_actions",
         "vibris_run_matrix",
@@ -402,7 +404,7 @@ try
     if ([string]::Join("`n", $tools) -cne [string]::Join("`n", $expectedTools) -or
         @($tools | Select-Object -Unique).Count -ne $expectedTools.Count)
     {
-        throw "Native MCP tool registry does not expose exactly the expected 8-tool surface."
+        throw "Native MCP tool registry does not expose exactly the expected 10-tool surface."
     }
     foreach ($legacy in @(
         "mcp\src\main\cpp\debug_tools.cpp",
@@ -613,7 +615,7 @@ try
     }
 
     Write-Output ($descriptorOutput | Where-Object { $_ -like "PASS *" })
-    Write-Output ("PASS source_audit=true transport=grpc source_payload=reference tools=8 " +
+    Write-Output ("PASS source_audit=true transport=grpc source_payload=reference tools=10 " +
         "jvm_language=kotlin native_mcp=cpp core_iris_jgit_imports=0 " +
         "vibris_mixins=$($actualVibrisMixins.Count) " +
         "renderdoc_dependencies=0 package_exe=1 package_iris_jar=1 extra_mod_jars=0 " +

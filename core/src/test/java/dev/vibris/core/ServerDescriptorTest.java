@@ -74,7 +74,8 @@ class ServerDescriptorTest {
             Capability.CAPABILITY_CONTROL_STREAM,
             Capability.CAPABILITY_RUNTIME_LEASE,
             Capability.CAPABILITY_STATUS_WAIT,
-            Capability.CAPABILITY_TRANSACTIONAL_RESTORE), hello.getCapabilitiesList());
+            Capability.CAPABILITY_TRANSACTIONAL_RESTORE,
+            Capability.CAPABILITY_GRACEFUL_RESTART), hello.getCapabilitiesList());
         assertEquals(VibrisCoreEngine.MAX_STATUS_WAIT_MS, hello.getLimits().getMaxStatusWaitMs());
         assertEquals("vibris-core", hello.getServerVersion());
         assertEquals(ServerState.SERVER_STATE_AVAILABLE, hello.getStatus().getState());

@@ -37,6 +37,7 @@ internal class ServerDescriptor @JvmOverloads constructor(
         .addCapabilities(Capability.CAPABILITY_RUNTIME_LEASE)
         .addCapabilities(Capability.CAPABILITY_STATUS_WAIT)
         .addCapabilities(Capability.CAPABILITY_TRANSACTIONAL_RESTORE)
+        .addCapabilities(Capability.CAPABILITY_GRACEFUL_RESTART)
         .setLimits(
             ServerLimits.newBuilder()
                 .setMaxSourceBytes(maxSourceBytes)
@@ -79,6 +80,7 @@ internal class ServerDescriptor @JvmOverloads constructor(
             .setActiveSourceUuid(snapshot.activeSourceUuid)
         snapshot.activeLease?.let(builder::setActiveLease)
         snapshot.recovery?.let(builder::setRecovery)
+        snapshot.restart?.let(builder::setRestart)
 
         if (detail == StatusDetail.STATUS_DETAIL_JOBS || detail == StatusDetail.STATUS_DETAIL_FULL) {
             builder.addAllQueue(snapshot.queue)
@@ -160,6 +162,9 @@ internal class ServerDescriptor @JvmOverloads constructor(
 
     private fun readinessDetail(snapshot: VibrisCoreEngine.StatusSnapshot): String = when {
         !snapshot.coreOnline -> "Core source activation is unavailable."
+        snapshot.restart != null ->
+            "A graceful Minecraft restart is ${snapshot.restart.phase.name.removePrefix("RESTART_PHASE_").lowercase()}; " +
+                "${snapshot.restart.remainingJobs} accepted job(s) remain."
         snapshot.state == ServerState.SERVER_STATE_FAILED && snapshot.recovery != null ->
             "Runtime recovery failed for job ${snapshot.recovery.jobId} " +
                 "from workspace ${snapshot.recovery.workspaceId}; explicit recovery is required."

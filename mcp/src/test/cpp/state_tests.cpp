@@ -932,7 +932,7 @@ void typed_preset_discovery_and_request_scene() {
 
 void tool_metadata_is_request_scoped() {
     const vibris::mcp::ToolRegistry tools;
-    require(tools.definitions().size() == 8, "Tool registry did not expose exactly eight v2 tools.");
+    require(tools.definitions().size() == 10, "Tool registry did not expose exactly ten v2 tools.");
     for (const auto& definition : tools.definitions()) {
         const auto name = definition.at("name").get<std::string>();
         const auto description = definition.at("description").get<std::string>();
@@ -1029,6 +1029,12 @@ void status_lease_transition_mapping() {
     require(mapped_status.at("queue").size() == 1 &&
             mapped_status.at("queue").front().at("position") == 1,
         "Fair queue position was not preserved by the MCP result mapper.");
+
+    failure->set_code(proto::ERROR_CODE_INTERNAL);
+    failure->set_message("Scheduled Minecraft restart could not be launched: fixture failure");
+    const auto restart_diagnostic = vibris::mcp::ResultMapper::status(response).at("status");
+    require(restart_diagnostic.at("operational") == true && restart_diagnostic.contains("last_error"),
+        "Operational status hid a failed graceful-restart launch from the agent.");
 
     status->mutable_readiness()->set_core_online(false);
     const auto diagnostic = vibris::mcp::ResultMapper::status(response).at("status");

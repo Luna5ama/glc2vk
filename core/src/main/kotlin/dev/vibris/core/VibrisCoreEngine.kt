@@ -14,6 +14,8 @@ import dev.vibris.protocol.v2.RuntimeFailure
 import dev.vibris.protocol.v2.RuntimeLease
 import dev.vibris.protocol.v2.RuntimePhase
 import dev.vibris.protocol.v2.RuntimeRecovery
+import dev.vibris.protocol.v2.RestartPhase
+import dev.vibris.protocol.v2.RestartStatus
 import dev.vibris.protocol.v2.ServerMessage
 import dev.vibris.protocol.v2.ServerState
 import dev.vibris.protocol.v2.StateTransition
@@ -41,6 +43,9 @@ class VibrisCoreEngine internal constructor(
     maxSourceFiles: Int = ServerConfiguration.DEFAULT_MAX_SOURCE_FILES,
     maxGlobalQueue: Int = ServerConfiguration.DEFAULT_MAX_GLOBAL_QUEUE,
     maxActionsPerJob: Int = ServerConfiguration.DEFAULT_MAX_ACTIONS_PER_JOB,
+    replayCaptureRoot: Path? = null,
+    replayerRoot: Path? = null,
+    bundledReplayJava: Path? = null,
 ) : AutoCloseable {
     private val requests = RequestRegistry<TerminalResult>(
         LIVE_REQUEST_CAPACITY,
@@ -54,7 +59,16 @@ class VibrisCoreEngine internal constructor(
     private val probe = CoreProbe()
     private val sources = SourceRegistry(pendingRoot, probe, maxSourceBytes, maxSourceFiles)
     private val activator = SourceActivator(sources, shaderLink)
-    private val executor = RuntimeJobExecutor(runtime, probe, activator, shaderLogs, maxActionsPerJob)
+    private val executor = RuntimeJobExecutor(
+        runtime,
+        probe,
+        activator,
+        shaderLogs,
+        maxActionsPerJob,
+        replayCaptureRoot = replayCaptureRoot,
+        replayerRoot = replayerRoot,
+        bundledReplayJava = bundledReplayJava,
+    )
     private val delivery = TerminalDelivery()
     private val disconnectTimer: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "Vibris Disconnect Grace").apply { isDaemon = true }
@@ -70,6 +84,8 @@ class VibrisCoreEngine internal constructor(
     private var closed = false
     private var activeRequestId = ""
     private var activeStage = JobStage.JOB_STAGE_UNSPECIFIED
+    private var restartStatus: RestartStatus? = null
+    private var terminalDeliveriesInFlight = 0
 
     constructor(pendingRoot: Path, runtime: VibrisRuntimeAdapter) :
         this(pendingRoot, runtime, ShaderLink.transientLink(), ShaderLogSink.none())
@@ -92,6 +108,58 @@ class VibrisCoreEngine internal constructor(
 
     @Synchronized
     fun canAcceptJob(): Boolean = projectionLocked().canAcceptJob
+
+    @Synchronized
+    internal fun requestRestart(workspaceId: String, reason: String): RestartRequestResult {
+        val existing = restartStatus
+        if (existing != null) return RestartRequestResult(restartSnapshotLocked(existing), true)
+        val scheduled = RestartStatus.newBuilder()
+            .setPhase(RestartPhase.RESTART_PHASE_DRAINING)
+            .setRequestedByWorkspaceId(workspaceId)
+            .setRequestedAtUnixMs(System.currentTimeMillis())
+            .setReason(reason.take(512))
+            .setRetryAfterMs(RESTART_RETRY_AFTER_MS)
+            .build()
+        restartStatus = scheduled
+        stateChangedLocked("restart-scheduled")
+        return RestartRequestResult(restartSnapshotLocked(scheduled), false)
+    }
+
+    @Throws(InterruptedException::class)
+    internal fun awaitRestartDrain(): Boolean = synchronized(this) {
+        while (!closed && restartStatus != null &&
+            (liveJobs.isNotEmpty() || terminalDeliveriesInFlight != 0)
+        ) {
+            @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
+            (this as java.lang.Object).wait()
+        }
+        !closed && restartStatus != null
+    }
+
+    @Synchronized
+    internal fun markRestartLaunching(): RestartStatus? {
+        val current = restartStatus ?: return null
+        val launching = current.toBuilder()
+            .setPhase(RestartPhase.RESTART_PHASE_LAUNCHING)
+            .setRemainingJobs(0)
+            .build()
+        restartStatus = launching
+        stateChangedLocked("restart-launching")
+        return launching
+    }
+
+    @Synchronized
+    internal fun restartFailed(detail: String) {
+        if (restartStatus == null) return
+        restartStatus = null
+        lastError = runtimeFailure(
+            ErrorCode.ERROR_CODE_INTERNAL,
+            "Scheduled Minecraft restart could not be launched: ${detail.take(384)}",
+            "",
+            "",
+        )
+        stateChangedLocked("restart-launch-failed")
+    }
 
     @Synchronized
     internal fun activeJob(): ActiveJob? = scheduler.snapshot().active?.let { active ->
@@ -173,6 +241,7 @@ class VibrisCoreEngine internal constructor(
             lastError,
             transitions.toList(),
             sources.activeUuid().ifBlank { runtimeStatus.activeSourceUuid },
+            restartStatus?.let(::restartSnapshotLocked),
             statusRevision,
         )
     }
@@ -229,6 +298,15 @@ class VibrisCoreEngine internal constructor(
         }
         val job = CoreJob(submission, requestId, session.workspaceId(), message.messageId, session)
         synchronized(this) {
+            if (restartStatus != null) {
+                failImmediate(
+                    session,
+                    message,
+                    ErrorCode.ERROR_CODE_SERVER_RESTARTED,
+                    "A graceful Minecraft restart is scheduled; wait for the replacement runtime and retry.",
+                )
+                return
+            }
             if (closed || !activator.ready() && !recovery) {
                 failImmediate(session, message, ErrorCode.ERROR_CODE_SERVER_NOT_AVAILABLE, "Vibris is not ready.")
                 return
@@ -482,16 +560,24 @@ class VibrisCoreEngine internal constructor(
                 job.submission.jobId,
             )
             updateMetrics()
+            terminalDeliveriesInFlight++
             job.session!!
         }
         probe.event(
             job.requestId,
             if (successful) "SUCCEEDED" else if (state == RequestState.CANCELLED) "CANCELLED" else "FAILED",
         )
-        delivery.send(
-            session,
-            terminal.message(job.messageId, job.requestId, job.workspaceId),
-        )
+        try {
+            delivery.send(
+                session,
+                terminal.message(job.messageId, job.requestId, job.workspaceId),
+            )
+        } finally {
+            synchronized(this) {
+                terminalDeliveriesInFlight--
+                stateChangedLocked("terminal-delivered", job.submission.jobId)
+            }
+        }
     }
 
     private fun finishRejected(
@@ -612,7 +698,7 @@ class VibrisCoreEngine internal constructor(
             else -> ServerState.SERVER_STATE_FAILED
         }
         val canAccept = coreOnline && !recoveryPending && scheduler.canAccept() &&
-            requests.liveSize() < LIVE_REQUEST_CAPACITY
+            requests.liveSize() < LIVE_REQUEST_CAPACITY && restartStatus == null
         return Projection(
             state,
             phase,
@@ -624,6 +710,10 @@ class VibrisCoreEngine internal constructor(
 
     private fun currentStage(requestId: String): JobStage =
         if (activeRequestId == requestId) activeStage else JobStage.JOB_STAGE_UNSPECIFIED
+
+    private fun restartSnapshotLocked(status: RestartStatus): RestartStatus = status.toBuilder()
+        .setRemainingJobs(liveJobs.size + terminalDeliveriesInFlight)
+        .build()
 
     private fun liveSummary(
         metadata: FairJobScheduler.JobMetadata,
@@ -735,12 +825,15 @@ class VibrisCoreEngine internal constructor(
         val lastError: RuntimeFailure?,
         val transitions: List<StateTransition>,
         val activeSourceUuid: String,
+        val restart: RestartStatus?,
         val revision: Long,
     )
 
     internal data class WaitResult(val satisfied: Boolean, val timedOut: Boolean)
 
     internal data class ActiveJob(val requestId: String, val stage: JobStage)
+
+    internal data class RestartRequestResult(val status: RestartStatus, val alreadyScheduled: Boolean)
 
     companion object {
         const val REQUEST_REGISTRY_CAPACITY = 192
@@ -751,6 +844,7 @@ class VibrisCoreEngine internal constructor(
         private const val TRANSITION_CAPACITY = 32
         private val TERMINAL_TTL: Duration = Duration.ofMinutes(10)
         private val DISCONNECT_GRACE: Duration = Duration.ofSeconds(2)
+        private const val RESTART_RETRY_AFTER_MS = 10_000L
 
         private fun failImmediate(
             session: ControlSession,

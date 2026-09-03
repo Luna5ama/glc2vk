@@ -35,6 +35,28 @@ class CaptureActionExecutorTest {
         }
     }
 
+    @Test
+    fun acceptsCoreOwnedAbsoluteCapturePath() {
+        val root = createTempDirectory("vibris-action-game")
+        val replayRoot = createTempDirectory("vibris-action-replay")
+        try {
+            val manager = CaptureManager()
+            val executor = CaptureActionExecutor(root, manager, ShaderDebugControl(EmptyHost(root)))
+            val target = replayRoot.resolve("job-capture").toAbsolutePath().normalize()
+
+            val result = Json.parseToJsonElement(
+                executor.execute(RuntimeAction.CaptureMulti("composite", target.toString()))
+                    .toCompletableFuture().join(),
+            ).jsonObject
+
+            assertTrue(manager.status().pending)
+            assertEquals(target.toString(), result["path"]!!.jsonPrimitive.content)
+        } finally {
+            root.toFile().deleteRecursively()
+            replayRoot.toFile().deleteRecursively()
+        }
+    }
+
     private class EmptyHost(private val root: Path) : ShaderDebugHost {
         override fun shaderPackName(): String? = null
         override fun reloadShaders() = Unit

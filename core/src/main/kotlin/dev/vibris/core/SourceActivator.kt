@@ -6,7 +6,10 @@ internal class SourceActivator(
     private val sources: SourceRegistry,
     private val link: ShaderLink,
 ) : AutoCloseable {
+    @Volatile
     private var ready = true
+
+    @Volatile
     private var closed = false
 
     @Synchronized
@@ -132,7 +135,6 @@ internal class SourceActivator(
         }
     }
 
-    @Synchronized
     fun ready(): Boolean = ready && !closed
 
     @Synchronized

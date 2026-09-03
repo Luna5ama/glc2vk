@@ -64,8 +64,13 @@ class CaptureActionExecutor(
 
     private fun capturePath(path: String?, name: String): Path {
         val requested = path?.let(Path::of) ?: CaptureManager.defaultOutputPath(name)
-        val resolved = gameDirectory.resolve(requested).toAbsolutePath().normalize()
-        require(resolved.startsWith(gameDirectory)) { "Capture path must remain inside the game directory" }
+        val resolved = if (requested.isAbsolute) {
+            requested.normalize()
+        } else {
+            gameDirectory.resolve(requested).toAbsolutePath().normalize().also {
+                require(it.startsWith(gameDirectory)) { "Relative capture path must remain inside the game directory" }
+            }
+        }
         return resolved
     }
 }

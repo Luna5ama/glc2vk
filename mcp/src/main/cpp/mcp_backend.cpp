@@ -20,6 +20,7 @@
 #include "result_mapper.hpp"
 #include "scene_context_resolver.hpp"
 #include "job_context.hpp"
+#include "nsight_analyzer.hpp"
 #include "source_handler.hpp"
 #include "state_error.hpp"
 #include "synchronous_job_runner.hpp"
@@ -106,6 +107,9 @@ void merge_stats(GrpcClientStats& aggregate, const GrpcClientStats& current) {
     aggregate.worker_threads_started += current.worker_threads_started;
     aggregate.worker_threads_joined += current.worker_threads_joined;
     aggregate.control_connected = aggregate.control_connected || current.control_connected;
+    aggregate.restart_scheduled = aggregate.restart_scheduled || current.restart_scheduled;
+    aggregate.restart_retry_after_ms = std::max(
+        aggregate.restart_retry_after_ms, current.restart_retry_after_ms);
 }
 
 } // namespace
@@ -127,12 +131,26 @@ private:
                   }) {}
 
         ToolOutcome dispatch(std::string_view name, const Json& arguments) {
+            if (name == "mcp_vibiris_nsight_analyze") {
+                return analyze_nsight_bundle(
+                    binding_.root,
+                    fs::path(arguments.at("artifact_path").get<std::string>()),
+                    arguments.at("query"));
+            }
+            if (name == "vibris_restart") return restart(arguments);
             if (name == "vibris_list_presets") return list_presets(arguments);
             if (name == "vibris_list_resources") return list_resources(arguments);
             if (name == "vibris_get_status") return get_status(arguments);
             if (name == "vibris_job") return job(arguments);
             if (name == "vibris_artifacts") return artifacts(arguments);
             if (name == "vibris_run_recipe" || name == "vibris_run_actions" || name == "vibris_run_matrix") {
+                if (!wait_for_planned_restart()) {
+                    return ToolFailure{"SERVER_RESTARTING",
+                        "A planned Minecraft restart did not finish within five minutes. Retry this tool call; "
+                        "the runtime is restarting, not failed.", true,
+                        {{"next_action", "retry"},
+                         {"waited_ms", std::chrono::duration_cast<std::chrono::milliseconds>(unary_wait).count()}}};
+                }
                 const bool durable = arguments.value("execution", std::string("sync")) == "async" ||
                     (name == "vibris_run_recipe" &&
                         (arguments.value("recipe", std::string{}) == "profile_matrix" ||
@@ -212,6 +230,10 @@ private:
                 case grpc::StatusCode::NOT_FOUND:
                     return ToolFailure{"ARTIFACT_NOT_FOUND", bounded(status.error_message()), false};
                 case grpc::StatusCode::FAILED_PRECONDITION:
+                    if (status.error_message().find("RESTART_NOT_CONFIGURED") != std::string::npos) {
+                        return ToolFailure{"RESTART_NOT_CONFIGURED",
+                            "server.json does not define a usable restart_executable.", false};
+                    }
                     return ToolFailure{"ARTIFACT_MANIFEST_CHANGED", bounded(status.error_message()), false};
                 default:
                     return ToolFailure{"SERVER_OFFLINE", bounded(status.error_message()), true};
@@ -323,6 +345,37 @@ private:
                 });
         }
 
+        ToolOutcome restart(const Json& arguments) {
+            control::RequestRestartRequest request;
+            request.set_reason(arguments.value(
+                "reason", std::string("Minecraft restart requested through Vibris MCP.")));
+            return unary<control::RequestRestartResponse>(
+                [this, request = std::move(request)](auto completion) mutable {
+                    return client().request_restart(request, std::move(completion));
+                },
+                [](const auto& response) -> ToolOutcome {
+                    if (!response.has_restart()) {
+                        return ToolFailure{"SERVER_NOT_READY",
+                            "The Vibris server did not return a restart receipt.", true};
+                    }
+                    const auto& restart = response.restart();
+                    std::string phase = restart.phase() == control::RESTART_PHASE_LAUNCHING
+                        ? "launching" : "draining";
+                    return Json{{"scheduled", true},
+                                {"already_scheduled", response.already_scheduled()},
+                                {"phase", std::move(phase)},
+                                {"remaining_jobs", restart.remaining_jobs()},
+                                {"requested_at_unix_ms", restart.requested_at_unix_ms()},
+                                {"requested_by_workspace_id", restart.requested_by_workspace_id()},
+                                {"reason", restart.reason()},
+                                {"retry_after_ms", restart.retry_after_ms()},
+                                {"behavior", "New job admission is closed; all accepted jobs drain before restart."},
+                                {"next_action", {{"kind", "wait_for_runtime_restart"},
+                                                  {"tool", "vibris_get_status"},
+                                                  {"retry_after_ms", restart.retry_after_ms()}}}};
+                });
+        }
+
         ToolOutcome job(const Json& arguments) {
             return jobs_.control(arguments);
         }
@@ -358,6 +411,13 @@ private:
         }
 
         ToolOutcome run_durable_step(DurableJobStepExecution execution) {
+            if (!wait_for_planned_restart()) {
+                return ToolFailure{"SERVER_RESTARTING",
+                    "A planned Minecraft restart did not finish within five minutes. Resume this durable job; "
+                    "the runtime is restarting, not failed.", true,
+                    {{"next_action", "resume"},
+                     {"waited_ms", std::chrono::duration_cast<std::chrono::milliseconds>(unary_wait).count()}}};
+            }
             const auto context = scene_from_json(execution.arguments.at("__vibris_scene_context"));
             return unary<control::GetServerInfoResponse>(
                 [this](auto completion) { return client().get_server_info(std::move(completion)); },
@@ -443,6 +503,11 @@ private:
             return *grpc_;
         }
 
+        bool wait_for_planned_restart() {
+            auto& current = client();
+            return !current.restart_scheduled() || current.wait_for_restart(unary_wait);
+        }
+
         void release_client() {
             if (!grpc_) return;
             grpc_->shutdown();
@@ -453,6 +518,9 @@ private:
                 std::max(aggregate_.peak_pending_requests, stats.peak_pending_requests);
             aggregate_.worker_threads_started += stats.worker_threads_started;
             aggregate_.worker_threads_joined += stats.worker_threads_joined;
+            aggregate_.restart_scheduled = aggregate_.restart_scheduled || stats.restart_scheduled;
+            aggregate_.restart_retry_after_ms = std::max(
+                aggregate_.restart_retry_after_ms, stats.restart_retry_after_ms);
             grpc_.reset();
         }
 

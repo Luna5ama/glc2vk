@@ -21,6 +21,7 @@ import dev.vibris.protocol.v2.RuntimeMutationReceipt
 import dev.vibris.protocol.v2.ShaderInspectionReceipt
 import dev.vibris.protocol.v2.WaitFramesReceipt
 import java.io.IOException
+import java.nio.file.Path
 import java.util.LinkedHashSet
 import java.util.function.Consumer
 
@@ -29,6 +30,7 @@ internal class ActionJobExecutor(
     private val probe: CoreProbe,
     private val captures: CaptureJobExecutor,
     private val owner: RuntimeJobExecutor,
+    private val nsight: NsightGpuTraceRunner,
 ) {
     @Throws(RuntimeJobExecutor.Failure::class)
     fun execute(job: CoreJob, progress: Consumer<JobStage>, deadline: Long): JobResult {
@@ -44,6 +46,7 @@ internal class ActionJobExecutor(
             val captureExecutions = ArrayList<CaptureExecution>()
             val afterPassExecutions = ArrayList<AfterPassExecution>()
             val patchedExecutions = ArrayList<PatchedExecution>()
+            val nsightExecutions = ArrayList<NsightExecution>()
             var comparison: dev.vibris.protocol.v2.CompareReceipt? = null
 
             fun resolveDeferredCapture(
@@ -422,6 +425,28 @@ internal class ActionJobExecutor(
                                     .build(),
                             )
                         }
+                        CaptureProgramBuilder.ActionType.NSIGHT -> {
+                            if (prepared == null) throw captureUnavailable()
+                            val execution = nsight.execute(
+                                step.runtimeAction!!.nsightGpuTrace,
+                                job,
+                                progress,
+                                deadline,
+                                runtime,
+                                owner,
+                                prepared,
+                            )
+                            nsightExecutions.add(
+                                NsightExecution(step.actionIndex, execution.receipt, execution.artifacts),
+                            )
+                            pendingCaptureIndices.add(step.actionIndex)
+                            receiptBook.put(
+                                step.actionIndex,
+                                receiptBook.success(step.actionIndex)
+                                    .setNsightGpuTrace(execution.receipt)
+                                    .build(),
+                            )
+                        }
                         CaptureProgramBuilder.ActionType.RUNTIME -> {
                             val response = owner.await(
                                 runtime.executeAction(RuntimeActionProtocol.toApi(step.runtimeAction!!)),
@@ -488,6 +513,7 @@ internal class ActionJobExecutor(
                     prepared.transaction,
                     receiptBook.complete().actions,
                 )
+                val generatedArtifacts = resultArtifacts + nsightExecutions.flatMap(NsightExecution::artifacts)
                 progress.accept(JobStage.JOB_STAGE_FINALIZING)
                 probe.event(job.requestId, "FINALIZING")
                 activeIndices = pendingCaptureIndices.toList()
@@ -497,7 +523,7 @@ internal class ActionJobExecutor(
                     completedCapturePlans,
                     captured,
                     comparison,
-                    resultArtifacts,
+                    generatedArtifacts,
                     afterPassExecutions.associate { execution ->
                         execution.receipt.request.target.artifactName to execution.receipt.physicalName
                     },
@@ -534,6 +560,20 @@ internal class ActionJobExecutor(
                         receiptBook.success(execution.actionIndex)
                             .setPatchedShaders(
                                 captures.patchedShadersReceipt(execution.plan, execution.result, committed),
+                            )
+                            .build(),
+                    )
+                }
+                nsightExecutions.forEach { execution ->
+                    val names = execution.artifacts.mapTo(HashSet()) { it.fileName }
+                    val artifacts = committed.artifactsList.filter { artifact ->
+                        Path.of(artifact.relativePath).fileName.toString() in names
+                    }
+                    receiptBook.replace(
+                        execution.actionIndex,
+                        receiptBook.success(execution.actionIndex)
+                            .setNsightGpuTrace(
+                                execution.receipt.toBuilder().addAllArtifacts(artifacts),
                             )
                             .build(),
                     )
@@ -830,6 +870,12 @@ internal class ActionJobExecutor(
     private data class AfterPassExecution(
         val actionIndex: Int,
         val receipt: CapturePlan.AfterPassReceipt,
+    )
+
+    private data class NsightExecution(
+        val actionIndex: Int,
+        val receipt: dev.vibris.protocol.v2.NsightGpuTraceReceipt,
+        val artifacts: List<GeneratedArtifact>,
     )
 
 }

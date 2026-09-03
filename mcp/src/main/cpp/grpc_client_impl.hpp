@@ -6,6 +6,7 @@
 #include <grpcpp/grpcpp.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <deque>
 #include <mutex>
 #include <stop_token>
@@ -27,10 +28,13 @@ public:
     bool list_resources(proto::ListResourcesRequest request, ListResourcesCompletion completion);
     bool validate_context(proto::ValidateContextRequest request, ValidateContextCompletion completion);
     bool get_status(proto::GetStatusRequest request, GetStatusCompletion completion);
+    bool request_restart(proto::RequestRestartRequest request, RequestRestartCompletion completion);
     bool manage_artifacts(proto::ManageArtifactsRequest request, ManageArtifactsCompletion completion);
     bool submit(proto::ClientMessage message, GrpcCompletion completion);
     bool resume(std::string request_id, GrpcCompletion completion);
     bool cancel(std::string_view request_id, std::string reason);
+    [[nodiscard]] bool restart_scheduled() const noexcept;
+    bool wait_for_restart(std::chrono::milliseconds timeout);
     void shutdown();
     [[nodiscard]] GrpcClientStats stats() const;
 
@@ -96,6 +100,7 @@ private:
     const GrpcClientOptions options_;
     PendingRequestRegistry pending_;
     mutable std::mutex mutex_;
+    std::condition_variable restart_changed_;
     grpc::CompletionQueue queue_;
     std::shared_ptr<grpc::Channel> channel_;
     std::unique_ptr<proto::VibrisControl::Stub> stub_;
@@ -119,6 +124,8 @@ private:
     std::atomic_size_t workers_started_{0};
     std::atomic_size_t workers_joined_{0};
     std::atomic_bool connected_{false};
+    std::atomic_bool restart_scheduled_{false};
+    std::atomic_uint64_t restart_retry_after_ms_{0};
 };
 
 }

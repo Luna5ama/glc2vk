@@ -813,8 +813,7 @@ Json normalize_action_sequence_result(const Json& terminal, const std::string_vi
         }
         const auto receipt_kind = receipt->value("kind", std::string{});
         if ((receipt_kind == "ACTION_KIND_TAKE_SCREENSHOT" || receipt_kind == "ACTION_KIND_DUMP_TEXTURE" ||
-                receipt_kind == "ACTION_KIND_DUMP_BUFFER" || receipt_kind == "ACTION_KIND_CAPTURE_PASS" ||
-                receipt_kind == "ACTION_KIND_CAPTURE_MULTI") && receipt->contains("capture")) {
+                receipt_kind == "ACTION_KIND_DUMP_BUFFER") && receipt->contains("capture")) {
             const auto& capture = receipt->at("capture");
             if (capture.is_object() && capture.contains("frame_id")) {
                 frame_ids.push_back(wire_uint64(capture.at("frame_id")));
@@ -1091,6 +1090,17 @@ ToolOutcome SynchronousJobRunner::submit_once(std::string_view tool_name, const 
         report_progress(control.progress, request_id, "checkpointing", false);
         auto outcome = JobProtocol::terminal(*terminal);
         if (auto* result = std::get_if<Json>(&outcome)) ResultMapper::finalize_provenance(*result);
+        if (const auto* failure = std::get_if<ToolFailure>(&outcome);
+            failure != nullptr &&
+            (failure->code == "server_restarted" || failure->code == "SERVER_RESTARTED") &&
+            client_.restart_scheduled()) {
+            report_progress(control.progress, request_id, "retrying", false);
+            if (!client_.wait_for_restart(std::chrono::minutes(5))) {
+                return ToolFailure{"SERVER_RESTARTING",
+                    "The planned Minecraft restart did not finish within five minutes; retry this call.", true};
+            }
+            return submit_once(tool_name, arguments, server, context, control);
+        }
         return outcome;
     } catch (...) {
         sources_.retire(request_id);
@@ -1196,6 +1206,10 @@ ToolOutcome SynchronousJobRunner::resume_or_submit(std::string_view request_id,
         return outcome;
     }
     report_progress(control.progress, {}, "retrying", false);
+    if (client_.restart_scheduled() && !client_.wait_for_restart(std::chrono::minutes(5))) {
+        return ToolFailure{"SERVER_RESTARTING",
+            "The planned Minecraft restart did not finish within five minutes; resume this job after restart.", true};
+    }
     return submit_once(tool_name, arguments, server, context, control);
 }
 

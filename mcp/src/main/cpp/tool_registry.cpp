@@ -109,6 +109,50 @@ Json visual_thresholds_schema() {
     });
 }
 
+Json nsight_query_schema() {
+    const auto top = bounded_integer(1, 500);
+    const Json filter{{"type", "string"}, {"maxLength", 512}};
+    const Json marker{{"type", "string"}, {"maxLength", 512}};
+    const auto diagnostic = [&](const char* operation) {
+        return closed_object({
+            {"operation", enum_string({operation})},
+            {"top", top},
+            {"in_marker", marker},
+        }, {"operation"});
+    };
+    return one_of({
+        closed_object({{"operation", enum_string({"summary"})}}, {"operation"}),
+        closed_object({
+            {"operation", enum_string({"stages"})},
+            {"depth", bounded_integer(0, 64)},
+            {"parent", filter},
+            {"top", top},
+        }, {"operation"}),
+        closed_object({
+            {"operation", enum_string({"actions"})},
+            {"top", top},
+            {"sort", enum_string({"duration", "start"})},
+            {"filter", filter},
+            {"in_marker", marker},
+            {"with_metrics", {{"type", "boolean"}}},
+        }, {"operation"}),
+        closed_object({
+            {"operation", enum_string({"metric"})},
+            {"name", {{"type", "string"}, {"minLength", 1}, {"maxLength", 512}}},
+            {"in_marker", marker},
+            {"all_matches", {{"type", "boolean"}}},
+            {"top", top},
+        }, {"operation", "name"}),
+        diagnostic("stalls"),
+        diagnostic("bandwidth"),
+        diagnostic("shader_bound"),
+        diagnostic("texture_cache"),
+        diagnostic("overdraw"),
+        diagnostic("geometry"),
+        diagnostic("draws"),
+    });
+}
+
 Json benchmark_visual_schema() {
     auto schema = visual_thresholds_schema();
     schema["properties"]["warmup_frames"] =
@@ -187,7 +231,7 @@ Json recipe_schema() {
 }
 
 Json action_schema() {
-    const Json artifact_name{{"type", "string"}, {"minLength", 1}};
+    const Json artifact_name{{"type", "string"}, {"minLength", 1}, {"maxLength", 64}};
     const Json resource_name{{"type", "string"}, {"minLength", 1}};
     const auto texture_selector = closed_object({{"logical_name", resource_name},
                                                   {"view", enum_string({"current", "alternate", "main", "alt"})},
@@ -238,12 +282,29 @@ Json action_schema() {
                       {"type", "pass_id", "resource", "artifact_name"}),
         empty_action("get_capture_status"),
         load_shader,
-        closed_object({{"type", enum_string({"capture_pass"})},
-                       {"pass_id", resource_name}, {"artifact_name", artifact_name}},
-                      {"type", "pass_id", "artifact_name"}),
-        closed_object({{"type", enum_string({"capture_multi"})},
-                       {"capture_type", enum_string({"prepare", "begin", "deferred", "composite"})},
-                       {"artifact_name", artifact_name}}, {"type", "capture_type", "artifact_name"}),
+        closed_object({
+            {"type", enum_string({"nsight_gpu_trace"})},
+            {"capture", one_of({
+                closed_object({
+                    {"mode", enum_string({"single"})},
+                    {"pass_id", resource_name},
+                }, {"mode", "pass_id"}),
+                closed_object({
+                    {"mode", enum_string({"multi"})},
+                    {"capture_type", enum_string({"prepare", "begin", "deferred", "composite"})},
+                }, {"mode", "capture_type"}),
+            })},
+            {"artifact_name", artifact_name},
+            {"replay_backend", enum_string({"gl", "vk"})},
+            {"architecture", enum_string({"Turing", "Ampere GA10x", "Orin GA10B", "Ada", "Thor GB10B", "Blackwell GB20x", "T25x GB20x"})},
+            {"metric_set_name", {{"type", "string"}, {"minLength", 1}, {"maxLength", 128}}},
+            {"replay_frames", bounded_integer(2, 10'000)},
+            {"start_after_ms", bounded_integer(0, 600'000)},
+            {"max_duration_ms", bounded_integer(1, 600'000)},
+            {"timeout_seconds", bounded_integer(30, 3'600)},
+            {"time_every_action", {{"type", "boolean"}}},
+            {"gpu_clocks", enum_string({"unaltered", "base", "boost"})},
+        }, {"type", "capture", "artifact_name", "architecture"}),
         empty_action("inspect_shader"),
         closed_object({{"type", enum_string({"get_gpu_metrics"})}, {"frames", frames},
                        {"metric_ids", string_array(256)}}, {"type", "frames"}),
@@ -269,13 +330,17 @@ Json output_schema() {
     }, {"schema_version", "success"});
 }
 
-Json definition(const char* name, const char* description, Json input_schema, bool read_only) {
+Json definition(
+    const char* name, const char* description, Json input_schema, bool read_only,
+    bool destructive = false) {
     return Json{{"name", name},
                 {"schema_version", 2},
                 {"description", description},
                 {"inputSchema", std::move(input_schema)},
                 {"outputSchema", output_schema()},
-                {"annotations", {{"readOnlyHint", read_only}, {"destructiveHint", false}, {"openWorldHint", false}}}};
+                {"annotations", {{"readOnlyHint", read_only},
+                                 {"destructiveHint", destructive},
+                                 {"openWorldHint", false}}}};
 }
 
 Json build_definitions() {
@@ -296,6 +361,17 @@ Json build_definitions() {
                        {"job_id", {{"type", "string"}, {"minLength", 1}}},
                        {"timeout_ms", bounded_integer(0, 300'000)},
                    }), false), true),
+        definition("vibris_restart",
+                   "Schedule one graceful Minecraft restart for the explicit Git worktree's connected runtime "
+                   "using restart_executable from server.json. "
+                   "This is a top-level control operation, not a run action. Core immediately closes new job "
+                   "admission, lets every already accepted queued or active job finish without cancellation, "
+                   "broadcasts a planned-restart notice to all connected MCP clients, then restarts Minecraft. "
+                   "Other MCP clients wait for the replacement runtime and retry job-starting calls instead of "
+                   "treating the planned disconnect as a runtime failure.",
+                   scoped(closed_object({
+                       {"reason", {{"type", "string"}, {"maxLength", 512}}},
+                   }), false), false, true),
         definition("vibris_list_presets",
                    "List Minecraft scene presets for the explicit Git worktree using exact preset and tag filters.",
                    scoped(closed_object({{"preset_id", {{"type", "string"}, {"minLength", 1}}},
@@ -307,6 +383,17 @@ Json build_definitions() {
                        {"logical_name", {{"type", "string"}, {"minLength", 1}}},
                        {"pass_id", {{"type", "string"}, {"minLength", 1}}},
                    }), false), true),
+        definition("mcp_vibiris_nsight_analyze",
+                   "Analyze one managed Vibris Nsight GPU Trace auto-export bundle for the explicit Git worktree "
+                   "locally in this MCP process. "
+                   "No Minecraft/Core request is made. artifact_path must identify the bundle descriptor returned "
+                   "by nsight_gpu_trace. The default evidence scope is the outer Replay marker: whole-capture, "
+                   "CPU submission, Copy, and unmarked tail timing are never reported as shader-pass evidence. "
+                   "GPUTRACE_REGIMES.xls is streamed and only requested metric columns are projected.",
+                   scoped(closed_object({
+                       {"artifact_path", {{"type", "string"}, {"minLength", 1}}},
+                       {"query", nsight_query_schema()},
+                   }, {"artifact_path", "query"}), false), true),
         definition("vibris_run_recipe",
                    "ADMISSION RULE: never wait for a global idle lease; when can_accept_job is "
                    "true, submit now and let Core queue the job by workspace round-robin. Run a standard shader "

@@ -173,14 +173,56 @@ class GLReplayResource(private val captureData: CaptureData) {
         }
 
         fun resetCapturedData() {
-            when (val copySource = copySource) {
-                is TextureObject.Tex1D -> copySource.copyTo(texture as TextureObject.Tex1D)
-                is TextureObject.Texture1DArray -> copySource.copyTo(texture as TextureObject.Texture1DArray)
-                is TextureObject.Texture2D -> copySource.copyTo(texture as TextureObject.Texture2D)
-                is TextureObject.TextureCubemap -> copySource.copyTo(texture as TextureObject.TextureCubemap)
-                is TextureObject.Texture2DArray -> copySource.copyTo(texture as TextureObject.Texture2DArray)
-                is TextureObject.Texture3D -> copySource.copyTo(texture as TextureObject.Texture3D)
-                is TextureObject.TextureCubemapArray -> copySource.copyTo(texture as TextureObject.TextureCubemapArray)
+            data.levels.indices.forEach { mip ->
+                val width = max(1, metadata.width shr mip)
+                val height = max(1, metadata.height shr mip)
+                val depth = max(1, metadata.depth shr mip)
+                when (val copySource = copySource) {
+                    is TextureObject.Tex1D ->
+                        copySource.copyTo(texture as TextureObject.Tex1D, mip, 0, mip, 0, width)
+                    is TextureObject.Texture1DArray ->
+                        copySource.copyTo(
+                            texture as TextureObject.Texture1DArray,
+                            mip, 0, 0,
+                            mip, 0, 0,
+                            width, metadata.arrayLayers,
+                        )
+                    is TextureObject.Texture2D ->
+                        copySource.copyTo(
+                            texture as TextureObject.Texture2D,
+                            mip, 0, 0,
+                            mip, 0, 0,
+                            width, height,
+                        )
+                    is TextureObject.TextureCubemap ->
+                        copySource.copyTo(
+                            texture as TextureObject.TextureCubemap,
+                            mip, 0, 0,
+                            mip, 0, 0,
+                            width, height,
+                        )
+                    is TextureObject.Texture2DArray ->
+                        copySource.copyTo(
+                            texture as TextureObject.Texture2DArray,
+                            mip, 0, 0, 0,
+                            mip, 0, 0, 0,
+                            width, height, metadata.arrayLayers,
+                        )
+                    is TextureObject.Texture3D ->
+                        copySource.copyTo(
+                            texture as TextureObject.Texture3D,
+                            mip, 0, 0, 0,
+                            mip, 0, 0, 0,
+                            width, height, depth,
+                        )
+                    is TextureObject.TextureCubemapArray ->
+                        copySource.copyTo(
+                            texture as TextureObject.TextureCubemapArray,
+                            mip, 0, 0, 0,
+                            mip, 0, 0, 0,
+                            width, height, metadata.arrayLayers,
+                        )
+                }
             }
         }
 

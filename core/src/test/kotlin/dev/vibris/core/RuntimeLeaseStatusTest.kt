@@ -176,6 +176,44 @@ class RuntimeLeaseStatusTest {
     }
 
     @Test
+    fun gracefulRestartClosesAdmissionAndWaitsForAcceptedJobToFinish() {
+        val runtime = RuntimeTestAdapter()
+        val pending = temp.resolve("restart-pending").toAbsolutePath()
+        Files.createDirectories(pending)
+        val engine = VibrisCoreEngine(pending, runtime)
+        val reload = CompletableFuture<ReloadResult>()
+        runtime.reloadStages.add(reload)
+        val compiling = CountDownLatch(1)
+        val terminal = CountDownLatch(1)
+        engine.submit(session(compiling, terminal), job("active-before-restart", source(pending)))
+        assertTrue(compiling.await(2, TimeUnit.SECONDS))
+
+        val scheduled = engine.requestRestart(WORKSPACE_ID, "deploy new build")
+        assertFalse(scheduled.alreadyScheduled)
+        assertEquals(1, scheduled.status.remainingJobs)
+        assertFalse(engine.canAcceptJob())
+        val status = engine.statusSnapshot()
+        assertEquals("deploy new build", status.restart?.reason)
+        assertEquals(1, status.restart?.remainingJobs)
+
+        val rejected = recordingSession()
+        engine.submit(rejected.session, job("after-restart-request", source(pending)))
+        assertTrue(rejected.terminal.await(2, TimeUnit.SECONDS))
+        assertEquals(
+            ErrorCode.ERROR_CODE_SERVER_RESTARTED,
+            rejected.messages.last { it.hasJobFailed() }.jobFailed.error.code,
+        )
+
+        val drained = CompletableFuture.supplyAsync { engine.awaitRestartDrain() }
+        assertFalse(drained.isDone)
+        reload.complete(ReloadResult.success(EffectiveShaderSettings.empty(), emptyList()))
+        assertTrue(terminal.await(2, TimeUnit.SECONDS))
+        assertTrue(drained.get(2, TimeUnit.SECONDS))
+        assertEquals(0, engine.markRestartLaunching()?.remainingJobs)
+        engine.close()
+    }
+
+    @Test
     fun queuedOrdinaryJobIsRejectedIfEarlierJobLeavesRuntimeInRecovery() {
         val runtime = RuntimeTestAdapter()
         val pending = temp.resolve("queued-recovery-pending").toAbsolutePath()

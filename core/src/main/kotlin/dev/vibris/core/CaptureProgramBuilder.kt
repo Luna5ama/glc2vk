@@ -191,6 +191,18 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                     flushAll()
                     steps.add(ActionStep.inspect(actionIndex))
                 }
+                action.hasNsightGpuTrace() -> {
+                    flushAll()
+                    try {
+                        NsightGpuTraceRunner.validate(action.nsightGpuTrace)
+                    } catch (exception: IllegalArgumentException) {
+                        throw invalid(exception.message ?: "Nsight GPU Trace action is invalid.")
+                    }
+                    NsightGpuTraceRunner.artifactFileNames(action.nsightGpuTrace).forEach {
+                        requireUnique(artifactNames, it)
+                    }
+                    steps.add(ActionStep.nsight(actionIndex, action))
+                }
                 RuntimeActionProtocol.isRuntime(action) -> {
                     flushAll()
                     steps.add(ActionStep.runtime(actionIndex, action))
@@ -232,6 +244,7 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
         PATCHED_SHADERS,
         COMPARE,
         INSPECT,
+        NSIGHT,
         RUNTIME,
     }
 
@@ -308,6 +321,11 @@ internal class CaptureProgramBuilder(private val maxActions: Int = DEFAULT_MAX_A
                 ActionStep(
                     ActionType.INSPECT, null, 0, null, null, actionIndex,
                     null, null, emptyList(), emptyList(), null, emptyList(),
+                )
+            fun nsight(actionIndex: Int, action: Action) =
+                ActionStep(
+                    ActionType.NSIGHT, null, 0, null, null, actionIndex,
+                    action, null, emptyList(), emptyList(), null, emptyList(),
                 )
             fun runtime(actionIndex: Int, action: Action) =
                 ActionStep(

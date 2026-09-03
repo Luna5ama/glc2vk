@@ -2,6 +2,8 @@ package dev.vibris.core;
 
 import dev.vibris.api.SceneContext;
 import dev.vibris.api.ScenePreset;
+import dev.vibris.protocol.v2.ClientHello;
+import dev.vibris.protocol.v2.ClientMessage;
 import dev.vibris.protocol.v2.ErrorCode;
 import dev.vibris.protocol.v2.GetServerInfoRequest;
 import dev.vibris.protocol.v2.GetServerInfoResponse;
@@ -11,6 +13,10 @@ import dev.vibris.protocol.v2.ListPresetsRequest;
 import dev.vibris.protocol.v2.ListPresetsResponse;
 import dev.vibris.protocol.v2.ListResourcesRequest;
 import dev.vibris.protocol.v2.ManageArtifactsRequest;
+import dev.vibris.protocol.v2.ProtocolVersion;
+import dev.vibris.protocol.v2.RequestRestartRequest;
+import dev.vibris.protocol.v2.RequestRestartResponse;
+import dev.vibris.protocol.v2.ServerMessage;
 import dev.vibris.protocol.v2.ValidateContextRequest;
 import dev.vibris.protocol.v2.ValidateContextResponse;
 import dev.vibris.protocol.v2.VibrisControlGrpc;
@@ -34,6 +40,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
@@ -79,7 +86,7 @@ class VibrisBootstrapTest {
     }
 
     @Test
-    void missingServerConfigWritesV2DefaultsAndStartsReady() throws Exception {
+    void missingServerConfigWritesV4DefaultsAndStartsReady() throws Exception {
         RuntimeTestAdapter runtime = new RuntimeTestAdapter();
         AtomicReference<BindableService> captured = new AtomicReference<>();
 
@@ -90,8 +97,16 @@ class VibrisBootstrapTest {
         });
 
         assertTrue(bootstrap.ready());
-        assertTrue(Files.readString(temp.resolve("config/vibris/server.json"))
-            .contains("\"schema_version\": 2"));
+        String defaultConfig = Files.readString(temp.resolve("config/vibris/server.json"));
+        assertTrue(defaultConfig.contains("\"schema_version\": 4"));
+        assertTrue(defaultConfig.contains("\"vibris_root\":"));
+        assertFalse(defaultConfig.contains("\"pending_source_root\":"));
+        assertFalse(defaultConfig.contains("\"artifact_root\":"));
+        assertTrue(defaultConfig.contains("\"restart_executable\": \"\""));
+        Path defaultVibrisRoot = temp.resolve("vibris").toAbsolutePath().normalize();
+        assertTrue(Files.isDirectory(defaultVibrisRoot.resolve("pending"), NOFOLLOW_LINKS));
+        assertTrue(Files.isDirectory(defaultVibrisRoot.resolve("artifacts"), NOFOLLOW_LINKS));
+        assertTrue(Files.isDirectory(defaultVibrisRoot.resolve("replay_capture"), NOFOLLOW_LINKS));
         Path defaultShaderpack = temp.resolve("shaderpacks/vibris").toAbsolutePath().normalize();
         assertTrue(Files.isDirectory(defaultShaderpack, NOFOLLOW_LINKS));
         assertEquals(defaultShaderpack, ServerConfiguration.Companion.load(temp).getPaths().shaderpackRoot());
@@ -134,6 +149,22 @@ class VibrisBootstrapTest {
         ServerConfiguration configuration = ServerConfiguration.Companion.load(temp);
 
         assertEquals(pending.toAbsolutePath().normalize(), configuration.getPaths().pendingShadersRoot());
+    }
+
+    @Test
+    void gameSideReplayerRootDoesNotFollowConfiguredVibrisRoot() throws Exception {
+        Path vibrisRoot = temp.resolve("external-vibris-root");
+        Path shaderpack = temp.resolve("external-vibris-shaderpack");
+        writeServerConfigV4(temp, vibrisRoot, shaderpack, 50128);
+
+        ServerConfiguration configuration = ServerConfiguration.Companion.load(temp);
+
+        assertEquals(vibrisRoot.toAbsolutePath().normalize(), configuration.getVibrisRoot());
+        assertEquals(
+            vibrisRoot.resolve("replay_capture").toAbsolutePath().normalize(),
+            configuration.getReplayCaptureRoot()
+        );
+        assertEquals(temp.resolve("vibris").toAbsolutePath().normalize(), configuration.getReplayerRoot());
     }
 
     @Test
@@ -205,6 +236,7 @@ class VibrisBootstrapTest {
             assertUnavailable(() -> stub.listResources(ListResourcesRequest.getDefaultInstance()));
             assertUnavailable(() -> stub.validateContext(ValidateContextRequest.getDefaultInstance()));
             assertUnavailable(() -> stub.manageArtifacts(ManageArtifactsRequest.getDefaultInstance()));
+            assertUnavailable(() -> stub.requestRestart(RequestRestartRequest.getDefaultInstance()));
         } finally {
             channel.shutdownNow().awaitTermination(5, TimeUnit.SECONDS);
             bootstrap.close();
@@ -227,6 +259,57 @@ class VibrisBootstrapTest {
 
         assertTrue(bootstrap.ready());
         assertEquals(pending.toAbsolutePath().normalize(), bootstrap.pendingShadersRoot());
+        bootstrap.close();
+    }
+
+    @Test
+    void configuredRestartSchedulesAfterDrainAndInvokesExactExecutable() throws Exception {
+        Path pending = Files.createDirectory(temp.resolve("restart-pending"));
+        Path artifacts = Files.createDirectory(temp.resolve("restart-artifacts"));
+        Path shaderpack = Files.createDirectory(temp.resolve("restart-shaderpack"));
+        Path executable = Files.createFile(temp.resolve("restart minecraft.bat"));
+        writeServerConfigV3(temp, pending, artifacts, shaderpack, executable, 50127);
+        RuntimeTestAdapter runtime = new RuntimeTestAdapter();
+        AtomicReference<BindableService> captured = new AtomicReference<>();
+        AtomicReference<Path> launched = new AtomicReference<>();
+        CountDownLatch launch = new CountDownLatch(1);
+
+        VibrisBootstrap bootstrap = VibrisBootstrap.start(
+            temp,
+            runtime,
+            path -> {
+                launched.set(path);
+                launch.countDown();
+            },
+            (address, service) -> {
+                captured.set(service);
+                return new TestListener();
+            }
+        );
+        var service = (VibrisControlService) captured.get();
+        AtomicReference<RequestRestartResponse> response = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        CountDownLatch notices = new CountDownLatch(2);
+        service.control(restartObserver(notices, failure)).onNext(clientHello("restart-observer-a"));
+        service.control(restartObserver(notices, failure)).onNext(clientHello("restart-observer-b"));
+        service.requestRestart(
+            RequestRestartRequest.newBuilder()
+                .setProtocolVersion(ProtocolVersion.newBuilder().setMajor(2))
+                .setWorkspaceId("restart-test-workspace")
+                .setReason("deploy test build")
+                .build(),
+            observer(response, failure)
+        );
+
+        assertNull(failure.get());
+        assertTrue(response.get().hasRestart());
+        assertFalse(response.get().getAlreadyScheduled());
+        assertEquals("deploy test build", response.get().getRestart().getReason());
+        assertTrue(notices.await(2, TimeUnit.SECONDS));
+        assertTrue(launch.await(2, TimeUnit.SECONDS));
+        assertEquals(executable.toAbsolutePath().normalize(), launched.get());
+        assertTrue(status(service).getStatus().hasRestart());
+        assertFalse(status(service).getStatus().getCanAcceptJob());
         bootstrap.close();
     }
 
@@ -539,6 +622,118 @@ class VibrisBootstrapTest {
               "max_actions_per_job": 64
             }
             """.formatted(port, jsonPath(pending), jsonPath(artifacts), jsonPath(shaderpack)));
+    }
+
+    private static void writeServerConfigV3(
+        Path game,
+        Path pending,
+        Path artifacts,
+        Path shaderpack,
+        Path restartExecutable,
+        int port
+    ) throws IOException {
+        Path config = game.resolve("config/vibris/server.json");
+        Files.createDirectories(config.getParent());
+        Files.writeString(config, """
+            {
+              "schema_version": 3,
+              "listen_address": "127.0.0.1:%d",
+              "pending_source_root": "%s",
+              "artifact_root": "%s",
+              "artifact_quota_bytes": 3221225472,
+              "artifact_ttl_hours": 168,
+              "shaderpack_root": "%s",
+              "max_source_bytes": 536870912,
+              "max_source_files": 100000,
+              "max_global_queue": 32,
+              "max_actions_per_job": 64,
+              "restart_executable": "%s"
+            }
+            """.formatted(
+                port,
+                jsonPath(pending),
+                jsonPath(artifacts),
+                jsonPath(shaderpack),
+                jsonPath(restartExecutable)
+            ));
+    }
+
+    private static void writeServerConfigV4(
+        Path game,
+        Path vibrisRoot,
+        Path shaderpack,
+        int port
+    ) throws IOException {
+        Path config = game.resolve("config/vibris/server.json");
+        Files.createDirectories(config.getParent());
+        Files.writeString(config, """
+            {
+              "schema_version": 4,
+              "listen_address": "127.0.0.1:%d",
+              "vibris_root": "%s",
+              "artifact_quota_bytes": 3221225472,
+              "artifact_ttl_hours": 168,
+              "shaderpack_root": "%s",
+              "max_source_bytes": 536870912,
+              "max_source_files": 100000,
+              "max_global_queue": 32,
+              "max_actions_per_job": 64,
+              "restart_executable": ""
+            }
+            """.formatted(port, jsonPath(vibrisRoot), jsonPath(shaderpack)));
+    }
+
+    private static <T> StreamObserver<T> observer(
+        AtomicReference<T> response,
+        AtomicReference<Throwable> failure
+    ) {
+        return new StreamObserver<>() {
+            @Override
+            public void onNext(T value) {
+                response.set(value);
+            }
+
+            @Override
+            public void onError(Throwable throwable) {
+                failure.set(throwable);
+            }
+
+            @Override
+            public void onCompleted() {
+            }
+        };
+    }
+
+    private static ClientMessage clientHello(String workspaceId) {
+        return ClientMessage.newBuilder()
+            .setProtocolVersion(ProtocolVersion.newBuilder().setMajor(2))
+            .setMessageId("hello-" + workspaceId)
+            .setWorkspaceId(workspaceId)
+            .setClientHello(ClientHello.newBuilder()
+                .setClientVersion("restart-test")
+                .setProcessInstanceId("process-" + workspaceId))
+            .build();
+    }
+
+    private static StreamObserver<ServerMessage> restartObserver(
+        CountDownLatch notices,
+        AtomicReference<Throwable> failure
+    ) {
+        return new StreamObserver<>() {
+            @Override
+            public void onNext(ServerMessage message) {
+                if (message.hasServerShuttingDown()) notices.countDown();
+            }
+
+            @Override
+            public void onError(Throwable throwable) {
+                failure.compareAndSet(null, throwable);
+            }
+
+            @Override
+            public void onCompleted() {
+            }
+        };
     }
 
     private static String jsonPath(Path path) {

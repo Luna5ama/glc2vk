@@ -23,6 +23,7 @@ import dev.vibris.protocol.v2.JobStage
 import dev.vibris.protocol.v2.RestorationReceipt
 import dev.vibris.protocol.v2.RuntimeRecovery
 import java.io.IOException
+import java.nio.file.Path
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
@@ -37,11 +38,20 @@ internal class RuntimeJobExecutor @JvmOverloads constructor(
     private val shaderLogs: ShaderLogSink,
     maxActions: Int = ServerConfiguration.DEFAULT_MAX_ACTIONS_PER_JOB,
     private val restorationTimeout: Duration = DEFAULT_RESTORATION_TIMEOUT,
+    replayCaptureRoot: Path? = null,
+    replayerRoot: Path? = null,
+    bundledReplayJava: Path? = null,
 ) {
     private val runtime: VibrisRuntimeAdapter = requireNotNull(runtime) { "runtime" }
     private val captures = CaptureJobExecutor(shaderLogs as? ArtifactManager, maxActions)
     private val awaiter = RuntimeAwaiter(probe)
-    private val actions = ActionJobExecutor(this.runtime, probe, captures, this)
+    private val actions = ActionJobExecutor(
+        this.runtime,
+        probe,
+        captures,
+        this,
+        NsightGpuTraceRunner(replayCaptureRoot, replayerRoot, bundledReplayJava),
+    )
     private val compileValidation = CompileValidationJobExecutor(this)
 
     init {

@@ -111,6 +111,32 @@ void explicit_load_action_uses_declared_v2_ids() {
 		"explicit load action lost its declared source_id/config_id mapping");
 }
 
+void missing_config_values_use_pack_defaults() {
+	const Json arguments{
+		{"sources", Json::array({{{"id", "candidate"}, {"kind", "workspace"}}})},
+		{"configs", Json::array({{{"id", "defaults"}}})},
+		{"actions", Json::array({{{"type", "load_shader"},
+			{"source_id", "candidate"}, {"config_id", "defaults"}}})},
+	};
+	const std::vector sources{source()};
+	const auto request = JobProtocol::request(
+		"vibris_run_actions", arguments, config(), scene(), sources, std::string(request_id));
+	const auto& shader = request.submit_job().job().action_sequence().actions(0).load_shader().config();
+	require(!shader.preserve_current() && shader.values().empty(),
+		"a config without values did not select shaderpack defaults");
+}
+
+void omitted_recipe_config_uses_pack_defaults() {
+	const Json arguments{{"recipe", "load_and_screenshot"},
+		{"source", {{"kind", "workspace"}}}, {"warmup_frames", 0}, {"preset_id", "quality"}};
+	const std::vector sources{source()};
+	const auto request = JobProtocol::request(
+		"vibris_run_recipe", arguments, config(), scene(), sources, std::string(request_id));
+	const auto& shader = request.submit_job().job().action_sequence().actions(0).load_shader().config();
+	require(!shader.preserve_current() && shader.values().empty(),
+		"an omitted recipe config did not select shaderpack defaults");
+}
+
 void load_and_screenshot_emits_one_post_load_capture_sequence() {
 	const Json arguments{{"recipe", "load_and_screenshot"}, {"source", {{"kind", "workspace"}}},
 		{"config", {{"QUALITY", 2}}}, {"warmup_frames", 3}, {"preset_id", "quality"}};
@@ -294,8 +320,8 @@ void matrix_auto_load_is_a_prelude_receipt_action() {
 	const Json arguments{
 		{"actions", Json::array({{{"type", "wait_frames"}, {"frames", 2}}})},
 		{"sources", Json::array({{{"id", "candidate"}, {"kind", "workspace"}}})},
-		{"configs", Json::array({{{"id", "quality"}, {"values", {{"SAMPLES", 4}}}}})},
-		{"matrix", {{"sources", Json::array({"candidate"})}, {"configs", Json::array({"quality"})}}},
+		{"configs", Json::array({{{"id", "defaults"}}})},
+		{"matrix", {{"sources", Json::array({"candidate"})}, {"configs", Json::array({"defaults"})}}},
 	};
 	const std::vector sources{source()};
 	const auto request = JobProtocol::request(
@@ -305,9 +331,11 @@ void matrix_auto_load_is_a_prelude_receipt_action() {
 		"matrix case did not contain one auto-load and one requested action");
 	require(cases[0].actions().actions(0).has_load_shader() &&
 		cases[0].actions().actions(0).prelude() &&
+		!cases[0].actions().actions(0).load_shader().config().preserve_current() &&
+		cases[0].actions().actions(0).load_shader().config().values().empty() &&
 		cases[0].actions().actions(1).has_wait_frames() &&
 		!cases[0].actions().actions(1).prelude(),
-		"matrix auto-load and requested action were not separated by prelude semantics");
+		"matrix auto-load did not use defaults or preserve prelude semantics");
 }
 
 void compile_validation_uses_typed_uuid_cases_without_render_actions() {
@@ -476,6 +504,8 @@ int main() {
 	try {
 		strict_v2_request_contains_typed_texture_and_buffer_actions();
 		explicit_load_action_uses_declared_v2_ids();
+		missing_config_values_use_pack_defaults();
+		omitted_recipe_config_uses_pack_defaults();
 		load_and_screenshot_emits_one_post_load_capture_sequence();
 		ab_compare_resets_each_source_before_equal_warmup_and_capture();
 		after_pass_actions_preserve_exact_pass_and_resource_selectors();

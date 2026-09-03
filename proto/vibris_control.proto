@@ -12,6 +12,7 @@ service VibrisControl {
     rpc ListResources(ListResourcesRequest) returns (ListResourcesResponse);
     rpc ValidateContext(ValidateContextRequest) returns (ValidateContextResponse);
     rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+    rpc RequestRestart(RequestRestartRequest) returns (RequestRestartResponse);
     rpc ManageArtifacts(ManageArtifactsRequest) returns (ManageArtifactsResponse);
     rpc Control(stream ClientMessage) returns (stream ServerMessage);
 }
@@ -33,6 +34,7 @@ enum Capability {
     CAPABILITY_PROVENANCE = 8;
     CAPABILITY_MANAGED_ARTIFACTS = 9;
     CAPABILITY_PASS_BOUNDARY_CAPTURE = 10;
+    CAPABILITY_GRACEFUL_RESTART = 11;
 }
 
 message ClientMessage {
@@ -172,6 +174,33 @@ message GetStatusResponse {
     bool wait_timed_out = 4;
 }
 
+message RequestRestartRequest {
+    ProtocolVersion protocol_version = 1;
+    string workspace_id = 2;
+    string reason = 3;
+}
+
+message RequestRestartResponse {
+    ProtocolVersion protocol_version = 1;
+    RestartStatus restart = 2;
+    bool already_scheduled = 3;
+}
+
+enum RestartPhase {
+    RESTART_PHASE_UNSPECIFIED = 0;
+    RESTART_PHASE_DRAINING = 1;
+    RESTART_PHASE_LAUNCHING = 2;
+}
+
+message RestartStatus {
+    RestartPhase phase = 1;
+    string requested_by_workspace_id = 2;
+    uint64 requested_at_unix_ms = 3;
+    string reason = 4;
+    uint32 remaining_jobs = 5;
+    uint64 retry_after_ms = 6;
+}
+
 message ServerStatus {
     ServerState state = 1;
     RuntimeReadiness readiness = 2;
@@ -185,6 +214,7 @@ message ServerStatus {
     ArtifactCapacity artifact_capacity = 10;
     string active_source_uuid = 11;
     optional RuntimeRecovery recovery = 12;
+    optional RestartStatus restart = 13;
 }
 
 enum ServerState {
@@ -511,8 +541,6 @@ message Action {
         ActivateSource activate_source = 4;
         CompareCaptures compare_captures = 5;
         GetCaptureStatus get_capture_status = 6;
-        CapturePass capture_pass = 7;
-        CaptureMulti capture_multi = 8;
         InspectShader inspect_shader = 9;
         GetGpuMetrics get_gpu_metrics = 10;
         LoadShader load_shader = 11;
@@ -522,7 +550,10 @@ message Action {
         GetPatchedShaders get_patched_shaders = 15;
         DumpTextureAfterPass dump_texture_after_pass = 16;
         DumpBufferAfterPass dump_buffer_after_pass = 17;
+        NsightGpuTrace nsight_gpu_trace = 18;
     }
+    reserved 7, 8;
+    reserved "capture_pass", "capture_multi";
     bool prelude = 30;
 }
 
@@ -534,8 +565,6 @@ enum ActionKind {
     ACTION_KIND_ACTIVATE_SOURCE = 4;
     ACTION_KIND_COMPARE_CAPTURES = 5;
     ACTION_KIND_GET_CAPTURE_STATUS = 6;
-    ACTION_KIND_CAPTURE_PASS = 7;
-    ACTION_KIND_CAPTURE_MULTI = 8;
     ACTION_KIND_INSPECT_SHADER = 9;
     ACTION_KIND_GET_GPU_METRICS = 10;
     ACTION_KIND_LOAD_SHADER = 11;
@@ -545,6 +574,9 @@ enum ActionKind {
     ACTION_KIND_GET_PATCHED_SHADERS = 15;
     ACTION_KIND_DUMP_TEXTURE_AFTER_PASS = 16;
     ACTION_KIND_DUMP_BUFFER_AFTER_PASS = 17;
+    ACTION_KIND_NSIGHT_GPU_TRACE = 18;
+    reserved 7, 8;
+    reserved "ACTION_KIND_CAPTURE_PASS", "ACTION_KIND_CAPTURE_MULTI";
 }
 
 message ResetTemporalState {}
@@ -583,14 +615,21 @@ message VisualThresholds {
 
 message GetCaptureStatus {}
 
-message CapturePass {
-    string pass_id = 1;
-    string artifact_name = 2;
-}
-
-message CaptureMulti {
-    string capture_type = 1;
-    string artifact_name = 2;
+message NsightGpuTrace {
+    oneof capture {
+        string pass_id = 1;
+        string capture_type = 2;
+    }
+    string artifact_name = 3;
+    string replay_backend = 4;
+    string architecture = 5;
+    string metric_set_name = 6;
+    uint32 replay_frames = 7;
+    uint32 start_after_ms = 8;
+    uint32 max_duration_ms = 9;
+    uint32 timeout_seconds = 10;
+    bool time_every_action = 11;
+    string gpu_clocks = 12;
 }
 
 message InspectShader {}
@@ -708,6 +747,7 @@ enum JobStage {
     JOB_STAGE_RESTORING = 13;
     JOB_STAGE_RECOVERING = 14;
     JOB_STAGE_FINALIZING = 15;
+    JOB_STAGE_GPU_TRACING = 16;
 }
 
 enum JobState {
@@ -816,6 +856,7 @@ message ActionReceipt {
         PatchedShadersReceipt patched_shaders = 18;
         EmptyReceipt empty = 19;
         ResetTemporalReceipt reset_temporal = 20;
+        NsightGpuTraceReceipt nsight_gpu_trace = 21;
     }
 }
 
@@ -823,6 +864,23 @@ message EmptyReceipt {}
 
 message ResetTemporalReceipt {
     uint64 completed_at_unix_ms = 1;
+}
+
+message NsightGpuTraceReceipt {
+    string capture_mode = 1;
+    optional string pass_id = 2;
+    optional string capture_type = 3;
+    string replay_backend = 4;
+    string architecture = 5;
+    string metric_set_name = 6;
+    uint32 replay_frames = 7;
+    uint32 start_after_ms = 8;
+    uint32 max_duration_ms = 9;
+    bool time_every_action = 10;
+    string gpu_clocks = 11;
+    bool replay_capture_discarded = 12;
+    bool raw_trace_discarded = 13;
+    repeated ArtifactMetadata artifacts = 14;
 }
 
 message WaitFramesReceipt {
@@ -1203,6 +1261,7 @@ enum ArtifactKind {
     ARTIFACT_KIND_PATCHED_SHADER = 8;
     ARTIFACT_KIND_RESULT = 9;
     ARTIFACT_KIND_EVENT_LOG = 10;
+    ARTIFACT_KIND_NSIGHT_GPU_TRACE = 11;
 }
 
 enum ArtifactFormat {
@@ -1213,6 +1272,7 @@ enum ArtifactFormat {
     ARTIFACT_FORMAT_TEXT = 4;
     ARTIFACT_FORMAT_JSON = 5;
     ARTIFACT_FORMAT_CSV = 6;
+    ARTIFACT_FORMAT_TSV = 7;
 }
 
 enum ArtifactRole {

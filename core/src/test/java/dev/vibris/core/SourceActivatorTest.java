@@ -9,6 +9,9 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -80,6 +83,37 @@ class SourceActivatorTest {
         assertFalse(Files.exists(sourceB.directory()));
     }
 
+    @Test
+    void readinessDoesNotWaitForActiveSourceVerification() throws Exception {
+        // Given
+        Path pending = Files.createDirectory(temp.resolve("pending-readiness"));
+        SourceRegistry registry = new SourceRegistry(pending, new CoreProbe());
+        RecordingShaderLink link = new RecordingShaderLink();
+        SourceActivator activator = new SourceActivator(registry, link);
+        SourceRegistry.Lease source = source(registry, pending, "active");
+        SourceActivator.Activation activation = activator.begin(source);
+        activator.commit(activation);
+        link.blockRetainsActiveSource = true;
+
+        CompletableFuture<SourceRegistry.Lease> verification = CompletableFuture.supplyAsync(() -> {
+            try {
+                return activator.verifyActiveSource();
+            } catch (SourceActivator.Failure failure) {
+                throw new RuntimeException(failure);
+            }
+        });
+        assertTrue(link.retainsActiveSourceEntered.await(5, TimeUnit.SECONDS));
+
+        // When / Then
+        CompletableFuture<Boolean> readiness = CompletableFuture.supplyAsync(activator::ready);
+        try {
+            assertTrue(readiness.get(1, TimeUnit.SECONDS));
+        } finally {
+            link.releaseRetainsActiveSource.countDown();
+        }
+        assertEquals(source, verification.get(5, TimeUnit.SECONDS));
+    }
+
     private static SourceRegistry.Lease source(SourceRegistry registry, Path pending, String marker) throws Exception {
         String uuid = UUID.randomUUID().toString();
         byte[] content = marker.getBytes(java.nio.charset.StandardCharsets.UTF_8);
@@ -99,7 +133,10 @@ class SourceActivatorTest {
 
     private static final class RecordingShaderLink implements ShaderLink {
         private final List<String> switches = new ArrayList<>();
+        private final CountDownLatch retainsActiveSourceEntered = new CountDownLatch(1);
+        private final CountDownLatch releaseRetainsActiveSource = new CountDownLatch(1);
         private String failSource;
+        private boolean blockRetainsActiveSource;
 
         @Override
         public void switchTo(SourceRegistry.Lease source, OwnershipCheck ownership) throws Failure {
@@ -115,7 +152,16 @@ class SourceActivatorTest {
         }
 
         @Override
-        public boolean retainsActiveSource() {
+        public boolean retainsActiveSource() throws Failure {
+            if (blockRetainsActiveSource) {
+                retainsActiveSourceEntered.countDown();
+                try {
+                    releaseRetainsActiveSource.await();
+                } catch (InterruptedException interruption) {
+                    Thread.currentThread().interrupt();
+                    throw new Failure("interrupted active-source verification", true, interruption);
+                }
+            }
             return true;
         }
     }

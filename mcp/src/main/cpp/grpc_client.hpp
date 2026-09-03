@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <cstdint>
 
 namespace vibris::mcp {
 
@@ -28,6 +29,8 @@ struct GrpcClientStats {
     std::size_t worker_threads_started = 0;
     std::size_t worker_threads_joined = 0;
     bool control_connected = false;
+    bool restart_scheduled = false;
+    std::uint64_t restart_retry_after_ms = 0;
 };
 
 using ListPresetsCompletion = std::function<void(
@@ -42,6 +45,9 @@ using ValidateContextCompletion = std::function<void(
 using GetStatusCompletion = std::function<void(
     const grpc::Status&,
     const ::vibris::control::v2::GetStatusResponse&)>;
+using RequestRestartCompletion = std::function<void(
+    const grpc::Status&,
+    const ::vibris::control::v2::RequestRestartResponse&)>;
 using ListResourcesCompletion = std::function<void(
     const grpc::Status&,
     const ::vibris::control::v2::ListResourcesResponse&)>;
@@ -73,12 +79,17 @@ public:
     bool get_status(
         ::vibris::control::v2::GetStatusRequest request,
         GetStatusCompletion completion);
+    bool request_restart(
+        ::vibris::control::v2::RequestRestartRequest request,
+        RequestRestartCompletion completion);
     bool manage_artifacts(
         ::vibris::control::v2::ManageArtifactsRequest request,
         ManageArtifactsCompletion completion);
     bool submit(::vibris::control::v2::ClientMessage message, GrpcCompletion completion);
     bool resume(std::string request_id, GrpcCompletion completion);
     bool cancel(std::string_view request_id, std::string reason);
+    [[nodiscard]] bool restart_scheduled() const noexcept;
+    bool wait_for_restart(std::chrono::milliseconds timeout);
     void shutdown();
 
     [[nodiscard]] GrpcClientStats stats() const;

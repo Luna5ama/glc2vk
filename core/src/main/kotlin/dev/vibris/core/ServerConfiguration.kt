@@ -17,13 +17,19 @@ import java.time.Duration
 internal data class ServerConfiguration(
     val address: InetSocketAddress,
     val paths: VibrisBootstrap.Config,
+    val vibrisRoot: Path,
+    val replayerRoot: Path?,
     val artifactQuotaBytes: Long,
     val artifactTtl: Duration,
     val maxSourceBytes: Long,
     val maxSourceFiles: Int,
     val maxGlobalQueue: Int,
     val maxActionsPerJob: Int,
+    val restartExecutable: Path?,
 ) {
+    val replayCaptureRoot: Path
+        get() = vibrisRoot.resolve("replay_capture")
+
     companion object {
         const val DEFAULT_PORT = 50_051
         const val DEFAULT_MAX_SOURCE_BYTES = 512L * 1024 * 1024
@@ -33,7 +39,7 @@ internal data class ServerConfiguration(
 
         private const val MAX_CONFIG_BYTES = 1024 * 1024L
         private val JSON = Json { isLenient = false }
-        private val REQUIRED_KEYS = setOf(
+        private val V2_KEYS = setOf(
             "schema_version",
             "listen_address",
             "pending_source_root",
@@ -46,16 +52,21 @@ internal data class ServerConfiguration(
             "max_global_queue",
             "max_actions_per_job",
         )
+        private val V3_KEYS = V2_KEYS + "restart_executable"
+        private val V4_KEYS = V3_KEYS - setOf("pending_source_root", "artifact_root") + "vibris_root"
 
         fun defaults(paths: VibrisBootstrap.Config): ServerConfiguration = ServerConfiguration(
             InetSocketAddress("127.0.0.1", paths.port),
             paths,
+            commonRoot(paths.pendingShadersRoot, paths.artifactRoot),
+            null,
             ArtifactManager.DEFAULT_QUOTA_BYTES,
             ArtifactManager.DEFAULT_TTL,
             DEFAULT_MAX_SOURCE_BYTES,
             DEFAULT_MAX_SOURCE_FILES,
             DEFAULT_MAX_GLOBAL_QUEUE,
             DEFAULT_MAX_ACTIONS_PER_JOB,
+            null,
         )
 
         fun defaults(pendingRoot: Path, artifactRoot: Path): ServerConfiguration {
@@ -72,19 +83,38 @@ internal data class ServerConfiguration(
             try {
                 if (!Files.exists(file, NOFOLLOW_LINKS)) writeDefaults(game, file)
                 val root = read(file)
-                if (root["schema_version"]?.jsonPrimitive?.longOrNull != 2L) {
-                    throw Failure("UNSUPPORTED_VERSION: server.json schema_version must be 2")
+                val schemaVersion = root["schema_version"]?.jsonPrimitive?.longOrNull
+                if (schemaVersion != 2L && schemaVersion != 3L && schemaVersion != 4L) {
+                    throw Failure("UNSUPPORTED_VERSION: server.json schema_version must be 2, 3, or 4")
                 }
-                require(root.keys == REQUIRED_KEYS) {
-                    "server.json fields do not match schema version 2"
+                val expectedKeys = when (schemaVersion) {
+                    4L -> V4_KEYS
+                    3L -> V3_KEYS
+                    else -> V2_KEYS
+                }
+                require(root.keys == expectedKeys) {
+                    "server.json fields do not match schema version $schemaVersion"
                 }
                 val address = address(text(root, "listen_address"))
                 parsedAddress = address
-                val pending = path(game, text(root, "pending_source_root"))
-                val artifacts = path(game, text(root, "artifact_root"))
+                val vibrisRoot = if (schemaVersion == 4L) {
+                    path(game, text(root, "vibris_root"))
+                } else {
+                    commonRoot(
+                        path(game, text(root, "pending_source_root")),
+                        path(game, text(root, "artifact_root")),
+                    )
+                }
+                val pending = if (schemaVersion == 4L) vibrisRoot.resolve("pending") else
+                    path(game, text(root, "pending_source_root"))
+                val artifacts = if (schemaVersion == 4L) vibrisRoot.resolve("artifacts") else
+                    path(game, text(root, "artifact_root"))
+                val replayCapture = vibrisRoot.resolve("replay_capture")
                 val shaderpack = path(game, text(root, "shaderpack_root"))
+                requireWritableDirectory(vibrisRoot, if (schemaVersion == 4L) "vibris_root" else "Vibris root")
                 requireWritableDirectory(pending, "pending_source_root")
                 requireWritableDirectory(artifacts, "artifact_root")
+                requireWritableDirectory(replayCapture, "replay_capture")
                 requireWritableDirectory(shaderpack, "shaderpack_root")
                 val quota = positive(root, "artifact_quota_bytes")
                 val ttl = Duration.ofHours(positive(root, "artifact_ttl_hours"))
@@ -92,15 +122,25 @@ internal data class ServerConfiguration(
                 val sourceFiles = positiveInt(root, "max_source_files")
                 val queue = positiveInt(root, "max_global_queue")
                 val actions = positiveInt(root, "max_actions_per_job")
+                val restartExecutable = if (schemaVersion >= 3L) {
+                    text(root, "restart_executable").takeIf(String::isNotBlank)?.let { configured ->
+                        path(game, configured).also(::requireRestartExecutable)
+                    }
+                } else {
+                    null
+                }
                 return ServerConfiguration(
                     address,
                     VibrisBootstrap.Config(address.port, pending, artifacts, shaderpack),
+                    vibrisRoot,
+                    game.resolve("vibris"),
                     quota,
                     ttl,
                     sourceBytes,
                     sourceFiles,
                     queue,
                     actions,
+                    restartExecutable,
                 )
             } catch (failure: Failure) {
                 if (failure.address != null || parsedAddress == null) {
@@ -168,31 +208,53 @@ internal data class ServerConfiguration(
             }
         }
 
+        private fun requireRestartExecutable(path: Path) {
+            require(
+                Files.isRegularFile(path, NOFOLLOW_LINKS) &&
+                    !Files.isSymbolicLink(path),
+            ) {
+                "restart_executable is missing or is not an ordinary file"
+            }
+        }
+
+        private fun commonRoot(pending: Path, artifacts: Path): Path {
+            val normalizedPending = pending.toAbsolutePath().normalize()
+            val normalizedArtifacts = artifacts.toAbsolutePath().normalize()
+            return if (
+                normalizedPending.fileName?.toString().equals("pending", ignoreCase = true) &&
+                normalizedArtifacts.fileName?.toString().equals("artifacts", ignoreCase = true) &&
+                normalizedPending.parent == normalizedArtifacts.parent
+            ) {
+                normalizedPending.parent
+            } else {
+                normalizedPending.parent ?: normalizedPending
+            }
+        }
+
         private fun writeDefaults(game: Path, file: Path) {
             try {
                 OwnedPathIdentity.createDirectoriesSafely(file.parent)
-                val pending = game.resolve("vibris/pending").toAbsolutePath().normalize()
-                val artifacts = game.resolve("vibris/artifacts").toAbsolutePath().normalize()
+                val vibris = game.resolve("vibris").toAbsolutePath().normalize()
                 val shaderpacks = game.resolve("shaderpacks/vibris").toAbsolutePath().normalize()
                 val json = """
                     {
-                      "schema_version": 2,
+                      "schema_version": 4,
                       "listen_address": "127.0.0.1:$DEFAULT_PORT",
-                      "pending_source_root": "${escape(pending.toString())}",
-                      "artifact_root": "${escape(artifacts.toString())}",
+                      "vibris_root": "${escape(vibris.toString())}",
                       "artifact_quota_bytes": ${ArtifactManager.DEFAULT_QUOTA_BYTES},
                       "artifact_ttl_hours": ${ArtifactManager.DEFAULT_TTL.toHours()},
                       "shaderpack_root": "${escape(shaderpacks.toString())}",
                       "max_source_bytes": $DEFAULT_MAX_SOURCE_BYTES,
                       "max_source_files": $DEFAULT_MAX_SOURCE_FILES,
                       "max_global_queue": $DEFAULT_MAX_GLOBAL_QUEUE,
-                      "max_actions_per_job": $DEFAULT_MAX_ACTIONS_PER_JOB
+                      "max_actions_per_job": $DEFAULT_MAX_ACTIONS_PER_JOB,
+                      "restart_executable": ""
                     }
 
                 """.trimIndent()
                 Files.writeString(file, json, CREATE_NEW)
             } catch (exception: Exception) {
-                throw Failure("server.json v2 defaults could not be created", exception)
+                throw Failure("server.json v4 defaults could not be created", exception)
             }
         }
 

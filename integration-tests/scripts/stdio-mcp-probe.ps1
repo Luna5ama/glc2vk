@@ -293,8 +293,10 @@ try
     $listed = @($toolsResponse.result.tools | ForEach-Object { $_.name })
     $expectedTools = @(
         "vibris_get_status",
+        "vibris_restart",
         "vibris_list_presets",
         "vibris_list_resources",
+        "mcp_vibiris_nsight_analyze",
         "vibris_run_recipe",
         "vibris_run_actions",
         "vibris_run_matrix",
@@ -303,7 +305,7 @@ try
     )
     if ([string]::Join("`n", $listed) -cne [string]::Join("`n", $expectedTools))
     {
-        throw "tools/list did not expose exactly the expected 8-tool v2 surface."
+        throw "tools/list did not expose exactly the expected 10-tool v2 surface."
     }
 
     $status = Get-ToolPayload (Get-Response -Responses $first.Responses -Id 3)
@@ -318,11 +320,10 @@ try
     {
         throw "vibris_get_status workspace_id is not a UUID: $workspaceId"
     }
-    if (@(Get-NamedValue -Value $status -Name "detail") -cnotcontains "test-save minecraft:overworld" -or
-        @(Get-NamedValue -Value $status -Name "world_loaded") -notcontains $true -or
-        @(Get-NamedValue -Value $status -Name "can_start_job") -notcontains $true)
+    if (@(Get-NamedValue -Value $status -Name "operational") -notcontains $true -or
+        @(Get-NamedValue -Value $status -Name "can_accept_job") -notcontains $true)
     {
-        throw "vibris_get_status did not expose the fake gRPC runtime markers."
+        throw "vibris_get_status did not expose the fake gRPC operational markers: $($status | ConvertTo-Json -Compress -Depth 20)"
     }
     $presets = Get-ToolPayload (Get-Response -Responses $first.Responses -Id 4)
     if (@(Get-NamedValue -Value $presets -Name "preset_id") -cnotcontains "default")
@@ -343,7 +344,7 @@ try
     {
         throw "Native stdio MCP restart did not preserve the durable workspace identity."
     }
-    Write-Output "PASS tools=8 schema_version=2 workspace_id=$workspaceId grpc_status=test-save request_scoped=true"
+    Write-Output "PASS tools=10 schema_version=2 workspace_id=$workspaceId grpc_status=test-save request_scoped=true"
 }
 finally
 {

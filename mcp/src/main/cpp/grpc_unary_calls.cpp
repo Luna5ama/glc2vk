@@ -90,6 +90,28 @@ bool GrpcClient::Impl::get_status(proto::GetStatusRequest request, GetStatusComp
         });
 }
 
+bool GrpcClient::Impl::request_restart(
+    proto::RequestRestartRequest request, RequestRestartCompletion completion) {
+    request.mutable_protocol_version()->set_major(2);
+    request.set_workspace_id(options_.workspace_id);
+    RequestRestartCompletion observe_restart = [this, completion = std::move(completion)](
+                                                   const grpc::Status& status,
+                                                   const proto::RequestRestartResponse& response) mutable {
+        if (status.ok() && response.has_restart()) {
+            restart_scheduled_.store(true, std::memory_order_release);
+            restart_retry_after_ms_.store(response.restart().retry_after_ms(), std::memory_order_release);
+            restart_changed_.notify_all();
+        }
+        completion(status, response);
+    };
+    return start_unary<proto::RequestRestartRequest, proto::RequestRestartResponse>(
+        std::move(request), std::move(observe_restart),
+        [](proto::VibrisControl::Stub& stub, grpc::ClientContext& context,
+            const proto::RequestRestartRequest& request, grpc::CompletionQueue& queue) {
+            return stub.AsyncRequestRestart(&context, request, &queue);
+        });
+}
+
 bool GrpcClient::Impl::manage_artifacts(
     proto::ManageArtifactsRequest request, ManageArtifactsCompletion completion) {
     request.mutable_protocol_version()->set_major(2);
